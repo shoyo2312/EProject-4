@@ -1,0 +1,31 @@
+server:
+  port: 8089
+
+spring:
+  application:
+    name: notification-service
+
+  data:
+    mongodb:
+      uri: mongodb://root:password@localhost:27017/notification_db?authSource=admin
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: notification-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+jwt:
+  secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
+
+firebase:
+  enabled: ${FIREBASE_ENABLED:false}
+  credentials-path: ${FIREBASE_CREDENTIALS_PATH:firebase-service-account.json}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html

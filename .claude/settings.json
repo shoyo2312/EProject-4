@@ -1,0 +1,63 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(**/target/**)",
+      "Read(**/.gradle/**)",
+      "Read(**/build/**)",
+      "Read(**/out/**)",
+      "Read(**/*.class)",
+      "Read(**/*.jar)",
+      "Read(**/*.war)",
+
+      "Read(**/.idea/**)",
+      "Read(**/*.iml)",
+      "Read(**/*.iws)",
+      "Read(**/.vscode/**)",
+      "Read(**/*.suo)",
+      "Read(**/*.user)",
+
+      "Read(**/node_modules/**)",
+      "Read(**/.mvn/repository/**)",
+
+      "Read(**/*.log)",
+      "Read(**/logs/**)",
+      "Read(**/tmp/**)",
+      "Read(**/.DS_Store)",
+      "Read(**/Thumbs.db)",
+
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/application-prod.yml)",
+      "Read(**/application-staging.yml)",
+      "Read(**/application-secret.yml)",
+      "Read(**/*secret*)",
+      "Read(**/*credentials*)",
+      "Read(**/*private-key*)",
+      "Read(**/*.pem)",
+      "Read(**/*.p12)",
+      "Read(**/*.jks)",
+      "Read(**/*.keystore)",
+
+      "Read(**/surefire-reports/**)",
+      "Read(**/failsafe-reports/**)",
+      "Read(**/test-results/**)",
+      "Read(**/*.xml.bak)",
+
+      "Read(**/docker-volumes/**)",
+      "Read(**/.docker/**)",
+
+      "Read(frontend/**)",
+      "Read(mobile/**)",
+      "Read(infra/terraform/**)",
+      "Read(infra/kubernetes/**)",
+
+      "Read(**/*.png)",
+      "Read(**/*.jpg)",
+      "Read(**/*.gif)",
+      "Read(**/*.mp4)",
+      "Read(**/*.zip)",
+      "Read(**/*.gz)",
+      "Read(**/*.tar)"
+    ]
+  }
+}

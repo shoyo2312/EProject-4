@@ -1,0 +1,44 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  cloud:
+    gateway:
+      routes:
+        - id: auth-service
+          uri: ${AUTH_SERVICE_URI:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/**
+        - id: user-service
+          uri: ${USER_SERVICE_URI:http://localhost:8082}
+          predicates:
+            - Path=/api/v1/users/**
+        - id: video-service
+          uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+          predicates:
+            - Path=/api/v1/videos/**
+        - id: interaction-service
+          uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
+          predicates:
+            - Path=/api/v1/interactions/**
+      default-filters:
+        - name: RequestRateLimiter
+          args:
+            redis-rate-limiter.replenishRate: 20
+            redis-rate-limiter.burstCapacity: 40
+            key-resolver: "#{@ipKeyResolver}"
+
+jwt:
+  secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html

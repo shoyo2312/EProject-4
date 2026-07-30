@@ -1,0 +1,19 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: chat-service
+
+  data:
+    mongodb:
+      uri: mongodb://root:password@localhost:27017/chat_db?authSource=admin
+
+jwt:
+  secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html

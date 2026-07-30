@@ -1,0 +1,31 @@
+server:
+  port: 8097
+
+spring:
+  application:
+    name: analytics-service
+
+  datasource:
+    url: jdbc:clickhouse://${CLICKHOUSE_HOST:localhost}:${CLICKHOUSE_PORT:8123}/analytics_db
+    username: ${CLICKHOUSE_USER:default}
+    password: ${CLICKHOUSE_PASSWORD:clickhouse}
+    driver-class-name: com.clickhouse.jdbc.ClickHouseDriver
+
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: analytics-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
