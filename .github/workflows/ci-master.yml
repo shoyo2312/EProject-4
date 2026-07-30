@@ -1,0 +1,118 @@
+name: CI - Tier 2 (master)
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-master-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JWT_SECRET: ${{ secrets.JWT_SECRET || 'ci-master-jwt-secret-not-for-production-0123456789' }}
+
+jobs:
+  build-and-test:
+    name: Build + Full Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build (skip tests)
+        run: ./mvnw -B -ntp clean install -DskipTests
+
+      - name: Run full test suite (unit + integration)
+        run: ./mvnw -B -ntp verify
+
+      - name: Publish test reports
+        if: always()
+        uses: dorny/test-reporter@v1
+        with:
+          name: Full Test Results (master)
+          path: '**/target/surefire-reports/*.xml'
+          reporter: java-junit
+          fail-on-error: false
+
+  code-quality:
+    name: Code Quality (full)
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build (skip tests)
+        run: ./mvnw -B -ntp clean install -DskipTests
+
+      - name: SpotBugs full analysis
+        run: ./mvnw -B -ntp com.github.spotbugs:spotbugs-maven-plugin:4.8.6.2:check
+
+      - name: SonarQube analysis
+        if: ${{ env.SONAR_TOKEN != '' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./mvnw -B -ntp org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.token=$SONAR_TOKEN
+
+  security-scan:
+    name: OWASP Dependency-Check
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build (skip tests)
+        run: ./mvnw -B -ntp clean install -DskipTests
+
+      - name: Cache OWASP NVD database
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: owasp-nvd-db-${{ runner.os }}
+
+      - name: Run OWASP Dependency-Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          ./mvnw -B -ntp org.owasp:dependency-check-maven:check \
+            -DnvdApiKey="${NVD_API_KEY}" \
+            -DfailBuildOnCVSS=8 \
+            -Dformat=ALL
+
+      - name: Upload dependency-check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: '**/target/dependency-check-report.*'
+          retention-days: 30
+
+  quality-gate:
+    name: Quality Gate (required before merge to master)
+    needs: [build-and-test, code-quality, security-scan]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All gates passed
+        run: echo "Build, full test suite, code quality, and security scan all passed."
