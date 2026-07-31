@@ -27,6 +27,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -47,6 +48,7 @@ public class AuthServiceImpl implements AuthService {
     private final JwtProperties jwtProperties;
     private final RefreshTokenRepository refreshTokenRepository;
     private final LoginRateLimiter loginRateLimiter;
+    private final AccessTokenBlacklist accessTokenBlacklist;
 
     @Override
     @Transactional
@@ -128,12 +130,29 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
-    public void logout(RefreshTokenRequest request) {
+    public void logout(RefreshTokenRequest request, String accessToken) {
         refreshTokenRepository.findByTokenHash(HashUtils.sha256(request.refreshToken()))
                 .ifPresent(storedToken -> {
                     storedToken.revoke();
                     refreshTokenRepository.save(storedToken);
                 });
+
+        blacklistAccessToken(accessToken);
+    }
+
+    private void blacklistAccessToken(String accessToken) {
+        if (accessToken == null || !jwtProvider.isValid(accessToken)) {
+            return;
+        }
+
+        Claims claims = jwtProvider.extractClaims(accessToken);
+        String jti = claims.get(CLAIM_JTI, String.class);
+        if (jti == null) {
+            return;
+        }
+
+        Duration remaining = Duration.between(Instant.now(), claims.getExpiration().toInstant());
+        accessTokenBlacklist.blacklist(jti, remaining);
     }
 
     @Override
@@ -151,7 +170,7 @@ public class AuthServiceImpl implements AuthService {
 
         String accessToken = jwtProvider.generateToken(
                 subject,
-                Map.of(CLAIM_ROLE, user.getRole().name()),
+                Map.of(CLAIM_ROLE, user.getRole().name(), CLAIM_JTI, UUID.randomUUID().toString()),
                 jwtProperties.accessTokenExpiryMillis());
 
         String refreshToken = jwtProvider.generateToken(

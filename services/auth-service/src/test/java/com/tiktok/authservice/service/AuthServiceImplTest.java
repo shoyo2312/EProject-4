@@ -25,12 +25,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -49,6 +52,11 @@ class AuthServiceImplTest {
     @Container
     @ServiceConnection
     static PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+
+    @Container
+    @ServiceConnection(name = "redis")
+    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
+            .withExposedPorts(6379);
 
     @MockBean
     private KafkaTemplate<String, String> kafkaTemplate;
@@ -71,12 +79,16 @@ class AuthServiceImplTest {
     @Autowired
     private LoginRateLimiter loginRateLimiter;
 
+    @Autowired
+    private StringRedisTemplate redisTemplate;
+
     @BeforeEach
     void cleanUp() {
         outboxEventRepository.deleteAll();
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
         loginRateLimiter.reset();
+        redisTemplate.getConnectionFactory().getConnection().serverCommands().flushDb();
     }
 
     private RegisterRequest validRegisterRequest() {
@@ -220,7 +232,7 @@ class AuthServiceImplTest {
         authService.register(validRegisterRequest());
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.logout(new RefreshTokenRequest(initial.refreshToken()));
+        authService.logout(new RefreshTokenRequest(initial.refreshToken()), null);
 
         assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(initial.refreshToken())))
                 .isInstanceOf(InvalidRefreshTokenException.class);
@@ -229,7 +241,32 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void logout_withUnknownToken_doesNotThrow() {
-        authService.logout(new RefreshTokenRequest("unknown-token"));
+        authService.logout(new RefreshTokenRequest("unknown-token"), null);
+    }
+
+    @Test
+    @Transactional
+    void logout_withAccessToken_blacklistsItsJti() {
+        authService.register(validRegisterRequest());
+        TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.logout(new RefreshTokenRequest(initial.refreshToken()), initial.accessToken());
+
+        String jti = jwtProvider.extractClaims(initial.accessToken()).get("jti", String.class);
+        assertThat(jti).isNotBlank();
+        assertThat(redisTemplate.hasKey(AccessTokenBlacklist.KEY_PREFIX + jti)).isTrue();
+    }
+
+    @Test
+    @Transactional
+    void logout_withoutAccessToken_doesNotBlacklistAnything() {
+        authService.register(validRegisterRequest());
+        TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.logout(new RefreshTokenRequest(initial.refreshToken()), null);
+
+        String jti = jwtProvider.extractClaims(initial.accessToken()).get("jti", String.class);
+        assertThat(redisTemplate.hasKey(AccessTokenBlacklist.KEY_PREFIX + jti)).isFalse();
     }
 
     @Test

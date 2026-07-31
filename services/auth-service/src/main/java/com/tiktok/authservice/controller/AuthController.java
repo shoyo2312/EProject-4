@@ -9,6 +9,7 @@ import com.tiktok.authservice.service.AuthService;
 import com.tiktok.common.response.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -17,6 +18,8 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/v1/auth")
 @RequiredArgsConstructor
 public class AuthController {
+
+    private static final String BEARER_PREFIX = "Bearer ";
 
     private final AuthService authService;
 
@@ -38,8 +41,12 @@ public class AuthController {
 
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void logout(@Valid @RequestBody RefreshTokenRequest request) {
-        authService.logout(request);
+    public void logout(@Valid @RequestBody RefreshTokenRequest request,
+                        @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorizationHeader) {
+        String accessToken = authorizationHeader != null && authorizationHeader.startsWith(BEARER_PREFIX)
+                ? authorizationHeader.substring(BEARER_PREFIX.length())
+                : null;
+        authService.logout(request, accessToken);
     }
 
     @GetMapping("/me")
