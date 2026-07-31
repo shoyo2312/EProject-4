@@ -13,4 +13,8 @@ public interface AuthService {
     TokenResponse login(LoginRequest request);
 
     TokenResponse refresh(RefreshTokenRequest request);
+
+    void logout(RefreshTokenRequest request, String accessToken);
+
+    UserResponse getCurrentUser(Long userId);
 }
