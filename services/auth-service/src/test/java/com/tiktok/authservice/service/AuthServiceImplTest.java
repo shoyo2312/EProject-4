@@ -12,6 +12,7 @@ import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
 import com.tiktok.authservice.exception.TooManyLoginAttemptsException;
+import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
@@ -259,5 +260,24 @@ class AuthServiceImplTest {
 
         assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
                 .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    @Test
+    @Transactional
+    void getCurrentUser_withExistingUser_returnsUserResponse() {
+        UserResponse registered = authService.register(validRegisterRequest());
+
+        UserResponse me = authService.getCurrentUser(registered.id());
+
+        assertThat(me.id()).isEqualTo(registered.id());
+        assertThat(me.username()).isEqualTo("johndoe");
+        assertThat(me.email()).isEqualTo("john@example.com");
+    }
+
+    @Test
+    @Transactional
+    void getCurrentUser_withUnknownId_throwsUserNotFound() {
+        assertThatThrownBy(() -> authService.getCurrentUser(999999L))
+                .isInstanceOf(UserNotFoundException.class);
     }
 }

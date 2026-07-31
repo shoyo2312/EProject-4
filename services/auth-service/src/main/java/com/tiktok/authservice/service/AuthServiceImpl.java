@@ -14,6 +14,7 @@ import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
+import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.mapper.UserMapper;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
@@ -133,6 +134,16 @@ public class AuthServiceImpl implements AuthService {
                     storedToken.revoke();
                     refreshTokenRepository.save(storedToken);
                 });
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public UserResponse getCurrentUser(Long userId) {
+        User user = userRepository.findById(userId)
+                .filter(u -> !u.isDeleted())
+                .orElseThrow(() -> new UserNotFoundException(String.valueOf(userId)));
+
+        return userMapper.toResponse(user);
     }
 
     private TokenResponse issueTokens(User user) {

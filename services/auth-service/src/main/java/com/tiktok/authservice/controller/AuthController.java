@@ -10,6 +10,7 @@ import com.tiktok.common.response.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -39,5 +40,10 @@ public class AuthController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void logout(@Valid @RequestBody RefreshTokenRequest request) {
         authService.logout(request);
+    }
+
+    @GetMapping("/me")
+    public ApiResponse<UserResponse> me(@AuthenticationPrincipal Long userId) {
+        return ApiResponse.success(authService.getCurrentUser(userId));
     }
 }
