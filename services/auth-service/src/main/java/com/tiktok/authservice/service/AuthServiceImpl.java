@@ -45,6 +45,7 @@ public class AuthServiceImpl implements AuthService {
     private final JwtProvider jwtProvider;
     private final JwtProperties jwtProperties;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final LoginRateLimiter loginRateLimiter;
 
     @Override
     @Transactional
@@ -75,18 +76,23 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public TokenResponse login(LoginRequest request) {
-        User user = userRepository.findByUsernameAndDeletedAtIsNull(request.usernameOrEmail())
-                .or(() -> userRepository.findByEmailAndDeletedAtIsNull(request.usernameOrEmail()))
-                .orElseThrow(InvalidCredentialsException::new);
+        String key = request.usernameOrEmail();
+        loginRateLimiter.checkAllowed(key);
 
-        if (user.getStatus() != UserStatus.ACTIVE) {
+        User user = userRepository.findByUsernameAndDeletedAtIsNull(key)
+                .or(() -> userRepository.findByEmailAndDeletedAtIsNull(key))
+                .orElse(null);
+
+        boolean valid = user != null
+                && user.getStatus() == UserStatus.ACTIVE
+                && HashUtils.bcryptMatches(request.password(), user.getPasswordHash());
+
+        if (!valid) {
+            loginRateLimiter.recordFailure(key);
             throw new InvalidCredentialsException();
         }
 
-        if (!HashUtils.bcryptMatches(request.password(), user.getPasswordHash())) {
-            throw new InvalidCredentialsException();
-        }
-
+        loginRateLimiter.recordSuccess(key);
         return issueTokens(user);
     }
 

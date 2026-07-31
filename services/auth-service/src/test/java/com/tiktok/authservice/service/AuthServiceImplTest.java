@@ -11,6 +11,7 @@ import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
+import com.tiktok.authservice.exception.TooManyLoginAttemptsException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
@@ -66,11 +67,15 @@ class AuthServiceImplTest {
     @Autowired
     private JwtProvider jwtProvider;
 
+    @Autowired
+    private LoginRateLimiter loginRateLimiter;
+
     @BeforeEach
     void cleanUp() {
         outboxEventRepository.deleteAll();
         refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
+        loginRateLimiter.reset();
     }
 
     private RegisterRequest validRegisterRequest() {
@@ -224,5 +229,35 @@ class AuthServiceImplTest {
     @Transactional
     void logout_withUnknownToken_doesNotThrow() {
         authService.logout(new RefreshTokenRequest("unknown-token"));
+    }
+
+    @Test
+    @Transactional
+    void login_afterFiveFailedAttempts_locksOutEvenWithCorrectPassword() {
+        authService.register(validRegisterRequest());
+
+        for (int i = 0; i < 5; i++) {
+            assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
+                    .isInstanceOf(InvalidCredentialsException.class);
+        }
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "password123")))
+                .isInstanceOf(TooManyLoginAttemptsException.class);
+    }
+
+    @Test
+    @Transactional
+    void login_successResetsFailedAttemptCounter() {
+        authService.register(validRegisterRequest());
+
+        for (int i = 0; i < 4; i++) {
+            assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
+                    .isInstanceOf(InvalidCredentialsException.class);
+        }
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
+                .isInstanceOf(InvalidCredentialsException.class);
     }
 }
