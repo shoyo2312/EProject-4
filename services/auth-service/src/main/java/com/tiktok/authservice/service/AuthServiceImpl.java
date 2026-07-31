@@ -6,6 +6,7 @@ import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
+import com.tiktok.authservice.entity.RefreshToken;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
@@ -15,6 +16,7 @@ import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.mapper.UserMapper;
+import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
@@ -24,7 +26,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -33,12 +37,14 @@ public class AuthServiceImpl implements AuthService {
     private static final String CLAIM_ROLE = "role";
     private static final String TOKEN_TYPE_REFRESH = "refresh";
     private static final String CLAIM_TOKEN_TYPE = "tokenType";
+    private static final String CLAIM_JTI = "jti";
 
     private final UserRepository userRepository;
     private final UserMapper userMapper;
     private final UserEventProducer userEventProducer;
     private final JwtProvider jwtProvider;
     private final JwtProperties jwtProperties;
+    private final RefreshTokenRepository refreshTokenRepository;
 
     @Override
     @Transactional
@@ -67,7 +73,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional
     public TokenResponse login(LoginRequest request) {
         User user = userRepository.findByUsernameAndDeletedAtIsNull(request.usernameOrEmail())
                 .or(() -> userRepository.findByEmailAndDeletedAtIsNull(request.usernameOrEmail()))
@@ -85,7 +91,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    @Transactional(readOnly = true)
+    @Transactional
     public TokenResponse refresh(RefreshTokenRequest request) {
         String token = request.refreshToken();
 
@@ -98,12 +104,29 @@ public class AuthServiceImpl implements AuthService {
             throw new InvalidRefreshTokenException();
         }
 
+        RefreshToken storedToken = refreshTokenRepository.findByTokenHash(HashUtils.sha256(token))
+                .filter(RefreshToken::isActive)
+                .orElseThrow(InvalidRefreshTokenException::new);
+
         Long userId = Long.valueOf(claims.getSubject());
         User user = userRepository.findById(userId)
                 .filter(u -> !u.isDeleted() && u.getStatus() == UserStatus.ACTIVE)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
+        storedToken.revoke();
+        refreshTokenRepository.save(storedToken);
+
         return issueTokens(user);
+    }
+
+    @Override
+    @Transactional
+    public void logout(RefreshTokenRequest request) {
+        refreshTokenRepository.findByTokenHash(HashUtils.sha256(request.refreshToken()))
+                .ifPresent(storedToken -> {
+                    storedToken.revoke();
+                    refreshTokenRepository.save(storedToken);
+                });
     }
 
     private TokenResponse issueTokens(User user) {
@@ -116,8 +139,15 @@ public class AuthServiceImpl implements AuthService {
 
         String refreshToken = jwtProvider.generateToken(
                 subject,
-                Map.of(CLAIM_TOKEN_TYPE, TOKEN_TYPE_REFRESH),
+                Map.of(CLAIM_TOKEN_TYPE, TOKEN_TYPE_REFRESH, CLAIM_JTI, UUID.randomUUID().toString()),
                 jwtProperties.refreshTokenExpiryMillis());
+
+        RefreshToken tokenRecord = RefreshToken.builder()
+                .userId(user.getId())
+                .tokenHash(HashUtils.sha256(refreshToken))
+                .expiresAt(Instant.now().plusMillis(jwtProperties.refreshTokenExpiryMillis()))
+                .build();
+        refreshTokenRepository.save(tokenRecord);
 
         return new TokenResponse(accessToken, refreshToken, jwtProperties.accessTokenExpiryMillis());
     }
