@@ -9,6 +9,7 @@ import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.NotFollowingException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.mapper.UserProfileMapper;
+import com.tiktok.userservice.repository.FollowCountProjection;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
@@ -16,6 +17,11 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -58,33 +64,53 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional(readOnly = true)
     public Page<UserProfileResponse> listFollowers(Long userId, Pageable pageable) {
-        return userFollowRepository.findByFollowingIdAndDeletedAtIsNull(userId, pageable)
-                .map(UserFollow::getFollowerId)
-                .map(this::toProfileResponse);
+        Page<Long> followerIds = userFollowRepository.findByFollowingIdAndDeletedAtIsNull(userId, pageable)
+                .map(UserFollow::getFollowerId);
+        return toProfileResponses(followerIds);
     }
 
     @Override
     @Transactional(readOnly = true)
     public Page<UserProfileResponse> listFollowing(Long userId, Pageable pageable) {
-        return userFollowRepository.findByFollowerIdAndDeletedAtIsNull(userId, pageable)
-                .map(UserFollow::getFollowingId)
-                .map(this::toProfileResponse);
+        Page<Long> followingIds = userFollowRepository.findByFollowerIdAndDeletedAtIsNull(userId, pageable)
+                .map(UserFollow::getFollowingId);
+        return toProfileResponses(followingIds);
     }
 
-    private UserProfileResponse toProfileResponse(Long userId) {
-        UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
-                .orElseThrow(() -> new UserProfileNotFoundException(userId));
+    /**
+     * Batches profile + follower/following count lookups for a page of user ids into a
+     * constant number of queries, instead of 1 profile query + 2 count queries per row.
+     */
+    private Page<UserProfileResponse> toProfileResponses(Page<Long> userIdsPage) {
+        List<Long> userIds = userIdsPage.getContent();
+        if (userIds.isEmpty()) {
+            return userIdsPage.map(id -> null);
+        }
 
-        UserProfileResponse base = userProfileMapper.toResponse(profile);
-        long followerCount = userFollowRepository.countByFollowingIdAndDeletedAtIsNull(userId);
-        long followingCount = userFollowRepository.countByFollowerIdAndDeletedAtIsNull(userId);
+        Map<Long, UserProfile> profilesByUserId = userProfileRepository.findByUserIdInAndDeletedAtIsNull(userIds).stream()
+                .collect(Collectors.toMap(UserProfile::getUserId, Function.identity()));
+        Map<Long, Long> followerCounts = toCountMap(userFollowRepository.countFollowersByUserIdIn(userIds));
+        Map<Long, Long> followingCounts = toCountMap(userFollowRepository.countFollowingByUserIdIn(userIds));
 
-        return new UserProfileResponse(
-                base.userId(),
-                base.displayName(),
-                base.bio(),
-                base.avatarUrl(),
-                followerCount,
-                followingCount);
+        return userIdsPage.map(userId -> {
+            UserProfile profile = profilesByUserId.get(userId);
+            if (profile == null) {
+                throw new UserProfileNotFoundException(userId);
+            }
+
+            UserProfileResponse base = userProfileMapper.toResponse(profile);
+            return new UserProfileResponse(
+                    base.userId(),
+                    base.displayName(),
+                    base.bio(),
+                    base.avatarUrl(),
+                    followerCounts.getOrDefault(userId, 0L),
+                    followingCounts.getOrDefault(userId, 0L));
+        });
+    }
+
+    private Map<Long, Long> toCountMap(List<FollowCountProjection> projections) {
+        return projections.stream()
+                .collect(Collectors.toMap(FollowCountProjection::getUserId, FollowCountProjection::getCount));
     }
 }
