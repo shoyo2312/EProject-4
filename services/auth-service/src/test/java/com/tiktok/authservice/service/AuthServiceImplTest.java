@@ -11,8 +11,11 @@ import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
+import com.tiktok.authservice.exception.TooManyLoginAttemptsException;
+import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.repository.OutboxEventRepository;
+import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
@@ -22,12 +25,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -47,6 +53,11 @@ class AuthServiceImplTest {
     @ServiceConnection
     static PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
 
+    @Container
+    @ServiceConnection(name = "redis")
+    static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
+            .withExposedPorts(6379);
+
     @MockBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
@@ -60,12 +71,24 @@ class AuthServiceImplTest {
     private OutboxEventRepository outboxEventRepository;
 
     @Autowired
+    private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
     private JwtProvider jwtProvider;
+
+    @Autowired
+    private LoginRateLimiter loginRateLimiter;
+
+    @Autowired
+    private StringRedisTemplate redisTemplate;
 
     @BeforeEach
     void cleanUp() {
         outboxEventRepository.deleteAll();
+        refreshTokenRepository.deleteAll();
         userRepository.deleteAll();
+        loginRateLimiter.reset();
+        redisTemplate.getConnectionFactory().getConnection().serverCommands().flushDb();
     }
 
     private RegisterRequest validRegisterRequest() {
@@ -189,5 +212,109 @@ class AuthServiceImplTest {
     void refresh_withGarbageToken_throwsInvalidRefreshToken() {
         assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest("not-a-jwt")))
                 .isInstanceOf(InvalidRefreshTokenException.class);
+    }
+
+    @Test
+    @Transactional
+    void refresh_reusingRotatedToken_throwsInvalidRefreshToken() {
+        authService.register(validRegisterRequest());
+        TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.refresh(new RefreshTokenRequest(initial.refreshToken()));
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(initial.refreshToken())))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+    }
+
+    @Test
+    @Transactional
+    void logout_revokesRefreshToken() {
+        authService.register(validRegisterRequest());
+        TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.logout(new RefreshTokenRequest(initial.refreshToken()), null);
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(initial.refreshToken())))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+    }
+
+    @Test
+    @Transactional
+    void logout_withUnknownToken_doesNotThrow() {
+        authService.logout(new RefreshTokenRequest("unknown-token"), null);
+    }
+
+    @Test
+    @Transactional
+    void logout_withAccessToken_blacklistsItsJti() {
+        authService.register(validRegisterRequest());
+        TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.logout(new RefreshTokenRequest(initial.refreshToken()), initial.accessToken());
+
+        String jti = jwtProvider.extractClaims(initial.accessToken()).get("jti", String.class);
+        assertThat(jti).isNotBlank();
+        assertThat(redisTemplate.hasKey(AccessTokenBlacklist.KEY_PREFIX + jti)).isTrue();
+    }
+
+    @Test
+    @Transactional
+    void logout_withoutAccessToken_doesNotBlacklistAnything() {
+        authService.register(validRegisterRequest());
+        TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.logout(new RefreshTokenRequest(initial.refreshToken()), null);
+
+        String jti = jwtProvider.extractClaims(initial.accessToken()).get("jti", String.class);
+        assertThat(redisTemplate.hasKey(AccessTokenBlacklist.KEY_PREFIX + jti)).isFalse();
+    }
+
+    @Test
+    @Transactional
+    void login_afterFiveFailedAttempts_locksOutEvenWithCorrectPassword() {
+        authService.register(validRegisterRequest());
+
+        for (int i = 0; i < 5; i++) {
+            assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
+                    .isInstanceOf(InvalidCredentialsException.class);
+        }
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "password123")))
+                .isInstanceOf(TooManyLoginAttemptsException.class);
+    }
+
+    @Test
+    @Transactional
+    void login_successResetsFailedAttemptCounter() {
+        authService.register(validRegisterRequest());
+
+        for (int i = 0; i < 4; i++) {
+            assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
+                    .isInstanceOf(InvalidCredentialsException.class);
+        }
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
+                .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    @Test
+    @Transactional
+    void getCurrentUser_withExistingUser_returnsUserResponse() {
+        UserResponse registered = authService.register(validRegisterRequest());
+
+        UserResponse me = authService.getCurrentUser(registered.id());
+
+        assertThat(me.id()).isEqualTo(registered.id());
+        assertThat(me.username()).isEqualTo("johndoe");
+        assertThat(me.email()).isEqualTo("john@example.com");
+    }
+
+    @Test
+    @Transactional
+    void getCurrentUser_withUnknownId_throwsUserNotFound() {
+        assertThatThrownBy(() -> authService.getCurrentUser(999999L))
+                .isInstanceOf(UserNotFoundException.class);
     }
 }
