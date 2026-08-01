@@ -26,9 +26,18 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
+
+app:
+  avatar:
+    # Hosts allowed for UpdateProfileRequest.avatarUrl (must also be https - see ValidAvatarUrl).
+    # Override AVATAR_ALLOWED_HOSTS (comma-separated) with the real CDN/MinIO public host(s) in prod.
+    allowed-hosts: ${AVATAR_ALLOWED_HOSTS:cdn.tiktok-clone.local}
 
 springdoc:
   api-docs:
