@@ -9,7 +9,6 @@ import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.NotFollowingException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.mapper.UserProfileMapper;
-import com.tiktok.userservice.repository.FollowCountProjection;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +47,8 @@ public class FollowServiceImpl implements FollowService {
                 .build();
 
         userFollowRepository.save(follow);
+        userProfileRepository.incrementFollowingCount(followerId);
+        userProfileRepository.incrementFollowerCount(followingId);
 
         return new FollowResponse(followerId, followingId);
     }
@@ -59,6 +60,8 @@ public class FollowServiceImpl implements FollowService {
                 .orElseThrow(NotFollowingException::new);
 
         follow.markDeleted();
+        userProfileRepository.decrementFollowingCount(followerId);
+        userProfileRepository.decrementFollowerCount(followingId);
     }
 
     @Override
@@ -78,8 +81,9 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /**
-     * Batches profile + follower/following count lookups for a page of user ids into a
-     * constant number of queries, instead of 1 profile query + 2 count queries per row.
+     * Batches the profile lookup for a page of user ids into a single query; follower/following
+     * counts come straight off UserProfile (denormalized columns kept in sync by follow/unfollow),
+     * so no separate count query is needed at all.
      */
     private Page<UserProfileResponse> toProfileResponses(Page<Long> userIdsPage) {
         List<Long> userIds = userIdsPage.getContent();
@@ -89,28 +93,13 @@ public class FollowServiceImpl implements FollowService {
 
         Map<Long, UserProfile> profilesByUserId = userProfileRepository.findByUserIdInAndDeletedAtIsNull(userIds).stream()
                 .collect(Collectors.toMap(UserProfile::getUserId, Function.identity()));
-        Map<Long, Long> followerCounts = toCountMap(userFollowRepository.countFollowersByUserIdIn(userIds));
-        Map<Long, Long> followingCounts = toCountMap(userFollowRepository.countFollowingByUserIdIn(userIds));
 
         return userIdsPage.map(userId -> {
             UserProfile profile = profilesByUserId.get(userId);
             if (profile == null) {
                 throw new UserProfileNotFoundException(userId);
             }
-
-            UserProfileResponse base = userProfileMapper.toResponse(profile);
-            return new UserProfileResponse(
-                    base.userId(),
-                    base.displayName(),
-                    base.bio(),
-                    base.avatarUrl(),
-                    followerCounts.getOrDefault(userId, 0L),
-                    followingCounts.getOrDefault(userId, 0L));
+            return userProfileMapper.toResponse(profile);
         });
-    }
-
-    private Map<Long, Long> toCountMap(List<FollowCountProjection> projections) {
-        return projections.stream()
-                .collect(Collectors.toMap(FollowCountProjection::getUserId, FollowCountProjection::getCount));
     }
 }
