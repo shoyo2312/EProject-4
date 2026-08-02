@@ -30,11 +30,28 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+  mail:
+    host: ${MAIL_HOST:smtp-relay.brevo.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
 auth:
   jwt:
     secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
     access-token-expiry-millis: 900000
     refresh-token-expiry-millis: 604800000
+  otp:
+    email-verification-expiry-millis: 900000
+    password-reset-expiry-millis: 900000
+  mail:
+    from: ${MAIL_FROM:no-reply@tiktok-clone.dev}
 
 springdoc:
   api-docs:

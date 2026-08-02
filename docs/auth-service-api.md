@@ -76,11 +76,14 @@ Response `data` → `UserResponse`:
   "email": "a@b.com",
   "role": "USER",             // enum: xem UserRole
   "status": "ACTIVE",         // enum: xem UserStatus
+  "emailVerified": false,     // luôn false ngay sau khi đăng ký — xem mục 3.6
   "createdAt": "2026-08-01T10:00:00Z"
 }
 ```
 
 Lỗi có thể gặp: `VALIDATION_ERROR` (400), `USERNAME_ALREADY_EXISTS` (409), `EMAIL_ALREADY_EXISTS` (409).
+
+Ngay sau khi tạo tài khoản thành công, server tự động gửi 1 email chứa mã OTP 6 số để xác thực email (xem mục 3.6). Đăng ký xong client có thể `login` bình thường — **login không bị chặn** dù email chưa verify (xem `emailVerified` để tự quyết định có nhắc user xác thực hay không).
 
 ### 3.2 `POST /login`
 Không cần token. Trả `200 OK`.
@@ -127,9 +130,57 @@ Request:
 ### 3.5 `GET /me`
 **Bắt buộc** header `Authorization: Bearer <accessToken>`. Trả `200 OK`.
 
-Response `data` → `UserResponse` (giống mục 3.1).
+Response `data` → `UserResponse` (giống mục 3.1, bao gồm `emailVerified`).
 
 Lỗi: `401 Unauthorized` nếu token thiếu/hết hạn/đã bị blacklist (do logout).
+
+### 3.6 `POST /verify-email`
+Không cần token. Trả `204 No Content`.
+
+Request:
+```json
+{ "email": "a@b.com", "otp": "483920" }
+```
+
+Xác thực mã OTP 6 số gửi qua email lúc `register` (hoặc `resend-verification`). OTP hết hạn sau **15 phút**, dùng 1 lần.
+
+Lỗi: `VALIDATION_ERROR` (400 — otp không đúng định dạng 6 số), `INVALID_OTP` (400 — sai email/otp, đã dùng, hoặc hết hạn).
+
+### 3.7 `POST /resend-verification`
+Không cần token. Trả `204 No Content` (luôn trả 204 kể cả khi email không tồn tại hoặc đã verify — tránh lộ thông tin tài khoản).
+
+Request:
+```json
+{ "email": "a@b.com" }
+```
+
+Gửi lại OTP xác thực email mới (OTP cũ bị hủy). Giới hạn **3 lần / 15 phút** theo email.
+
+Lỗi: `VALIDATION_ERROR` (400), `TOO_MANY_OTP_REQUESTS` (429).
+
+### 3.8 `POST /forgot-password`
+Không cần token. Trả `204 No Content` (luôn trả 204 dù email có tồn tại hay không — chống dò email).
+
+Request:
+```json
+{ "email": "a@b.com" }
+```
+
+Nếu email tồn tại và tài khoản đang `ACTIVE`, gửi OTP reset password (15 phút, dùng 1 lần). Giới hạn **3 lần / 15 phút** theo email.
+
+Lỗi: `VALIDATION_ERROR` (400), `TOO_MANY_OTP_REQUESTS` (429).
+
+### 3.9 `POST /reset-password`
+Không cần token. Trả `204 No Content`.
+
+Request:
+```json
+{ "email": "a@b.com", "otp": "192837", "newPassword": "N3wP@ssw0rd" }
+```
+
+Đổi mật khẩu bằng OTP nhận từ `forgot-password`. **Sau khi đổi thành công, mọi refresh token cũ của tài khoản bị thu hồi** — các phiên đang đăng nhập trên thiết bị khác sẽ mất hiệu lực ở lần `/refresh` kế tiếp (buộc đăng nhập lại bằng mật khẩu mới).
+
+Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400).
 
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
@@ -164,6 +215,8 @@ ACTIVE, LOCKED
 | `USERNAME_ALREADY_EXISTS` | 409 | Đăng ký trùng username |
 | `EMAIL_ALREADY_EXISTS` | 409 | Đăng ký trùng email |
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
+| `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`) |
+| `TOO_MANY_OTP_REQUESTS` | 429 | Quá 3 lần gọi `resend-verification`/`forgot-password` trong 15 phút (theo email) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định — hiển thị generic error, không show message raw cho user |
 
 `message` là mô tả người-đọc-được (tiếng Anh), phù hợp để log/debug, KHÔNG nên hiển thị trực tiếp cho end-user — nên map `code` → chuỗi đa ngôn ngữ phía Flutter (i18n).
