@@ -1,29 +1,38 @@
 package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.config.JwtProperties;
+import com.tiktok.authservice.config.OtpProperties;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
+import com.tiktok.authservice.dto.request.ResendVerificationRequest;
+import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.entity.RefreshToken;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
+import com.tiktok.authservice.entity.VerificationToken;
+import com.tiktok.authservice.entity.VerificationTokenType;
+import com.tiktok.authservice.event.local.EmailVerificationRequestedEvent;
 import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
+import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
 import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.mapper.UserMapper;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
+import com.tiktok.authservice.repository.VerificationTokenRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.event.user.UserRegisteredEvent;
 import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,6 +40,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Function;
 
 @Service
 @RequiredArgsConstructor
@@ -49,6 +59,11 @@ public class AuthServiceImpl implements AuthService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final LoginRateLimiter loginRateLimiter;
     private final AccessTokenBlacklist accessTokenBlacklist;
+    private final VerificationTokenRepository verificationTokenRepository;
+    private final OtpGenerator otpGenerator;
+    private final OtpProperties otpProperties;
+    private final OtpRateLimiter otpRateLimiter;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     @Transactional
@@ -72,6 +87,9 @@ public class AuthServiceImpl implements AuthService {
 
         userEventProducer.publishUserRegistered(
                 UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail()));
+
+        issueOtp(saved, VerificationTokenType.EMAIL_VERIFICATION, otpProperties.emailVerificationExpiryMillis(),
+                otp -> new EmailVerificationRequestedEvent(saved.getEmail(), otp));
 
         return userMapper.toResponse(saved);
     }
@@ -163,6 +181,62 @@ public class AuthServiceImpl implements AuthService {
                 .orElseThrow(() -> new UserNotFoundException(String.valueOf(userId)));
 
         return userMapper.toResponse(user);
+    }
+
+    @Override
+    @Transactional
+    public void verifyEmail(VerifyEmailRequest request) {
+        User user = userRepository.findByEmailAndDeletedAtIsNull(request.email())
+                .orElseThrow(InvalidOtpException::new);
+
+        VerificationToken token = verificationTokenRepository
+                .findByTokenHashAndTokenType(hashOtp(user.getId(), VerificationTokenType.EMAIL_VERIFICATION, request.otp()),
+                        VerificationTokenType.EMAIL_VERIFICATION)
+                .filter(VerificationToken::isValid)
+                .orElseThrow(InvalidOtpException::new);
+
+        token.markUsed();
+        verificationTokenRepository.save(token);
+
+        user.markEmailVerified();
+        userRepository.save(user);
+    }
+
+    @Override
+    @Transactional
+    public void resendVerification(ResendVerificationRequest request) {
+        otpRateLimiter.checkAllowed("email-verification", request.email());
+
+        userRepository.findByEmailAndDeletedAtIsNull(request.email())
+                .filter(user -> !user.isEmailVerified())
+                .ifPresent(user -> issueOtp(user, VerificationTokenType.EMAIL_VERIFICATION,
+                        otpProperties.emailVerificationExpiryMillis(),
+                        otp -> new EmailVerificationRequestedEvent(user.getEmail(), otp)));
+    }
+
+    private void issueOtp(User user, VerificationTokenType type, long expiryMillis,
+                           Function<String, ?> eventFactory) {
+        verificationTokenRepository.deleteAllByUserIdAndTokenType(user.getId(), type);
+
+        String otp = otpGenerator.generate();
+        VerificationToken token = VerificationToken.builder()
+                .userId(user.getId())
+                .tokenHash(hashOtp(user.getId(), type, otp))
+                .tokenType(type)
+                .expiresAt(Instant.now().plusMillis(expiryMillis))
+                .build();
+        verificationTokenRepository.save(token);
+
+        eventPublisher.publishEvent(eventFactory.apply(otp));
+    }
+
+    /**
+     * A 6-digit OTP alone has only 1e6 possible values, so hashing it in isolation would let
+     * different users collide on the same token_hash. Folding in the user id + token type keeps
+     * the stored hash unique per (user, purpose) even when two users are issued the same digits.
+     */
+    private String hashOtp(Long userId, VerificationTokenType type, String otp) {
+        return HashUtils.sha256(userId + ":" + type + ":" + otp);
     }
 
     private TokenResponse issueTokens(User user) {

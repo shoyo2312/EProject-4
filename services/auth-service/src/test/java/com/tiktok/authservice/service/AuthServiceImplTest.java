@@ -3,6 +3,7 @@ package com.tiktok.authservice.service;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
+import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.entity.OutboxEvent;
@@ -10,6 +11,7 @@ import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
+import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
 import com.tiktok.authservice.exception.TooManyLoginAttemptsException;
 import com.tiktok.authservice.exception.UserNotFoundException;
@@ -17,10 +19,12 @@ import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
+import com.tiktok.authservice.repository.VerificationTokenRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -37,6 +41,9 @@ import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 
 /**
  * Exercises AuthServiceImpl against a real Postgres (Testcontainers) instead of mocking
@@ -61,6 +68,9 @@ class AuthServiceImplTest {
     @MockBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
+    @MockBean
+    private MailService mailService;
+
     @Autowired
     private AuthService authService;
 
@@ -72,6 +82,9 @@ class AuthServiceImplTest {
 
     @Autowired
     private RefreshTokenRepository refreshTokenRepository;
+
+    @Autowired
+    private VerificationTokenRepository verificationTokenRepository;
 
     @Autowired
     private JwtProvider jwtProvider;
@@ -86,6 +99,7 @@ class AuthServiceImplTest {
     void cleanUp() {
         outboxEventRepository.deleteAll();
         refreshTokenRepository.deleteAll();
+        verificationTokenRepository.deleteAll();
         userRepository.deleteAll();
         loginRateLimiter.reset();
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushDb();
@@ -316,5 +330,38 @@ class AuthServiceImplTest {
     void getCurrentUser_withUnknownId_throwsUserNotFound() {
         assertThatThrownBy(() -> authService.getCurrentUser(999999L))
                 .isInstanceOf(UserNotFoundException.class);
+    }
+
+    // No @Transactional below: the mail send is wired via an AFTER_COMMIT event listener,
+    // so the transaction needs to actually commit for MailService to be invoked.
+
+    @Test
+    void register_sendsVerificationOtpAfterCommit() {
+        authService.register(validRegisterRequest());
+
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    void verifyEmail_withValidOtp_marksUserVerified() {
+        UserResponse registered = authService.register(validRegisterRequest());
+
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), otpCaptor.capture());
+
+        authService.verifyEmail(new VerifyEmailRequest("john@example.com", otpCaptor.getValue()));
+
+        User user = userRepository.findById(registered.id()).orElseThrow();
+        assertThat(user.isEmailVerified()).isTrue();
+    }
+
+    @Test
+    void verifyEmail_withWrongOtp_throwsInvalidOtp() {
+        authService.register(validRegisterRequest());
+
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), org.mockito.ArgumentMatchers.anyString());
+
+        assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequest("john@example.com", "000000")))
+                .isInstanceOf(InvalidOtpException.class);
     }
 }
