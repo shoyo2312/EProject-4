@@ -16,6 +16,7 @@ import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
 import com.tiktok.authservice.exception.TooManyLoginAttemptsException;
+import com.tiktok.authservice.exception.TooManyOtpRequestsException;
 import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.repository.OutboxEventRepository;
@@ -315,6 +316,64 @@ class AuthServiceImplTest {
                 .isInstanceOf(InvalidCredentialsException.class);
     }
 
+    /**
+     * The refresh token is signed with the same secret as the access token, so every filter that
+     * authenticates a bearer token has to reject it explicitly — otherwise a stolen refresh token
+     * authenticates requests for its full 7-day life.
+     */
+    @Test
+    @Transactional
+    void issuedTokens_onlyTheAccessTokenPassesTheBearerCheck() {
+        authService.register(validRegisterRequest());
+        TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(jwtProvider.isValidAccessToken(tokens.accessToken())).isTrue();
+        assertThat(jwtProvider.isValidAccessToken(tokens.refreshToken())).isFalse();
+        assertThat(jwtProvider.isValid(tokens.refreshToken()))
+                .as("refresh token is still a structurally valid JWT — only the tokenType claim separates them")
+                .isTrue();
+    }
+
+    @Test
+    @Transactional
+    void register_lowercasesEmail() {
+        UserResponse response = authService.register(
+                new RegisterRequest("johndoe", "John@Example.COM", "password123"));
+
+        assertThat(response.email()).isEqualTo("john@example.com");
+    }
+
+    @Test
+    @Transactional
+    void register_emailDifferingOnlyInCase_throwsConflict() {
+        authService.register(validRegisterRequest());
+
+        RegisterRequest duplicate = new RegisterRequest("janedoe", "JOHN@EXAMPLE.COM", "password123");
+
+        assertThatThrownBy(() -> authService.register(duplicate))
+                .isInstanceOf(EmailAlreadyExistsException.class);
+    }
+
+    @Test
+    @Transactional
+    void login_withDifferentEmailCase_returnsTokens() {
+        authService.register(new RegisterRequest("johndoe", "John@Example.com", "password123"));
+
+        TokenResponse tokens = authService.login(new LoginRequest("john@example.com", "password123"));
+
+        assertThat(tokens.accessToken()).isNotBlank();
+    }
+
+    @Test
+    @Transactional
+    void login_withDifferentUsernameCase_returnsTokens() {
+        authService.register(validRegisterRequest());
+
+        TokenResponse tokens = authService.login(new LoginRequest("JohnDoe", "password123"));
+
+        assertThat(tokens.accessToken()).isNotBlank();
+    }
+
     @Test
     @Transactional
     void getCurrentUser_withExistingUser_returnsUserResponse() {
@@ -365,6 +424,56 @@ class AuthServiceImplTest {
 
         assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequest("john@example.com", "000000")))
                 .isInstanceOf(InvalidOtpException.class);
+    }
+
+    /**
+     * A 6-digit OTP is only 1e6 values; without a guess cap an attacker spread over many IPs
+     * walks the whole space inside the code's 15-minute life.
+     */
+    @Test
+    void verifyEmail_afterFiveWrongOtps_blocksFurtherGuesses() {
+        authService.register(validRegisterRequest());
+
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), otpCaptor.capture());
+
+        for (int i = 0; i < 5; i++) {
+            assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequest("john@example.com", "000000")))
+                    .isInstanceOf(InvalidOtpException.class);
+        }
+
+        // Even the correct code is refused once the guess budget is spent.
+        assertThatThrownBy(() -> authService.verifyEmail(
+                new VerifyEmailRequest("john@example.com", otpCaptor.getValue())))
+                .isInstanceOf(TooManyOtpRequestsException.class);
+    }
+
+    @Test
+    void verifyEmail_withUnknownEmail_countsAgainstTheGuessBudget() {
+        for (int i = 0; i < 5; i++) {
+            assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequest("ghost@example.com", "000000")))
+                    .isInstanceOf(InvalidOtpException.class);
+        }
+
+        assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequest("ghost@example.com", "000000")))
+                .isInstanceOf(TooManyOtpRequestsException.class);
+    }
+
+    @Test
+    void verifyEmail_successResetsTheGuessCounter() {
+        authService.register(validRegisterRequest());
+
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), otpCaptor.capture());
+
+        for (int i = 0; i < 4; i++) {
+            assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequest("john@example.com", "000000")))
+                    .isInstanceOf(InvalidOtpException.class);
+        }
+
+        authService.verifyEmail(new VerifyEmailRequest("john@example.com", otpCaptor.getValue()));
+
+        assertThat(redisTemplate.hasKey("auth:otp-fail:email-verification:john@example.com")).isFalse();
     }
 
     @Test

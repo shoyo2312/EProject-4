@@ -1,6 +1,7 @@
 package com.tiktok.authservice.config;
 
 import com.tiktok.authservice.security.JwtAuthenticationFilter;
+import com.tiktok.authservice.service.AccessTokenBlacklist;
 import com.tiktok.crypto.jwt.JwtProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -16,7 +17,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, JwtProvider jwtProvider) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, JwtProvider jwtProvider,
+                                            AccessTokenBlacklist accessTokenBlacklist) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -29,7 +31,8 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .anyRequest().authenticated()
                 )
-                .addFilterBefore(new JwtAuthenticationFilter(jwtProvider), UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(new JwtAuthenticationFilter(jwtProvider, accessTokenBlacklist),
+                        UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

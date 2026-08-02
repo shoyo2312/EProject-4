@@ -21,6 +21,10 @@ import java.util.List;
  * downstream service. Each service still validates the token itself (defense in depth,
  * same JWT_SECRET) — this is just the first line of defense.
  *
+ * <p>Only access tokens are accepted: a refresh token carries the same signature and would
+ * otherwise work as a bearer credential for its full 7-day life. See
+ * {@link com.tiktok.crypto.jwt.JwtProvider#isValidAccessToken(String)}.
+ *
  * <p>Also rejects tokens whose jti was blacklisted by auth-service on logout (see
  * AccessTokenBlacklist there). The blacklist check fails open — if Redis is unreachable, the
  * token is treated as not blacklisted and accepted based on signature/expiry alone, since
@@ -42,7 +46,7 @@ public class JwtReactiveAuthenticationManager implements ReactiveAuthenticationM
     public Mono<Authentication> authenticate(Authentication authentication) {
         String token = (String) authentication.getCredentials();
 
-        if (!jwtProvider.isValid(token)) {
+        if (!jwtProvider.isValidAccessToken(token)) {
             return Mono.error(new BadCredentialsException("Invalid or expired token"));
         }
 

@@ -5,13 +5,18 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;
 
+/**
+ * All lookups are case-insensitive: an account registered as Test@Gmail.com must be reachable by
+ * typing test@gmail.com, and two usernames differing only in case must not coexist. The matching
+ * unique indexes are on lower(email)/lower(username) — see V6 — so these stay index-backed.
+ */
 public interface UserRepository extends JpaRepository<User, Long> {
 
-    Optional<User> findByUsernameAndDeletedAtIsNull(String username);
+    Optional<User> findByUsernameIgnoreCaseAndDeletedAtIsNull(String username);
 
-    Optional<User> findByEmailAndDeletedAtIsNull(String email);
+    Optional<User> findByEmailIgnoreCaseAndDeletedAtIsNull(String email);
 
-    boolean existsByUsernameAndDeletedAtIsNull(String username);
+    boolean existsByUsernameIgnoreCaseAndDeletedAtIsNull(String username);
 
-    boolean existsByEmailAndDeletedAtIsNull(String email);
+    boolean existsByEmailIgnoreCaseAndDeletedAtIsNull(String email);
 }

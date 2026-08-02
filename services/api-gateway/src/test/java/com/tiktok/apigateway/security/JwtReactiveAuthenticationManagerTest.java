@@ -53,7 +53,9 @@ class JwtReactiveAuthenticationManagerTest {
     }
 
     private String tokenWithJti(String jti) {
-        return jwtProvider.generateToken("42", Map.of("role", "USER", "jti", jti), Duration.ofMinutes(15).toMillis());
+        return jwtProvider.generateToken("42",
+                Map.of("role", "USER", "jti", jti, JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS),
+                Duration.ofMinutes(15).toMillis());
     }
 
     @Test
@@ -78,6 +80,24 @@ class JwtReactiveAuthenticationManagerTest {
         redisTemplate.opsForValue().set("auth:blacklist:" + jti, "1", Duration.ofMinutes(1)).block();
 
         var authentication = new UsernamePasswordAuthenticationToken(null, token);
+
+        StepVerifier.create(manager.authenticate(authentication))
+                .expectError(BadCredentialsException.class)
+                .verify();
+    }
+
+    /**
+     * A refresh token is signed with the same secret and lives 7 days — accepting it here would
+     * make the 15-minute access token TTL meaningless.
+     */
+    @Test
+    void authenticate_withRefreshToken_rejectsWithBadCredentials() {
+        String refreshToken = jwtProvider.generateToken("42",
+                Map.of("jti", UUID.randomUUID().toString(),
+                        JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_REFRESH),
+                Duration.ofDays(7).toMillis());
+
+        var authentication = new UsernamePasswordAuthenticationToken(null, refreshToken);
 
         StepVerifier.create(manager.authenticate(authentication))
                 .expectError(BadCredentialsException.class)

@@ -19,7 +19,7 @@ tiktok-backend/
 │   ├── common-lib/       # BaseEntity, ApiResponse, exceptions, SnowflakeId
 │   ├── event-schema/     # Kafka event POJOs (shared giữa producers/consumers)
 │   ├── crypto-lib/       # JwtProvider, HashUtils, AesEncryptor
-│   └── security-lib/     # Centralized JWT config + auto-configuration (JwtProperties, JwtAuthenticationFilter, JwtSecurityAutoConfiguration)
+│   └── security-lib/     # Centralized JWT config + auto-configuration (JwtProperties, JwtAuthenticationFilter, JwtSecurityAutoConfiguration, RevokedTokenChecker)
 └── services/
     ├── api-gateway/      :8080  WebFlux — KHÔNG dùng spring-boot-starter-web
     ├── auth-service/     :8081  PostgreSQL + Security + Flyway
@@ -100,6 +100,8 @@ com.tiktok.{service}/
   - Auto-configured via Spring Boot auto-configuration (`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`)
   - Services KHÔNG cần `@Configuration` cục bộ cho JWT — được inject tự động
   - Fail-fast: kiểm tra JWT_SECRET có tồn tại khi service startup
+- **Token type — BẮT BUỘC**: access token và refresh token cùng ký bằng 1 secret, phân biệt bằng claim `tokenType` (`access`/`refresh`). Mọi nơi authenticate từ bearer token PHẢI dùng `JwtProvider.isValidAccessToken()`, KHÔNG dùng `isValid()` — nếu không refresh token (7 ngày) sẽ đăng nhập được như access token
+- **Revocation**: logout ghi jti vào Redis (`auth:blacklist:{jti}`). Read side: api-gateway, auth-service filter, và `RevokedTokenChecker` của security-lib. Tất cả fail-open khi Redis chết; service không có Redis trên classpath nhận bản no-op
 - **Exceptions (NOT using security-lib)**:
   - `api-gateway`: dùng WebFlux (không có servlet API) — giữ JwtConfig/JwtProperties riêng
   - `auth-service`: cấp phát JWT token (khác config: accessTokenExpiryMillis/refreshTokenExpiryMillis, prefix `auth.jwt`) — giữ file riêng + đã có fail-fast validation
