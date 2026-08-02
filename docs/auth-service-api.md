@@ -144,7 +144,7 @@ Request:
 
 Xác thực mã OTP 6 số gửi qua email lúc `register` (hoặc `resend-verification`). OTP hết hạn sau **15 phút**, dùng 1 lần.
 
-Lỗi: `VALIDATION_ERROR` (400 — otp không đúng định dạng 6 số), `INVALID_OTP` (400 — sai email/otp, đã dùng, hoặc hết hạn).
+Lỗi: `VALIDATION_ERROR` (400 — otp không đúng định dạng 6 số), `INVALID_OTP` (400 — sai email/otp, đã dùng, hoặc hết hạn), `TOO_MANY_OTP_REQUESTS` (429 — nhập sai OTP quá **5 lần/15 phút** theo email, độc lập với giới hạn gửi lại OTP ở mục 3.7).
 
 ### 3.7 `POST /resend-verification`
 Không cần token. Trả `204 No Content` (luôn trả 204 kể cả khi email không tồn tại hoặc đã verify — tránh lộ thông tin tài khoản).
@@ -180,7 +180,7 @@ Request:
 
 Đổi mật khẩu bằng OTP nhận từ `forgot-password`. **Sau khi đổi thành công, mọi refresh token cũ của tài khoản bị thu hồi** — các phiên đang đăng nhập trên thiết bị khác sẽ mất hiệu lực ở lần `/refresh` kế tiếp (buộc đăng nhập lại bằng mật khẩu mới).
 
-Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400).
+Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400), `TOO_MANY_OTP_REQUESTS` (429 — nhập sai OTP quá **5 lần/15 phút** theo email, độc lập với giới hạn gửi lại OTP ở mục 3.8).
 
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
@@ -216,7 +216,7 @@ ACTIVE, LOCKED
 | `EMAIL_ALREADY_EXISTS` | 409 | Đăng ký trùng email |
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
 | `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`) |
-| `TOO_MANY_OTP_REQUESTS` | 429 | Quá 3 lần gọi `resend-verification`/`forgot-password` trong 15 phút (theo email) |
+| `TOO_MANY_OTP_REQUESTS` | 429 | (a) Quá 3 lần gọi `resend-verification`/`forgot-password` trong 15 phút (theo email), **hoặc** (b) quá 5 lần nhập sai OTP trong 15 phút ở `verify-email`/`reset-password` (theo email) — 2 counter độc lập, client cần xử lý cả hai trường hợp |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định — hiển thị generic error, không show message raw cho user |
 
 `message` là mô tả người-đọc-được (tiếng Anh), phù hợp để log/debug, KHÔNG nên hiển thị trực tiếp cho end-user — nên map `code` → chuỗi đa ngôn ngữ phía Flutter (i18n).
