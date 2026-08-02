@@ -134,4 +134,32 @@ class UserProfileServiceImplTest {
         assertThat(updated.bio()).isEqualTo("Hello world");
         assertThat(updated.avatarUrl()).isEqualTo("https://example.com/avatar.png");
     }
+
+    @Test
+    @Transactional
+    void updateOwnProfile_withOnlyDisplayName_keepsBioAndAvatar() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", "john@example.com");
+        userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest("John Doe", "Hello world", "https://example.com/avatar.png"));
+
+        UserProfileResponse updated = userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest("Johnny", null, null));
+
+        assertThat(updated.displayName()).isEqualTo("Johnny");
+        assertThat(updated.bio()).isEqualTo("Hello world");
+        assertThat(updated.avatarUrl()).isEqualTo("https://example.com/avatar.png");
+    }
+
+    @Test
+    @Transactional
+    void updateOwnProfile_withEmptyBio_clearsIt() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", "john@example.com");
+        userProfileService.updateOwnProfile(1L, new UpdateProfileRequest(null, "Hello world", null));
+
+        UserProfileResponse updated = userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest(null, "", null));
+
+        assertThat(updated.bio()).isNull();
+        assertThat(updated.displayName()).isEqualTo("johndoe");
+    }
 }

@@ -207,6 +207,20 @@ class UserProfileControllerTest {
     }
 
     @Test
+    void updateOwnProfile_withoutDisplayName_isAccepted() throws Exception {
+        // PATCH: an omitted field means "unchanged", so a bio-only edit must not be a 400.
+        UserProfileResponse response = new UserProfileResponse(1L, "Alice", "new bio", null, 0, 0);
+        when(userProfileService.updateOwnProfile(eq(1L), any())).thenReturn(response);
+
+        mockMvc.perform(patch("/api/v1/users/me")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"bio\":\"new bio\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.bio").value("new bio"));
+    }
+
+    @Test
     void follow_withValidToken_createsFollowAndReturns201() throws Exception {
         when(followService.follow(1L, 2L)).thenReturn(new FollowResponse(1L, 2L));
 

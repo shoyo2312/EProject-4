@@ -40,9 +40,20 @@ public class UserProfile extends BaseEntity {
     @Column(name = "following_count", nullable = false)
     private long followingCount = 0L;
 
+    /**
+     * Partial update: null arguments leave the current value alone, matching the PATCH semantics
+     * of UpdateProfileRequest. Blank strings clear the optional fields — that is the only way a
+     * client can erase a bio or avatar, since null already means "not sent".
+     */
     public void updateProfile(String displayName, String bio, String avatarUrl) {
-        this.displayName = displayName;
-        this.bio = bio;
-        this.avatarUrl = avatarUrl;
+        if (displayName != null) {
+            this.displayName = displayName;
+        }
+        if (bio != null) {
+            this.bio = bio.isBlank() ? null : bio;
+        }
+        if (avatarUrl != null) {
+            this.avatarUrl = avatarUrl.isBlank() ? null : avatarUrl;
+        }
     }
 }
