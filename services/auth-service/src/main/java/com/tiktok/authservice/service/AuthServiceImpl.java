@@ -2,10 +2,12 @@ package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.config.JwtProperties;
 import com.tiktok.authservice.config.OtpProperties;
+import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
 import com.tiktok.authservice.dto.request.ResendVerificationRequest;
+import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
@@ -16,6 +18,7 @@ import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.entity.VerificationToken;
 import com.tiktok.authservice.entity.VerificationTokenType;
 import com.tiktok.authservice.event.local.EmailVerificationRequestedEvent;
+import com.tiktok.authservice.event.local.PasswordResetRequestedEvent;
 import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
@@ -212,6 +215,39 @@ public class AuthServiceImpl implements AuthService {
                 .ifPresent(user -> issueOtp(user, VerificationTokenType.EMAIL_VERIFICATION,
                         otpProperties.emailVerificationExpiryMillis(),
                         otp -> new EmailVerificationRequestedEvent(user.getEmail(), otp)));
+    }
+
+    @Override
+    @Transactional
+    public void forgotPassword(ForgotPasswordRequest request) {
+        otpRateLimiter.checkAllowed("password-reset", request.email());
+
+        userRepository.findByEmailAndDeletedAtIsNull(request.email())
+                .filter(user -> user.getStatus() == UserStatus.ACTIVE)
+                .ifPresent(user -> issueOtp(user, VerificationTokenType.PASSWORD_RESET,
+                        otpProperties.passwordResetExpiryMillis(),
+                        otp -> new PasswordResetRequestedEvent(user.getEmail(), otp)));
+    }
+
+    @Override
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request) {
+        User user = userRepository.findByEmailAndDeletedAtIsNull(request.email())
+                .orElseThrow(InvalidOtpException::new);
+
+        VerificationToken token = verificationTokenRepository
+                .findByTokenHashAndTokenType(hashOtp(user.getId(), VerificationTokenType.PASSWORD_RESET, request.otp()),
+                        VerificationTokenType.PASSWORD_RESET)
+                .filter(VerificationToken::isValid)
+                .orElseThrow(InvalidOtpException::new);
+
+        token.markUsed();
+        verificationTokenRepository.save(token);
+
+        user.changePasswordHash(HashUtils.bcryptHash(request.newPassword()));
+        userRepository.save(user);
+
+        refreshTokenRepository.revokeAllByUserId(user.getId(), Instant.now());
     }
 
     private void issueOtp(User user, VerificationTokenType type, long expiryMillis,

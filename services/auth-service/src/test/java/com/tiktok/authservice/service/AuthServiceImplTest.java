@@ -1,8 +1,10 @@
 package com.tiktok.authservice.service;
 
+import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
+import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
@@ -363,5 +365,29 @@ class AuthServiceImplTest {
 
         assertThatThrownBy(() -> authService.verifyEmail(new VerifyEmailRequest("john@example.com", "000000")))
                 .isInstanceOf(InvalidOtpException.class);
+    }
+
+    @Test
+    void forgotPassword_withUnknownEmail_doesNotThrow() {
+        authService.forgotPassword(new ForgotPasswordRequest("ghost@example.com"));
+    }
+
+    @Test
+    void resetPassword_withValidOtp_changesPasswordAndRevokesRefreshTokens() {
+        authService.register(validRegisterRequest());
+        TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com"));
+
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+
+        authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(tokens.refreshToken())))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+
+        TokenResponse relogin = authService.login(new LoginRequest("johndoe", "newpassword123"));
+        assertThat(relogin.accessToken()).isNotBlank();
     }
 }

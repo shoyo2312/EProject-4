@@ -158,6 +158,30 @@ Gửi lại OTP xác thực email mới (OTP cũ bị hủy). Giới hạn **3 l
 
 Lỗi: `VALIDATION_ERROR` (400), `TOO_MANY_OTP_REQUESTS` (429).
 
+### 3.8 `POST /forgot-password`
+Không cần token. Trả `204 No Content` (luôn trả 204 dù email có tồn tại hay không — chống dò email).
+
+Request:
+```json
+{ "email": "a@b.com" }
+```
+
+Nếu email tồn tại và tài khoản đang `ACTIVE`, gửi OTP reset password (15 phút, dùng 1 lần). Giới hạn **3 lần / 15 phút** theo email.
+
+Lỗi: `VALIDATION_ERROR` (400), `TOO_MANY_OTP_REQUESTS` (429).
+
+### 3.9 `POST /reset-password`
+Không cần token. Trả `204 No Content`.
+
+Request:
+```json
+{ "email": "a@b.com", "otp": "192837", "newPassword": "N3wP@ssw0rd" }
+```
+
+Đổi mật khẩu bằng OTP nhận từ `forgot-password`. **Sau khi đổi thành công, mọi refresh token cũ của tài khoản bị thu hồi** — các phiên đang đăng nhập trên thiết bị khác sẽ mất hiệu lực ở lần `/refresh` kế tiếp (buộc đăng nhập lại bằng mật khẩu mới).
+
+Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400).
+
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
 1. `register` → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext).
@@ -191,8 +215,8 @@ ACTIVE, LOCKED
 | `USERNAME_ALREADY_EXISTS` | 409 | Đăng ký trùng username |
 | `EMAIL_ALREADY_EXISTS` | 409 | Đăng ký trùng email |
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
-| `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`) |
-| `TOO_MANY_OTP_REQUESTS` | 429 | Quá 3 lần gọi `resend-verification` trong 15 phút (theo email) |
+| `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`) |
+| `TOO_MANY_OTP_REQUESTS` | 429 | Quá 3 lần gọi `resend-verification`/`forgot-password` trong 15 phút (theo email) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định — hiển thị generic error, không show message raw cho user |
 
 `message` là mô tả người-đọc-được (tiếng Anh), phù hợp để log/debug, KHÔNG nên hiển thị trực tiếp cho end-user — nên map `code` → chuỗi đa ngôn ngữ phía Flutter (i18n).
