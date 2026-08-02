@@ -10,6 +10,7 @@ import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.exception.AlreadyFollowingException;
 import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.NotFollowingException;
+import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.service.FollowService;
 import com.tiktok.userservice.service.UserProfileService;
 import org.junit.jupiter.api.BeforeEach;
@@ -91,7 +92,7 @@ class UserProfileControllerTest {
     @Test
     void getOwnProfile_withValidToken_bindsCurrentUserIdFromTokenSubject() throws Exception {
         UserProfileResponse response = new UserProfileResponse(42L, "Alice", "bio", null, 3, 5);
-        when(userProfileService.getByUserId(42L)).thenReturn(response);
+        when(userProfileService.getByUserId(42L, 42L)).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/users/me")
                         .header("Authorization", "Bearer " + tokenFor(42L)))
@@ -100,7 +101,7 @@ class UserProfileControllerTest {
                 .andExpect(jsonPath("$.data.userId").value(42))
                 .andExpect(jsonPath("$.data.displayName").value("Alice"));
 
-        verify(userProfileService).getByUserId(42L);
+        verify(userProfileService).getByUserId(42L, 42L);
     }
 
     @Test
@@ -177,12 +178,32 @@ class UserProfileControllerTest {
     @Test
     void getProfileByUserId_withValidToken_returnsRequestedProfile() throws Exception {
         UserProfileResponse response = new UserProfileResponse(99L, "Bob", null, null, 0, 0);
-        when(userProfileService.getByUserId(99L)).thenReturn(response);
+        when(userProfileService.getByUserId(1L, 99L)).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/users/99")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.userId").value(99));
+    }
+
+    @Test
+    void getProfileByUserId_whenBlocked_returns404() throws Exception {
+        when(userProfileService.getByUserId(1L, 99L)).thenThrow(new UserProfileNotFoundException(99L));
+
+        mockMvc.perform(get("/api/v1/users/99")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("USER_PROFILE_NOT_FOUND"));
+    }
+
+    @Test
+    void listFollowers_whenBlocked_returns404() throws Exception {
+        when(followService.listFollowers(eq(1L), eq(2L), any())).thenThrow(new UserProfileNotFoundException(2L));
+
+        mockMvc.perform(get("/api/v1/users/2/followers")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("USER_PROFILE_NOT_FOUND"));
     }
 
     @Test
@@ -238,7 +259,7 @@ class UserProfileControllerTest {
     void listFollowers_withValidToken_returnsPagedProfiles() throws Exception {
         UserProfileResponse follower = new UserProfileResponse(7L, "Carol", null, null, 1, 2);
         Page<UserProfileResponse> page = new PageImpl<>(List.of(follower), PageRequest.of(0, 10), 1);
-        when(followService.listFollowers(eq(2L), any())).thenReturn(page);
+        when(followService.listFollowers(eq(1L), eq(2L), any())).thenReturn(page);
 
         mockMvc.perform(get("/api/v1/users/2/followers")
                         .header("Authorization", "Bearer " + tokenFor(1L)))

@@ -16,10 +16,13 @@ public class UserProfileServiceImpl implements UserProfileService {
 
     private final UserProfileRepository userProfileRepository;
     private final UserProfileMapper userProfileMapper;
+    private final ProfileVisibilityGuard profileVisibilityGuard;
 
     @Override
     @Transactional(readOnly = true)
-    public UserProfileResponse getByUserId(Long userId) {
+    public UserProfileResponse getByUserId(Long viewerId, Long userId) {
+        profileVisibilityGuard.requireVisible(viewerId, userId);
+
         UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new UserProfileNotFoundException(userId));
         return userProfileMapper.toResponse(profile);

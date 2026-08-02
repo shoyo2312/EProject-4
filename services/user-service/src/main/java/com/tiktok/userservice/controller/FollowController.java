@@ -35,12 +35,18 @@ public class FollowController {
     }
 
     @GetMapping("/followers")
-    public ApiResponse<Page<UserProfileResponse>> listFollowers(@PathVariable Long userId, Pageable pageable) {
-        return ApiResponse.success(followService.listFollowers(userId, pageable));
+    public ApiResponse<Page<UserProfileResponse>> listFollowers(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long userId,
+            Pageable pageable) {
+        return ApiResponse.success(followService.listFollowers(currentUserId, userId, pageable));
     }
 
     @GetMapping("/following")
-    public ApiResponse<Page<UserProfileResponse>> listFollowing(@PathVariable Long userId, Pageable pageable) {
-        return ApiResponse.success(followService.listFollowing(userId, pageable));
+    public ApiResponse<Page<UserProfileResponse>> listFollowing(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long userId,
+            Pageable pageable) {
+        return ApiResponse.success(followService.listFollowing(currentUserId, userId, pageable));
     }
 }

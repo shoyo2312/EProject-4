@@ -18,7 +18,7 @@ public class UserProfileController {
 
     @GetMapping("/me")
     public ApiResponse<UserProfileResponse> getOwnProfile(@AuthenticationPrincipal Long currentUserId) {
-        return ApiResponse.success(userProfileService.getByUserId(currentUserId));
+        return ApiResponse.success(userProfileService.getByUserId(currentUserId, currentUserId));
     }
 
     @PatchMapping("/me")
@@ -29,7 +29,9 @@ public class UserProfileController {
     }
 
     @GetMapping("/{userId}")
-    public ApiResponse<UserProfileResponse> getProfile(@PathVariable Long userId) {
-        return ApiResponse.success(userProfileService.getByUserId(userId));
+    public ApiResponse<UserProfileResponse> getProfile(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long userId) {
+        return ApiResponse.success(userProfileService.getByUserId(currentUserId, userId));
     }
 }
