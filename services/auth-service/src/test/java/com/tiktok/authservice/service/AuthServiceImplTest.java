@@ -335,6 +335,46 @@ class AuthServiceImplTest {
 
     @Test
     @Transactional
+    void register_lowercasesEmail() {
+        UserResponse response = authService.register(
+                new RegisterRequest("johndoe", "John@Example.COM", "password123"));
+
+        assertThat(response.email()).isEqualTo("john@example.com");
+    }
+
+    @Test
+    @Transactional
+    void register_emailDifferingOnlyInCase_throwsConflict() {
+        authService.register(validRegisterRequest());
+
+        RegisterRequest duplicate = new RegisterRequest("janedoe", "JOHN@EXAMPLE.COM", "password123");
+
+        assertThatThrownBy(() -> authService.register(duplicate))
+                .isInstanceOf(EmailAlreadyExistsException.class);
+    }
+
+    @Test
+    @Transactional
+    void login_withDifferentEmailCase_returnsTokens() {
+        authService.register(new RegisterRequest("johndoe", "John@Example.com", "password123"));
+
+        TokenResponse tokens = authService.login(new LoginRequest("john@example.com", "password123"));
+
+        assertThat(tokens.accessToken()).isNotBlank();
+    }
+
+    @Test
+    @Transactional
+    void login_withDifferentUsernameCase_returnsTokens() {
+        authService.register(validRegisterRequest());
+
+        TokenResponse tokens = authService.login(new LoginRequest("JohnDoe", "password123"));
+
+        assertThat(tokens.accessToken()).isNotBlank();
+    }
+
+    @Test
+    @Transactional
     void getCurrentUser_withExistingUser_returnsUserResponse() {
         UserResponse registered = authService.register(validRegisterRequest());
 

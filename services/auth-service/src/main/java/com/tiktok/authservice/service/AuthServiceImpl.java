@@ -41,6 +41,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
@@ -69,16 +70,20 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public UserResponse register(RegisterRequest request) {
-        if (userRepository.existsByUsernameAndDeletedAtIsNull(request.username())) {
+        // Stored lowercase so every later lookup is an exact match; the username keeps the
+        // casing the user chose, and only its uniqueness check is case-insensitive.
+        String email = request.email().toLowerCase(Locale.ROOT);
+
+        if (userRepository.existsByUsernameIgnoreCaseAndDeletedAtIsNull(request.username())) {
             throw new UsernameAlreadyExistsException(request.username());
         }
-        if (userRepository.existsByEmailAndDeletedAtIsNull(request.email())) {
-            throw new EmailAlreadyExistsException(request.email());
+        if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
+            throw new EmailAlreadyExistsException(email);
         }
 
         User user = User.builder()
                 .username(request.username())
-                .email(request.email())
+                .email(email)
                 .passwordHash(HashUtils.bcryptHash(request.password()))
                 .role(UserRole.USER)
                 .status(UserStatus.ACTIVE)
@@ -101,8 +106,8 @@ public class AuthServiceImpl implements AuthService {
         String key = request.usernameOrEmail();
         loginRateLimiter.checkAllowed(key);
 
-        User user = userRepository.findByUsernameAndDeletedAtIsNull(key)
-                .or(() -> userRepository.findByEmailAndDeletedAtIsNull(key))
+        User user = userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull(key)
+                .or(() -> userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(key))
                 .orElse(null);
 
         boolean valid = user != null
@@ -187,7 +192,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void verifyEmail(VerifyEmailRequest request) {
-        User user = userRepository.findByEmailAndDeletedAtIsNull(request.email())
+        User user = userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .orElseThrow(InvalidOtpException::new);
 
         VerificationToken token = verificationTokenRepository
@@ -208,7 +213,7 @@ public class AuthServiceImpl implements AuthService {
     public void resendVerification(ResendVerificationRequest request) {
         otpRateLimiter.checkAllowed("email-verification", request.email());
 
-        userRepository.findByEmailAndDeletedAtIsNull(request.email())
+        userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .filter(user -> !user.isEmailVerified())
                 .ifPresent(user -> issueOtp(user, VerificationTokenType.EMAIL_VERIFICATION,
                         otpProperties.emailVerificationExpiryMillis(),
@@ -220,7 +225,7 @@ public class AuthServiceImpl implements AuthService {
     public void forgotPassword(ForgotPasswordRequest request) {
         otpRateLimiter.checkAllowed("password-reset", request.email());
 
-        userRepository.findByEmailAndDeletedAtIsNull(request.email())
+        userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .filter(user -> user.getStatus() == UserStatus.ACTIVE)
                 .ifPresent(user -> issueOtp(user, VerificationTokenType.PASSWORD_RESET,
                         otpProperties.passwordResetExpiryMillis(),
@@ -230,7 +235,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void resetPassword(ResetPasswordRequest request) {
-        User user = userRepository.findByEmailAndDeletedAtIsNull(request.email())
+        User user = userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .orElseThrow(InvalidOtpException::new);
 
         VerificationToken token = verificationTokenRepository
