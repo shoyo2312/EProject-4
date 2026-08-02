@@ -3,6 +3,7 @@ package com.tiktok.userservice.repository;
 import com.tiktok.userservice.entity.UserProfile;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface UserProfileRepository extends JpaRepository<UserProfile, Long> {
@@ -10,4 +11,6 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
     Optional<UserProfile> findByUserIdAndDeletedAtIsNull(Long userId);
 
     boolean existsByUserIdAndDeletedAtIsNull(Long userId);
+
+    List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<Long> userIds);
 }
