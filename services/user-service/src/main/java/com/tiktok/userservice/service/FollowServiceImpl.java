@@ -24,6 +24,7 @@ public class FollowServiceImpl implements FollowService {
     private final UserProfileRepository userProfileRepository;
     private final UserBlockRepository userBlockRepository;
     private final UserProfileBatchAssembler profileBatchAssembler;
+    private final ProfileVisibilityGuard profileVisibilityGuard;
 
     @Override
     @Transactional
@@ -65,7 +66,9 @@ public class FollowServiceImpl implements FollowService {
 
     @Override
     @Transactional(readOnly = true)
-    public Page<UserProfileResponse> listFollowers(Long userId, Pageable pageable) {
+    public Page<UserProfileResponse> listFollowers(Long viewerId, Long userId, Pageable pageable) {
+        profileVisibilityGuard.requireVisible(viewerId, userId);
+
         Page<Long> followerIds = userFollowRepository.findByFollowingIdAndDeletedAtIsNull(userId, pageable)
                 .map(UserFollow::getFollowerId);
         return profileBatchAssembler.toResponses(followerIds);
@@ -73,7 +76,9 @@ public class FollowServiceImpl implements FollowService {
 
     @Override
     @Transactional(readOnly = true)
-    public Page<UserProfileResponse> listFollowing(Long userId, Pageable pageable) {
+    public Page<UserProfileResponse> listFollowing(Long viewerId, Long userId, Pageable pageable) {
+        profileVisibilityGuard.requireVisible(viewerId, userId);
+
         Page<Long> followingIds = userFollowRepository.findByFollowerIdAndDeletedAtIsNull(userId, pageable)
                 .map(UserFollow::getFollowingId);
         return profileBatchAssembler.toResponses(followingIds);

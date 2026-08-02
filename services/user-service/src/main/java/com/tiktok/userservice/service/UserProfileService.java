@@ -5,7 +5,7 @@ import com.tiktok.userservice.dto.response.UserProfileResponse;
 
 public interface UserProfileService {
 
-    UserProfileResponse getByUserId(Long userId);
+    UserProfileResponse getByUserId(Long viewerId, Long userId);
 
     UserProfileResponse updateOwnProfile(Long userId, UpdateProfileRequest request);
 

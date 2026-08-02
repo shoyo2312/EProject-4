@@ -11,7 +11,7 @@ public interface FollowService {
 
     void unfollow(Long followerId, Long followingId);
 
-    Page<UserProfileResponse> listFollowers(Long userId, Pageable pageable);
+    Page<UserProfileResponse> listFollowers(Long viewerId, Long userId, Pageable pageable);
 
-    Page<UserProfileResponse> listFollowing(Long userId, Pageable pageable);
+    Page<UserProfileResponse> listFollowing(Long viewerId, Long userId, Pageable pageable);
 }

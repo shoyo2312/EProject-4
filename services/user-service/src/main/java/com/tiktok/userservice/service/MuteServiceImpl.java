@@ -13,6 +13,13 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * Deliberately has no block check, unlike FollowServiceImpl.follow. Follow is a mutually visible
+ * relationship, so a block must reject it; mute is a one-sided, silent flag that only filters the
+ * muter's own feed, so muting someone who blocked you is redundant rather than wrong. Rejecting it
+ * would also leak the block back to the caller — exactly what ProfileVisibilityGuard hides — and
+ * would stop a user from downgrading a block to a mute after unblocking.
+ */
 @Service
 @RequiredArgsConstructor
 public class MuteServiceImpl implements MuteService {
