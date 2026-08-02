@@ -5,7 +5,6 @@ import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.entity.UserProfile;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.mapper.UserProfileMapper;
-import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -16,7 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserProfileServiceImpl implements UserProfileService {
 
     private final UserProfileRepository userProfileRepository;
-    private final UserFollowRepository userFollowRepository;
     private final UserProfileMapper userProfileMapper;
 
     @Override
@@ -24,7 +22,7 @@ public class UserProfileServiceImpl implements UserProfileService {
     public UserProfileResponse getByUserId(Long userId) {
         UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new UserProfileNotFoundException(userId));
-        return toResponseWithCounts(profile);
+        return userProfileMapper.toResponse(profile);
     }
 
     @Override
@@ -35,7 +33,7 @@ public class UserProfileServiceImpl implements UserProfileService {
 
         profile.updateProfile(request.displayName(), request.bio(), request.avatarUrl());
 
-        return toResponseWithCounts(profile);
+        return userProfileMapper.toResponse(profile);
     }
 
     @Override
@@ -51,19 +49,5 @@ public class UserProfileServiceImpl implements UserProfileService {
                 .build();
 
         userProfileRepository.save(profile);
-    }
-
-    private UserProfileResponse toResponseWithCounts(UserProfile profile) {
-        UserProfileResponse base = userProfileMapper.toResponse(profile);
-        long followerCount = userFollowRepository.countByFollowingIdAndDeletedAtIsNull(profile.getUserId());
-        long followingCount = userFollowRepository.countByFollowerIdAndDeletedAtIsNull(profile.getUserId());
-
-        return new UserProfileResponse(
-                base.userId(),
-                base.displayName(),
-                base.bio(),
-                base.avatarUrl(),
-                followerCount,
-                followingCount);
     }
 }

@@ -12,12 +12,14 @@ class UserProfileMapperTest {
     private final UserProfileMapper mapper = Mappers.getMapper(UserProfileMapper.class);
 
     @Test
-    void toResponse_mapsProfileFieldsAndIgnoresFollowCounts() {
+    void toResponse_mapsProfileFieldsIncludingDenormalizedFollowCounts() {
         UserProfile profile = UserProfile.builder()
                 .userId(42L)
                 .displayName("Alice")
                 .bio("Just here for the memes")
                 .avatarUrl("https://cdn.example.com/avatar.png")
+                .followerCount(3L)
+                .followingCount(5L)
                 .build();
 
         UserProfileResponse response = mapper.toResponse(profile);
@@ -26,10 +28,8 @@ class UserProfileMapperTest {
         assertThat(response.displayName()).isEqualTo("Alice");
         assertThat(response.bio()).isEqualTo("Just here for the memes");
         assertThat(response.avatarUrl()).isEqualTo("https://cdn.example.com/avatar.png");
-        // followerCount/followingCount are @Mapping(ignore = true): the service layer fills
-        // these in separately from batched count queries, not from the entity itself.
-        assertThat(response.followerCount()).isZero();
-        assertThat(response.followingCount()).isZero();
+        assertThat(response.followerCount()).isEqualTo(3L);
+        assertThat(response.followingCount()).isEqualTo(5L);
     }
 
     @Test
