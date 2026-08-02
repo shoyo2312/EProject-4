@@ -65,7 +65,10 @@ class BlockMuteControllerTest {
     }
 
     private String tokenFor(long userId) {
-        return jwtProvider.generateToken(String.valueOf(userId), Map.of(), 60_000L);
+        // tokenType is mandatory: the filter only accepts access tokens, so a token without it
+        // is rejected exactly like a refresh token would be.
+        return jwtProvider.generateToken(String.valueOf(userId),
+                Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS), 60_000L);
     }
 
     @Test
