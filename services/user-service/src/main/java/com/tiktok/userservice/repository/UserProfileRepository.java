@@ -17,20 +17,20 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
 
     List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<Long> userIds);
 
-    @Modifying
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update UserProfile p set p.followerCount = p.followerCount + 1 where p.userId = :userId")
     void incrementFollowerCount(@Param("userId") Long userId);
 
-    @Modifying
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update UserProfile p set p.followerCount = case when p.followerCount > 0 then p.followerCount - 1 else 0 end " +
             "where p.userId = :userId")
     void decrementFollowerCount(@Param("userId") Long userId);
 
-    @Modifying
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update UserProfile p set p.followingCount = p.followingCount + 1 where p.userId = :userId")
     void incrementFollowingCount(@Param("userId") Long userId);
 
-    @Modifying
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update UserProfile p set p.followingCount = case when p.followingCount > 0 then p.followingCount - 1 else 0 end " +
             "where p.userId = :userId")
     void decrementFollowingCount(@Param("userId") Long userId);
