@@ -50,8 +50,6 @@ import java.util.function.Function;
 public class AuthServiceImpl implements AuthService {
 
     private static final String CLAIM_ROLE = "role";
-    private static final String TOKEN_TYPE_REFRESH = "refresh";
-    private static final String CLAIM_TOKEN_TYPE = "tokenType";
     private static final String CLAIM_JTI = "jti";
 
     private final UserRepository userRepository;
@@ -130,7 +128,7 @@ public class AuthServiceImpl implements AuthService {
         }
 
         Claims claims = jwtProvider.extractClaims(token);
-        if (!TOKEN_TYPE_REFRESH.equals(claims.get(CLAIM_TOKEN_TYPE))) {
+        if (!JwtProvider.TOKEN_TYPE_REFRESH.equals(claims.get(JwtProvider.CLAIM_TOKEN_TYPE))) {
             throw new InvalidRefreshTokenException();
         }
 
@@ -280,12 +278,15 @@ public class AuthServiceImpl implements AuthService {
 
         String accessToken = jwtProvider.generateToken(
                 subject,
-                Map.of(CLAIM_ROLE, user.getRole().name(), CLAIM_JTI, UUID.randomUUID().toString()),
+                Map.of(CLAIM_ROLE, user.getRole().name(),
+                        CLAIM_JTI, UUID.randomUUID().toString(),
+                        JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS),
                 jwtProperties.accessTokenExpiryMillis());
 
         String refreshToken = jwtProvider.generateToken(
                 subject,
-                Map.of(CLAIM_TOKEN_TYPE, TOKEN_TYPE_REFRESH, CLAIM_JTI, UUID.randomUUID().toString()),
+                Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_REFRESH,
+                        CLAIM_JTI, UUID.randomUUID().toString()),
                 jwtProperties.refreshTokenExpiryMillis());
 
         RefreshToken tokenRecord = RefreshToken.builder()

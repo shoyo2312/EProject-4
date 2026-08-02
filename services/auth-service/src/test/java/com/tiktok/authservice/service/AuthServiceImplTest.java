@@ -315,6 +315,24 @@ class AuthServiceImplTest {
                 .isInstanceOf(InvalidCredentialsException.class);
     }
 
+    /**
+     * The refresh token is signed with the same secret as the access token, so every filter that
+     * authenticates a bearer token has to reject it explicitly — otherwise a stolen refresh token
+     * authenticates requests for its full 7-day life.
+     */
+    @Test
+    @Transactional
+    void issuedTokens_onlyTheAccessTokenPassesTheBearerCheck() {
+        authService.register(validRegisterRequest());
+        TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(jwtProvider.isValidAccessToken(tokens.accessToken())).isTrue();
+        assertThat(jwtProvider.isValidAccessToken(tokens.refreshToken())).isFalse();
+        assertThat(jwtProvider.isValid(tokens.refreshToken()))
+                .as("refresh token is still a structurally valid JWT — only the tokenType claim separates them")
+                .isTrue();
+    }
+
     @Test
     @Transactional
     void getCurrentUser_withExistingUser_returnsUserResponse() {

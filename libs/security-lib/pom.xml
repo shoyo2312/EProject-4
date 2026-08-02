@@ -43,5 +43,15 @@
             <artifactId>jakarta.servlet-api</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!--
+            Optional on purpose: only used to read auth-service's logout blacklist. Services that
+            already run Redis get revocation checks for free; the rest fall back to the no-op
+            RevokedTokenChecker instead of being forced to take on a Redis dependency.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+            <optional>true</optional>
+        </dependency>
     </dependencies>
 </project>

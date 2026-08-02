@@ -2,9 +2,13 @@ package com.tiktok.security.jwt;
 
 import com.tiktok.crypto.jwt.JwtProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.nio.charset.StandardCharsets;
 
@@ -14,7 +18,7 @@ import java.nio.charset.StandardCharsets;
  * issues tokens and has its own JwtProperties/JwtConfig, and api-gateway, which is WebFlux
  * and has no servlet API on its classpath).
  */
-@AutoConfiguration
+@AutoConfiguration(afterName = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
 @EnableConfigurationProperties(JwtProperties.class)
 public class JwtSecurityAutoConfiguration {
 
@@ -28,8 +32,34 @@ public class JwtSecurityAutoConfiguration {
     }
 
     @Bean
-    public JwtAuthenticationFilter jwtAuthenticationFilter(JwtProvider jwtProvider) {
-        return new JwtAuthenticationFilter(jwtProvider);
+    public JwtAuthenticationFilter jwtAuthenticationFilter(JwtProvider jwtProvider,
+                                                           RevokedTokenChecker revokedTokenChecker) {
+        return new JwtAuthenticationFilter(jwtProvider, revokedTokenChecker);
+    }
+
+    /**
+     * Fallback for services with no Redis on the classpath (product, order, admin, …): they can't
+     * see the logout blacklist, so a token stays usable until it expires. api-gateway still
+     * rejects revoked tokens at the edge, which covers all traffic that isn't service-to-service.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public RevokedTokenChecker revokedTokenChecker() {
+        return jti -> false;
+    }
+
+    /**
+     * Nested member classes are parsed before the enclosing class's @Bean methods, so when Redis
+     * is present this registers first and the @ConditionalOnMissingBean no-op above backs off.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(StringRedisTemplate.class)
+    static class RedisRevocationConfiguration {
+
+        @Bean
+        RevokedTokenChecker redisRevokedTokenChecker(StringRedisTemplate redisTemplate) {
+            return new RedisRevokedTokenChecker(redisTemplate);
+        }
     }
 
     private void validateSecret(String secret, Environment environment) {
