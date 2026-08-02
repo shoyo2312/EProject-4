@@ -52,6 +52,8 @@ public class AuthServiceImpl implements AuthService {
 
     private static final String CLAIM_ROLE = "role";
     private static final String CLAIM_JTI = "jti";
+    private static final String PURPOSE_EMAIL_VERIFICATION = "email-verification";
+    private static final String PURPOSE_PASSWORD_RESET = "password-reset";
 
     private final UserRepository userRepository;
     private final UserMapper userMapper;
@@ -192,17 +194,8 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void verifyEmail(VerifyEmailRequest request) {
-        User user = userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
-                .orElseThrow(InvalidOtpException::new);
-
-        VerificationToken token = verificationTokenRepository
-                .findByTokenHashAndTokenType(hashOtp(user.getId(), VerificationTokenType.EMAIL_VERIFICATION, request.otp()),
-                        VerificationTokenType.EMAIL_VERIFICATION)
-                .filter(VerificationToken::isValid)
-                .orElseThrow(InvalidOtpException::new);
-
-        token.markUsed();
-        verificationTokenRepository.save(token);
+        User user = consumeOtp(PURPOSE_EMAIL_VERIFICATION, VerificationTokenType.EMAIL_VERIFICATION,
+                request.email(), request.otp());
 
         user.markEmailVerified();
         userRepository.save(user);
@@ -211,7 +204,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void resendVerification(ResendVerificationRequest request) {
-        otpRateLimiter.checkAllowed("email-verification", request.email());
+        otpRateLimiter.checkAllowed(PURPOSE_EMAIL_VERIFICATION, request.email());
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .filter(user -> !user.isEmailVerified())
@@ -223,7 +216,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void forgotPassword(ForgotPasswordRequest request) {
-        otpRateLimiter.checkAllowed("password-reset", request.email());
+        otpRateLimiter.checkAllowed(PURPOSE_PASSWORD_RESET, request.email());
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .filter(user -> user.getStatus() == UserStatus.ACTIVE)
@@ -235,22 +228,46 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void resetPassword(ResetPasswordRequest request) {
-        User user = userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
-                .orElseThrow(InvalidOtpException::new);
-
-        VerificationToken token = verificationTokenRepository
-                .findByTokenHashAndTokenType(hashOtp(user.getId(), VerificationTokenType.PASSWORD_RESET, request.otp()),
-                        VerificationTokenType.PASSWORD_RESET)
-                .filter(VerificationToken::isValid)
-                .orElseThrow(InvalidOtpException::new);
-
-        token.markUsed();
-        verificationTokenRepository.save(token);
+        User user = consumeOtp(PURPOSE_PASSWORD_RESET, VerificationTokenType.PASSWORD_RESET,
+                request.email(), request.otp());
 
         user.changePasswordHash(HashUtils.bcryptHash(request.newPassword()));
         userRepository.save(user);
 
         refreshTokenRepository.revokeAllByUserId(user.getId(), Instant.now());
+    }
+
+    /**
+     * Resolves the account, burns its one-time code, and returns the account — throwing
+     * {@link InvalidOtpException} for every failure mode (unknown email, wrong code, expired
+     * code, already-used code) so the response never reveals which one occurred.
+     *
+     * <p>Wrong guesses are counted in Redis and blocked past the limit. The counter is bumped on
+     * the unknown-email path too: skipping it there would leak account existence through timing
+     * and through which addresses can be probed indefinitely. Redis writes are not part of the
+     * surrounding transaction, so a failure still increments even though the tx rolls back.
+     */
+    private User consumeOtp(String purpose, VerificationTokenType type, String email, String otp) {
+        otpRateLimiter.checkGuessAllowed(purpose, email);
+
+        try {
+            User user = userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(email)
+                    .orElseThrow(InvalidOtpException::new);
+
+            VerificationToken token = verificationTokenRepository
+                    .findByTokenHashAndTokenType(hashOtp(user.getId(), type, otp), type)
+                    .filter(VerificationToken::isValid)
+                    .orElseThrow(InvalidOtpException::new);
+
+            token.markUsed();
+            verificationTokenRepository.save(token);
+
+            otpRateLimiter.recordGuessSuccess(purpose, email);
+            return user;
+        } catch (InvalidOtpException e) {
+            otpRateLimiter.recordGuessFailure(purpose, email);
+            throw e;
+        }
     }
 
     private void issueOtp(User user, VerificationTokenType type, long expiryMillis,
