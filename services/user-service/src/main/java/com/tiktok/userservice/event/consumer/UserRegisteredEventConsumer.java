@@ -7,19 +7,17 @@ import com.tiktok.userservice.repository.InboxEventRepository;
 import com.tiktok.userservice.service.UserProfileService;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class UserRegisteredEventConsumer {
-
-    private static final Logger log = LoggerFactory.getLogger(UserRegisteredEventConsumer.class);
 
     private final InboxEventRepository inboxEventRepository;
     private final UserProfileService userProfileService;

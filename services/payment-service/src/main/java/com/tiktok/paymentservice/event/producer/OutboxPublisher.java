@@ -36,6 +36,11 @@ public class OutboxPublisher {
         List<OutboxEvent> pending = outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
         for (OutboxEvent event : pending) {
             String topic = TOPIC_BY_EVENT_TYPE.get(event.getEventType());
+            // TODO(outbox): send() is async, so a record the broker rejects is marked published
+            // anyway and never retried. A dropped PaymentCompletedEvent means money moved but
+            // the order is never confirmed. Migrate to kafka-lib's OutboxDispatcher, which marks
+            // only after the ack. See docs/outbox-migration.md — note this service has
+            // @KafkaListeners, so the dependency also switches them to bounded retry + DLQ.
             kafkaTemplate.send(topic, event.getAggregateId(), event.getPayload());
             event.markPublished();
         }

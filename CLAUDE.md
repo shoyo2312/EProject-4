@@ -92,15 +92,18 @@ com.tiktok.{service}/
 
 ### Kafka
 - Producer: ghi vào `outbox_events` table cùng transaction DB (Outbox pattern)
+- **Publish outbox**: chỉ `markPublished()` SAU khi broker ack. `KafkaTemplate.send()` là async — nó chỉ throw đồng bộ khi serialize lỗi hoặc buffer đầy, nên đánh dấu ngay sau lời gọi sẽ đánh dấu cả những row broker chưa hề nhận; query poll bỏ qua row đã đánh dấu → event mất vĩnh viễn, đúng thứ outbox sinh ra để chống. Dùng `OutboxDispatcher` của `kafka-lib`, đừng tự viết lại
 - Consumer: **claim** `eventId` TRƯỚC khi xử lý, không phải check-rồi-ghi-sau. Check-then-act để lọt 2 delivery song song (rebalance) cùng qua cửa → `$inc` đếm 2 lần, sai vĩnh viễn
   - PostgreSQL: `INSERT ... ON CONFLICT DO NOTHING` trong transaction (xem `user-service/InboxEventRepository.tryClaim`)
   - MongoDB: insert dựa vào unique index trên `eventId`; không có transaction nên phải release claim khi xử lý lỗi (xem `video-service/IdempotentEventProcessor`)
 - Event class lấy từ `libs/event-schema`
 - **Topic trộn nhiều event type** (vd. `admin.moderation-events`): payload JSON không có field phân biệt loại — dùng Kafka header `eventType` (đọc qua `@Header(name = "eventType")`) để route, KHÔNG suy đoán từ shape JSON
-- **kafka-lib usage**: `user-service`, `video-service` dùng centralized `kafka-lib` để auto-config `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang topic `<topic>.DLT` thay vì kẹt consumer vô hạn khi gặp poison message)
-  - Dependency: `<artifactId>kafka-lib</artifactId>` — không cần `@Configuration` cục bộ
-  - Các service CÓ `@KafkaListener` nhưng CHƯA migrate (analytics, inventory, media-worker, notification, order, payment, recommendation, search) — vẫn dùng default retry-vô-hạn của Spring Kafka, thêm dependency `kafka-lib` khi cần
-  - admin, auth, interaction, product, story chỉ produce, không có consumer — không cần `kafka-lib`
+- **kafka-lib usage**: dependency `<artifactId>kafka-lib</artifactId>`, auto-config qua Spring Boot — không cần `@Configuration` cục bộ. Hai thứ độc lập nhau:
+  - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `user-service`, `video-service`
+  - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`
+  - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, inventory, media-worker, notification, order, payment, recommendation, search) — vẫn dùng default retry-vô-hạn của Spring Kafka
+  - CÓ outbox nhưng CHƯA migrate dispatcher (inventory, order, payment, product) — vẫn `markPublished()` ngay sau `send()`, tức là đang mất event khi broker từ chối. **Khi động vào 1 trong 4 service này, migrate luôn**: các bước trong `docs/outbox-migration.md`, marker `TODO(outbox)` nằm ngay tại chỗ lỗi trong từng `OutboxPublisher`
+  - interaction, story không có consumer lẫn outbox — không cần `kafka-lib`
 
 ### JWT Authentication & security-lib
 - **security-lib usage**: 12 services (admin, cart, chat, interaction, inventory, notification, order, payment, product, story, user, video) dùng centralized `security-lib` để validate JWT token

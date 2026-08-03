@@ -28,6 +28,9 @@ public class OutboxPublisher {
     public void publishPending() {
         List<OutboxEvent> pending = outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
         for (OutboxEvent event : pending) {
+            // TODO(outbox): send() is async, so a record the broker rejects is marked published
+            // anyway and never retried — the event is lost. Migrate to kafka-lib's
+            // OutboxDispatcher, which marks only after the ack. See docs/outbox-migration.md.
             kafkaTemplate.send(TOPIC, event.getAggregateId(), event.getPayload());
             event.markPublished();
         }

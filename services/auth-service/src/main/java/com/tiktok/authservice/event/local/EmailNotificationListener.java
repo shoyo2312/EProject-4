@@ -2,18 +2,16 @@ package com.tiktok.authservice.event.local;
 
 import com.tiktok.authservice.service.MailService;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class EmailNotificationListener {
-
-    private static final Logger log = LoggerFactory.getLogger(EmailNotificationListener.class);
 
     private final MailService mailService;
 
