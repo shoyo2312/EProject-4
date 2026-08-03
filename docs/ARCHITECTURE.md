@@ -104,10 +104,13 @@ security-lib     ← Centralized JWT auto-configuration (12 services)
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean cho 12 services
 
-kafka-lib        ← Centralized Kafka consumer error handling (2 services)
+kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
   ├── KafkaConsumerAutoConfiguration (DefaultErrorHandler + DeadLetterPublishingRecoverer)
   │   └── Poison message: retry 3 lần (FixedBackOff 1s) → topic `<topic>.DLT`
   │   └── @ConditionalOnMissingBean — service tự khai bean riêng vẫn override được
+  ├── OutboxDispatcher (+ KafkaOutboxAutoConfiguration, OutboxProperties)
+  │   └── Chỉ markPublished SAU khi broker ack; send lỗi → để nguyên cho poll sau
+  │   └── Gửi cả batch rồi mới chờ ack (pipeline), timeout `tiktok.kafka.outbox.ack-timeout` (30s)
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean khi service thêm dependency, không cần @Configuration cục bộ
 ```
@@ -128,26 +131,33 @@ product-service, story-service, user-service, video-service
 - **auth-service**: Cấp JWT token (config khác: `auth.jwt.*` prefix, accessTokenExpiryMillis/refreshTokenExpiryMillis) →
   `JwtConfig` riêng
 
-### 5b. Kafka Consumer Error Handling — kafka-lib (2 services)
+### 5b. kafka-lib — ai đang dùng
 
 **Đang dùng `kafka-lib`** (auto-configured via Spring Boot):
 
 ```
-user-service, video-service
+user-service, video-service     ← consumer error handling (+ outbox dispatch ở video)
+auth-service, admin-service     ← chỉ OutboxDispatcher (không có @KafkaListener)
 ```
 
-**Chưa migrate** — có `@KafkaListener` nhưng vẫn dùng default retry-vô-hạn của Spring Kafka
-(thêm dependency `kafka-lib` khi cần):
+**Chưa migrate consumer error handling** — có `@KafkaListener` nhưng vẫn dùng default
+retry-vô-hạn của Spring Kafka (thêm dependency `kafka-lib` khi cần):
 
 ```
 analytics-service, inventory-service, media-worker, notification-service,
 order-service, payment-service, recommendation-service, search-service
 ```
 
-**Không cần** — chỉ produce, không có consumer nào:
+**Chưa migrate outbox** — vẫn `markPublished()` ngay sau `send()`, event mất khi broker từ chối:
 
 ```
-admin-service, auth-service, interaction-service, product-service, story-service
+inventory-service, order-service, payment-service, product-service
+```
+
+**Không cần `kafka-lib`** — không có consumer lẫn outbox:
+
+```
+interaction-service, story-service
 ```
 
 ## 6. Ports nhanh
