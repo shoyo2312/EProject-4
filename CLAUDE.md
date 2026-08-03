@@ -92,12 +92,15 @@ com.tiktok.{service}/
 
 ### Kafka
 - Producer: ghi vào `outbox_events` table cùng transaction DB (Outbox pattern)
-- Consumer: check `inbox_events` trước khi xử lý (idempotent)
+- Consumer: **claim** `eventId` TRƯỚC khi xử lý, không phải check-rồi-ghi-sau. Check-then-act để lọt 2 delivery song song (rebalance) cùng qua cửa → `$inc` đếm 2 lần, sai vĩnh viễn
+  - PostgreSQL: `INSERT ... ON CONFLICT DO NOTHING` trong transaction (xem `user-service/InboxEventRepository.tryClaim`)
+  - MongoDB: insert dựa vào unique index trên `eventId`; không có transaction nên phải release claim khi xử lý lỗi (xem `video-service/IdempotentEventProcessor`)
 - Event class lấy từ `libs/event-schema`
 - **Topic trộn nhiều event type** (vd. `admin.moderation-events`): payload JSON không có field phân biệt loại — dùng Kafka header `eventType` (đọc qua `@Header(name = "eventType")`) để route, KHÔNG suy đoán từ shape JSON
 - **kafka-lib usage**: `user-service`, `video-service` dùng centralized `kafka-lib` để auto-config `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang topic `<topic>.DLT` thay vì kẹt consumer vô hạn khi gặp poison message)
   - Dependency: `<artifactId>kafka-lib</artifactId>` — không cần `@Configuration` cục bộ
-  - Các service Kafka khác (admin, auth, analytics, interaction, media-worker, order, inventory, product, notification, payment, search, story, recommendation) CHƯA migrate — vẫn dùng default retry-vô-hạn của Spring Kafka, thêm dependency `kafka-lib` khi cần
+  - Các service CÓ `@KafkaListener` nhưng CHƯA migrate (analytics, inventory, media-worker, notification, order, payment, recommendation, search) — vẫn dùng default retry-vô-hạn của Spring Kafka, thêm dependency `kafka-lib` khi cần
+  - admin, auth, interaction, product, story chỉ produce, không có consumer — không cần `kafka-lib`
 
 ### JWT Authentication & security-lib
 - **security-lib usage**: 12 services (admin, cart, chat, interaction, inventory, notification, order, payment, product, story, user, video) dùng centralized `security-lib` để validate JWT token
@@ -137,7 +140,8 @@ make help           # Xem tất cả lệnh
 - [ ] KHÔNG `@Autowired` field injection
 - [ ] KHÔNG dùng `@Data` trên `@Entity`
 - [ ] KHÔNG lưu sensitive data (password, token thô) vào Redis/log
-- [ ] Mọi Kafka consumer PHẢI idempotent (check inbox table)
+- [ ] Mọi Kafka consumer PHẢI idempotent (claim eventId trước khi xử lý, xem §Kafka)
+- [ ] MongoDB service: BẬT `spring.data.mongodb.auto-index-creation` — mặc định TẮT từ Spring Data Mongo 3.x, `@Indexed`/`@CompoundIndex` sẽ im lặng không được tạo
 - [ ] `api-gateway` dùng WebFlux — KHÔNG import `spring-boot-starter-web`
 
 ## 7. Khi Claude sinh code — checklist

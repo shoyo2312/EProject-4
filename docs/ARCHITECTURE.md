@@ -136,12 +136,18 @@ product-service, story-service, user-service, video-service
 user-service, video-service
 ```
 
-**Chưa migrate** (vẫn dùng default retry-vô-hạn của Spring Kafka, thêm dependency `kafka-lib` khi cần):
+**Chưa migrate** — có `@KafkaListener` nhưng vẫn dùng default retry-vô-hạn của Spring Kafka
+(thêm dependency `kafka-lib` khi cần):
 
 ```
-admin-service, auth-service, analytics-service, interaction-service, media-worker,
-order-service, inventory-service, product-service, notification-service,
-payment-service, search-service, story-service, recommendation-service
+analytics-service, inventory-service, media-worker, notification-service,
+order-service, payment-service, recommendation-service, search-service
+```
+
+**Không cần** — chỉ produce, không có consumer nào:
+
+```
+admin-service, auth-service, interaction-service, product-service, story-service
 ```
 
 ## 6. Ports nhanh
