@@ -96,6 +96,14 @@ public class Video {
         this.status = VideoStatus.FAILED;
     }
 
+    public void markTakenDown() {
+        this.status = VideoStatus.TAKEN_DOWN;
+    }
+
+    public void markRestored() {
+        this.status = VideoStatus.PUBLISHED;
+    }
+
     public void markEventPublished() {
         this.eventPublishedAt = Instant.now();
     }
