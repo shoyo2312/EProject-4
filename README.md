@@ -11,7 +11,7 @@
 ![Maven](https://img.shields.io/badge/Build-Maven-C71A36?logo=apachemaven&logoColor=white)
 ![Docker](https://img.shields.io/badge/Container-Docker-2496ED?logo=docker&logoColor=white)
 
-18 microservices · 4 shared libraries · Saga, Outbox & Inbox patterns · Soft-delete-first
+18 microservices · 5 shared libraries · Saga, Outbox & Inbox patterns · Soft-delete-first
 
 </div>
 
@@ -96,7 +96,8 @@ tiktok-backend/
 │   ├── common-lib/          # BaseEntity, DTOs, Exceptions, Utilities
 │   ├── event-schema/        # Kafka event classes
 │   ├── crypto-lib/          # JWT, Hashing, Encryption
-│   └── security-lib/        # Centralized JWT auth config (JwtProperties, JwtAuthenticationFilter, auto-configuration)
+│   ├── security-lib/        # Centralized JWT auth config (JwtProperties, JwtAuthenticationFilter, auto-configuration)
+│   └── kafka-lib/           # Centralized Kafka consumer error handling (DefaultErrorHandler + DLQ, auto-configuration)
 ├── services/
 │   ├── api-gateway/         # :8080 — Spring Cloud Gateway
 │   ├── auth-service/        # :8081 — Đăng ký, đăng nhập, JWT

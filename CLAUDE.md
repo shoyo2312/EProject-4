@@ -19,7 +19,8 @@ tiktok-backend/
 │   ├── common-lib/       # BaseEntity, ApiResponse, exceptions, SnowflakeId
 │   ├── event-schema/     # Kafka event POJOs (shared giữa producers/consumers)
 │   ├── crypto-lib/       # JwtProvider, HashUtils, AesEncryptor
-│   └── security-lib/     # Centralized JWT config + auto-configuration (JwtProperties, JwtAuthenticationFilter, JwtSecurityAutoConfiguration, RevokedTokenChecker)
+│   ├── security-lib/     # Centralized JWT config + auto-configuration (JwtProperties, JwtAuthenticationFilter, JwtSecurityAutoConfiguration, RevokedTokenChecker)
+│   └── kafka-lib/        # Centralized Kafka consumer error handling + auto-configuration (KafkaConsumerAutoConfiguration → DefaultErrorHandler + DLQ)
 └── services/
     ├── api-gateway/      :8080  WebFlux — KHÔNG dùng spring-boot-starter-web
     ├── auth-service/     :8081  PostgreSQL + Security + Flyway
@@ -93,6 +94,10 @@ com.tiktok.{service}/
 - Producer: ghi vào `outbox_events` table cùng transaction DB (Outbox pattern)
 - Consumer: check `inbox_events` trước khi xử lý (idempotent)
 - Event class lấy từ `libs/event-schema`
+- **Topic trộn nhiều event type** (vd. `admin.moderation-events`): payload JSON không có field phân biệt loại — dùng Kafka header `eventType` (đọc qua `@Header(name = "eventType")`) để route, KHÔNG suy đoán từ shape JSON
+- **kafka-lib usage**: `user-service`, `video-service` dùng centralized `kafka-lib` để auto-config `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang topic `<topic>.DLT` thay vì kẹt consumer vô hạn khi gặp poison message)
+  - Dependency: `<artifactId>kafka-lib</artifactId>` — không cần `@Configuration` cục bộ
+  - Các service Kafka khác (admin, auth, analytics, interaction, media-worker, order, inventory, product, notification, payment, search, story, recommendation) CHƯA migrate — vẫn dùng default retry-vô-hạn của Spring Kafka, thêm dependency `kafka-lib` khi cần
 
 ### JWT Authentication & security-lib
 - **security-lib usage**: 12 services (admin, cart, chat, interaction, inventory, notification, order, payment, product, story, user, video) dùng centralized `security-lib` để validate JWT token
