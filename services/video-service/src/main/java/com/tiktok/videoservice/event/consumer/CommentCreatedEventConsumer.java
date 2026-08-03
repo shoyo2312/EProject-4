@@ -2,9 +2,7 @@ package com.tiktok.videoservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
-import com.tiktok.videoservice.entity.ProcessedEvent;
 import com.tiktok.videoservice.entity.Video;
-import com.tiktok.videoservice.repository.ProcessedEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -25,7 +23,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 @RequiredArgsConstructor
 public class CommentCreatedEventConsumer {
 
-    private final ProcessedEventRepository processedEventRepository;
+    private final IdempotentEventProcessor idempotentEventProcessor;
     private final MongoTemplate mongoTemplate;
     private final ObjectMapper objectMapper;
 
@@ -34,10 +32,11 @@ public class CommentCreatedEventConsumer {
     public void onMessage(String payload) {
         CommentCreatedEvent event = objectMapper.readValue(payload, CommentCreatedEvent.class);
 
-        if (processedEventRepository.existsByEventId(event.eventId())) {
-            return;
-        }
+        idempotentEventProcessor.runOnce(
+                event.eventId(), event.getClass().getSimpleName(), () -> apply(event));
+    }
 
+    private void apply(CommentCreatedEvent event) {
         var result = mongoTemplate.updateFirst(
                 Query.query(where("_id").is(String.valueOf(event.videoId()))),
                 new Update().inc("commentCount", 1),
@@ -46,10 +45,5 @@ public class CommentCreatedEventConsumer {
         if (result.getMatchedCount() == 0) {
             log.warn("CommentCreatedEvent for unknown videoId={}", event.videoId());
         }
-
-        processedEventRepository.save(ProcessedEvent.builder()
-                .eventId(event.eventId())
-                .eventType(event.getClass().getSimpleName())
-                .build());
     }
 }

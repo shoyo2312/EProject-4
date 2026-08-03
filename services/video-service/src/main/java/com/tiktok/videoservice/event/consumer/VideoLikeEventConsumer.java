@@ -2,9 +2,7 @@ package com.tiktok.videoservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.VideoLikeEvent;
-import com.tiktok.videoservice.entity.ProcessedEvent;
 import com.tiktok.videoservice.entity.Video;
-import com.tiktok.videoservice.repository.ProcessedEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -26,7 +24,7 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 @RequiredArgsConstructor
 public class VideoLikeEventConsumer {
 
-    private final ProcessedEventRepository processedEventRepository;
+    private final IdempotentEventProcessor idempotentEventProcessor;
     private final MongoTemplate mongoTemplate;
     private final ObjectMapper objectMapper;
 
@@ -35,10 +33,11 @@ public class VideoLikeEventConsumer {
     public void onMessage(String payload) {
         VideoLikeEvent event = objectMapper.readValue(payload, VideoLikeEvent.class);
 
-        if (processedEventRepository.existsByEventId(event.eventId())) {
-            return;
-        }
+        idempotentEventProcessor.runOnce(
+                event.eventId(), event.getClass().getSimpleName(), () -> apply(event));
+    }
 
+    private void apply(VideoLikeEvent event) {
         long delta = event.liked() ? 1 : -1;
         var result = mongoTemplate.updateFirst(
                 Query.query(where("_id").is(String.valueOf(event.videoId()))),
@@ -48,10 +47,5 @@ public class VideoLikeEventConsumer {
         if (result.getMatchedCount() == 0) {
             log.warn("VideoLikeEvent for unknown videoId={}", event.videoId());
         }
-
-        processedEventRepository.save(ProcessedEvent.builder()
-                .eventId(event.eventId())
-                .eventType(event.getClass().getSimpleName())
-                .build());
     }
 }

@@ -26,7 +26,7 @@ public class AdminModerationEventConsumer {
     private static final String VIDEO_TAKEN_DOWN = "VideoTakenDownEvent";
     private static final String VIDEO_RESTORED = "VideoRestoredEvent";
 
-    private final ProcessedEventRepository processedEventRepository;
+    private final IdempotentEventProcessor idempotentEventProcessor;
     private final VideoRepository videoRepository;
     private final ObjectMapper objectMapper;
 
@@ -45,39 +45,22 @@ public class AdminModerationEventConsumer {
     }
 
     private void handleTakenDown(VideoTakenDownEvent event) {
-        if (processedEventRepository.existsByEventId(event.eventId())) {
-            return;
-        }
-
-        videoRepository.findById(event.videoId()).ifPresentOrElse(
-                video -> {
-                    video.markTakenDown();
-                    videoRepository.save(video);
-                },
-                () -> log.warn("VideoTakenDownEvent for unknown videoId={}", event.videoId()));
-
-        markProcessed(event.eventId(), VIDEO_TAKEN_DOWN);
+        idempotentEventProcessor.runOnce(event.eventId(), VIDEO_TAKEN_DOWN, () ->
+                videoRepository.findById(event.videoId()).ifPresentOrElse(
+                        video -> {
+                            video.markTakenDown();
+                            videoRepository.save(video);
+                        },
+                        () -> log.warn("VideoTakenDownEvent for unknown videoId={}", event.videoId())));
     }
 
     private void handleRestored(VideoRestoredEvent event) {
-        if (processedEventRepository.existsByEventId(event.eventId())) {
-            return;
-        }
-
-        videoRepository.findById(event.videoId()).ifPresentOrElse(
-                video -> {
-                    video.markRestored();
-                    videoRepository.save(video);
-                },
-                () -> log.warn("VideoRestoredEvent for unknown videoId={}", event.videoId()));
-
-        markProcessed(event.eventId(), VIDEO_RESTORED);
-    }
-
-    private void markProcessed(String eventId, String eventType) {
-        processedEventRepository.save(ProcessedEvent.builder()
-                .eventId(eventId)
-                .eventType(eventType)
-                .build());
+        idempotentEventProcessor.runOnce(event.eventId(), VIDEO_RESTORED, () ->
+                videoRepository.findById(event.videoId()).ifPresentOrElse(
+                        video -> {
+                            video.markRestored();
+                            videoRepository.save(video);
+                        },
+                        () -> log.warn("VideoRestoredEvent for unknown videoId={}", event.videoId())));
     }
 }

@@ -2,8 +2,6 @@ package com.tiktok.videoservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoTranscodedEvent;
-import com.tiktok.videoservice.entity.ProcessedEvent;
-import com.tiktok.videoservice.repository.ProcessedEventRepository;
 import com.tiktok.videoservice.repository.VideoRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -16,7 +14,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class VideoTranscodedEventConsumer {
 
-    private final ProcessedEventRepository processedEventRepository;
+    private final IdempotentEventProcessor idempotentEventProcessor;
     private final VideoRepository videoRepository;
     private final ObjectMapper objectMapper;
 
@@ -25,11 +23,11 @@ public class VideoTranscodedEventConsumer {
     public void onMessage(String payload) {
         VideoTranscodedEvent event = objectMapper.readValue(payload, VideoTranscodedEvent.class);
 
-        if (processedEventRepository.existsByEventId(event.eventId())) {
-            log.debug("Skipping already-processed VideoTranscodedEvent eventId={}", event.eventId());
-            return;
-        }
+        idempotentEventProcessor.runOnce(
+                event.eventId(), event.getClass().getSimpleName(), () -> apply(event));
+    }
 
+    private void apply(VideoTranscodedEvent event) {
         if (!event.success()) {
             log.warn("VideoTranscodedEvent failure for videoId={}: {}", event.videoId(), event.failureReason());
         }
@@ -42,10 +40,5 @@ public class VideoTranscodedEventConsumer {
             }
             videoRepository.save(video);
         }, () -> log.warn("VideoTranscodedEvent for unknown videoId={}", event.videoId()));
-
-        processedEventRepository.save(ProcessedEvent.builder()
-                .eventId(event.eventId())
-                .eventType(event.getClass().getSimpleName())
-                .build());
     }
 }

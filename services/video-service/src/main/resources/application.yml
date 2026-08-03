@@ -8,6 +8,11 @@ spring:
   data:
     mongodb:
       uri: mongodb://root:password@localhost:27017/video_db?authSource=admin
+      # Off by default since Spring Data Mongo 3.x, which silently left every @Indexed and
+      # @CompoundIndex in this service uncreated: feed_idx was absent (feed queries were
+      # collection scans) and ProcessedEvent.eventId had no unique index, so the idempotency
+      # claim had nothing to enforce it. Asserted by ProcessedEventRepositoryTest.
+      auto-index-creation: true
     web:
       pageable:
         default-page-size: 20
