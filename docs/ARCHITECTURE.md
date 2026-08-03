@@ -148,7 +148,9 @@ analytics-service, inventory-service, media-worker, notification-service,
 order-service, payment-service, recommendation-service, search-service
 ```
 
-**Chưa migrate outbox** — vẫn `markPublished()` ngay sau `send()`, event mất khi broker từ chối:
+**Chưa migrate outbox** — vẫn `markPublished()` ngay sau `send()`, event mất khi broker từ chối.
+Các bước migrate: [`docs/outbox-migration.md`](outbox-migration.md) (marker `TODO(outbox)` đặt sẵn
+tại chỗ lỗi trong từng file):
 
 ```
 inventory-service, order-service, payment-service, product-service

@@ -102,7 +102,7 @@ com.tiktok.{service}/
   - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `user-service`, `video-service`
   - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`
   - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, inventory, media-worker, notification, order, payment, recommendation, search) — vẫn dùng default retry-vô-hạn của Spring Kafka
-  - CÓ outbox nhưng CHƯA migrate dispatcher (inventory, order, payment, product) — vẫn `markPublished()` ngay sau `send()`, tức là đang mất event khi broker từ chối
+  - CÓ outbox nhưng CHƯA migrate dispatcher (inventory, order, payment, product) — vẫn `markPublished()` ngay sau `send()`, tức là đang mất event khi broker từ chối. **Khi động vào 1 trong 4 service này, migrate luôn**: các bước trong `docs/outbox-migration.md`, marker `TODO(outbox)` nằm ngay tại chỗ lỗi trong từng `OutboxPublisher`
   - interaction, story không có consumer lẫn outbox — không cần `kafka-lib`
 
 ### JWT Authentication & security-lib
