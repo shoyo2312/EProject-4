@@ -77,6 +77,21 @@ class AdminModerationEventConsumerTest {
     }
 
     @Test
+    void onMessage_restored_returnsToStatusBeforeTakedown() throws Exception {
+        Video video = videoRepository.save(processingVideo());
+        video.markTakenDown();
+        videoRepository.save(video);
+
+        VideoRestoredEvent event = VideoRestoredEvent.of(video.getId(), 99L, "appeal accepted");
+        consumer.onMessage(objectMapper.writeValueAsString(event), "VideoRestoredEvent".getBytes());
+
+        Video updated = videoRepository.findById(video.getId()).orElseThrow();
+        assertThat(updated.getStatus())
+                .as("a video taken down mid-transcode has no hlsUrl, so restore must not publish it")
+                .isEqualTo(VideoStatus.PROCESSING);
+    }
+
+    @Test
     void onMessage_unrelatedEventType_isIgnored() throws Exception {
         Video video = videoRepository.save(publishedVideo("s3://raw/3.mp4"));
 
@@ -98,6 +113,17 @@ class AdminModerationEventConsumerTest {
         consumer.onMessage(payload, header);
 
         assertThat(processedEventRepository.count()).isEqualTo(1);
+    }
+
+    private Video processingVideo() {
+        return Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("t")
+                .rawFileUrl("s3://raw/5.mp4")
+                .visibility(VideoVisibility.PUBLIC)
+                .status(VideoStatus.PROCESSING)
+                .build();
     }
 
     private Video publishedVideo(String rawFileUrl) {
