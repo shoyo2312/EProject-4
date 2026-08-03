@@ -19,6 +19,15 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
+  data:
+    web:
+      pageable:
+        # listFollowers/listFollowing/listBlocked/listMuted take a Pageable straight from the
+        # query string, so without a cap a client can ask for ?size=100000 and pull the whole
+        # relation table in one request. Same values as video-service.
+        default-page-size: 20
+        max-page-size: 50
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
