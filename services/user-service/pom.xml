@@ -73,6 +73,10 @@
             <groupId>com.tiktok</groupId>
             <artifactId>security-lib</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.tiktok</groupId>
+            <artifactId>kafka-lib</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>
