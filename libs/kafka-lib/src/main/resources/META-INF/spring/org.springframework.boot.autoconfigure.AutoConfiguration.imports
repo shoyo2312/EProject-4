@@ -1,1 +1,2 @@
 com.tiktok.kafka.config.KafkaConsumerAutoConfiguration
+com.tiktok.kafka.config.KafkaOutboxAutoConfiguration

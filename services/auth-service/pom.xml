@@ -91,6 +91,12 @@
             <groupId>com.tiktok</groupId>
             <artifactId>crypto-lib</artifactId>
         </dependency>
+        <!-- OutboxDispatcher. auth-service has no @KafkaListener, so kafka-lib's consumer
+             error handler is configured but never exercised. -->
+        <dependency>
+            <groupId>com.tiktok</groupId>
+            <artifactId>kafka-lib</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>
