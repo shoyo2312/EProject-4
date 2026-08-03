@@ -52,6 +52,13 @@ public class Video {
 
     private VideoStatus status;
 
+    /**
+     * What {@code status} was before a takedown, so a restore puts the video back where it
+     * was instead of assuming PUBLISHED. Null for videos never taken down, and for those
+     * taken down before this field existed.
+     */
+    private VideoStatus statusBeforeTakedown;
+
     private VideoVisibility visibility;
 
     private long viewCount;
@@ -94,6 +101,24 @@ public class Video {
 
     public void markFailed() {
         this.status = VideoStatus.FAILED;
+    }
+
+    public void markTakenDown() {
+        // Guarded so a repeated takedown doesn't record TAKEN_DOWN as the state to restore to.
+        if (this.status != VideoStatus.TAKEN_DOWN) {
+            this.statusBeforeTakedown = this.status;
+        }
+        this.status = VideoStatus.TAKEN_DOWN;
+    }
+
+    /**
+     * A video taken down while still PROCESSING or FAILED has no hlsUrl, so restoring it as
+     * PUBLISHED would put an unplayable entry on the feed. It goes back to whatever it was;
+     * the transcode result, if one arrives later, publishes it normally.
+     */
+    public void markRestored() {
+        this.status = this.statusBeforeTakedown == null ? VideoStatus.PUBLISHED : this.statusBeforeTakedown;
+        this.statusBeforeTakedown = null;
     }
 
     public void markEventPublished() {

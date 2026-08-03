@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.tiktok</groupId>
+        <artifactId>tiktok-backend</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>kafka-lib</artifactId>
+    <packaging>jar</packaging>
+    <name>kafka-lib</name>
+
+    <!--
+        Shared Kafka consumer error handling: a DefaultErrorHandler wired to a
+        DeadLetterPublishingRecoverer, so a poison message (bad JSON, or any exception thrown
+        from a @KafkaListener) retries a bounded number of times then goes to a "<topic>.DLT"
+        topic instead of blocking the partition forever (Spring Kafka's default).
+        Auto-configured via META-INF/spring/...AutoConfiguration.imports — consuming services
+        just need this dependency, no local @Configuration class required.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <!-- Provided: every service on this bean's @ConditionalOnClass already has jackson-databind
+             transitively via spring-boot-starter-web/json. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+</project>

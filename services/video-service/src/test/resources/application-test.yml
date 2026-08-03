@@ -1,0 +1,6 @@
+spring:
+  kafka:
+    listener:
+      # Consumer tests invoke the listener methods directly, so the containers only add a
+      # background reconnect loop against a broker that isn't running in tests.
+      auto-startup: false

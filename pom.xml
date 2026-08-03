@@ -27,6 +27,7 @@
         <module>libs/event-schema</module>
         <module>libs/crypto-lib</module>
         <module>libs/security-lib</module>
+        <module>libs/kafka-lib</module>
 
         <!-- Services -->
         <module>services/api-gateway</module>
@@ -127,6 +128,11 @@
             <dependency>
                 <groupId>com.tiktok</groupId>
                 <artifactId>security-lib</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.tiktok</groupId>
+                <artifactId>kafka-lib</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

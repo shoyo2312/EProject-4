@@ -61,6 +61,7 @@ A gửi msg → instance 1 → lưu MongoDB
 | **Idempotent Consumer**  | Mọi Kafka consumer                                | Chống xử lý trùng (inbox_events table)             |
 | **Soft Delete**          | Tất cả services                                   | `deleted_at` thay vì xoá thật                      |
 | **Optimistic Lock**      | inventory, order, payment                         | `@Version` chống race condition                    |
+| **Dead Letter Queue**    | user-service, video-service (qua `kafka-lib`)     | Poison message retry 3 lần → `<topic>.DLT` thay vì kẹt consumer vô hạn |
 
 ## 4. Database per Service
 
@@ -102,6 +103,13 @@ security-lib     ← Centralized JWT auto-configuration (12 services)
   │   └── Fail-fast startup: kiểm tra JWT_SECRET tồn tại
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean cho 12 services
+
+kafka-lib        ← Centralized Kafka consumer error handling (2 services)
+  ├── KafkaConsumerAutoConfiguration (DefaultErrorHandler + DeadLetterPublishingRecoverer)
+  │   └── Poison message: retry 3 lần (FixedBackOff 1s) → topic `<topic>.DLT`
+  │   └── @ConditionalOnMissingBean — service tự khai bean riêng vẫn override được
+  └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+      └── Auto-register bean khi service thêm dependency, không cần @Configuration cục bộ
 ```
 
 ### 5a. JWT Authentication — security-lib (Centralized)
@@ -119,6 +127,28 @@ product-service, story-service, user-service, video-service
 - **api-gateway**: WebFlux (không có servlet API) → `JwtConfig` riêng
 - **auth-service**: Cấp JWT token (config khác: `auth.jwt.*` prefix, accessTokenExpiryMillis/refreshTokenExpiryMillis) →
   `JwtConfig` riêng
+
+### 5b. Kafka Consumer Error Handling — kafka-lib (2 services)
+
+**Đang dùng `kafka-lib`** (auto-configured via Spring Boot):
+
+```
+user-service, video-service
+```
+
+**Chưa migrate** — có `@KafkaListener` nhưng vẫn dùng default retry-vô-hạn của Spring Kafka
+(thêm dependency `kafka-lib` khi cần):
+
+```
+analytics-service, inventory-service, media-worker, notification-service,
+order-service, payment-service, recommendation-service, search-service
+```
+
+**Không cần** — chỉ produce, không có consumer nào:
+
+```
+admin-service, auth-service, interaction-service, product-service, story-service
+```
 
 ## 6. Ports nhanh
 

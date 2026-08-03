@@ -30,6 +30,12 @@ public class ProcessedEvent {
 
     private String eventType;
 
+    /**
+     * TTL far longer than any realistic Kafka redelivery window (retention plus a stuck
+     * consumer), but bounded — without it this collection grows for the life of the service
+     * to guard against replays that can no longer happen.
+     */
     @CreatedDate
+    @Indexed(expireAfter = "30d")
     private Instant processedAt;
 }
