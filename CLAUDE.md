@@ -117,6 +117,15 @@ com.tiktok.{service}/
   - `api-gateway`: dùng WebFlux (không có servlet API) — giữ JwtConfig/JwtProperties riêng
   - `auth-service`: cấp phát JWT token (khác config: accessTokenExpiryMillis/refreshTokenExpiryMillis, prefix `auth.jwt`) — giữ file riêng + đã có fail-fast validation
 
+### Dev-only affordances — PHẢI gỡ trước khi deploy production
+Những thứ dưới đây cố ý nằm trong repo để test thủ công (Postman) không cần đọc email thật. Chúng vi phạm rule "KHÔNG lưu sensitive data vào log" ở §6 và chỉ được chấp nhận ở local:
+
+| Cái gì | Ở đâu | Rủi ro nếu lên production |
+|---|---|---|
+| `log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] ... OTP ...")` | `auth-service/event/local/EmailNotificationListener.java` (2 chỗ: verify email + reset password) | OTP hiện nguyên văn trong log — ai đọc được log là chiếm được tài khoản bất kỳ |
+
+**Trước mỗi lần deploy thật**: `grep -rn "DEV ONLY" services/` phải trả về rỗng.
+
 ## 5. Common Commands
 ```bash
 # Build
