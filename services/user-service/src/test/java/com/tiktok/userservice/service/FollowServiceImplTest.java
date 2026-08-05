@@ -93,6 +93,19 @@ class FollowServiceImplTest {
 
     @Test
     @Transactional
+    void follow_unknownTarget_throwsNotFoundAndLeavesCountersUntouched() {
+        // No FK on user_follows.following_id and the counter update is an UPDATE ... WHERE that
+        // matches nothing, so before the existence check this returned 200 and left the
+        // follower's followingCount permanently overstating a non-existent edge.
+        assertThatThrownBy(() -> followService.follow(1L, 999L))
+                .isInstanceOf(UserProfileNotFoundException.class);
+
+        assertThat(userProfileService.getByUserId(1L, 1L).followingCount()).isZero();
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(1L, 999L)).isEmpty();
+    }
+
+    @Test
+    @Transactional
     void follow_twice_throwsAlreadyFollowing() {
         followService.follow(1L, 2L);
 
