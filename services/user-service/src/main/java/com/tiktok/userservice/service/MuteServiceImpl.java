@@ -6,7 +6,9 @@ import com.tiktok.userservice.entity.UserMute;
 import com.tiktok.userservice.exception.AlreadyMutedException;
 import com.tiktok.userservice.exception.CannotMuteSelfException;
 import com.tiktok.userservice.exception.NotMutedException;
+import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.UserMuteRepository;
+import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -25,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class MuteServiceImpl implements MuteService {
 
     private final UserMuteRepository userMuteRepository;
+    private final UserProfileRepository userProfileRepository;
     private final UserProfileBatchAssembler profileBatchAssembler;
 
     @Override
@@ -32,6 +35,10 @@ public class MuteServiceImpl implements MuteService {
     public MuteResponse mute(Long muterId, Long mutedId) {
         if (muterId.equals(mutedId)) {
             throw new CannotMuteSelfException();
+        }
+
+        if (!userProfileRepository.existsByUserIdAndDeletedAtIsNull(mutedId)) {
+            throw new UserProfileNotFoundException(mutedId);
         }
 
         if (userMuteRepository.findByMuterIdAndMutedIdAndDeletedAtIsNull(muterId, mutedId).isPresent()) {

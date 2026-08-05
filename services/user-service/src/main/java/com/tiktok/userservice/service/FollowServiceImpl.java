@@ -7,6 +7,7 @@ import com.tiktok.userservice.exception.AlreadyFollowingException;
 import com.tiktok.userservice.exception.CannotFollowBlockedUserException;
 import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.NotFollowingException;
+import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
@@ -31,6 +32,13 @@ public class FollowServiceImpl implements FollowService {
     public FollowResponse follow(Long followerId, Long followingId) {
         if (followerId.equals(followingId)) {
             throw new CannotFollowSelfException();
+        }
+
+        // No FK backs user_follows.following_id, and the counter updates are UPDATE ... WHERE
+        // that silently match zero rows — without this an edge to a non-existent user is
+        // accepted with a 200 and leaves followingCount permanently overstated.
+        if (!userProfileRepository.existsByUserIdAndDeletedAtIsNull(followingId)) {
+            throw new UserProfileNotFoundException(followingId);
         }
 
         if (userBlockRepository.existsBlockBetween(followerId, followingId)) {

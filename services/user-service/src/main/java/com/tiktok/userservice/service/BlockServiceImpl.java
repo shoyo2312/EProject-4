@@ -6,6 +6,7 @@ import com.tiktok.userservice.entity.UserBlock;
 import com.tiktok.userservice.exception.AlreadyBlockedException;
 import com.tiktok.userservice.exception.CannotBlockSelfException;
 import com.tiktok.userservice.exception.NotBlockedException;
+import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
@@ -29,6 +30,10 @@ public class BlockServiceImpl implements BlockService {
     public BlockResponse block(Long blockerId, Long blockedId) {
         if (blockerId.equals(blockedId)) {
             throw new CannotBlockSelfException();
+        }
+
+        if (!userProfileRepository.existsByUserIdAndDeletedAtIsNull(blockedId)) {
+            throw new UserProfileNotFoundException(blockedId);
         }
 
         if (userBlockRepository.findByBlockerIdAndBlockedIdAndDeletedAtIsNull(blockerId, blockedId).isPresent()) {
