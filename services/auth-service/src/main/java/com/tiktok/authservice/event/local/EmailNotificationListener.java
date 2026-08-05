@@ -19,6 +19,7 @@ public class EmailNotificationListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onEmailVerificationRequested(EmailVerificationRequestedEvent event) {
         try {
+            log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] verification OTP for {} = {}", event.email(), event.otp());
             mailService.sendVerificationOtp(event.email(), event.otp());
         } catch (Exception e) {
             log.error("Failed to send verification email to {}", event.email(), e);
@@ -29,6 +30,7 @@ public class EmailNotificationListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPasswordResetRequested(PasswordResetRequestedEvent event) {
         try {
+            log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] password reset OTP for {} = {}", event.email(), event.otp());
             mailService.sendPasswordResetOtp(event.email(), event.otp());
         } catch (Exception e) {
             log.error("Failed to send password reset email to {}", event.email(), e);
