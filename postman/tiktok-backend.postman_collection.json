@@ -1,0 +1,857 @@
+{
+  "info": {
+    "name": "TikTok Backend - Auth & User Service",
+    "description": "Auth-service (8081) + User-service (8082). HOW TO RUN: import both files, select environment 'TikTok Backend - Local', then use Collection Runner on the WHOLE collection top-to-bottom (folders already numbered 0/1/2 in dependency order) - no manual variable editing needed. testUsername/testEmail/userId/accessToken/etc are all set automatically as you go; every later request reads what an earlier one wrote. Two exceptions that need a manual step: (1) 'otp' env var must be pasted in from your mail sink/DB before the two OTP-'Success' requests (verify-email, reset-password) - no API echoes the OTP back; (2) 'Login - Too Many Attempts' and 'Resend Verification - Too Many Requests' are single requests meant to be re-run several times via Runner iterations to trip the rate limiter, not one-shot.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "authBaseUrl", "value": "http://localhost:8081" },
+    { "key": "userBaseUrl", "value": "http://localhost:8082" }
+  ],
+  "item": [
+    {
+      "name": "0. Setup",
+      "item": [
+        {
+          "name": "Register User A",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "const rand = Date.now();",
+              "pm.environment.set('testUsername', 'userA_' + rand);",
+              "pm.environment.set('testEmail', 'userA_' + rand + '@example.com');"
+            ] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.test('returns user id', () => pm.expect(body.data.id).to.exist);",
+              "pm.environment.set('userId', body.data.id);"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{testUsername}}\",\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
+            "url": "{{authBaseUrl}}/api/v1/auth/register"
+          }
+        },
+        {
+          "name": "Register User B",
+          "event": [
+            { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+              "const rand = Date.now() + 1;",
+              "pm.environment.set('testUsernameB', 'userB_' + rand);",
+              "pm.environment.set('testEmailB', 'userB_' + rand + '@example.com');"
+            ] } },
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('201 Created', () => pm.response.to.have.status(201));",
+              "const body = pm.response.json();",
+              "pm.environment.set('userIdB', body.data.id);"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{testUsernameB}}\",\n  \"email\": \"{{testEmailB}}\",\n  \"password\": \"{{testPasswordB}}\"\n}" },
+            "url": "{{authBaseUrl}}/api/v1/auth/register"
+          }
+        },
+        {
+          "name": "Login User A",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.environment.set('accessToken', body.data.accessToken);",
+              "pm.environment.set('refreshToken', body.data.refreshToken);"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
+            "url": "{{authBaseUrl}}/api/v1/auth/login"
+          }
+        },
+        {
+          "name": "Login User B",
+          "event": [
+            { "listen": "test", "script": { "type": "text/javascript", "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.environment.set('accessTokenB', body.data.accessToken);",
+              "pm.environment.set('refreshTokenB', body.data.refreshToken);"
+            ] } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsernameB}}\",\n  \"password\": \"{{testPasswordB}}\"\n}" },
+            "url": "{{authBaseUrl}}/api/v1/auth/login"
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Auth Service",
+      "item": [
+        {
+          "name": "Register",
+          "item": [
+            {
+              "name": "Register - Validation Error (blank fields)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));",
+                "pm.test('code is VALIDATION_ERROR', () => pm.expect(pm.response.json().code).to.eql('VALIDATION_ERROR'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"username\": \"\",\n  \"email\": \"not-an-email\",\n  \"password\": \"123\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/register"
+              }
+            },
+            {
+              "name": "Register - Success",
+              "event": [
+                { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+                  "const rand = Date.now();",
+                  "pm.environment.set('testUsername', 'userA_' + rand);",
+                  "pm.environment.set('testEmail', 'userA_' + rand + '@example.com');"
+                ] } },
+                { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('emailVerified is false', () => pm.expect(body.data.emailVerified).to.eql(false));",
+                  "pm.test('status is ACTIVE', () => pm.expect(body.data.status).to.eql('ACTIVE'));",
+                  "pm.environment.set('userId', body.data.id);"
+                ] } }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{testUsername}}\",\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/register"
+              },
+              "description": "Runs FIRST in this folder - sets testUsername/testEmail/userId, the same variables the whole rest of the collection reads from. Every request after this (Login, Get Me, User Service...) automatically targets this same account. Running this whole collection top-to-bottom via Collection Runner needs no manual variable editing."
+            },
+            {
+              "name": "Register - Duplicate Username",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('409 USERNAME_ALREADY_EXISTS', () => pm.response.to.have.status(409));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('USERNAME_ALREADY_EXISTS'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{testUsername}}\",\n  \"email\": \"someone-else-{{$timestamp}}@example.com\",\n  \"password\": \"{{testPassword}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/register"
+              },
+              "description": "Must run after 'Register - Success' above (or '0. Setup / Register User A') so {{testUsername}} is already taken."
+            },
+            {
+              "name": "Register - Duplicate Email",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('409 EMAIL_ALREADY_EXISTS', () => pm.response.to.have.status(409));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('EMAIL_ALREADY_EXISTS'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"username\": \"someone_else_{{$timestamp}}\",\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/register"
+              },
+              "description": "Must run after 'Register - Success' above (or '0. Setup / Register User A') so {{testEmail}} is already taken."
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "item": [
+            {
+              "name": "Login - Validation Error (missing password)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/login"
+              }
+            },
+            {
+              "name": "Login - Invalid Credentials (wrong password)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401 INVALID_CREDENTIALS', () => pm.response.to.have.status(401));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('INVALID_CREDENTIALS'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\",\n  \"password\": \"wrong-password-123\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/login"
+              }
+            },
+            {
+              "name": "Login - Invalid Credentials (unknown user)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401 INVALID_CREDENTIALS', () => pm.response.to.have.status(401));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"no-such-user-{{$timestamp}}\",\n  \"password\": \"whatever123\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/login"
+              }
+            },
+            {
+              "name": "Login - Too Many Attempts (run 6x via Collection Runner)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "// Run this single request 6 times in a row (Collection Runner, iterations=6, same env).",
+                "// Attempts 1-5 -> 401 INVALID_CREDENTIALS. Attempt 6 -> 429 TOO_MANY_LOGIN_ATTEMPTS.",
+                "pm.test('status is 401 or 429', () => pm.expect([401, 429]).to.include(pm.response.code));",
+                "if (pm.response.code === 429) {",
+                "  pm.test('code is TOO_MANY_LOGIN_ATTEMPTS', () => pm.expect(pm.response.json().code).to.eql('TOO_MANY_LOGIN_ATTEMPTS'));",
+                "}"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\",\n  \"password\": \"wrong-password-123\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/login"
+              },
+              "description": "LoginRateLimiter allows 5 failed attempts / 15min per account. Use Collection Runner to fire this 6 times back-to-back."
+            },
+            {
+              "name": "Login - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.test('has accessToken + refreshToken', () => {",
+                "  pm.expect(body.data.accessToken).to.exist;",
+                "  pm.expect(body.data.refreshToken).to.exist;",
+                "});",
+                "pm.environment.set('accessToken', body.data.accessToken);",
+                "pm.environment.set('refreshToken', body.data.refreshToken);"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/login"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "item": [
+            {
+              "name": "Refresh - Invalid Token (garbage)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401 INVALID_REFRESH_TOKEN', () => pm.response.to.have.status(401));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('INVALID_REFRESH_TOKEN'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"not-a-real-jwt\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/refresh"
+              }
+            },
+            {
+              "name": "Refresh - Wrong Token Type (passing accessToken)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401 INVALID_REFRESH_TOKEN', () => pm.response.to.have.status(401));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{accessToken}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/refresh"
+              },
+              "description": "tokenType claim is 'access', not 'refresh' -> must be rejected."
+            },
+            {
+              "name": "Refresh - Success (rotates tokens)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.environment.set('accessToken', body.data.accessToken);",
+                "pm.environment.set('refreshToken', body.data.refreshToken);"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/refresh"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Me",
+          "item": [
+            {
+              "name": "Get Me - Unauthorized (no token)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401', () => pm.response.to.have.status(401));"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{authBaseUrl}}/api/v1/auth/me" }
+            },
+            {
+              "name": "Get Me - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('returns username', () => pm.expect(pm.response.json().data.username).to.eql(pm.environment.get('testUsername')));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{authBaseUrl}}/api/v1/auth/me"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify Email",
+          "item": [
+            {
+              "name": "Verify Email - Validation Error (bad otp format)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"abc\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/verify-email"
+              }
+            },
+            {
+              "name": "Verify Email - Invalid OTP",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 INVALID_OTP', () => pm.response.to.have.status(400));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('INVALID_OTP'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"{{wrongOtp}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/verify-email"
+              }
+            },
+            {
+              "name": "Verify Email - Success (fill {{otp}} manually first)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"{{otp}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/verify-email"
+              },
+              "description": "OTP is only emailed (UserRegisteredEvent flow), never returned by any API. Pull it from your mail sink / DB and set env var `otp` before running."
+            }
+          ]
+        },
+        {
+          "name": "Resend Verification",
+          "item": [
+            {
+              "name": "Resend Verification - Success (no enumeration)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/resend-verification"
+              }
+            },
+            {
+              "name": "Resend Verification - Unknown Email (still 204)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('204 No Content, no enumeration', () => pm.response.to.have.status(204));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"nobody-{{$timestamp}}@example.com\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/resend-verification"
+              }
+            },
+            {
+              "name": "Resend Verification - Too Many Requests (run 4x via Runner)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "// Fire this 4 times back-to-back for the SAME testEmail. 1-3 -> 204. 4th -> 429 TOO_MANY_OTP_REQUESTS.",
+                "pm.test('status is 204 or 429', () => pm.expect([204, 429]).to.include(pm.response.code));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/resend-verification"
+              },
+              "description": "send cap is 3 / 15min per email (checked before existence lookup)."
+            }
+          ]
+        },
+        {
+          "name": "Forgot / Reset Password",
+          "item": [
+            {
+              "name": "Forgot Password - Success (always 204)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/forgot-password"
+              }
+            },
+            {
+              "name": "Reset Password - Validation Error (short password)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"{{wrongOtp}}\",\n  \"newPassword\": \"short\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/reset-password"
+              }
+            },
+            {
+              "name": "Reset Password - Invalid OTP",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 INVALID_OTP', () => pm.response.to.have.status(400));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('INVALID_OTP'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"{{wrongOtp}}\",\n  \"newPassword\": \"NewPassw0rd!23\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/reset-password"
+              }
+            },
+            {
+              "name": "Reset Password - Success (fill {{otp}} manually first)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('204 No Content', () => pm.response.to.have.status(204));",
+                "if (pm.response.code === 204) { pm.environment.set('testPassword', 'NewPassw0rd!23'); }"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"{{otp}}\",\n  \"newPassword\": \"NewPassw0rd!23\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/reset-password"
+              },
+              "description": "Revokes ALL refresh tokens for the user on success -> old {{refreshToken}} becomes invalid, must re-login."
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "item": [
+            {
+              "name": "Logout - Success (idempotent, garbage refreshToken still 204)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/logout"
+              }
+            },
+            {
+              "name": "Get Me - Unauthorized (access token blacklisted after logout)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401 - jti blacklisted', () => pm.response.to.have.status(401));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{authBaseUrl}}/api/v1/auth/me"
+              },
+              "description": "Run right after 'Logout - Success' with the SAME accessToken still set in the env."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. User Service",
+      "item": [
+        {
+          "name": "Profile",
+          "item": [
+            {
+              "name": "Get My Profile - Unauthorized",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401', () => pm.response.to.have.status(401));"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{userBaseUrl}}/api/v1/users/me" }
+            },
+            {
+              "name": "Get My Profile - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('has userId', () => pm.expect(pm.response.json().data.userId).to.exist);"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/me"
+              },
+              "description": "May 404 USER_PROFILE_NOT_FOUND if the async UserRegisteredEvent consumer hasn't created the profile row yet - retry after a moment."
+            },
+            {
+              "name": "Update My Profile - Validation Error (bad avatarUrl host)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"avatarUrl\": \"http://evil.example.com/avatar.png\"\n}" },
+                "url": "{{userBaseUrl}}/api/v1/users/me"
+              },
+              "description": "http (not https) AND disallowed host -> should fail @ValidAvatarUrl."
+            },
+            {
+              "name": "Update My Profile - Validation Error (blank displayName)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"displayName\": \"   \"\n}" },
+                "url": "{{userBaseUrl}}/api/v1/users/me"
+              }
+            },
+            {
+              "name": "Update My Profile - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.test('displayName updated', () => pm.expect(body.data.displayName).to.eql('Test User A'));"
+              ] } } ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"displayName\": \"Test User A\",\n  \"bio\": \"Hello from Postman\"\n}" },
+                "url": "{{userBaseUrl}}/api/v1/users/me"
+              }
+            },
+            {
+              "name": "Get User By Id - Not Found",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404 USER_PROFILE_NOT_FOUND', () => pm.response.to.have.status(404));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('USER_PROFILE_NOT_FOUND'));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/999999999"
+              }
+            },
+            {
+              "name": "Get User By Id - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Follow",
+          "item": [
+            {
+              "name": "Follow - Cannot Follow Self",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 CANNOT_FOLLOW_SELF', () => pm.response.to.have.status(400));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('CANNOT_FOLLOW_SELF'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/follow"
+              }
+            },
+            {
+              "name": "Follow - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('201 Created', () => pm.response.to.have.status(201));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/follow"
+              }
+            },
+            {
+              "name": "Follow - Already Following",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('409 ALREADY_FOLLOWING', () => pm.response.to.have.status(409));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('ALREADY_FOLLOWING'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/follow"
+              },
+              "description": "Run right after 'Follow - Success' against the same target."
+            },
+            {
+              "name": "List Followers of User B",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('userA is in the list', () => {",
+                "  const content = pm.response.json().data.content;",
+                "  pm.expect(content.some(u => String(u.userId) === pm.environment.get('userId'))).to.be.true;",
+                "});"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/followers"
+              }
+            },
+            {
+              "name": "List Following of User A - Pagination Cap Test",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('page size clamped to max 50, not the requested 99999', () => {",
+                "  pm.expect(pm.response.json().data.size).to.be.at.most(50);",
+                "});"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/following?size=99999"
+              }
+            },
+            {
+              "name": "Unfollow - Not Following",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404 NOT_FOLLOWING', () => pm.response.to.have.status(404));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('NOT_FOLLOWING'));"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/follow"
+              },
+              "description": "User B never followed User A."
+            },
+            {
+              "name": "Unfollow - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/follow"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Block",
+          "item": [
+            {
+              "name": "Block - Cannot Block Self",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 CANNOT_BLOCK_SELF', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/block"
+              }
+            },
+            {
+              "name": "Block - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('201 Created', () => pm.response.to.have.status(201));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/block"
+              }
+            },
+            {
+              "name": "Block - Already Blocked",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('409 ALREADY_BLOCKED', () => pm.response.to.have.status(409));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('ALREADY_BLOCKED'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/block"
+              }
+            },
+            {
+              "name": "Follow - Blocked (403 USER_BLOCKED)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403 USER_BLOCKED', () => pm.response.to.have.status(403));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('USER_BLOCKED'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/follow"
+              },
+              "description": "User B tries to follow User A while A has B blocked -> block check runs in either direction."
+            },
+            {
+              "name": "Get Profile - Hidden by Block (404)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404 USER_PROFILE_NOT_FOUND (block hides existence)', () => pm.response.to.have.status(404));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userId}}"
+              }
+            },
+            {
+              "name": "List My Blocked Users - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/me/blocked"
+              }
+            },
+            {
+              "name": "Unblock - Not Blocked",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404 NOT_BLOCKED', () => pm.response.to.have.status(404));"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/block"
+              },
+              "description": "User B never blocked User A (only A blocked B)."
+            },
+            {
+              "name": "Unblock - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/block"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mute",
+          "item": [
+            {
+              "name": "Mute - Cannot Mute Self",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 CANNOT_MUTE_SELF', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/mute"
+              }
+            },
+            {
+              "name": "Mute - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('201 Created', () => pm.response.to.have.status(201));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/mute"
+              }
+            },
+            {
+              "name": "Mute - Already Muted",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('409 ALREADY_MUTED', () => pm.response.to.have.status(409));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('ALREADY_MUTED'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/mute"
+              }
+            },
+            {
+              "name": "List My Muted Users - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/me/muted"
+              }
+            },
+            {
+              "name": "Unmute - Not Muted",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404 NOT_MUTED', () => pm.response.to.have.status(404));"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/mute"
+              }
+            },
+            {
+              "name": "Unmute - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/mute"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
