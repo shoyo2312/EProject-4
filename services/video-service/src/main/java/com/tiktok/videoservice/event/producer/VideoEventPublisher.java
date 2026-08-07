@@ -62,6 +62,6 @@ public class VideoEventPublisher {
 
     private void markPublished(Video video) {
         video.markEventPublished();
-        videoRepository.save(video);
+        videoRepository.updateEventPublished(video);
     }
 }
