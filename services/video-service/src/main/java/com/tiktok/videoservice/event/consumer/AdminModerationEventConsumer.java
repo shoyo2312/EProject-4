@@ -49,7 +49,7 @@ public class AdminModerationEventConsumer {
                 videoRepository.findById(event.videoId()).ifPresentOrElse(
                         video -> {
                             video.markTakenDown();
-                            videoRepository.save(video);
+                            videoRepository.updateModerationStatus(video);
                         },
                         () -> log.warn("VideoTakenDownEvent for unknown videoId={}", event.videoId())));
     }
@@ -59,7 +59,7 @@ public class AdminModerationEventConsumer {
                 videoRepository.findById(event.videoId()).ifPresentOrElse(
                         video -> {
                             video.markRestored();
-                            videoRepository.save(video);
+                            videoRepository.updateModerationStatus(video);
                         },
                         () -> log.warn("VideoRestoredEvent for unknown videoId={}", event.videoId())));
     }

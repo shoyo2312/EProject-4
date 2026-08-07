@@ -39,10 +39,11 @@ public class VideoTranscodedEventConsumer {
         videoRepository.findByIdAndDeletedAtIsNull(event.videoId()).ifPresentOrElse(video -> {
             if (event.success()) {
                 video.markPublished(event.thumbnailUrl(), event.hlsUrl(), event.durationSeconds());
+                videoRepository.updateTranscodeResult(video);
             } else {
                 video.markFailed();
+                videoRepository.updateStatus(video);
             }
-            videoRepository.save(video);
         }, () -> log.warn("VideoTranscodedEvent for unknown or deleted videoId={}", event.videoId()));
     }
 }
