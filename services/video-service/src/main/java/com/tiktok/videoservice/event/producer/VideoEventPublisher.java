@@ -36,7 +36,7 @@ public class VideoEventPublisher {
 
     @Scheduled(fixedDelay = 5000)
     public void publishPending() {
-        List<Video> pending = videoRepository.findTop100ByEventPublishedAtIsNullOrderByCreatedAtAsc();
+        List<Video> pending = videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc();
         if (pending.isEmpty()) {
             return;
         }

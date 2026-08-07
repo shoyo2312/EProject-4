@@ -92,6 +92,31 @@ class VideoTranscodedEventConsumerTest {
     }
 
     @Test
+    void onMessage_deletedVideo_isNotPublished() throws Exception {
+        Video video = videoRepository.save(Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("t")
+                .rawFileUrl("s3://raw/4.mp4")
+                .visibility(VideoVisibility.PUBLIC)
+                .status(VideoStatus.PROCESSING)
+                .build());
+        video.markDeleted();
+        videoRepository.save(video);
+
+        VideoTranscodedEvent event = VideoTranscodedEvent.success(
+                video.getId(), "http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
+        consumer.onMessage(objectMapper.writeValueAsString(event));
+
+        Video after = videoRepository.findById(video.getId()).orElseThrow();
+        assertThat(after.getStatus())
+                .as("a soft-deleted video must not come back as PUBLISHED")
+                .isEqualTo(VideoStatus.PROCESSING);
+        assertThat(after.getHlsUrl()).isNull();
+        assertThat(after.getDeletedAt()).isNotNull();
+    }
+
+    @Test
     void onMessage_replay_isNoOp() throws Exception {
         Video video = videoRepository.save(Video.builder()
                 .id(Video.newId())

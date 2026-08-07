@@ -19,5 +19,10 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
     Page<Video> findByStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
             VideoStatus status, VideoVisibility visibility, Pageable pageable);
 
-    List<Video> findTop100ByEventPublishedAtIsNullOrderByCreatedAtAsc();
+    /**
+     * Outbox poll. Excludes soft-deleted videos: the poll runs every five seconds, so a video
+     * deleted inside that window would otherwise still be announced to the rest of the system
+     * and transcoded after its owner removed it.
+     */
+    List<Video> findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc();
 }

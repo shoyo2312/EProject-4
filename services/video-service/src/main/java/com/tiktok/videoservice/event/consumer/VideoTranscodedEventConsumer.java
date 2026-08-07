@@ -32,7 +32,11 @@ public class VideoTranscodedEventConsumer {
             log.warn("VideoTranscodedEvent failure for videoId={}: {}", event.videoId(), event.failureReason());
         }
 
-        videoRepository.findById(event.videoId()).ifPresentOrElse(video -> {
+        // Deleted videos are skipped rather than updated. Transcoding takes far longer than the
+        // window in which an owner can delete, so the event routinely comes back for a video that
+        // is already gone; writing the result anyway leaves a document that is both soft-deleted
+        // and PUBLISHED, a combination no read path expects and nothing later corrects.
+        videoRepository.findByIdAndDeletedAtIsNull(event.videoId()).ifPresentOrElse(video -> {
             if (event.success()) {
                 video.markPublished(event.thumbnailUrl(), event.hlsUrl(), event.durationSeconds());
                 videoRepository.updateTranscodeResult(video);
@@ -40,6 +44,6 @@ public class VideoTranscodedEventConsumer {
                 video.markFailed();
                 videoRepository.updateStatus(video);
             }
-        }, () -> log.warn("VideoTranscodedEvent for unknown videoId={}", event.videoId()));
+        }, () -> log.warn("VideoTranscodedEvent for unknown or deleted videoId={}", event.videoId()));
     }
 }
