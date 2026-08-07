@@ -10,7 +10,7 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 import java.util.List;
 import java.util.Optional;
 
-public interface VideoRepository extends MongoRepository<Video, String> {
+public interface VideoRepository extends MongoRepository<Video, String>, VideoRepositoryCustom {
 
     Optional<Video> findByIdAndDeletedAtIsNull(String id);
 

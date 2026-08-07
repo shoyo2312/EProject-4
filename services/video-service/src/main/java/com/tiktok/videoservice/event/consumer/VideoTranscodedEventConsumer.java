@@ -35,10 +35,11 @@ public class VideoTranscodedEventConsumer {
         videoRepository.findById(event.videoId()).ifPresentOrElse(video -> {
             if (event.success()) {
                 video.markPublished(event.thumbnailUrl(), event.hlsUrl(), event.durationSeconds());
+                videoRepository.updateTranscodeResult(video);
             } else {
                 video.markFailed();
+                videoRepository.updateStatus(video);
             }
-            videoRepository.save(video);
         }, () -> log.warn("VideoTranscodedEvent for unknown videoId={}", event.videoId()));
     }
 }

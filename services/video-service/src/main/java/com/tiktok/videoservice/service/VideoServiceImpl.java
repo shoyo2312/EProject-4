@@ -76,7 +76,7 @@ public class VideoServiceImpl implements VideoService {
         }
 
         video.markDeleted();
-        videoRepository.save(video);
+        videoRepository.updateSoftDeleted(video);
     }
 
     private boolean isOwner(Long requesterId, Video video) {

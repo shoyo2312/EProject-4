@@ -83,7 +83,7 @@ class VideoEventPublisherTest {
         assertThat(record.value()).contains(video.getId()).contains(video.getTitle());
 
         assertThat(video.getEventPublishedAt()).isNotNull();
-        verify(videoRepository).save(video);
+        verify(videoRepository).updateEventPublished(video);
     }
 
     @Test
@@ -100,7 +100,7 @@ class VideoEventPublisherTest {
         assertThat(video.getEventPublishedAt())
                 .as("an unacknowledged event must stay pending, otherwise it is lost for good")
                 .isNull();
-        verify(videoRepository, never()).save(any(Video.class));
+        verify(videoRepository, never()).updateEventPublished(any(Video.class));
     }
 
     @Test
@@ -119,7 +119,7 @@ class VideoEventPublisherTest {
 
         assertThat(failing.getEventPublishedAt()).isNull();
         assertThat(succeeding.getEventPublishedAt()).isNotNull();
-        verify(videoRepository).save(succeeding);
+        verify(videoRepository).updateEventPublished(succeeding);
     }
 
     private Video pendingVideo() {
