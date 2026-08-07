@@ -55,7 +55,7 @@ class VideoEventPublisherTest {
 
     @Test
     void publishPending_noPendingVideos_doesNotTouchKafka() {
-        when(videoRepository.findTop100ByEventPublishedAtIsNullOrderByCreatedAtAsc())
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .thenReturn(List.of());
 
         publisher.publishPending();
@@ -66,7 +66,7 @@ class VideoEventPublisherTest {
     @Test
     void publishPending_sendsEventAndMarksPublished() {
         Video video = pendingVideo();
-        when(videoRepository.findTop100ByEventPublishedAtIsNullOrderByCreatedAtAsc())
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .thenReturn(List.of(video));
         when(kafkaOperations.send(any(ProducerRecord.class)))
                 .thenReturn(CompletableFuture.completedFuture(null));
@@ -89,7 +89,7 @@ class VideoEventPublisherTest {
     @Test
     void publishPending_sendFailure_leavesVideoPendingForNextPoll() {
         Video video = pendingVideo();
-        when(videoRepository.findTop100ByEventPublishedAtIsNullOrderByCreatedAtAsc())
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .thenReturn(List.of(video));
         CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
         failed.completeExceptionally(new RuntimeException("broker unreachable"));
@@ -107,7 +107,7 @@ class VideoEventPublisherTest {
     void publishPending_oneFailureDoesNotBlockTheRest() {
         Video failing = pendingVideo();
         Video succeeding = pendingVideo();
-        when(videoRepository.findTop100ByEventPublishedAtIsNullOrderByCreatedAtAsc())
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .thenReturn(List.of(failing, succeeding));
 
         CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
