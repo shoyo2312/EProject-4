@@ -11,6 +11,7 @@ import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -40,10 +41,17 @@ public class BlockServiceImpl implements BlockService {
             throw new AlreadyBlockedException();
         }
 
-        userBlockRepository.save(UserBlock.builder()
-                .blockerId(blockerId)
-                .blockedId(blockedId)
-                .build());
+        // See FollowServiceImpl.follow: the check above loses to a concurrent duplicate, and only
+        // uq_user_blocks_blocker_blocked stops it. Flushing here turns that into the same 409 the
+        // sequential path returns instead of a 500.
+        try {
+            userBlockRepository.saveAndFlush(UserBlock.builder()
+                    .blockerId(blockerId)
+                    .blockedId(blockedId)
+                    .build());
+        } catch (DataIntegrityViolationException ex) {
+            throw new AlreadyBlockedException();
+        }
 
         // Blocking severs any existing follow relationship in either direction, so neither
         // side keeps showing up in the other's followers/following list after the block.

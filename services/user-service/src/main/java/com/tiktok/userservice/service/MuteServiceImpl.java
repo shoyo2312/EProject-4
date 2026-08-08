@@ -10,6 +10,7 @@ import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.UserMuteRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -45,10 +46,17 @@ public class MuteServiceImpl implements MuteService {
             throw new AlreadyMutedException();
         }
 
-        userMuteRepository.save(UserMute.builder()
-                .muterId(muterId)
-                .mutedId(mutedId)
-                .build());
+        // See FollowServiceImpl.follow: the check above loses to a concurrent duplicate, and only
+        // uq_user_mutes_muter_muted stops it. Flushing here turns that into the same 409 the
+        // sequential path returns instead of a 500.
+        try {
+            userMuteRepository.saveAndFlush(UserMute.builder()
+                    .muterId(muterId)
+                    .mutedId(mutedId)
+                    .build());
+        } catch (DataIntegrityViolationException ex) {
+            throw new AlreadyMutedException();
+        }
 
         return new MuteResponse(muterId, mutedId);
     }
