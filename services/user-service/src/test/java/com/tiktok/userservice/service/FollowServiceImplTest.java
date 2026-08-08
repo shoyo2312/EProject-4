@@ -106,6 +106,19 @@ class FollowServiceImplTest {
 
     @Test
     @Transactional
+    void follow_callerWithoutProfile_throwsNotFoundAndPersistsNothing() {
+        // A caller whose UserRegisteredEvent never landed holds a valid token but no profile row.
+        // incrementFollowingCount would match nothing, and the edge would leave an id with no
+        // profile sitting in bob's followers list.
+        assertThatThrownBy(() -> followService.follow(999L, 2L))
+                .isInstanceOf(UserProfileNotFoundException.class);
+
+        assertThat(userProfileService.getByUserId(2L, 2L).followerCount()).isZero();
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(999L, 2L)).isEmpty();
+    }
+
+    @Test
+    @Transactional
     void follow_twice_throwsAlreadyFollowing() {
         followService.follow(1L, 2L);
 

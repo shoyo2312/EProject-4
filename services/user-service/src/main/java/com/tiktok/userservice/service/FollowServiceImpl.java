@@ -12,6 +12,7 @@ import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -41,6 +42,14 @@ public class FollowServiceImpl implements FollowService {
             throw new UserProfileNotFoundException(followingId);
         }
 
+        // The follower is checked for the same reason as the target, on the other side of the
+        // edge. A caller whose UserRegisteredEvent never landed holds a valid token but no
+        // profile row; incrementFollowingCount would match nothing and the edge would put an id
+        // with no profile into the target's followers list forever.
+        if (!userProfileRepository.existsByUserIdAndDeletedAtIsNull(followerId)) {
+            throw new UserProfileNotFoundException(followerId);
+        }
+
         if (userBlockRepository.existsBlockBetween(followerId, followingId)) {
             throw new CannotFollowBlockedUserException();
         }
@@ -54,7 +63,16 @@ public class FollowServiceImpl implements FollowService {
                 .followingId(followingId)
                 .build();
 
-        userFollowRepository.save(follow);
+        // The check above is not the guarantee — two concurrent requests both pass it and only
+        // uq_user_follows_follower_following stops the second. saveAndFlush forces that violation
+        // to surface here instead of at commit, so the loser is answered 409 ALREADY_FOLLOWING
+        // like the sequential case rather than a 500, and rolls back before the counters move.
+        try {
+            userFollowRepository.saveAndFlush(follow);
+        } catch (DataIntegrityViolationException ex) {
+            throw new AlreadyFollowingException();
+        }
+
         userProfileRepository.incrementFollowingCount(followerId);
         userProfileRepository.incrementFollowerCount(followingId);
 
