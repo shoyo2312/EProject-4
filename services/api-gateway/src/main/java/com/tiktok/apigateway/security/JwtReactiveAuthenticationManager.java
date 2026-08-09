@@ -1,10 +1,10 @@
 package com.tiktok.apigateway.security;
 
 import com.tiktok.crypto.jwt.JwtProvider;
+import com.tiktok.crypto.jwt.RevocationKeys;
 import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.ReactiveAuthenticationManager;
@@ -25,19 +25,19 @@ import java.util.List;
  * otherwise work as a bearer credential for its full 7-day life. See
  * {@link com.tiktok.crypto.jwt.JwtProvider#isValidAccessToken(String)}.
  *
- * <p>Also rejects tokens whose jti was blacklisted by auth-service on logout (see
- * AccessTokenBlacklist there). The blacklist check fails open — if Redis is unreachable, the
+ * <p>Also rejects tokens auth-service revoked before their natural expiry (see
+ * AccessTokenBlacklist there): a single jti on logout, or every token issued to a user before a
+ * cutoff instant when all sessions had to die at once — password reset, refresh-token replay.
+ * The revocation check fails open — if Redis is unreachable, the
  * token is treated as not blacklisted and accepted based on signature/expiry alone, since
  * Redis here is best-effort revocation, not the source of truth for token validity.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class JwtReactiveAuthenticationManager implements ReactiveAuthenticationManager {
 
-    private static final Logger log = LoggerFactory.getLogger(JwtReactiveAuthenticationManager.class);
     private static final String CLAIM_ROLE = "role";
-    private static final String CLAIM_JTI = "jti";
-    private static final String BLACKLIST_KEY_PREFIX = "auth:blacklist:";
 
     private final JwtProvider jwtProvider;
     private final ReactiveStringRedisTemplate redisTemplate;
@@ -51,25 +51,38 @@ public class JwtReactiveAuthenticationManager implements ReactiveAuthenticationM
         }
 
         Claims claims = jwtProvider.extractClaims(token);
-        String jti = claims.get(CLAIM_JTI, String.class);
 
-        return isBlacklisted(jti).flatMap(blacklisted -> {
-            if (blacklisted) {
+        return isRevoked(claims).flatMap(revoked -> {
+            if (revoked) {
                 return Mono.error(new BadCredentialsException("Token has been revoked"));
             }
             return Mono.just(toAuthentication(claims, token));
         });
     }
 
-    private Mono<Boolean> isBlacklisted(String jti) {
-        if (jti == null) {
-            return Mono.just(false);
-        }
-        return redisTemplate.hasKey(BLACKLIST_KEY_PREFIX + jti)
+    private Mono<Boolean> isRevoked(Claims claims) {
+        String jti = RevocationKeys.jtiOf(claims);
+        Mono<Boolean> byJti = jti == null
+                ? Mono.just(false)
+                : redisTemplate.hasKey(RevocationKeys.forJti(jti));
+
+        return byJti
+                .flatMap(revoked -> revoked ? Mono.just(true) : isIssuedBeforeUserCutoff(claims))
                 .onErrorResume(ex -> {
                     log.warn("Redis unavailable for blacklist check, failing open", ex);
                     return Mono.just(false);
                 });
+    }
+
+    /**
+     * A password reset or a detected refresh-token replay ends every session for a user at once,
+     * but access tokens are stateless — there is no list of ids to blacklist. auth-service writes
+     * one cutoff instant per user instead, and every token issued before it is refused.
+     */
+    private Mono<Boolean> isIssuedBeforeUserCutoff(Claims claims) {
+        return redisTemplate.opsForValue().get(RevocationKeys.forUser(claims.getSubject()))
+                .map(cutoff -> RevocationKeys.isIssuedBefore(claims, cutoff))
+                .defaultIfEmpty(false);
     }
 
     private Authentication toAuthentication(Claims claims, String token) {

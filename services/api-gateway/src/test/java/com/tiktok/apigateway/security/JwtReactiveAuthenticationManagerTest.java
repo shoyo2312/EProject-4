@@ -53,7 +53,11 @@ class JwtReactiveAuthenticationManagerTest {
     }
 
     private String tokenWithJti(String jti) {
-        return jwtProvider.generateToken("42",
+        return tokenFor("42", jti);
+    }
+
+    private String tokenFor(String subject, String jti) {
+        return jwtProvider.generateToken(subject,
                 Map.of("role", "USER", "jti", jti, JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS),
                 Duration.ofMinutes(15).toMillis());
     }
@@ -102,6 +106,40 @@ class JwtReactiveAuthenticationManagerTest {
         StepVerifier.create(manager.authenticate(authentication))
                 .expectError(BadCredentialsException.class)
                 .verify();
+    }
+
+    /**
+     * A password reset or a detected refresh-token replay has to kill access tokens that were
+     * already handed out, and there is no list of their ids to blacklist — auth-service writes one
+     * cutoff per user instead, and the edge refuses everything issued before it.
+     */
+    @Test
+    void authenticate_withTokenIssuedBeforeUserCutoff_rejectsWithBadCredentials() {
+        String token = tokenFor("777", UUID.randomUUID().toString());
+        long cutoff = System.currentTimeMillis() + 1_000;
+        redisTemplate.opsForValue()
+                .set("auth:blacklist:user:777", String.valueOf(cutoff), Duration.ofMinutes(1)).block();
+
+        var authentication = new UsernamePasswordAuthenticationToken(null, token);
+
+        StepVerifier.create(manager.authenticate(authentication))
+                .expectError(BadCredentialsException.class)
+                .verify();
+    }
+
+    /** The cutoff must not lock the user out of the session they open right after it. */
+    @Test
+    void authenticate_withTokenIssuedAfterUserCutoff_succeeds() {
+        long cutoff = System.currentTimeMillis() - 1_000;
+        redisTemplate.opsForValue()
+                .set("auth:blacklist:user:888", String.valueOf(cutoff), Duration.ofMinutes(1)).block();
+        String token = tokenFor("888", UUID.randomUUID().toString());
+
+        var authentication = new UsernamePasswordAuthenticationToken(null, token);
+
+        StepVerifier.create(manager.authenticate(authentication))
+                .assertNext(result -> assertThat(result.getPrincipal()).isEqualTo(888L))
+                .verifyComplete();
     }
 
     @Test
