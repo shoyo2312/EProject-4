@@ -31,7 +31,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String BEARER_PREFIX = "Bearer ";
     private static final String CLAIM_ROLE = "role";
-    private static final String CLAIM_JTI = "jti";
 
     private final JwtProvider jwtProvider;
     private final AccessTokenBlacklist accessTokenBlacklist;
@@ -47,7 +46,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (jwtProvider.isValidAccessToken(token)) {
                 Claims claims = jwtProvider.extractClaims(token);
 
-                if (accessTokenBlacklist.isBlacklisted(claims.get(CLAIM_JTI, String.class))) {
+                if (accessTokenBlacklist.isBlacklisted(claims)) {
                     filterChain.doFilter(request, response);
                     return;
                 }
