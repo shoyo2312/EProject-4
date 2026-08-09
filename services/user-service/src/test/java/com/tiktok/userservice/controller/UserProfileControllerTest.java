@@ -51,7 +51,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-at-least-32-bytes-long-0123456789",
-        "app.avatar.allowed-hosts=cdn.example.com"
+        "app.media.allowed-hosts=cdn.example.com"
 })
 class UserProfileControllerTest {
 

@@ -57,7 +57,7 @@ class VideoTranscodedEventConsumerTest {
                 .id(Video.newId())
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://raw/1.mp4")
+                .rawFileUrl("s3://video-media/raw/1.mp4")
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build());
@@ -79,7 +79,7 @@ class VideoTranscodedEventConsumerTest {
                 .id(Video.newId())
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://raw/2.mp4")
+                .rawFileUrl("s3://video-media/raw/2.mp4")
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build());
@@ -97,7 +97,7 @@ class VideoTranscodedEventConsumerTest {
                 .id(Video.newId())
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://raw/4.mp4")
+                .rawFileUrl("s3://video-media/raw/4.mp4")
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build());
@@ -122,7 +122,7 @@ class VideoTranscodedEventConsumerTest {
                 .id(Video.newId())
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://raw/3.mp4")
+                .rawFileUrl("s3://video-media/raw/3.mp4")
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build());

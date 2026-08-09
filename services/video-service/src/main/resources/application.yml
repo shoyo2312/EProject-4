@@ -20,12 +20,36 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: video-service
+      # Kafka's own default is "latest", which silently discards everything already on a topic
+      # whenever this group has no committed offset — a first deploy, or offsets aged out after
+      # a long outage. The events dropped that way are ones nothing re-sends: a missed
+      # VideoTranscodedEvent leaves a video PROCESSING forever, and a missed like or comment is
+      # a counter that stays wrong.
+      #
+      # Replaying is safe here even though two consumers do a non-idempotent $inc. Every
+      # consumer claims its eventId in processed_events first, those claims live 30 days
+      # (ProcessedEvent), and the broker keeps records for 7 (KAFKA_LOG_RETENTION_HOURS=168).
+      # Anything old enough to be replayed still has its claim, so it is skipped rather than
+      # counted twice. Shortening the TTL below the broker's retention would break that.
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
+
+app:
+  media:
+    # Where CreateVideoRequest.rawFileUrl is allowed to point. Buckets must match media-worker's
+    # MINIO_BUCKET; hosts are the public CDN/MinIO host(s) in front of it. Both empty means
+    # reject everything, so set them per environment.
+    allowed-hosts: ${MEDIA_ALLOWED_HOSTS:cdn.tiktok-clone.local}
+    allowed-buckets: ${MEDIA_ALLOWED_BUCKETS:video-media}
 
 springdoc:
   api-docs:

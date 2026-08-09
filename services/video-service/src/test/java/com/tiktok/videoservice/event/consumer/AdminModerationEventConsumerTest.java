@@ -54,7 +54,7 @@ class AdminModerationEventConsumerTest {
 
     @Test
     void onMessage_takenDown_marksVideoTakenDown() throws Exception {
-        Video video = videoRepository.save(publishedVideo("s3://raw/1.mp4"));
+        Video video = videoRepository.save(publishedVideo("s3://video-media/raw/1.mp4"));
 
         VideoTakenDownEvent event = VideoTakenDownEvent.of(video.getId(), 99L, "nudity");
         consumer.onMessage(objectMapper.writeValueAsString(event), "VideoTakenDownEvent".getBytes());
@@ -65,7 +65,7 @@ class AdminModerationEventConsumerTest {
 
     @Test
     void onMessage_restored_marksVideoPublished() throws Exception {
-        Video video = videoRepository.save(publishedVideo("s3://raw/2.mp4"));
+        Video video = videoRepository.save(publishedVideo("s3://video-media/raw/2.mp4"));
         video.markTakenDown();
         videoRepository.save(video);
 
@@ -93,7 +93,7 @@ class AdminModerationEventConsumerTest {
 
     @Test
     void onMessage_unrelatedEventType_isIgnored() throws Exception {
-        Video video = videoRepository.save(publishedVideo("s3://raw/3.mp4"));
+        Video video = videoRepository.save(publishedVideo("s3://video-media/raw/3.mp4"));
 
         consumer.onMessage("{\"userId\":1}", "UserBannedEvent".getBytes());
 
@@ -103,7 +103,7 @@ class AdminModerationEventConsumerTest {
 
     @Test
     void onMessage_replay_isNoOp() throws Exception {
-        Video video = videoRepository.save(publishedVideo("s3://raw/4.mp4"));
+        Video video = videoRepository.save(publishedVideo("s3://video-media/raw/4.mp4"));
 
         VideoTakenDownEvent event = VideoTakenDownEvent.of(video.getId(), 99L, "spam");
         String payload = objectMapper.writeValueAsString(event);
@@ -120,7 +120,7 @@ class AdminModerationEventConsumerTest {
                 .id(Video.newId())
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://raw/5.mp4")
+                .rawFileUrl("s3://video-media/raw/5.mp4")
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build();

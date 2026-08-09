@@ -529,7 +529,7 @@
                 "body": { "mode": "raw", "raw": "{\n  \"avatarUrl\": \"http://evil.example.com/avatar.png\"\n}" },
                 "url": "{{userBaseUrl}}/api/v1/users/me"
               },
-              "description": "http (not https) AND disallowed host -> should fail @ValidAvatarUrl."
+              "description": "http (not https) AND disallowed host -> should fail @ValidMediaUrl."
             },
             {
               "name": "Update My Profile - Validation Error (blank displayName)",

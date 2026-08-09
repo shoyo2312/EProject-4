@@ -103,7 +103,7 @@ class VideoLikeEventConsumerTest {
                 .id(Video.newId())
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://raw/1.mp4")
+                .rawFileUrl("s3://video-media/raw/1.mp4")
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PUBLISHED)
                 .build();
