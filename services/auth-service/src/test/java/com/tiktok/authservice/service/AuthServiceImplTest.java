@@ -12,6 +12,7 @@ import com.tiktok.authservice.entity.OutboxEvent;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
+import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
@@ -25,6 +26,7 @@ import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.authservice.repository.VerificationTokenRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
+import com.tiktok.crypto.jwt.RevocationKeys;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -98,6 +100,9 @@ class AuthServiceImplTest {
     @Autowired
     private StringRedisTemplate redisTemplate;
 
+    @Autowired
+    private AccessTokenBlacklist accessTokenBlacklist;
+
     @BeforeEach
     void cleanUp() {
         outboxEventRepository.deleteAll();
@@ -110,6 +115,22 @@ class AuthServiceImplTest {
 
     private RegisterRequest validRegisterRequest() {
         return new RegisterRequest("johndoe", "john@example.com", "password123");
+    }
+
+    /**
+     * Login now requires a confirmed email address, so every test that just needs a usable
+     * account flips the flag directly rather than replaying the OTP round trip — which only
+     * works in the tests that actually commit, since the mail is sent on an AFTER_COMMIT event.
+     */
+    private UserResponse registerVerified() {
+        return markVerified(authService.register(validRegisterRequest()));
+    }
+
+    private UserResponse markVerified(UserResponse registered) {
+        User user = userRepository.findById(registered.id()).orElseThrow();
+        user.markEmailVerified();
+        userRepository.save(user);
+        return registered;
     }
 
     @Test
@@ -155,7 +176,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void login_withValidUsernameAndPassword_returnsTokens() {
-        authService.register(validRegisterRequest());
+        registerVerified();
 
         TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
 
@@ -167,7 +188,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void login_withEmailInsteadOfUsername_returnsTokens() {
-        authService.register(validRegisterRequest());
+        registerVerified();
 
         TokenResponse tokens = authService.login(new LoginRequest("john@example.com", "password123"));
 
@@ -205,7 +226,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void refresh_withValidRefreshToken_issuesNewTokens() {
-        authService.register(validRegisterRequest());
+        registerVerified();
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
         TokenResponse refreshed = authService.refresh(new RefreshTokenRequest(initial.refreshToken()));
@@ -217,7 +238,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void refresh_withAccessTokenInsteadOfRefreshToken_throwsInvalidRefreshToken() {
-        authService.register(validRegisterRequest());
+        registerVerified();
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
         assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(initial.accessToken())))
@@ -234,7 +255,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void refresh_reusingRotatedToken_throwsInvalidRefreshToken() {
-        authService.register(validRegisterRequest());
+        registerVerified();
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
         authService.refresh(new RefreshTokenRequest(initial.refreshToken()));
@@ -246,7 +267,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void logout_revokesRefreshToken() {
-        authService.register(validRegisterRequest());
+        registerVerified();
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
         authService.logout(new RefreshTokenRequest(initial.refreshToken()), null);
@@ -264,26 +285,26 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void logout_withAccessToken_blacklistsItsJti() {
-        authService.register(validRegisterRequest());
+        registerVerified();
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
         authService.logout(new RefreshTokenRequest(initial.refreshToken()), initial.accessToken());
 
         String jti = jwtProvider.extractClaims(initial.accessToken()).get("jti", String.class);
         assertThat(jti).isNotBlank();
-        assertThat(redisTemplate.hasKey(AccessTokenBlacklist.KEY_PREFIX + jti)).isTrue();
+        assertThat(redisTemplate.hasKey(RevocationKeys.forJti(jti))).isTrue();
     }
 
     @Test
     @Transactional
     void logout_withoutAccessToken_doesNotBlacklistAnything() {
-        authService.register(validRegisterRequest());
+        registerVerified();
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
         authService.logout(new RefreshTokenRequest(initial.refreshToken()), null);
 
         String jti = jwtProvider.extractClaims(initial.accessToken()).get("jti", String.class);
-        assertThat(redisTemplate.hasKey(AccessTokenBlacklist.KEY_PREFIX + jti)).isFalse();
+        assertThat(redisTemplate.hasKey(RevocationKeys.forJti(jti))).isFalse();
     }
 
     @Test
@@ -303,7 +324,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void login_successResetsFailedAttemptCounter() {
-        authService.register(validRegisterRequest());
+        registerVerified();
 
         for (int i = 0; i < 4; i++) {
             assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
@@ -324,7 +345,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void issuedTokens_onlyTheAccessTokenPassesTheBearerCheck() {
-        authService.register(validRegisterRequest());
+        registerVerified();
         TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
 
         assertThat(jwtProvider.isValidAccessToken(tokens.accessToken())).isTrue();
@@ -357,7 +378,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void login_withDifferentEmailCase_returnsTokens() {
-        authService.register(new RegisterRequest("johndoe", "John@Example.com", "password123"));
+        markVerified(authService.register(new RegisterRequest("johndoe", "John@Example.com", "password123")));
 
         TokenResponse tokens = authService.login(new LoginRequest("john@example.com", "password123"));
 
@@ -367,7 +388,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void login_withDifferentUsernameCase_returnsTokens() {
-        authService.register(validRegisterRequest());
+        registerVerified();
 
         TokenResponse tokens = authService.login(new LoginRequest("JohnDoe", "password123"));
 
@@ -391,6 +412,68 @@ class AuthServiceImplTest {
     void getCurrentUser_withUnknownId_throwsUserNotFound() {
         assertThatThrownBy(() -> authService.getCurrentUser(999999L))
                 .isInstanceOf(UserNotFoundException.class);
+    }
+
+    /**
+     * The whole verify-email flow was decoration until login actually consulted the flag: anyone
+     * could register with an address they do not own and use the account immediately.
+     */
+    @Test
+    @Transactional
+    void login_withUnverifiedEmail_throwsEmailNotVerified() {
+        authService.register(validRegisterRequest());
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "password123")))
+                .isInstanceOf(EmailNotVerifiedException.class);
+    }
+
+    /**
+     * Distinct from a wrong password on purpose — the client has to know to offer "resend code"
+     * rather than "try again", and the caller already proved it knows the password.
+     */
+    @Test
+    @Transactional
+    void login_withUnverifiedEmailAndWrongPassword_stillReportsInvalidCredentials() {
+        authService.register(validRegisterRequest());
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
+                .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    /** A rejected-but-correct password is not a guess, so it must not burn the attempt budget. */
+    @Test
+    @Transactional
+    void login_withUnverifiedEmail_doesNotCountAgainstTheAttemptBudget() {
+        UserResponse registered = authService.register(validRegisterRequest());
+
+        for (int i = 0; i < 6; i++) {
+            assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "password123")))
+                    .isInstanceOf(EmailNotVerifiedException.class);
+        }
+
+        markVerified(registered);
+        assertThat(authService.login(new LoginRequest("johndoe", "password123")).accessToken()).isNotBlank();
+    }
+
+    /**
+     * Replaying a logged-out token is a stale client, not a theft: the token has no successor, so
+     * nobody else can be holding the chain. Kicking the user's other devices here would make
+     * logging out of one device log you out of all of them.
+     */
+    @Test
+    @Transactional
+    void refresh_replayingALoggedOutToken_leavesOtherSessionsAlone() {
+        registerVerified();
+        TokenResponse phone = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse laptop = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.logout(new RefreshTokenRequest(phone.refreshToken()), null);
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(phone.refreshToken())))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+        assertThat(authService.refresh(new RefreshTokenRequest(laptop.refreshToken())).accessToken())
+                .as("logging out one device must not end the others")
+                .isNotBlank();
     }
 
     // No @Transactional below: the mail send is wired via an AFTER_COMMIT event listener,
@@ -483,7 +566,7 @@ class AuthServiceImplTest {
 
     @Test
     void resetPassword_withValidOtp_changesPasswordAndRevokesRefreshTokens() {
-        authService.register(validRegisterRequest());
+        registerVerified();
         TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
 
         authService.forgotPassword(new ForgotPasswordRequest("john@example.com"));
@@ -498,5 +581,64 @@ class AuthServiceImplTest {
 
         TokenResponse relogin = authService.login(new LoginRequest("johndoe", "newpassword123"));
         assertThat(relogin.accessToken()).isNotBlank();
+    }
+
+    /**
+     * Rotation without replay detection is worse than no rotation: whoever refreshes first keeps
+     * a valid chain forever, and the loser just sees "please sign in again" — no alarm anywhere.
+     * A rotated token coming back means two parties hold it, so every session for that user dies
+     * and both sides have to prove who they are again.
+     *
+     * <p>Not @Transactional: the revocation runs in its own transaction (it has to survive the
+     * rejection that follows), which would deadlock against uncommitted rows held by the test.
+     */
+    @Test
+    void refresh_replayingARotatedToken_endsEverySessionForThatUser() {
+        registerVerified();
+        TokenResponse stolen = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+
+        // The thief gets there first and rotates the chain.
+        TokenResponse thiefsChain = authService.refresh(new RefreshTokenRequest(stolen.refreshToken()));
+
+        // The real user then presents the token they still hold — that is the tell.
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(stolen.refreshToken())))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(thiefsChain.refreshToken())))
+                .as("the chain the thief walked away with must be dead too")
+                .isInstanceOf(InvalidRefreshTokenException.class);
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(otherDevice.refreshToken())))
+                .as("every session for the user ends, not just the replayed chain")
+                .isInstanceOf(InvalidRefreshTokenException.class);
+
+        assertThat(accessTokenBlacklist.isBlacklisted(jwtProvider.extractClaims(thiefsChain.accessToken())))
+                .as("access tokens are stateless — without the user-wide cutoff the thief keeps ~15 minutes")
+                .isTrue();
+    }
+
+    /**
+     * Password reset used to revoke refresh tokens only, leaving the attacker's access token alive
+     * until it expired — the exact window the reset is meant to close.
+     */
+    @Test
+    void resetPassword_revokesAccessTokensAlreadyIssued() {
+        registerVerified();
+        TokenResponse attacker = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com"));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+
+        authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThat(accessTokenBlacklist.isBlacklisted(jwtProvider.extractClaims(attacker.accessToken())))
+                .isTrue();
+
+        // ...while the session the real owner opens right after must work.
+        TokenResponse owner = authService.login(new LoginRequest("johndoe", "newpassword123"));
+        assertThat(accessTokenBlacklist.isBlacklisted(jwtProvider.extractClaims(owner.accessToken())))
+                .as("the cutoff must not lock the user out of the session they just opened")
+                .isFalse();
     }
 }
