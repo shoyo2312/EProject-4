@@ -1,8 +1,7 @@
 package com.tiktok.kafka.outbox;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaOperations;
 
 import java.time.Duration;
@@ -26,9 +25,8 @@ import java.util.function.Function;
  * <p>Each service still owns its own storage, topic and record shape; this only owns the
  * send/ack/mark ordering that all of them have to get right.
  */
+@Slf4j
 public class OutboxDispatcher {
-
-    private static final Logger log = LoggerFactory.getLogger(OutboxDispatcher.class);
 
     private final KafkaOperations<String, String> kafkaOperations;
     private final Duration ackTimeout;

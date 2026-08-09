@@ -34,7 +34,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String BEARER_PREFIX = "Bearer ";
     private static final String CLAIM_ROLE = "role";
-    private static final String CLAIM_JTI = "jti";
 
     private final JwtProvider jwtProvider;
     private final RevokedTokenChecker revokedTokenChecker;
@@ -50,7 +49,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (jwtProvider.isValidAccessToken(token)) {
                 Claims claims = jwtProvider.extractClaims(token);
 
-                if (revokedTokenChecker.isRevoked(claims.get(CLAIM_JTI, String.class))) {
+                if (revokedTokenChecker.isRevoked(claims)) {
                     filterChain.doFilter(request, response);
                     return;
                 }

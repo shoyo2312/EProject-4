@@ -5,8 +5,7 @@ import com.tiktok.apigateway.dto.MeResponse;
 import com.tiktok.apigateway.dto.ProfileMeResponse;
 import com.tiktok.common.response.ApiResponse;
 import lombok.RequiredArgsConstructor;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
@@ -31,11 +30,11 @@ import java.util.Optional;
  * won't fix, so it's logged and degraded instead of retried. The auth-service call is not
  * degraded — account identity is mandatory, so its errors propagate as-is.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class MeServiceImpl implements MeService {
 
-    private static final Logger log = LoggerFactory.getLogger(MeServiceImpl.class);
 
     private static final Duration DOWNSTREAM_TIMEOUT = Duration.ofSeconds(3);
 

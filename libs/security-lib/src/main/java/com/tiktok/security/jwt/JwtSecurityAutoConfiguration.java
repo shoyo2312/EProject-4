@@ -45,7 +45,7 @@ public class JwtSecurityAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public RevokedTokenChecker revokedTokenChecker() {
-        return jti -> false;
+        return claims -> false;
     }
 
     /**

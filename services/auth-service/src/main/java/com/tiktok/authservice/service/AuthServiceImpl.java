@@ -21,6 +21,7 @@ import com.tiktok.authservice.event.local.EmailVerificationRequestedEvent;
 import com.tiktok.authservice.event.local.PasswordResetRequestedEvent;
 import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
+import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
@@ -35,6 +36,7 @@ import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.event.user.UserRegisteredEvent;
 import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +48,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
@@ -68,6 +71,7 @@ public class AuthServiceImpl implements AuthService {
     private final OtpProperties otpProperties;
     private final OtpRateLimiter otpRateLimiter;
     private final ApplicationEventPublisher eventPublisher;
+    private final SessionRevoker sessionRevoker;
 
     @Override
     @Transactional
@@ -121,7 +125,14 @@ public class AuthServiceImpl implements AuthService {
             throw new InvalidCredentialsException();
         }
 
+        // The password was right, so the attempt counter is cleared even if the next check
+        // rejects the login — an unverified email is not a credential guess.
         loginRateLimiter.recordSuccess(key);
+
+        if (!user.isEmailVerified()) {
+            throw new EmailNotVerifiedException();
+        }
+
         return issueTokens(user);
     }
 
@@ -140,15 +151,29 @@ public class AuthServiceImpl implements AuthService {
         }
 
         RefreshToken storedToken = refreshTokenRepository.findByTokenHash(HashUtils.sha256(token))
-                .filter(RefreshToken::isActive)
                 .orElseThrow(InvalidRefreshTokenException::new);
+
+        // Rotation without replay detection is worse than no rotation at all: the thief refreshes
+        // first, the real user's next refresh fails, and all the user sees is "please sign in
+        // again" while the thief keeps walking the chain forever. A rotated-but-unexpired token
+        // coming back means two parties hold it and there is no way to tell them apart — so end
+        // every session for that user and make both sides re-authenticate.
+        if (storedToken.isReplayOfRotatedToken()) {
+            log.warn("Refresh token replay detected for user {} — revoking all sessions", storedToken.getUserId());
+            sessionRevoker.revokeAllSessions(storedToken.getUserId());
+            throw new InvalidRefreshTokenException();
+        }
+
+        if (!storedToken.isActive()) {
+            throw new InvalidRefreshTokenException();
+        }
 
         Long userId = Long.valueOf(claims.getSubject());
         User user = userRepository.findById(userId)
                 .filter(u -> !u.isDeleted() && u.getStatus() == UserStatus.ACTIVE)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        storedToken.revoke();
+        storedToken.rotate();
         refreshTokenRepository.save(storedToken);
 
         return issueTokens(user);
@@ -234,7 +259,10 @@ public class AuthServiceImpl implements AuthService {
         user.changePasswordHash(HashUtils.bcryptHash(request.newPassword()));
         userRepository.save(user);
 
-        refreshTokenRepository.revokeAllByUserId(user.getId(), Instant.now());
+        // Revoking refresh tokens alone left the attacker's already-issued access token working
+        // until it expired — the reset is usually done *because* the account is suspected stolen,
+        // so the whole point is to cut access now.
+        sessionRevoker.revokeAllSessions(user.getId());
     }
 
     /**
