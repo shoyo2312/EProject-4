@@ -21,6 +21,14 @@ public class JwtProvider {
     public static final String TOKEN_TYPE_ACCESS = "access";
     public static final String TOKEN_TYPE_REFRESH = "refresh";
 
+    /**
+     * Issue time in epoch millis. The standard {@code iat} claim only has second resolution,
+     * which is too coarse for "revoke every token issued before now": a token minted in the same
+     * second as the cutoff cannot be told apart from one minted just after it, so either a stolen
+     * token survives or a fresh login is rejected.
+     */
+    public static final String CLAIM_ISSUED_AT_MILLIS = "iatMs";
+
     private final SecretKey key;
 
     public JwtProvider(String secret) {
@@ -33,9 +41,24 @@ public class JwtProvider {
                 .subject(subject)
                 .claims(claims)
                 .issuedAt(now)
+                .claim(CLAIM_ISSUED_AT_MILLIS, now.getTime())
                 .expiration(new Date(now.getTime() + expiryMillis))
                 .signWith(key)
                 .compact();
+    }
+
+    /**
+     * When this token was issued, in epoch millis. Falls back to the second-resolution {@code iat}
+     * for tokens minted before {@link #CLAIM_ISSUED_AT_MILLIS} existed — truncating to the start
+     * of the second, so a revocation cutoff errs towards rejecting such a token rather than
+     * letting it through.
+     */
+    public static long issuedAtMillis(Claims claims) {
+        Long issuedAtMillis = claims.get(CLAIM_ISSUED_AT_MILLIS, Long.class);
+        if (issuedAtMillis != null) {
+            return issuedAtMillis;
+        }
+        return claims.getIssuedAt() == null ? 0L : claims.getIssuedAt().getTime();
     }
 
     public Claims extractClaims(String token) {
