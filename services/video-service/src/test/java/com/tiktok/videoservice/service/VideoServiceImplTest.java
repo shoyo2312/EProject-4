@@ -51,7 +51,7 @@ class VideoServiceImplTest {
     @Test
     void publish_createsVideoWithProcessingStatus() {
         VideoResponse response = videoService.publish(1L,
-                new CreateVideoRequest("My first video", "desc", "s3://raw/1.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("My first video", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC));
 
         assertThat(response.status()).isEqualTo(VideoStatus.PROCESSING);
         assertThat(response.userId()).isEqualTo(1L);
@@ -66,7 +66,7 @@ class VideoServiceImplTest {
     @Test
     void getById_privateVideo_notOwner_throwsNotFound() {
         VideoResponse video = videoService.publish(1L,
-                new CreateVideoRequest("Private", null, "s3://raw/2.mp4", VideoVisibility.PRIVATE));
+                new CreateVideoRequest("Private", null, "s3://video-media/raw/2.mp4", VideoVisibility.PRIVATE));
 
         assertThatThrownBy(() -> videoService.getById(2L, video.id()))
                 .isInstanceOf(VideoNotFoundException.class);
@@ -75,7 +75,7 @@ class VideoServiceImplTest {
     @Test
     void getById_privateVideo_owner_canView() {
         VideoResponse video = videoService.publish(1L,
-                new CreateVideoRequest("Private", null, "s3://raw/3.mp4", VideoVisibility.PRIVATE));
+                new CreateVideoRequest("Private", null, "s3://video-media/raw/3.mp4", VideoVisibility.PRIVATE));
 
         VideoResponse fetched = videoService.getById(1L, video.id());
         assertThat(fetched.id()).isEqualTo(video.id());
@@ -84,12 +84,12 @@ class VideoServiceImplTest {
     @Test
     void getFeed_onlyReturnsPublishedPublicVideos() {
         VideoResponse processing = videoService.publish(1L,
-                new CreateVideoRequest("Processing", null, "s3://raw/4.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("Processing", null, "s3://video-media/raw/4.mp4", VideoVisibility.PUBLIC));
         VideoResponse published = videoService.publish(1L,
-                new CreateVideoRequest("Published", null, "s3://raw/5.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("Published", null, "s3://video-media/raw/5.mp4", VideoVisibility.PUBLIC));
         markPublished(published.id());
         VideoResponse privatePublished = videoService.publish(1L,
-                new CreateVideoRequest("Private published", null, "s3://raw/6.mp4", VideoVisibility.PRIVATE));
+                new CreateVideoRequest("Private published", null, "s3://video-media/raw/6.mp4", VideoVisibility.PRIVATE));
         markPublished(privatePublished.id());
 
         Page<VideoResponse> feed = videoService.getFeed(PageRequest.of(0, 10));
@@ -154,7 +154,7 @@ class VideoServiceImplTest {
     @Test
     void delete_notOwner_throwsNotVideoOwner() {
         VideoResponse video = videoService.publish(1L,
-                new CreateVideoRequest("Mine", null, "s3://raw/7.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("Mine", null, "s3://video-media/raw/7.mp4", VideoVisibility.PUBLIC));
 
         assertThatThrownBy(() -> videoService.delete(2L, video.id()))
                 .isInstanceOf(NotVideoOwnerException.class);
@@ -163,7 +163,7 @@ class VideoServiceImplTest {
     @Test
     void delete_owner_softDeletesVideo() {
         VideoResponse video = videoService.publish(1L,
-                new CreateVideoRequest("Mine", null, "s3://raw/8.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("Mine", null, "s3://video-media/raw/8.mp4", VideoVisibility.PUBLIC));
 
         videoService.delete(1L, video.id());
 
@@ -173,7 +173,7 @@ class VideoServiceImplTest {
 
     private VideoResponse publishAs(long userId, String title, VideoVisibility visibility) {
         return videoService.publish(userId,
-                new CreateVideoRequest(title, null, "s3://raw/" + title.replace(' ', '-') + ".mp4", visibility));
+                new CreateVideoRequest(title, null, "s3://video-media/raw/" + title.replace(' ', '-') + ".mp4", visibility));
     }
 
     private void markPublished(String videoId) {

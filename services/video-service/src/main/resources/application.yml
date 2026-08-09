@@ -27,6 +27,14 @@ spring:
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 
+app:
+  media:
+    # Where CreateVideoRequest.rawFileUrl is allowed to point. Buckets must match media-worker's
+    # MINIO_BUCKET; hosts are the public CDN/MinIO host(s) in front of it. Both empty means
+    # reject everything, so set them per environment.
+    allowed-hosts: ${MEDIA_ALLOWED_HOSTS:cdn.tiktok-clone.local}
+    allowed-buckets: ${MEDIA_ALLOWED_BUCKETS:video-media}
+
 springdoc:
   api-docs:
     path: /v3/api-docs

@@ -54,7 +54,7 @@ class VideoControllerPageSizeTest {
                     .id(Video.newId())
                     .userId(1L)
                     .title("video-" + i)
-                    .rawFileUrl("s3://raw/" + i + ".mp4")
+                    .rawFileUrl("s3://video-media/raw/" + i + ".mp4")
                     .visibility(VideoVisibility.PUBLIC)
                     .status(VideoStatus.PUBLISHED)
                     .build());

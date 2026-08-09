@@ -1,6 +1,6 @@
 package com.tiktok.userservice.dto.request;
 
-import com.tiktok.userservice.validation.ValidAvatarUrl;
+import com.tiktok.common.validation.ValidMediaUrl;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -15,9 +15,9 @@ public record UpdateProfileRequest(
         @Pattern(regexp = ".*\\S.*", message = "displayName must not be blank")
         @Size(max = 100) String displayName,
         @Size(max = 500) String bio,
-        // https-only, and host must be in app.avatar.allowed-hosts: rejects javascript:/data:
+        // https-only, and host must be in app.media.allowed-hosts: rejects javascript:/data:
         // URIs and arbitrary third-party hosts, not just malformed URLs. Blank/null still
         // passes (field is optional).
-        @Size(max = 500) @ValidAvatarUrl String avatarUrl
+        @Size(max = 500) @ValidMediaUrl String avatarUrl
 ) {
 }

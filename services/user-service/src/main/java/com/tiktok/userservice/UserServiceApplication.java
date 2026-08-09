@@ -1,6 +1,6 @@
 package com.tiktok.userservice;
 
-import com.tiktok.userservice.config.AvatarProperties;
+import com.tiktok.common.validation.MediaUrlProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -10,7 +10,7 @@ import static org.springframework.data.web.config.EnableSpringDataWebSupport.Pag
 
 @SpringBootApplication
 @EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)
-@EnableConfigurationProperties(AvatarProperties.class)
+@EnableConfigurationProperties(MediaUrlProperties.class)
 public class UserServiceApplication {
     public static void main(String[] args) {
         SpringApplication.run(UserServiceApplication.class, args);

@@ -43,10 +43,11 @@ jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 
 app:
-  avatar:
-    # Hosts allowed for UpdateProfileRequest.avatarUrl (must also be https - see ValidAvatarUrl).
-    # Override AVATAR_ALLOWED_HOSTS (comma-separated) with the real CDN/MinIO public host(s) in prod.
-    allowed-hosts: ${AVATAR_ALLOWED_HOSTS:cdn.tiktok-clone.local}
+  media:
+    # Hosts allowed for UpdateProfileRequest.avatarUrl (must also be https - see @ValidMediaUrl).
+    # Override MEDIA_ALLOWED_HOSTS (comma-separated) with the real CDN/MinIO public host(s) in prod.
+    # No allowed-buckets here: this service accepts no s3:// URLs.
+    allowed-hosts: ${MEDIA_ALLOWED_HOSTS:cdn.tiktok-clone.local}
 
 springdoc:
   api-docs:

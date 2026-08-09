@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tiktok.common.validation.MediaUrlProperties;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.videoservice.config.SecurityConfig;
@@ -13,9 +14,12 @@ import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.service.VideoService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -49,7 +53,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @WebMvcTest(controllers = VideoController.class)
 @Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class})
-@TestPropertySource(properties = "jwt.secret=test-secret-at-least-32-bytes-long-0123456789")
+@EnableConfigurationProperties(MediaUrlProperties.class)
+@TestPropertySource(properties = {
+        "jwt.secret=test-secret-at-least-32-bytes-long-0123456789",
+        "app.media.allowed-hosts=cdn.example.com",
+        "app.media.allowed-buckets=video-media"
+})
 class VideoControllerTest {
 
     private static final String JWT_SECRET = "test-secret-at-least-32-bytes-long-0123456789";
@@ -77,7 +86,7 @@ class VideoControllerTest {
 
     @Test
     void publish_withoutToken_isRejected() throws Exception {
-        CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://raw/1.mp4", VideoVisibility.PUBLIC);
+        CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC);
 
         mockMvc.perform(post("/api/v1/videos")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -89,7 +98,7 @@ class VideoControllerTest {
 
     @Test
     void publish_withValidToken_createsVideo() throws Exception {
-        CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://raw/1.mp4", VideoVisibility.PUBLIC);
+        CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC);
         VideoResponse response = new VideoResponse("v1", 42L, "title", "desc", null, null, null,
                 VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0, Instant.now());
         when(videoService.publish(eq(42L), any())).thenReturn(response);
@@ -108,7 +117,7 @@ class VideoControllerTest {
 
     @Test
     void publish_withBlankTitle_returnsValidationError() throws Exception {
-        CreateVideoRequest invalidRequest = new CreateVideoRequest("", "desc", "s3://raw/1.mp4", VideoVisibility.PUBLIC);
+        CreateVideoRequest invalidRequest = new CreateVideoRequest("", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC);
 
         mockMvc.perform(post("/api/v1/videos")
                         .header("Authorization", "Bearer " + tokenFor(1L))
@@ -119,6 +128,46 @@ class VideoControllerTest {
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 
         verify(videoService, never()).publish(any(), any());
+    }
+
+    /**
+     * rawFileUrl reaches media-worker, which fetches it. A URL the client chose on a host we do
+     * not own would turn our own backend into the requester — so it has to be refused at the
+     * edge, not merely stored.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "https://evil.example.net/payload.mp4",
+            "s3://someone-elses-bucket/1.mp4",
+            "javascript:alert(1)",
+            "file:///etc/passwd"
+    })
+    void publish_rawFileUrlOffOurStorage_returnsValidationError(String rawFileUrl) throws Exception {
+        CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC);
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verify(videoService, never()).publish(any(), any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"s3://video-media/raw/1.mp4", "https://cdn.example.com/raw/1.mp4"})
+    void publish_rawFileUrlOnOurStorage_isAccepted(String rawFileUrl) throws Exception {
+        CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC);
+        VideoResponse response = new VideoResponse("v1", 1L, "title", "desc", null, null, null,
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0, Instant.now());
+        when(videoService.publish(eq(1L), any())).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated());
     }
 
     @Test
