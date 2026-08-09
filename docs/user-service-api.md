@@ -16,21 +16,19 @@ Tài liệu này mô tả **những gì client (Flutter/Dart) cần biết** đ�
 
 Giống hệt `auth-service` — mọi response bọc trong `ApiResponse<T>` (`success`/`data`/`code`/`message`/`timestamp`, `code`/`message` vắng mặt khi thành công do `@JsonInclude(NON_NULL)`). Xem chi tiết ở mục 2 của `docs/auth-service-api.md`, dùng chung 1 model Dart `ApiResponse<T>` cho toàn app.
 
-Riêng các endpoint trả **danh sách** (followers/following/blocked/muted), `data` là 1 object `Page<T>` chuẩn Spring Data, KHÔNG phải mảng trần:
+Riêng các endpoint trả **danh sách** (followers/following/blocked/muted), `data` là 1 object phân trang, KHÔNG phải mảng trần. Metadata nằm gọn trong `page`, không nằm ngang hàng `content`:
 
 ```json
 {
   "success": true,
   "data": {
     "content": [ { "userId": 123, "displayName": "...", ... } ],
-    "totalElements": 42,
-    "totalPages": 3,
-    "number": 0,          // page index, bắt đầu từ 0
-    "size": 20,
-    "first": true,
-    "last": false,
-    "numberOfElements": 20,
-    "empty": false
+    "page": {
+      "size": 20,
+      "number": 0,        // page index, bắt đầu từ 0
+      "totalElements": 42,
+      "totalPages": 3
+    }
   },
   "code": null,
   "message": null,
@@ -38,7 +36,11 @@ Riêng các endpoint trả **danh sách** (followers/following/blocked/muted), `
 }
 ```
 
-Gợi ý: viết 1 wrapper `PageResponse<T>` dùng chung cho các list này ở phía Dart (`content`, `totalElements`, `totalPages`, `number`, `last`).
+Chỉ có đúng 4 field trong `page`. Các field `first`/`last`/`numberOfElements`/`empty`/`sort`/`pageable` của `PageImpl` **không được trả về** — server serialize bằng `VIA_DTO` để không phơi cấu trúc nội bộ của Spring Data ra làm contract. Suy ra tương đương ở phía client: `last` = `number + 1 >= totalPages`, `empty` = `content.isEmpty`.
+
+Gợi ý: viết 1 wrapper `PageResponse<T>` dùng chung cho các list này ở phía Dart (`content` + `page.{size,number,totalElements,totalPages}`). `video-service` trả về đúng format này, nên dùng chung được 1 wrapper.
+
+`size` bị chặn trên ở **50**; xin lớn hơn thì bị kẹp xuống 50 chứ không báo lỗi. Không truyền thì mặc định 20.
 
 ## 3. Endpoints
 
