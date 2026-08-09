@@ -14,7 +14,17 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
 
     Optional<Video> findByIdAndDeletedAtIsNull(String id);
 
+    /** Owner's own listing: everything they uploaded, whatever state it is in. */
     Page<Video> findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(Long userId, Pageable pageable);
+
+    /**
+     * Someone else's listing. Carries the same status+visibility filter as the feed query above,
+     * because this endpoint is reachable without a token: without it, a stranger reading
+     * /api/v1/videos/users/{userId} gets the owner's PRIVATE uploads, their videos still
+     * PROCESSING, and the ones moderation took down.
+     */
+    Page<Video> findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
+            Long userId, VideoStatus status, VideoVisibility visibility, Pageable pageable);
 
     Page<Video> findByStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
             VideoStatus status, VideoVisibility visibility, Pageable pageable);

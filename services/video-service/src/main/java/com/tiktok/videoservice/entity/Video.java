@@ -28,7 +28,14 @@ import java.time.Instant;
 @AllArgsConstructor
 @Document(collection = "videos")
 @CompoundIndexes({
-        @CompoundIndex(name = "feed_idx", def = "{'status': 1, 'visibility': 1, 'deletedAt': 1, 'createdAt': -1}")
+        @CompoundIndex(name = "feed_idx", def = "{'status': 1, 'visibility': 1, 'deletedAt': 1, 'createdAt': -1}"),
+        // Profile listing. feed_idx cannot serve it — userId is not a prefix there. Every field
+        // ahead of createdAt is matched by equality, so both the owner variant (userId +
+        // deletedAt) and the stranger variant (all four) read this index and take the sort from
+        // it rather than sorting the match set in memory, which a prolific uploader would
+        // eventually grow past Mongo's 32MB in-memory sort limit.
+        @CompoundIndex(name = "user_videos_idx",
+                def = "{'userId': 1, 'deletedAt': 1, 'status': 1, 'visibility': 1, 'createdAt': -1}")
 })
 public class Video {
 

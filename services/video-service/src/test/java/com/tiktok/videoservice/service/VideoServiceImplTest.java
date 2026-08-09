@@ -99,6 +99,59 @@ class VideoServiceImplTest {
     }
 
     @Test
+    void listByUser_otherViewer_onlyReturnsPublishedPublicVideos() {
+        VideoResponse published = publishAs(1L, "Published", VideoVisibility.PUBLIC);
+        markPublished(published.id());
+        VideoResponse processing = publishAs(1L, "Processing", VideoVisibility.PUBLIC);
+        VideoResponse privatePublished = publishAs(1L, "Private", VideoVisibility.PRIVATE);
+        markPublished(privatePublished.id());
+        VideoResponse takenDown = publishAs(1L, "Taken down", VideoVisibility.PUBLIC);
+        markPublished(takenDown.id());
+        markTakenDown(takenDown.id());
+
+        Page<VideoResponse> listed = videoService.listByUser(2L, 1L, PageRequest.of(0, 10));
+
+        assertThat(listed.getContent()).extracting(VideoResponse::id).containsExactly(published.id());
+        assertThat(listed.getContent()).extracting(VideoResponse::id)
+                .doesNotContain(processing.id(), privatePublished.id(), takenDown.id());
+    }
+
+    @Test
+    void listByUser_anonymousViewer_onlyReturnsPublishedPublicVideos() {
+        VideoResponse published = publishAs(1L, "Published", VideoVisibility.PUBLIC);
+        markPublished(published.id());
+        VideoResponse privatePublished = publishAs(1L, "Private", VideoVisibility.PRIVATE);
+        markPublished(privatePublished.id());
+
+        Page<VideoResponse> listed = videoService.listByUser(null, 1L, PageRequest.of(0, 10));
+
+        assertThat(listed.getContent()).extracting(VideoResponse::id).containsExactly(published.id());
+    }
+
+    @Test
+    void listByUser_owner_seesOwnPrivateAndUnpublishedVideos() {
+        VideoResponse published = publishAs(1L, "Published", VideoVisibility.PUBLIC);
+        markPublished(published.id());
+        VideoResponse processing = publishAs(1L, "Processing", VideoVisibility.PUBLIC);
+        VideoResponse privateVideo = publishAs(1L, "Private", VideoVisibility.PRIVATE);
+
+        Page<VideoResponse> listed = videoService.listByUser(1L, 1L, PageRequest.of(0, 10));
+
+        assertThat(listed.getContent()).extracting(VideoResponse::id)
+                .containsExactlyInAnyOrder(published.id(), processing.id(), privateVideo.id());
+    }
+
+    @Test
+    void listByUser_owner_stillExcludesDeletedVideos() {
+        VideoResponse deleted = publishAs(1L, "Deleted", VideoVisibility.PUBLIC);
+        videoService.delete(1L, deleted.id());
+
+        Page<VideoResponse> listed = videoService.listByUser(1L, 1L, PageRequest.of(0, 10));
+
+        assertThat(listed.getContent()).isEmpty();
+    }
+
+    @Test
     void delete_notOwner_throwsNotVideoOwner() {
         VideoResponse video = videoService.publish(1L,
                 new CreateVideoRequest("Mine", null, "s3://raw/7.mp4", VideoVisibility.PUBLIC));
@@ -118,9 +171,20 @@ class VideoServiceImplTest {
                 .isInstanceOf(VideoNotFoundException.class);
     }
 
+    private VideoResponse publishAs(long userId, String title, VideoVisibility visibility) {
+        return videoService.publish(userId,
+                new CreateVideoRequest(title, null, "s3://raw/" + title.replace(' ', '-') + ".mp4", visibility));
+    }
+
     private void markPublished(String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
         video.markPublished(null, null, null);
         videoRepository.save(video);
+    }
+
+    private void markTakenDown(String videoId) {
+        Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
+        video.markTakenDown();
+        videoRepository.updateModerationStatus(video);
     }
 }
