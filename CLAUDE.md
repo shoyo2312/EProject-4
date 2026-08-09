@@ -112,7 +112,12 @@ com.tiktok.{service}/
   - Services KHÔNG cần `@Configuration` cục bộ cho JWT — được inject tự động
   - Fail-fast: kiểm tra JWT_SECRET có tồn tại khi service startup
 - **Token type — BẮT BUỘC**: access token và refresh token cùng ký bằng 1 secret, phân biệt bằng claim `tokenType` (`access`/`refresh`). Mọi nơi authenticate từ bearer token PHẢI dùng `JwtProvider.isValidAccessToken()`, KHÔNG dùng `isValid()` — nếu không refresh token (7 ngày) sẽ đăng nhập được như access token
-- **Revocation**: logout ghi jti vào Redis (`auth:blacklist:{jti}`). Read side: api-gateway, auth-service filter, và `RevokedTokenChecker` của security-lib. Tất cả fail-open khi Redis chết; service không có Redis trên classpath nhận bản no-op
+- **Revocation**: hai loại key, đọc bởi 3 read side (api-gateway, auth-service filter, `RevokedTokenChecker` của security-lib). Tên key + phép so mốc cắt nằm ở `crypto-lib/RevocationKeys` — sửa ở đó, KHÔNG viết chuỗi `"auth:blacklist:..."` trong service. Lệnh Redis vẫn để ở từng read side vì gateway reactive, hai bên kia blocking:
+  - `auth:blacklist:{jti}` — logout, giết đúng 1 access token
+  - `auth:blacklist:user:{userId}` = mốc epoch millis — giết MỌI access token cấp trước mốc đó, dùng khi cả phiên phải chết cùng lúc (reset password, phát hiện refresh token replay). Access token là stateless nên không có danh sách jti để chặn; so sánh bằng `JwtProvider.issuedAtMillis(claims)` (claim `iatMs`, vì `iat` chuẩn chỉ có độ phân giải giây → không phân biệt được token cấp cùng giây với mốc cắt)
+  - Tất cả fail-open khi Redis chết; service không có Redis trên classpath nhận bản no-op
+- **Refresh rotation**: `/refresh` xoay token (`RefreshToken.rotate()` → set cả `revoked_at` lẫn `rotated_at`). Trình lại token ĐÃ rotate mà chưa hết hạn = bằng chứng lộ token → `SessionRevoker.revokeAllSessions()` giết toàn bộ phiên của user. Chỉ `rotated_at` mới kích hoạt, KHÔNG phải `revoked_at`: logout cũng revoke, mà trình lại token đã logout chỉ là client cũ — tính là replay thì logout ở 1 máy sẽ đá văng mọi máy khác. `SessionRevoker` chạy `REQUIRES_NEW` vì luồng replay revoke xong rồi throw; chạy chung transaction thì throw sẽ rollback luôn việc revoke
+- **Login**: bắt buộc `emailVerified` — chưa verify thì 403 `EMAIL_NOT_VERIFIED` (khác `INVALID_CREDENTIALS` có chủ đích: client cần biết để mở màn hình gửi lại OTP)
 - **Exceptions (NOT using security-lib)**:
   - `api-gateway`: dùng WebFlux (không có servlet API) — giữ JwtConfig/JwtProperties riêng
   - `auth-service`: cấp phát JWT token (khác config: accessTokenExpiryMillis/refreshTokenExpiryMillis, prefix `auth.jwt`) — giữ file riêng + đã có fail-fast validation
