@@ -3,8 +3,6 @@ package com.tiktok.videoservice.event.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
-import com.tiktok.videoservice.entity.ProcessedEvent;
-import com.tiktok.videoservice.repository.ProcessedEventRepository;
 import com.tiktok.videoservice.repository.VideoRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
