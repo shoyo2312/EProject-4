@@ -3,6 +3,7 @@ package com.tiktok.userservice.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
+import com.tiktok.userservice.config.PageableConfig;
 import com.tiktok.userservice.config.SecurityConfig;
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.FollowResponse;
@@ -15,6 +16,7 @@ import com.tiktok.userservice.service.FollowService;
 import com.tiktok.userservice.service.UserProfileService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -22,6 +24,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -29,6 +32,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -48,7 +52,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * responses end-to-end, not just the controller method in isolation.
  */
 @WebMvcTest(controllers = {UserProfileController.class, FollowController.class})
-@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class})
+@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, PageableConfig.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-at-least-32-bytes-long-0123456789",
         "app.media.allowed-hosts=cdn.example.com"
@@ -280,5 +284,41 @@ class UserProfileControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.content[0].userId").value(7))
                 .andExpect(jsonPath("$.data.page.totalElements").value(1));
+    }
+
+    /**
+     * spring.data.web.pageable.max-page-size exists so a caller cannot pull the whole
+     * user_follows table in one request. It is applied by Boot's SpringDataWebAutoConfiguration,
+     * which backs off as soon as something else defines a PageableHandlerMethodArgumentResolver
+     * — as @EnableSpringDataWebSupport does. The cap is silent when it disappears, so it is
+     * asserted here against the resolver's actual output rather than trusted from the yml.
+     */
+    @Test
+    void listFollowers_requestedSizeAboveMax_isClampedTo50() throws Exception {
+        when(followService.listFollowers(eq(1L), eq(2L), any()))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 50), 0));
+
+        mockMvc.perform(get("/api/v1/users/2/followers")
+                        .param("size", "1000")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(followService).listFollowers(eq(1L), eq(2L), pageable.capture());
+        assertThat(pageable.getValue().getPageSize()).isEqualTo(50);
+    }
+
+    @Test
+    void listFollowers_noSizeParameter_usesConfiguredDefaultOf20() throws Exception {
+        when(followService.listFollowers(eq(1L), eq(2L), any()))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
+
+        mockMvc.perform(get("/api/v1/users/2/followers")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
+        verify(followService).listFollowers(eq(1L), eq(2L), pageable.capture());
+        assertThat(pageable.getValue().getPageSize()).isEqualTo(20);
     }
 }

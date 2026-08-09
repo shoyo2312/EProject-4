@@ -66,6 +66,9 @@ class VideoControllerPageSizeTest {
         mockMvc.perform(get("/api/v1/videos/feed").param("size", "1000"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.content.length()").value(50))
-                .andExpect(jsonPath("$.data.totalElements").value(60));
+                // Nested under "page" because the app serializes with VIA_DTO, same as
+                // user-service. A flat totalElements here would mean that setting was lost.
+                .andExpect(jsonPath("$.data.page.totalElements").value(60))
+                .andExpect(jsonPath("$.data.page.size").value(50));
     }
 }
