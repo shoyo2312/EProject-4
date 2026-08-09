@@ -40,8 +40,11 @@ public class VideoController {
     }
 
     @GetMapping("/users/{userId}")
-    public ApiResponse<Page<VideoResponse>> listByUser(@PathVariable Long userId, Pageable pageable) {
-        return ApiResponse.success(videoService.listByUser(userId, pageable));
+    public ApiResponse<Page<VideoResponse>> listByUser(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long userId,
+            Pageable pageable) {
+        return ApiResponse.success(videoService.listByUser(currentUserId, userId, pageable));
     }
 
     @DeleteMapping("/{videoId}")

@@ -60,10 +60,20 @@ public class VideoServiceImpl implements VideoService {
                 .map(videoMapper::toResponse);
     }
 
+    /**
+     * The owner sees their whole shelf; anyone else sees only what is actually published and
+     * public — the same line {@link #getById} draws for a single video, applied to the list.
+     * The endpoint takes no token, so requesterId is null for anonymous callers and they fall
+     * to the filtered branch.
+     */
     @Override
-    public Page<VideoResponse> listByUser(Long userId, Pageable pageable) {
-        return videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
-                .map(videoMapper::toResponse);
+    public Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable) {
+        Page<Video> videos = isSelf(requesterId, userId)
+                ? videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
+                : videoRepository.findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
+                        userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
+
+        return videos.map(videoMapper::toResponse);
     }
 
     @Override
@@ -80,7 +90,11 @@ public class VideoServiceImpl implements VideoService {
     }
 
     private boolean isOwner(Long requesterId, Video video) {
-        return requesterId != null && requesterId.equals(video.getUserId());
+        return isSelf(requesterId, video.getUserId());
+    }
+
+    private boolean isSelf(Long requesterId, Long userId) {
+        return requesterId != null && requesterId.equals(userId);
     }
 
     private boolean isPubliclyVisible(Video video) {

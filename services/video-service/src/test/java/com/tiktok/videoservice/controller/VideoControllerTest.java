@@ -30,6 +30,7 @@ import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -127,6 +128,32 @@ class VideoControllerTest {
         mockMvc.perform(get("/api/v1/videos/feed"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
+    }
+
+    @Test
+    void listByUser_withoutToken_passesNullRequester() throws Exception {
+        when(videoService.listByUser(isNull(), eq(7L), any()))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
+
+        mockMvc.perform(get("/api/v1/videos/users/7"))
+                .andExpect(status().isOk());
+
+        // Null requester is what makes the service take the published+public branch. If the
+        // controller ever stopped forwarding the principal, this endpoint would silently start
+        // serving whatever branch the service treats as "owner".
+        verify(videoService).listByUser(isNull(), eq(7L), any());
+    }
+
+    @Test
+    void listByUser_withToken_passesAuthenticatedRequester() throws Exception {
+        when(videoService.listByUser(eq(7L), eq(7L), any()))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
+
+        mockMvc.perform(get("/api/v1/videos/users/7")
+                        .header("Authorization", "Bearer " + tokenFor(7L)))
+                .andExpect(status().isOk());
+
+        verify(videoService).listByUser(eq(7L), eq(7L), any());
     }
 
     @Test

@@ -13,7 +13,7 @@ public interface VideoService {
 
     Page<VideoResponse> getFeed(Pageable pageable);
 
-    Page<VideoResponse> listByUser(Long userId, Pageable pageable);
+    Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable);
 
     void delete(Long requesterId, String videoId);
 }
