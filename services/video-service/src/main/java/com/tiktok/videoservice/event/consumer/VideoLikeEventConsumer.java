@@ -39,13 +39,18 @@ public class VideoLikeEventConsumer {
 
     private void apply(VideoLikeEvent event) {
         long delta = event.liked() ? 1 : -1;
+
+        // deletedAt is part of the match, not just the id: interaction-service can only be as
+        // fresh as the last event it saw, so likes keep arriving for a video its owner has
+        // already removed. Counting them moves a number nothing will ever display and that no
+        // later event corrects — the same reason VideoTranscodedEventConsumer skips deleted ids.
         var result = mongoTemplate.updateFirst(
-                Query.query(where("_id").is(String.valueOf(event.videoId()))),
+                Query.query(where("_id").is(String.valueOf(event.videoId())).and("deletedAt").is(null)),
                 new Update().inc("likeCount", delta),
                 Video.class);
 
         if (result.getMatchedCount() == 0) {
-            log.warn("VideoLikeEvent for unknown videoId={}", event.videoId());
+            log.warn("VideoLikeEvent for unknown or deleted videoId={}", event.videoId());
         }
     }
 }
