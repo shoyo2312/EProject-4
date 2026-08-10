@@ -37,7 +37,9 @@ import com.tiktok.event.user.UserRegisteredEvent;
 import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -95,7 +97,7 @@ public class AuthServiceImpl implements AuthService {
                 .status(UserStatus.ACTIVE)
                 .build();
 
-        User saved = userRepository.save(user);
+        User saved = saveUnique(user, request.username(), email);
 
         userEventProducer.publishUserRegistered(
                 UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail()));
@@ -109,13 +111,20 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public TokenResponse login(LoginRequest request) {
-        String key = request.usernameOrEmail();
-        loginRateLimiter.checkAllowed(key);
+        String identifier = request.usernameOrEmail();
 
-        User user = userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull(key)
-                .or(() -> userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(key))
+        // Resolved before the limit is checked, because the account is what the limit is about.
+        // Keyed on the string the client sent, "bob" and "bob@example.com" were two counters for
+        // one account and alternating them bought 10 attempts instead of 5.
+        User user = userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull(identifier)
+                .or(() -> userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(identifier))
                 .orElse(null);
 
+        String key = rateLimitKey(user, identifier);
+        loginRateLimiter.checkAllowed(key);
+
+        // Checked after the limit, so a locked-out account costs one indexed read rather than a
+        // bcrypt verification per attempt — the work an attacker would otherwise get for free.
         boolean valid = user != null
                 && user.getStatus() == UserStatus.ACTIVE
                 && HashUtils.bcryptMatches(request.password(), user.getPasswordHash());
@@ -191,8 +200,15 @@ public class AuthServiceImpl implements AuthService {
         blacklistAccessToken(accessToken);
     }
 
+    /**
+     * isValidAccessToken, not isValid: the blacklist is an access-token namespace, and both token
+     * types are signed with the same secret, so isValid() happily accepted a refresh token
+     * presented as a bearer and burned a Redis key on a jti no read side ever consults. Harmless
+     * in effect, but it is exactly the call CLAUDE.md bans, five lines from the filter that gets
+     * it right — and wrong code next to right code is what gets copied.
+     */
     private void blacklistAccessToken(String accessToken) {
-        if (accessToken == null || !jwtProvider.isValid(accessToken)) {
+        if (accessToken == null || !jwtProvider.isValidAccessToken(accessToken)) {
             return;
         }
 
@@ -263,6 +279,70 @@ public class AuthServiceImpl implements AuthService {
         // until it expired — the reset is usually done *because* the account is suspected stolen,
         // so the whole point is to cut access now.
         sessionRevoker.revokeAllSessions(user.getId());
+    }
+
+    /**
+     * Which counter this attempt spends. One per account, so every way of naming the same account
+     * shares a budget; unknown accounts fall back to the identifier itself, because leaving them
+     * unlimited would make "never blocked" mean "no such account" — a cleaner existence oracle
+     * than the one it replaces.
+     *
+     * <p>The prefixes keep the two namespaces apart: usernames have no character restriction, so
+     * without them someone could register the literal name {@code user:123} and spend the real
+     * user 123's budget. It also survives a rename — the id does not change, the username can.
+     *
+     * <p>ponytail: an attacker who exhausts "bob" and then sees "bob@example.com" already blocked
+     * has learned the two name one account. That is inherent — limiting an account across both
+     * forms requires knowing they are the same account. Accepted: a brute-force ceiling that
+     * actually holds beats hiding a link the attacker had to guess correctly to test.
+     */
+    private String rateLimitKey(User user, String identifier) {
+        return user != null ? "user:" + user.getId() : "unknown:" + identifier;
+    }
+
+    /**
+     * Persists the new account, converting a lost uniqueness race into the same 409 the
+     * sequential case returns.
+     *
+     * <p>The existsBy checks in {@link #register} are not the guarantee: two concurrent
+     * registrations for the same identity both read nothing and both go on to insert, and only
+     * uq_users_email / uq_users_username stops the second. The id is assigned rather than
+     * generated, so Hibernate defers the INSERT to flush — left to {@code save()} the violation
+     * surfaced at commit, after this method had returned and outside any catch, and the loser of
+     * a race got a 500 for the action that answers 409 when it loses by a second instead of a
+     * millisecond. Flushing here pulls the failure back inside. Same shape as user-service's
+     * {@code FollowServiceImpl.follow}.
+     */
+    private User saveUnique(User user, String username, String email) {
+        try {
+            return userRepository.saveAndFlush(user);
+        } catch (DataIntegrityViolationException ex) {
+            throw duplicateIdentity(ex, username, email);
+        }
+    }
+
+    /**
+     * Which of the two unique indexes was hit. Postgres names the offending index in its 23505
+     * error and Hibernate surfaces that as the constraint name; without it there is no way to
+     * tell the loser of a username race from the loser of an email race, and naming the wrong
+     * field sends the user off to change the input that was fine.
+     *
+     * <p>An unrecognised constraint is rethrown as-is. That is a schema change nobody taught this
+     * method about — a bug on our side, not a conflict the caller can fix, so it belongs in the
+     * 500 bucket with a stack trace rather than being guessed into a 409.
+     */
+    private RuntimeException duplicateIdentity(DataIntegrityViolationException ex, String username, String email) {
+        String constraint = ex.getCause() instanceof ConstraintViolationException cause
+                ? String.valueOf(cause.getConstraintName()).toLowerCase(Locale.ROOT)
+                : "";
+
+        if (constraint.contains("username")) {
+            return new UsernameAlreadyExistsException(username);
+        }
+        if (constraint.contains("email")) {
+            return new EmailAlreadyExistsException(email);
+        }
+        return ex;
     }
 
     /**
