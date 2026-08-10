@@ -153,7 +153,7 @@ make help           # Xem tất cả lệnh
 ## 6. Key Rules — KHÔNG được vi phạm
 - [ ] KHÔNG query trực tiếp DB của service khác — gọi qua HTTP API hoặc Kafka event
 - [ ] KHÔNG dùng Float/Double cho tiền — dùng `BigDecimal`
-- [ ] KHÔNG hard delete — chỉ soft delete (`deletedAt`)
+- [ ] KHÔNG hard delete — chỉ soft delete (`deletedAt`). **Ngoại lệ: bảng hạ tầng** (`refresh_tokens`, `verification_tokens`, `outbox_events`, `inbox_events`, `processed_events`) — không phải entity nghiệp vụ, không kế thừa `BaseEntity`, và cả vấn đề của chúng là số row quá nhiều nên đánh dấu `deletedAt` không giải quyết được gì. Xoá bằng job retention (`auth-service/ExpiredRecordCleanup`) hoặc TTL index (video-service `processed_events`). Retention chỉ được xoá row đã hết tác dụng: outbox **phải** có `published_at IS NOT NULL` — row chưa publish là event không tồn tại ở đâu khác, xoá theo tuổi là mất vĩnh viễn
 - [ ] KHÔNG `@Autowired` field injection
 - [ ] KHÔNG dùng `@Data` trên `@Entity`
 - [ ] KHÔNG lưu sensitive data (password, token thô) vào Redis/log
