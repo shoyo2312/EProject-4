@@ -1,38 +1,13 @@
 package com.tiktok.authservice.exception;
 
-import com.tiktok.common.exception.DomainException;
-import com.tiktok.common.response.ApiResponse;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.MethodArgumentNotValidException;
-import org.springframework.web.bind.annotation.ExceptionHandler;
+import com.tiktok.common.exception.BaseExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@Slf4j
+/**
+ * All the mapping lives in {@link BaseExceptionHandler}; this exists so the advice is a bean in
+ * a package this service's component scan reaches. Add {@code @ExceptionHandler} methods here
+ * only for exceptions specific to auth-service.
+ */
 @RestControllerAdvice
-public class GlobalExceptionHandler {
-
-    @ExceptionHandler(DomainException.class)
-    public ResponseEntity<ApiResponse<Void>> handleDomainException(DomainException ex) {
-        return ResponseEntity.status(ex.getStatus())
-                .body(ApiResponse.error(ex.getCode(), ex.getMessage()));
-    }
-
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ApiResponse<Void>> handleValidationException(MethodArgumentNotValidException ex) {
-        String message = ex.getBindingResult().getFieldErrors().stream()
-                .findFirst()
-                .map(error -> error.getField() + ": " + error.getDefaultMessage())
-                .orElse("Validation failed");
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.error("VALIDATION_ERROR", message));
-    }
-
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Void>> handleUnexpectedException(Exception ex) {
-        log.error("Unexpected error handling request", ex);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.error("INTERNAL_ERROR", "An unexpected error occurred"));
-    }
+public class GlobalExceptionHandler extends BaseExceptionHandler {
 }
