@@ -324,6 +324,45 @@ class AuthServiceImplTest {
         assertThat(redisTemplate.hasKey(RevocationKeys.forJti(refreshJti))).isFalse();
     }
 
+    /**
+     * A request that ends an account other than the one it authenticated as is not a logout. No
+     * escalation either way — holding someone's refresh token already buys sessions, which beats
+     * ending one — but the endpoint has no reason to honour the combination, and refusing gives
+     * the mismatch somewhere to be logged.
+     */
+    @Test
+    @Transactional
+    void logout_withAnotherUsersRefreshToken_leavesThatSessionAlone() {
+        registerVerified();
+        TokenResponse victim = authService.login(new LoginRequest("johndoe", "password123"));
+
+        markVerified(authService.register(new RegisterRequest("janedoe", "jane@example.com", "password123")));
+        TokenResponse caller = authService.login(new LoginRequest("janedoe", "password123"));
+
+        authService.logout(new RefreshTokenRequest(victim.refreshToken()), caller.accessToken());
+
+        assertThat(authService.refresh(new RefreshTokenRequest(victim.refreshToken())).accessToken())
+                .as("the victim's session survives a logout it never asked for")
+                .isNotBlank();
+    }
+
+    /**
+     * Logging out with an expired access token — the client noticed it was signed out and is
+     * cleaning up — has to keep working, which is why the endpoint stays permitAll and the
+     * refresh token is what authorizes the revocation.
+     */
+    @Test
+    @Transactional
+    void logout_withoutAnAccessToken_stillRevokesTheRefreshToken() {
+        registerVerified();
+        TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.logout(new RefreshTokenRequest(tokens.refreshToken()), null);
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(tokens.refreshToken())))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+    }
+
     @Test
     @Transactional
     void login_afterFiveFailedAttempts_locksOutEvenWithCorrectPassword() {
