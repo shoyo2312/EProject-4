@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -44,13 +45,23 @@ public class VideoLikeEventConsumer {
         // fresh as the last event it saw, so likes keep arriving for a video its owner has
         // already removed. Counting them moves a number nothing will ever display and that no
         // later event corrects — the same reason VideoTranscodedEventConsumer skips deleted ids.
-        var result = mongoTemplate.updateFirst(
-                Query.query(where("_id").is(String.valueOf(event.videoId())).and("deletedAt").is(null)),
-                new Update().inc("likeCount", delta),
-                Video.class);
+        Criteria target = where("_id").is(String.valueOf(event.videoId())).and("deletedAt").is(null);
+
+        // An unlike is only allowed to remove a like that is actually counted here. $inc has no
+        // floor, and the events that reach it are not guaranteed to pair up: two partitions can
+        // deliver an unlike ahead of its like, and a redelivery older than the 30-day claim TTL
+        // is applied a second time. One stray -1 leaves a video showing -1 like forever, since
+        // nothing recomputes the counter. Postgres counters guard the same way — see
+        // user-service's UserProfileRepository.decrementFollowerCount.
+        if (!event.liked()) {
+            target = target.and("likeCount").gt(0);
+        }
+
+        var result = mongoTemplate.updateFirst(Query.query(target), new Update().inc("likeCount", delta), Video.class);
 
         if (result.getMatchedCount() == 0) {
-            log.warn("VideoLikeEvent for unknown or deleted videoId={}", event.videoId());
+            log.warn("VideoLikeEvent(liked={}) matched nothing: videoId={} is unknown, deleted{}",
+                    event.liked(), event.videoId(), event.liked() ? "" : ", or already at zero likes");
         }
     }
 }
