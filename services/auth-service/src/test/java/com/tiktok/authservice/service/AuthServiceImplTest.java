@@ -9,6 +9,7 @@ import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.entity.OutboxEvent;
+import com.tiktok.authservice.entity.RefreshToken;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
@@ -35,6 +36,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,6 +45,16 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -102,6 +114,9 @@ class AuthServiceImplTest {
 
     @Autowired
     private AccessTokenBlacklist accessTokenBlacklist;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void cleanUp() {
@@ -680,6 +695,10 @@ class AuthServiceImplTest {
         // The thief gets there first and rotates the chain.
         TokenResponse thiefsChain = authService.refresh(new RefreshTokenRequest(stolen.refreshToken()));
 
+        // The real user's client does not refresh until its access token runs out, a quarter of
+        // an hour later — far outside the window in which a lost-response retry is plausible.
+        backdateRotation(stolen.refreshToken(), Duration.ofMinutes(15));
+
         // The real user then presents the token they still hold — that is the tell.
         assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(stolen.refreshToken())))
                 .isInstanceOf(InvalidRefreshTokenException.class);
@@ -694,6 +713,94 @@ class AuthServiceImplTest {
         assertThat(accessTokenBlacklist.isBlacklisted(jwtProvider.extractClaims(thiefsChain.accessToken())))
                 .as("access tokens are stateless — without the user-wide cutoff the thief keeps ~15 minutes")
                 .isTrue();
+    }
+
+    /**
+     * The race the detection above was blind to. Reading the row, checking rotatedAt == null and
+     * then writing it is check-then-act: both requests read null, both rotate, and two live
+     * chains walk away — the attacker-and-victim situation itself, waved through by the code
+     * meant to catch it. Only the atomic claim decides a winner.
+     *
+     * <p>Real threads against real Postgres rather than a stubbed repository, because the
+     * guarantee under test is the row lock: the loser's UPDATE has to block until the winner
+     * commits and then match nothing. Stubbing the ordering would only prove the assertion.
+     */
+    @Test
+    void refresh_twoConcurrentRefreshesOfOneToken_issueExactlyOneChain() throws Exception {
+        registerVerified();
+        TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CyclicBarrier startTogether = new CyclicBarrier(2);
+        int issued = 0;
+        try {
+            for (Future<TokenResponse> attempt : pool.invokeAll(List.of(
+                    refreshTask(session.refreshToken(), startTogether),
+                    refreshTask(session.refreshToken(), startTogether)))) {
+                try {
+                    assertThat(attempt.get(30, TimeUnit.SECONDS).accessToken()).isNotBlank();
+                    issued++;
+                } catch (ExecutionException ex) {
+                    assertThat(ex.getCause()).isInstanceOf(InvalidRefreshTokenException.class);
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(issued)
+                .as("both requests rotating the same token is two live chains from one login")
+                .isEqualTo(1);
+        assertThat(refreshTokenRepository.findAll().stream().filter(RefreshToken::isActive))
+                .as("the successor and the untouched device — not two successors")
+                .hasSize(2);
+    }
+
+    /**
+     * The other half of the same race, and the reason it is not simply "0 rows means theft": a
+     * client that retries a refresh whose response it never received presents exactly what a
+     * thief presents. Within the grace window that retry is rejected — it will ask again and get
+     * a chain — but it must not take the user's other devices down with it.
+     */
+    @Test
+    void refresh_retryingWithinTheGraceWindow_leavesOtherSessionsAlone() {
+        registerVerified();
+        TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+
+        TokenResponse rotated = authService.refresh(new RefreshTokenRequest(session.refreshToken()));
+
+        // No backdating: the replay lands within milliseconds, which is a retry, not a theft.
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(session.refreshToken())))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+
+        assertThat(authService.refresh(new RefreshTokenRequest(rotated.refreshToken())).accessToken())
+                .as("the chain that did win the race stays usable")
+                .isNotBlank();
+        assertThat(authService.refresh(new RefreshTokenRequest(otherDevice.refreshToken())).accessToken())
+                .as("a lost response on one device must not sign the user out everywhere")
+                .isNotBlank();
+    }
+
+    private Callable<TokenResponse> refreshTask(String refreshToken, CyclicBarrier startTogether) {
+        return () -> {
+            startTogether.await(30, TimeUnit.SECONDS);
+            return authService.refresh(new RefreshTokenRequest(refreshToken));
+        };
+    }
+
+    /**
+     * Ages a token's rotation timestamp, so replaying it reads as arriving long after the
+     * successor was handed out rather than as an in-flight retry. Deterministic, unlike sleeping
+     * out the grace window, and it leaves the window itself at its production value.
+     */
+    private void backdateRotation(String refreshToken, Duration by) {
+        int updated = jdbcTemplate.update(
+                "UPDATE refresh_tokens SET rotated_at = rotated_at - CAST(? AS interval) WHERE token_hash = ?",
+                by.toSeconds() + " seconds", HashUtils.sha256(refreshToken));
+
+        assertThat(updated).as("nothing was rotated, so the test is not testing what it claims").isEqualTo(1);
     }
 
     /**
