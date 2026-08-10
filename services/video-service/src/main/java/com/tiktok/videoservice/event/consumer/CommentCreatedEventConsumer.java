@@ -37,13 +37,14 @@ public class CommentCreatedEventConsumer {
     }
 
     private void apply(CommentCreatedEvent event) {
+        // Skips soft-deleted videos, same reasoning as VideoLikeEventConsumer.
         var result = mongoTemplate.updateFirst(
-                Query.query(where("_id").is(String.valueOf(event.videoId()))),
+                Query.query(where("_id").is(String.valueOf(event.videoId())).and("deletedAt").is(null)),
                 new Update().inc("commentCount", 1),
                 Video.class);
 
         if (result.getMatchedCount() == 0) {
-            log.warn("CommentCreatedEvent for unknown videoId={}", event.videoId());
+            log.warn("CommentCreatedEvent for unknown or deleted videoId={}", event.videoId());
         }
     }
 }
