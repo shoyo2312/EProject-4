@@ -307,6 +307,23 @@ class AuthServiceImplTest {
         assertThat(redisTemplate.hasKey(RevocationKeys.forJti(jti))).isFalse();
     }
 
+    /**
+     * Both token types are signed with the same secret, so a plain isValid() check accepts a
+     * refresh token presented as a bearer. The blacklist is an access-token namespace: writing a
+     * refresh jti into it burns a key no read side ever consults.
+     */
+    @Test
+    @Transactional
+    void logout_withRefreshTokenAsBearer_doesNotBlacklistIt() {
+        registerVerified();
+        TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.logout(new RefreshTokenRequest(tokens.refreshToken()), tokens.refreshToken());
+
+        String refreshJti = jwtProvider.extractClaims(tokens.refreshToken()).get("jti", String.class);
+        assertThat(redisTemplate.hasKey(RevocationKeys.forJti(refreshJti))).isFalse();
+    }
+
     @Test
     @Transactional
     void login_afterFiveFailedAttempts_locksOutEvenWithCorrectPassword() {
@@ -335,6 +352,68 @@ class AuthServiceImplTest {
 
         assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
                 .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    /**
+     * The limit is per account, not per spelling of it. Keyed on the raw usernameOrEmail, the two
+     * ways of naming one account were two Redis counters and simply alternating them bought an
+     * attacker 10 attempts for the 5 the limit promises.
+     */
+    @Test
+    @Transactional
+    void login_alternatingUsernameAndEmail_sharesOneAttemptBudget() {
+        registerVerified();
+
+        for (int i = 0; i < 5; i++) {
+            String identifier = i % 2 == 0 ? "johndoe" : "john@example.com";
+            assertThatThrownBy(() -> authService.login(new LoginRequest(identifier, "wrongpass")))
+                    .isInstanceOf(InvalidCredentialsException.class);
+        }
+
+        // Both spellings are now spent, whichever one the sixth attempt uses.
+        assertThatThrownBy(() -> authService.login(new LoginRequest("john@example.com", "password123")))
+                .isInstanceOf(TooManyLoginAttemptsException.class);
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "password123")))
+                .isInstanceOf(TooManyLoginAttemptsException.class);
+    }
+
+    /**
+     * An account nobody registered still has to be throttled. Leaving the unknown branch
+     * unlimited would turn "this identifier never gets blocked" into a free existence check.
+     */
+    @Test
+    @Transactional
+    void login_unknownAccount_isThrottledLikeARealOne() {
+        for (int i = 0; i < 5; i++) {
+            assertThatThrownBy(() -> authService.login(new LoginRequest("ghost", "wrongpass")))
+                    .isInstanceOf(InvalidCredentialsException.class);
+        }
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ghost", "wrongpass")))
+                .isInstanceOf(TooManyLoginAttemptsException.class);
+    }
+
+    /**
+     * Usernames are only length-checked, so one can be spelled exactly like the key of another
+     * account. Without the namespace prefixes, registering {@code user:<id>} would let its owner
+     * burn a stranger's attempt budget — or clear it, by logging in successfully.
+     */
+    @Test
+    @Transactional
+    void login_usernameShapedLikeAnotherAccountsKey_doesNotShareItsBudget() {
+        UserResponse victim = registerVerified();
+        markVerified(authService.register(
+                new RegisterRequest("user:" + victim.id(), "impostor@example.com", "password123")));
+
+        for (int i = 0; i < 5; i++) {
+            assertThatThrownBy(() -> authService.login(new LoginRequest("user:" + victim.id(), "wrongpass")))
+                    .isInstanceOf(InvalidCredentialsException.class);
+        }
+
+        // The impostor is locked out; the victim they were named after is untouched.
+        assertThatThrownBy(() -> authService.login(new LoginRequest("user:" + victim.id(), "wrongpass")))
+                .isInstanceOf(TooManyLoginAttemptsException.class);
+        assertThat(authService.login(new LoginRequest("johndoe", "password123")).accessToken()).isNotBlank();
     }
 
     /**
