@@ -98,6 +98,23 @@ class VideoLikeEventConsumerTest {
         assertThat(processedEventRepository.count()).isEqualTo(1);
     }
 
+    /**
+     * interaction-service is only as fresh as the last event it saw, so likes keep arriving for a
+     * video its owner has already deleted. Counting them moves a number no read path will ever
+     * show and nothing later corrects.
+     */
+    @Test
+    void onMessage_softDeletedVideo_leavesTheCountAlone() throws Exception {
+        Video video = publishedVideo();
+        video.markDeleted();
+        videoRepository.save(video);
+
+        consumer.onMessage(objectMapper.writeValueAsString(
+                VideoLikeEvent.of(Long.valueOf(video.getId()), 1L, true)));
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isEqualTo(0);
+    }
+
     private Video publishedVideo() {
         return Video.builder()
                 .id(Video.newId())

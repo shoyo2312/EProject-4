@@ -76,6 +76,19 @@ class CommentCreatedEventConsumerTest {
         assertThat(processedEventRepository.count()).isEqualTo(1);
     }
 
+    /** Same reasoning as VideoLikeEventConsumerTest: a deleted video's counters stay frozen. */
+    @Test
+    void onMessage_softDeletedVideo_leavesTheCountAlone() throws Exception {
+        Video video = publishedVideo();
+        video.markDeleted();
+        videoRepository.save(video);
+
+        consumer.onMessage(objectMapper.writeValueAsString(
+                CommentCreatedEvent.of(1L, Long.valueOf(video.getId()), 1L, "nice video")));
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getCommentCount()).isEqualTo(0);
+    }
+
     private Video publishedVideo() {
         return Video.builder()
                 .id(Video.newId())
