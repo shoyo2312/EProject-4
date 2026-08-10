@@ -41,7 +41,7 @@ public class UserProfileServiceImpl implements UserProfileService {
 
     @Override
     @Transactional
-    public void createFromRegisteredEvent(Long userId, String username, String email) {
+    public void createFromRegisteredEvent(Long userId, String username) {
         if (userProfileRepository.existsByUserIdAndDeletedAtIsNull(userId)) {
             return;
         }
