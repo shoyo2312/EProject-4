@@ -42,6 +42,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -234,5 +235,48 @@ class VideoControllerTest {
                 .andExpect(jsonPath("$.success").value(true));
 
         verify(videoService).delete(1L, "v1");
+    }
+
+    /**
+     * Regression for the advice swallowing Spring MVC's own request exceptions. Until
+     * BaseExceptionHandler extended ResponseEntityExceptionHandler, the {@code Exception.class}
+     * handler was the only match for all three of these, so a plain client mistake answered
+     * 500 INTERNAL_ERROR and logged a stack trace.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            // unknown enum constant — HttpMessageNotReadableException
+            "{\"title\":\"t\",\"rawFileUrl\":\"s3://video-media/raw/1.mp4\",\"visibility\":\"BOGUS\"}",
+            // truncated body — HttpMessageNotReadableException
+            "{\"title\":\"t\","
+    })
+    void publish_withUnreadableBody_returnsBadRequest(String body) throws Exception {
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+
+        verify(videoService, never()).publish(any(), any());
+    }
+
+    @Test
+    void listByUser_withNonNumericUserId_returnsBadRequest() throws Exception {
+        mockMvc.perform(get("/api/v1/videos/users/abc"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+
+        verify(videoService, never()).listByUser(any(), any(), any());
+    }
+
+    @Test
+    void publish_withUnsupportedMethod_returnsMethodNotAllowed() throws Exception {
+        mockMvc.perform(put("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
     }
 }
