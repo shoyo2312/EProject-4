@@ -47,6 +47,8 @@ auth:
     secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
     access-token-expiry-millis: 900000
     refresh-token-expiry-millis: 604800000
+    # Grace for a client retrying a refresh it never got the answer to. See JwtProperties.
+    rotation-grace-millis: 10000
   otp:
     email-verification-expiry-millis: 900000
     password-reset-expiry-millis: 900000

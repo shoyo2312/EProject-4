@@ -159,45 +159,144 @@ public class AuthServiceImpl implements AuthService {
             throw new InvalidRefreshTokenException();
         }
 
-        RefreshToken storedToken = refreshTokenRepository.findByTokenHash(HashUtils.sha256(token))
+        String tokenHash = HashUtils.sha256(token);
+        RefreshToken storedToken = refreshTokenRepository.findByTokenHash(tokenHash)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        // Rotation without replay detection is worse than no rotation at all: the thief refreshes
-        // first, the real user's next refresh fails, and all the user sees is "please sign in
-        // again" while the thief keeps walking the chain forever. A rotated-but-unexpired token
-        // coming back means two parties hold it and there is no way to tell them apart — so end
-        // every session for that user and make both sides re-authenticate.
-        if (storedToken.isReplayOfRotatedToken()) {
-            log.warn("Refresh token replay detected for user {} — revoking all sessions", storedToken.getUserId());
-            sessionRevoker.revokeAllSessions(storedToken.getUserId());
+        Instant now = Instant.now();
+
+        // An expired row is just expired: whatever successor it may have had expired with it, so
+        // there is no live chain left for a second holder to be walking.
+        if (storedToken.isExpired()) {
             throw new InvalidRefreshTokenException();
         }
 
+        // Rotation without replay detection is worse than no rotation at all: the thief refreshes
+        // first, the real user's next refresh fails, and all the user sees is "please sign in
+        // again" while the thief keeps walking the chain forever.
+        if (storedToken.isRotated()) {
+            throw rejectAsReplay(storedToken, now);
+        }
+
+        // Revoked but never rotated means logout or a password reset — no successor exists, so
+        // whoever presents it is a stale client rather than a second holder of a live chain.
         if (!storedToken.isActive()) {
             throw new InvalidRefreshTokenException();
         }
 
+        // The claim is the check. Everything above was read outside any lock and can go stale
+        // between the read and here; only this UPDATE decides who rotates the token, and the
+        // loser gets 0 rows back instead of quietly minting a second chain.
+        if (refreshTokenRepository.claimForRotation(tokenHash, now) == 0) {
+            RefreshToken claimedByOther = refreshTokenRepository.findByTokenHash(tokenHash)
+                    .orElseThrow(InvalidRefreshTokenException::new);
+            throw rejectAsReplay(claimedByOther, now);
+        }
+
+        // After the claim, so a token belonging to a deleted or suspended account is not rotated
+        // on the way to being rejected. The throw rolls this transaction back, claim included.
         Long userId = Long.valueOf(claims.getSubject());
         User user = userRepository.findById(userId)
                 .filter(u -> !u.isDeleted() && u.getStatus() == UserStatus.ACTIVE)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        storedToken.rotate();
-        refreshTokenRepository.save(storedToken);
-
         return issueTokens(user);
+    }
+
+    /**
+     * Rejects a token whose successor was already handed out, ending every session for the user
+     * if the timing says theft rather than a retry.
+     *
+     * <p>Two parties holding one chain is indistinguishable from one party asking twice: a mobile
+     * client that double-submits, or retries after a response is lost in flight, presents exactly
+     * what a thief presents. The difference is when. A retry arrives while the first request is
+     * still in flight; the victim's own client only refreshes when its access token runs out,
+     * fifteen minutes later, and an attacker walking a stolen chain is later still. So inside the
+     * grace window the loser is simply rejected — it will retry the refresh and get a fresh chain
+     * — and outside it, every session for the user dies and both sides re-authenticate.
+     *
+     * <p>Returned rather than thrown so the call sites read as {@code throw rejectAsReplay(...)},
+     * which keeps the compiler aware that control does not continue past them.
+     */
+    private RuntimeException rejectAsReplay(RefreshToken token, Instant now) {
+        if (token.wasRotatedBefore(now.minusMillis(jwtProperties.rotationGraceMillis()))) {
+            log.warn("Refresh token replay detected for user {} — revoking all sessions", token.getUserId());
+            sessionRevoker.revokeAllSessions(token.getUserId());
+        }
+        return new InvalidRefreshTokenException();
     }
 
     @Override
     @Transactional
     public void logout(RefreshTokenRequest request, String accessToken) {
-        refreshTokenRepository.findByTokenHash(HashUtils.sha256(request.refreshToken()))
+        revokeRefreshToken(request.refreshToken(), accessToken);
+        blacklistAccessToken(accessToken);
+    }
+
+    /**
+     * Revokes the presented refresh token, provided the caller has any business ending that
+     * session.
+     *
+     * <p>The endpoint is permitAll and has to stay that way — logging out after the access token
+     * has already expired is the ordinary case, not an edge one — so the refresh token itself
+     * carries the authorization. Two things are checked before the row is touched:
+     *
+     * <ul>
+     *   <li>the token is one we signed, and is a refresh token. Previously any string at all was
+     *       hashed and looked up, so the endpoint would do database work for anybody who felt
+     *       like sending noise at it, and an access token pasted into the field would be
+     *       silently accepted as a logout that revoked nothing.</li>
+     *   <li>if an access token came with it, both name the same user. Nothing here is an
+     *       escalation — whoever holds someone else's refresh token can already mint sessions
+     *       with it, which is strictly worse than ending one — but a request that logs out an
+     *       account other than the one it authenticated as is not a logout, and refusing it
+     *       gives the mismatch somewhere to be logged.</li>
+     * </ul>
+     *
+     * <p>Silent on rejection, like the unknown-token case has always been: logout is idempotent
+     * from the client's side, and an error here would tell a caller whether a given token string
+     * is live.
+     */
+    private void revokeRefreshToken(String refreshToken, String accessToken) {
+        Long owner = refreshTokenSubject(refreshToken);
+        if (owner == null) {
+            return;
+        }
+
+        Long bearer = accessTokenSubject(accessToken);
+        if (bearer != null && !bearer.equals(owner)) {
+            log.warn("Logout for user {} presented a refresh token belonging to user {} — ignored", bearer, owner);
+            return;
+        }
+
+        refreshTokenRepository.findByTokenHash(HashUtils.sha256(refreshToken))
                 .ifPresent(storedToken -> {
                     storedToken.revoke();
                     refreshTokenRepository.save(storedToken);
                 });
+    }
 
-        blacklistAccessToken(accessToken);
+    /** The user a refresh token was issued to, or null if it is not a refresh token of ours. */
+    private Long refreshTokenSubject(String refreshToken) {
+        if (refreshToken == null || !jwtProvider.isValid(refreshToken)) {
+            return null;
+        }
+
+        Claims claims = jwtProvider.extractClaims(refreshToken);
+        if (!JwtProvider.TOKEN_TYPE_REFRESH.equals(claims.get(JwtProvider.CLAIM_TOKEN_TYPE))) {
+            return null;
+        }
+
+        return Long.valueOf(claims.getSubject());
+    }
+
+    /** The user an access token was issued to, or null if there is no usable one on the request. */
+    private Long accessTokenSubject(String accessToken) {
+        if (accessToken == null || !jwtProvider.isValidAccessToken(accessToken)) {
+            return null;
+        }
+
+        return Long.valueOf(jwtProvider.extractClaims(accessToken).getSubject());
     }
 
     /**
