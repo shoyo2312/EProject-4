@@ -159,33 +159,71 @@ public class AuthServiceImpl implements AuthService {
             throw new InvalidRefreshTokenException();
         }
 
-        RefreshToken storedToken = refreshTokenRepository.findByTokenHash(HashUtils.sha256(token))
+        String tokenHash = HashUtils.sha256(token);
+        RefreshToken storedToken = refreshTokenRepository.findByTokenHash(tokenHash)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        // Rotation without replay detection is worse than no rotation at all: the thief refreshes
-        // first, the real user's next refresh fails, and all the user sees is "please sign in
-        // again" while the thief keeps walking the chain forever. A rotated-but-unexpired token
-        // coming back means two parties hold it and there is no way to tell them apart — so end
-        // every session for that user and make both sides re-authenticate.
-        if (storedToken.isReplayOfRotatedToken()) {
-            log.warn("Refresh token replay detected for user {} — revoking all sessions", storedToken.getUserId());
-            sessionRevoker.revokeAllSessions(storedToken.getUserId());
+        Instant now = Instant.now();
+
+        // An expired row is just expired: whatever successor it may have had expired with it, so
+        // there is no live chain left for a second holder to be walking.
+        if (storedToken.isExpired()) {
             throw new InvalidRefreshTokenException();
         }
 
+        // Rotation without replay detection is worse than no rotation at all: the thief refreshes
+        // first, the real user's next refresh fails, and all the user sees is "please sign in
+        // again" while the thief keeps walking the chain forever.
+        if (storedToken.isRotated()) {
+            throw rejectAsReplay(storedToken, now);
+        }
+
+        // Revoked but never rotated means logout or a password reset — no successor exists, so
+        // whoever presents it is a stale client rather than a second holder of a live chain.
         if (!storedToken.isActive()) {
             throw new InvalidRefreshTokenException();
         }
 
+        // The claim is the check. Everything above was read outside any lock and can go stale
+        // between the read and here; only this UPDATE decides who rotates the token, and the
+        // loser gets 0 rows back instead of quietly minting a second chain.
+        if (refreshTokenRepository.claimForRotation(tokenHash, now) == 0) {
+            RefreshToken claimedByOther = refreshTokenRepository.findByTokenHash(tokenHash)
+                    .orElseThrow(InvalidRefreshTokenException::new);
+            throw rejectAsReplay(claimedByOther, now);
+        }
+
+        // After the claim, so a token belonging to a deleted or suspended account is not rotated
+        // on the way to being rejected. The throw rolls this transaction back, claim included.
         Long userId = Long.valueOf(claims.getSubject());
         User user = userRepository.findById(userId)
                 .filter(u -> !u.isDeleted() && u.getStatus() == UserStatus.ACTIVE)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        storedToken.rotate();
-        refreshTokenRepository.save(storedToken);
-
         return issueTokens(user);
+    }
+
+    /**
+     * Rejects a token whose successor was already handed out, ending every session for the user
+     * if the timing says theft rather than a retry.
+     *
+     * <p>Two parties holding one chain is indistinguishable from one party asking twice: a mobile
+     * client that double-submits, or retries after a response is lost in flight, presents exactly
+     * what a thief presents. The difference is when. A retry arrives while the first request is
+     * still in flight; the victim's own client only refreshes when its access token runs out,
+     * fifteen minutes later, and an attacker walking a stolen chain is later still. So inside the
+     * grace window the loser is simply rejected — it will retry the refresh and get a fresh chain
+     * — and outside it, every session for the user dies and both sides re-authenticate.
+     *
+     * <p>Returned rather than thrown so the call sites read as {@code throw rejectAsReplay(...)},
+     * which keeps the compiler aware that control does not continue past them.
+     */
+    private RuntimeException rejectAsReplay(RefreshToken token, Instant now) {
+        if (token.wasRotatedBefore(now.minusMillis(jwtProperties.rotationGraceMillis()))) {
+            log.warn("Refresh token replay detected for user {} — revoking all sessions", token.getUserId());
+            sessionRevoker.revokeAllSessions(token.getUserId());
+        }
+        return new InvalidRefreshTokenException();
     }
 
     @Override
