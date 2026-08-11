@@ -42,23 +42,29 @@ public class AdminModerationEventConsumer {
         // Any other eventType (UserBanned, ProductSuspended, ...) is not relevant to video-service.
     }
 
+    /**
+     * Soft-deleted videos are skipped, same as in {@link VideoTranscodedEventConsumer}: an owner
+     * can delete between the moderator's click and this event arriving, and a restore landing
+     * afterwards would leave a document that is both deleted and PUBLISHED. Nothing displays it,
+     * so nothing corrects it either.
+     */
     private void handleTakenDown(VideoTakenDownEvent event) {
         idempotentEventProcessor.runOnce(event.eventId(), VIDEO_TAKEN_DOWN, () ->
-                videoRepository.findById(event.videoId()).ifPresentOrElse(
+                videoRepository.findByIdAndDeletedAtIsNull(event.videoId()).ifPresentOrElse(
                         video -> {
                             video.markTakenDown();
                             videoRepository.updateModerationStatus(video);
                         },
-                        () -> log.warn("VideoTakenDownEvent for unknown videoId={}", event.videoId())));
+                        () -> log.warn("VideoTakenDownEvent for unknown or deleted videoId={}", event.videoId())));
     }
 
     private void handleRestored(VideoRestoredEvent event) {
         idempotentEventProcessor.runOnce(event.eventId(), VIDEO_RESTORED, () ->
-                videoRepository.findById(event.videoId()).ifPresentOrElse(
+                videoRepository.findByIdAndDeletedAtIsNull(event.videoId()).ifPresentOrElse(
                         video -> {
                             video.markRestored();
                             videoRepository.updateModerationStatus(video);
                         },
-                        () -> log.warn("VideoRestoredEvent for unknown videoId={}", event.videoId())));
+                        () -> log.warn("VideoRestoredEvent for unknown or deleted videoId={}", event.videoId())));
     }
 }
