@@ -47,7 +47,7 @@ class UserRegisteredEventConsumerTest {
         consumer.onMessage(payload);
 
         verify(userProfileService, times(1))
-                .createFromRegisteredEvent(event.userId(), event.username(), event.email());
+                .createFromRegisteredEvent(event.userId(), event.username());
     }
 
     @Test
@@ -66,7 +66,7 @@ class UserRegisteredEventConsumerTest {
         consumer.onMessage(payload);
 
         verify(userProfileService, never()).createFromRegisteredEvent(
-                ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(), ArgumentMatchers.anyString());
+                ArgumentMatchers.anyLong(), ArgumentMatchers.anyString());
     }
 
     @Test
@@ -80,6 +80,6 @@ class UserRegisteredEventConsumerTest {
                 ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(),
                 ArgumentMatchers.anyString(), ArgumentMatchers.any(Instant.class));
         verify(userProfileService, never()).createFromRegisteredEvent(
-                ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(), ArgumentMatchers.anyString());
+                ArgumentMatchers.anyLong(), ArgumentMatchers.anyString());
     }
 }

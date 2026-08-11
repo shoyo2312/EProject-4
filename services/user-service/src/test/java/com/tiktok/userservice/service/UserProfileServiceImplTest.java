@@ -69,7 +69,7 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void createFromRegisteredEvent_createsProfileWithUsernameAsDisplayName() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe", "john@example.com");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe");
 
         UserProfileResponse profile = userProfileService.getByUserId(1L, 1L);
 
@@ -82,8 +82,8 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void createFromRegisteredEvent_replay_isNoOp() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe", "john@example.com");
-        userProfileService.createFromRegisteredEvent(1L, "johndoe", "john@example.com");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe");
 
         assertThat(userProfileRepository.findAll()).hasSize(1);
     }
@@ -98,8 +98,8 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void getByUserId_viewerBlockedByTarget_throwsNotFound() {
-        userProfileService.createFromRegisteredEvent(1L, "alice", "alice@example.com");
-        userProfileService.createFromRegisteredEvent(2L, "bob", "bob@example.com");
+        userProfileService.createFromRegisteredEvent(1L, "alice");
+        userProfileService.createFromRegisteredEvent(2L, "bob");
         blockService.block(1L, 2L);
 
         // Same 404 in both directions: the block hides each side from the other, and neither
@@ -113,9 +113,9 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void getByUserId_unrelatedViewer_stillSeesProfile() {
-        userProfileService.createFromRegisteredEvent(1L, "alice", "alice@example.com");
-        userProfileService.createFromRegisteredEvent(2L, "bob", "bob@example.com");
-        userProfileService.createFromRegisteredEvent(3L, "carol", "carol@example.com");
+        userProfileService.createFromRegisteredEvent(1L, "alice");
+        userProfileService.createFromRegisteredEvent(2L, "bob");
+        userProfileService.createFromRegisteredEvent(3L, "carol");
         blockService.block(1L, 2L);
 
         assertThat(userProfileService.getByUserId(3L, 1L).displayName()).isEqualTo("alice");
@@ -125,7 +125,7 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void updateOwnProfile_updatesDisplayNameBioAndAvatar() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe", "john@example.com");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe");
 
         UserProfileResponse updated = userProfileService.updateOwnProfile(
                 1L, new UpdateProfileRequest("John Doe", "Hello world", "https://example.com/avatar.png"));
@@ -138,7 +138,7 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void updateOwnProfile_withOnlyDisplayName_keepsBioAndAvatar() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe", "john@example.com");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe");
         userProfileService.updateOwnProfile(
                 1L, new UpdateProfileRequest("John Doe", "Hello world", "https://example.com/avatar.png"));
 
@@ -153,7 +153,7 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void updateOwnProfile_withEmptyBio_clearsIt() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe", "john@example.com");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe");
         userProfileService.updateOwnProfile(1L, new UpdateProfileRequest(null, "Hello world", null));
 
         UserProfileResponse updated = userProfileService.updateOwnProfile(

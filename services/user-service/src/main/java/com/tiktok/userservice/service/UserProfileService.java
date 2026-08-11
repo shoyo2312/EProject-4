@@ -9,5 +9,12 @@ public interface UserProfileService {
 
     UserProfileResponse updateOwnProfile(Long userId, UpdateProfileRequest request);
 
-    void createFromRegisteredEvent(Long userId, String username, String email);
+    /**
+     * Creates the profile a newly registered account gets by default.
+     *
+     * <p>Takes no email on purpose: nothing in a profile is addressed by email, and a copy kept
+     * here would be a second place for it to be wrong once the account changes it. auth-service
+     * owns that field.
+     */
+    void createFromRegisteredEvent(Long userId, String username);
 }
