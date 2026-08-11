@@ -103,11 +103,30 @@ public class Video {
         this.thumbnailUrl = thumbnailUrl;
         this.hlsUrl = hlsUrl;
         this.durationSeconds = durationSeconds;
-        this.status = VideoStatus.PUBLISHED;
+        applyTranscodeOutcome(VideoStatus.PUBLISHED);
     }
 
     public void markFailed() {
-        this.status = VideoStatus.FAILED;
+        applyTranscodeOutcome(VideoStatus.FAILED);
+    }
+
+    /**
+     * A takedown outlives the transcode that was still running when it landed: transcoding takes
+     * minutes, so a moderator acting on a freshly uploaded video is routinely overtaken by its own
+     * result. Writing that result to {@code status} would put the video straight back on the feed
+     * with nothing left to say it had been removed, and would leave {@code statusBeforeTakedown}
+     * pointing at PROCESSING, so a later restore lands on a state the video is no longer in.
+     *
+     * <p>While the video is down the outcome is recorded as what a restore should return to, and
+     * {@code status} stays TAKEN_DOWN. The media fields are written either way — they describe the
+     * file, not its moderation state, and the video needs them the moment it comes back.
+     */
+    private void applyTranscodeOutcome(VideoStatus outcome) {
+        if (this.status == VideoStatus.TAKEN_DOWN) {
+            this.statusBeforeTakedown = outcome;
+        } else {
+            this.status = outcome;
+        }
     }
 
     public void markTakenDown() {

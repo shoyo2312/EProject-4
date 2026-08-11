@@ -117,6 +117,54 @@ class VideoTranscodedEventConsumerTest {
     }
 
     @Test
+    void onMessage_success_takenDownVideo_staysDown() throws Exception {
+        Video video = videoRepository.save(Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("t")
+                .rawFileUrl("s3://video-media/raw/5.mp4")
+                .visibility(VideoVisibility.PUBLIC)
+                .status(VideoStatus.PROCESSING)
+                .build());
+        video.markTakenDown();
+        videoRepository.updateModerationStatus(video);
+
+        VideoTranscodedEvent event = VideoTranscodedEvent.success(
+                video.getId(), "http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
+        consumer.onMessage(objectMapper.writeValueAsString(event));
+
+        Video after = videoRepository.findById(video.getId()).orElseThrow();
+        assertThat(after.getStatus())
+                .as("a transcode finishing after a takedown must not put the video back on the feed")
+                .isEqualTo(VideoStatus.TAKEN_DOWN);
+        assertThat(after.getStatusBeforeTakedown())
+                .as("a restore must return it to PUBLISHED, not the PROCESSING it was taken down in")
+                .isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(after.getHlsUrl()).isEqualTo("http://minio/master.m3u8");
+    }
+
+    @Test
+    void onMessage_failure_takenDownVideo_staysDown() throws Exception {
+        Video video = videoRepository.save(Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("t")
+                .rawFileUrl("s3://video-media/raw/6.mp4")
+                .visibility(VideoVisibility.PUBLIC)
+                .status(VideoStatus.PROCESSING)
+                .build());
+        video.markTakenDown();
+        videoRepository.updateModerationStatus(video);
+
+        VideoTranscodedEvent event = VideoTranscodedEvent.failure(video.getId(), "boom");
+        consumer.onMessage(objectMapper.writeValueAsString(event));
+
+        Video after = videoRepository.findById(video.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(VideoStatus.TAKEN_DOWN);
+        assertThat(after.getStatusBeforeTakedown()).isEqualTo(VideoStatus.FAILED);
+    }
+
+    @Test
     void onMessage_replay_isNoOp() throws Exception {
         Video video = videoRepository.save(Video.builder()
                 .id(Video.newId())

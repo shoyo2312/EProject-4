@@ -20,10 +20,14 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
 
     private final MongoTemplate mongoTemplate;
 
+    // statusBeforeTakedown is part of both transcode writes because that is where the outcome
+    // goes while the video is down — see Video.applyTranscodeOutcome. Leaving it out would drop
+    // the only record of the result on exactly the videos that need it at restore time.
     @Override
     public void updateTranscodeResult(Video video) {
         update(video.getId(), new Update()
                 .set("status", video.getStatus())
+                .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("thumbnailUrl", video.getThumbnailUrl())
                 .set("hlsUrl", video.getHlsUrl())
                 .set("durationSeconds", video.getDurationSeconds()));
@@ -31,7 +35,9 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
 
     @Override
     public void updateStatus(Video video) {
-        update(video.getId(), new Update().set("status", video.getStatus()));
+        update(video.getId(), new Update()
+                .set("status", video.getStatus())
+                .set("statusBeforeTakedown", video.getStatusBeforeTakedown()));
     }
 
     @Override
