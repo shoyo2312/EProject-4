@@ -115,6 +115,34 @@ class VideoLikeEventConsumerTest {
         assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isEqualTo(0);
     }
 
+    /**
+     * $inc has no floor and the events do not reliably pair up: two partitions can deliver an
+     * unlike ahead of its like, and a redelivery older than the claim TTL is applied twice. One
+     * stray -1 would leave a video advertising -1 like for good, since nothing recomputes it.
+     */
+    @Test
+    void onMessage_unlikedWithNoLikesCounted_leavesTheCountAtZero() throws Exception {
+        Video video = videoRepository.save(publishedVideo());
+
+        consumer.onMessage(objectMapper.writeValueAsString(
+                VideoLikeEvent.of(Long.valueOf(video.getId()), 1L, false)));
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isZero();
+    }
+
+    /** The floor must not cost an unlike that does have a like to remove. */
+    @Test
+    void onMessage_unlikedWithLikesCounted_stillDecrements() throws Exception {
+        Video video = videoRepository.save(publishedVideo());
+
+        consumer.onMessage(objectMapper.writeValueAsString(
+                VideoLikeEvent.of(Long.valueOf(video.getId()), 1L, true)));
+        consumer.onMessage(objectMapper.writeValueAsString(
+                VideoLikeEvent.of(Long.valueOf(video.getId()), 2L, false)));
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isZero();
+    }
+
     private Video publishedVideo() {
         return Video.builder()
                 .id(Video.newId())
