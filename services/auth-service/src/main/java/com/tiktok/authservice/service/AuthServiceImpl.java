@@ -229,13 +229,74 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void logout(RefreshTokenRequest request, String accessToken) {
-        refreshTokenRepository.findByTokenHash(HashUtils.sha256(request.refreshToken()))
+        revokeRefreshToken(request.refreshToken(), accessToken);
+        blacklistAccessToken(accessToken);
+    }
+
+    /**
+     * Revokes the presented refresh token, provided the caller has any business ending that
+     * session.
+     *
+     * <p>The endpoint is permitAll and has to stay that way — logging out after the access token
+     * has already expired is the ordinary case, not an edge one — so the refresh token itself
+     * carries the authorization. Two things are checked before the row is touched:
+     *
+     * <ul>
+     *   <li>the token is one we signed, and is a refresh token. Previously any string at all was
+     *       hashed and looked up, so the endpoint would do database work for anybody who felt
+     *       like sending noise at it, and an access token pasted into the field would be
+     *       silently accepted as a logout that revoked nothing.</li>
+     *   <li>if an access token came with it, both name the same user. Nothing here is an
+     *       escalation — whoever holds someone else's refresh token can already mint sessions
+     *       with it, which is strictly worse than ending one — but a request that logs out an
+     *       account other than the one it authenticated as is not a logout, and refusing it
+     *       gives the mismatch somewhere to be logged.</li>
+     * </ul>
+     *
+     * <p>Silent on rejection, like the unknown-token case has always been: logout is idempotent
+     * from the client's side, and an error here would tell a caller whether a given token string
+     * is live.
+     */
+    private void revokeRefreshToken(String refreshToken, String accessToken) {
+        Long owner = refreshTokenSubject(refreshToken);
+        if (owner == null) {
+            return;
+        }
+
+        Long bearer = accessTokenSubject(accessToken);
+        if (bearer != null && !bearer.equals(owner)) {
+            log.warn("Logout for user {} presented a refresh token belonging to user {} — ignored", bearer, owner);
+            return;
+        }
+
+        refreshTokenRepository.findByTokenHash(HashUtils.sha256(refreshToken))
                 .ifPresent(storedToken -> {
                     storedToken.revoke();
                     refreshTokenRepository.save(storedToken);
                 });
+    }
 
-        blacklistAccessToken(accessToken);
+    /** The user a refresh token was issued to, or null if it is not a refresh token of ours. */
+    private Long refreshTokenSubject(String refreshToken) {
+        if (refreshToken == null || !jwtProvider.isValid(refreshToken)) {
+            return null;
+        }
+
+        Claims claims = jwtProvider.extractClaims(refreshToken);
+        if (!JwtProvider.TOKEN_TYPE_REFRESH.equals(claims.get(JwtProvider.CLAIM_TOKEN_TYPE))) {
+            return null;
+        }
+
+        return Long.valueOf(claims.getSubject());
+    }
+
+    /** The user an access token was issued to, or null if there is no usable one on the request. */
+    private Long accessTokenSubject(String accessToken) {
+        if (accessToken == null || !jwtProvider.isValidAccessToken(accessToken)) {
+            return null;
+        }
+
+        return Long.valueOf(jwtProvider.extractClaims(accessToken).getSubject());
     }
 
     /**
