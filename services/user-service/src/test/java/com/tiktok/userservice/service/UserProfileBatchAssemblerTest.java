@@ -71,8 +71,8 @@ class UserProfileBatchAssemblerTest {
         userMuteRepository.deleteAll();
         userProfileRepository.deleteAll();
 
-        userProfileService.createFromRegisteredEvent(1L, "alice", "alice@example.com");
-        userProfileService.createFromRegisteredEvent(2L, "bob", "bob@example.com");
+        userProfileService.createFromRegisteredEvent(1L, "alice");
+        userProfileService.createFromRegisteredEvent(2L, "bob");
     }
 
     @Test
