@@ -32,10 +32,10 @@ import com.tiktok.videoservice.entity.Video;
  */
 public interface VideoRepositoryCustom {
 
-    /** Transcode succeeded: status plus the media fields it produced. */
+    /** Transcode succeeded: the media fields it produced, plus where the outcome was recorded. */
     void updateTranscodeResult(Video video);
 
-    /** Status alone — transcode failure, which has no media fields to write. */
+    /** Transcode failed — the outcome alone, with no media fields to write. */
     void updateStatus(Video video);
 
     /** Moderation takedown/restore: the status and the state to restore to. */

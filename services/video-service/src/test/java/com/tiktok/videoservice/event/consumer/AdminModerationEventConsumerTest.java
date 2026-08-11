@@ -92,6 +92,22 @@ class AdminModerationEventConsumerTest {
     }
 
     @Test
+    void onMessage_takenDown_deletedVideo_isIgnored() throws Exception {
+        Video video = videoRepository.save(publishedVideo("s3://video-media/raw/6.mp4"));
+        video.markDeleted();
+        videoRepository.updateSoftDeleted(video);
+
+        VideoTakenDownEvent event = VideoTakenDownEvent.of(video.getId(), 99L, "nudity");
+        consumer.onMessage(objectMapper.writeValueAsString(event), "VideoTakenDownEvent".getBytes());
+
+        Video after = videoRepository.findById(video.getId()).orElseThrow();
+        assertThat(after.getStatus())
+                .as("moderation must not write status onto a video its owner already deleted")
+                .isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(after.getStatusBeforeTakedown()).isNull();
+    }
+
+    @Test
     void onMessage_unrelatedEventType_isIgnored() throws Exception {
         Video video = videoRepository.save(publishedVideo("s3://video-media/raw/3.mp4"));
 
