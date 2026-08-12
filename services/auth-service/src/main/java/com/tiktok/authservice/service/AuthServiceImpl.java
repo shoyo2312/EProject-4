@@ -479,7 +479,13 @@ public class AuthServiceImpl implements AuthService {
 
     private void issueOtp(User user, VerificationTokenType type, long expiryMillis,
                            Function<String, ?> eventFactory) {
+        // Flushed here rather than at the end of the transaction: a derived delete is queued as
+        // em.remove(), and Hibernate orders inserts ahead of deletes at flush time. token_hash is
+        // UNIQUE and folds in the OTP, so a resend that happens to draw the same digits for the
+        // same user and type would collide with the row this delete is about to remove and fail
+        // the request with a 500. Rare — 1e-6 per resend — and unexplainable when it happens.
         verificationTokenRepository.deleteAllByUserIdAndTokenType(user.getId(), type);
+        verificationTokenRepository.flush();
 
         String otp = otpGenerator.generate();
         VerificationToken token = VerificationToken.builder()
