@@ -24,4 +24,18 @@ public interface InboxEventRepository extends JpaRepository<InboxEvent, Long> {
                  @Param("eventId") String eventId,
                  @Param("eventType") String eventType,
                  @Param("processedAt") Instant processedAt);
+
+    /**
+     * Deletes up to {@code batchSize} of the oldest claims processed before {@code cutoff}.
+     *
+     * <p>Oldest first, so a table that has never been swept shrinks from the end that is safe to
+     * lose rather than punching holes through the middle. The bound is applied in a subquery
+     * because Postgres has no LIMIT on DELETE.
+     */
+    @Modifying
+    @Query(value = "DELETE FROM inbox_events WHERE id IN (" +
+            "SELECT id FROM inbox_events WHERE processed_at < :cutoff " +
+            "ORDER BY processed_at LIMIT :batchSize)",
+            nativeQuery = true)
+    int deleteProcessedBefore(@Param("cutoff") Instant cutoff, @Param("batchSize") int batchSize);
 }

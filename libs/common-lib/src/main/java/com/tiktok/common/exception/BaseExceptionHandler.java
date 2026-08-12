@@ -2,6 +2,7 @@ package com.tiktok.common.exception;
 
 import com.tiktok.common.response.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -35,6 +36,30 @@ public abstract class BaseExceptionHandler extends ResponseEntityExceptionHandle
     public ResponseEntity<ApiResponse<Void>> handleDomainException(DomainException ex) {
         return ResponseEntity.status(ex.getStatus())
                 .body(ApiResponse.error(ex.getCode(), ex.getMessage()));
+    }
+
+    /**
+     * A lost race on {@code @Version}, which every {@code BaseEntity} carries: two requests read
+     * the same row and the second one to write finds the version already moved. That is a
+     * conflict, not a server fault — the caller's request was well formed and retrying it against
+     * the current state will usually succeed — so it answers 409 rather than falling through to
+     * the catch-all below as a 500. The distinction is the whole point: 500 tells a client to
+     * give up and an on-call engineer to start looking, while 409 tells the client to re-read and
+     * try again, which is exactly the right move.
+     *
+     * <p>Catches Spring's DAO-level {@code OptimisticLockingFailureException} rather than the JPA
+     * subclass, so the same mapping covers video-service's Mongo {@code @Version} documents.
+     *
+     * <p>Logged without a stack trace: under contention this is expected, and a trace per
+     * concurrent edit buries the failures that are real.
+     */
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ApiResponse<Void>> handleOptimisticLockingFailure(
+            OptimisticLockingFailureException ex) {
+        log.warn("Rejected concurrent modification: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResponse.error("CONCURRENT_MODIFICATION",
+                        "The resource was modified by another request. Re-read it and try again."));
     }
 
     /**
