@@ -42,6 +42,8 @@ Gợi ý: viết 1 wrapper `PageResponse<T>` dùng chung cho các list này ở 
 
 `size` bị chặn trên ở **50**; xin lớn hơn thì bị kẹp xuống 50 chứ không báo lỗi. Không truyền thì mặc định 20.
 
+**`content.length` có thể nhỏ hơn `page.size` mà vẫn CÒN trang tiếp theo.** Quan hệ (follow/block/mute) được lưu tách khỏi profile, nên một id trong trang có thể không còn profile tương ứng (user đã bị xoá mềm, hoặc profile chưa kịp tạo qua Kafka); server **bỏ qua** id đó thay vì trả lỗi cả trang. `page.totalElements` vẫn đếm đủ số quan hệ, nên phân trang không bị lệch. Hệ quả phía Flutter: **đừng dùng `content.isEmpty` hay `content.length < size` làm điều kiện dừng infinite scroll** — chỉ dựa vào `number + 1 >= totalPages`. Một trang trả ít item hơn mong đợi là bình thường, không phải hết dữ liệu.
+
 ## 3. Endpoints
 
 Base path: `/api/v1/users`. **Mọi request đều bắt buộc** header `Authorization: Bearer <accessToken>` (cùng access token lấy từ `auth-service`, cùng luật `isValidAccessToken()` — token hết hạn/bị blacklist đều trả `401`).
@@ -100,12 +102,18 @@ Follow 1 user. Trả `201 Created`.
 
 Response `data` → `FollowResponse`: `{ "followerId": ..., "followingId": ... }`.
 
-Lỗi: `CANNOT_FOLLOW_SELF` (400 — tự follow chính mình), `USER_BLOCKED` (403 — giữa 2 bên đang có quan hệ block, theo cả 2 chiều), `ALREADY_FOLLOWING` (409).
+Lỗi: `CANNOT_FOLLOW_SELF` (400 — tự follow chính mình), `USER_BLOCKED` (403 — giữa 2 bên đang có quan hệ block, theo cả 2 chiều), `USER_PROFILE_NOT_FOUND` (404), `ALREADY_FOLLOWING` (409).
+
+`USER_PROFILE_NOT_FOUND` ở đây có **2 nguồn**, client cần phân biệt vì cách xử lý khác nhau:
+- Profile của **người được follow** không tồn tại → hiển thị "người dùng không tồn tại" như mục 3.3.
+- Profile của **chính người gọi** chưa tồn tại — xảy ra khi vừa đăng ký xong và `UserRegisteredEvent` chưa kịp tạo profile (xem mục 3.1). Triệu chứng: `GET /me` cũng trả 404 cùng lúc. Xử lý: retry nhẹ như mục 3.1, đừng báo cho user là "người kia không tồn tại".
+
+Cách phân biệt rẻ nhất: nếu `GET /me` đang chạy được bình thường thì 404 chắc chắn đến từ target.
 
 ### 3.5 `DELETE /{userId}/follow`
 Unfollow. Trả `200 OK`, `data` rỗng/null.
 
-Lỗi: `NOT_FOLLOWING` (404).
+Lỗi: `NOT_FOLLOWING` (404), `CONCURRENT_MODIFICATION` (409 — bấm unfollow 2 lần sát nhau/2 thiết bị cùng lúc; retry 1 lần là hết, xem mục 5).
 
 ### 3.6 `GET /{userId}/followers`
 Danh sách follower của `userId`. Query param phân trang chuẩn Spring: `?page=0&size=20&sort=field,dir`. Trả `200 OK`, `data` → `Page<UserProfileResponse>` (xem mục 2).
@@ -120,7 +128,7 @@ Chặn 1 user. Trả `201 Created`.
 
 Response `data` → `BlockResponse`: `{ "blockerId": ..., "blockedId": ... }`.
 
-Lỗi: `CANNOT_BLOCK_SELF` (400), `ALREADY_BLOCKED` (409).
+Lỗi: `CANNOT_BLOCK_SELF` (400), `USER_PROFILE_NOT_FOUND` (404 — người bị block không tồn tại), `ALREADY_BLOCKED` (409).
 
 **Tác dụng phụ khi block (server tự xử lý, client không cần gọi thêm API):**
 - Quan hệ follow giữa 2 bên (theo cả 2 chiều — mình follow họ hoặc họ follow mình) bị **huỷ tự động**, counter `followerCount`/`followingCount` được cập nhật lại.
@@ -130,7 +138,9 @@ Lỗi: `CANNOT_BLOCK_SELF` (400), `ALREADY_BLOCKED` (409).
 ### 3.9 `DELETE /{userId}/block`
 Bỏ chặn. Trả `200 OK`, `data` rỗng/null.
 
-Lỗi: `NOT_BLOCKED` (404).
+Lỗi: `NOT_BLOCKED` (404), `CONCURRENT_MODIFICATION` (409 — xem mục 3.5).
+
+> Unblock **không** khôi phục lại quan hệ follow đã bị huỷ lúc block. Nếu muốn follow lại thì phải gọi `POST /{userId}/follow` lần nữa — UI nên nói rõ điều này để user không tưởng là bug.
 
 ### 3.10 `GET /me/blocked`
 Danh sách user mình đang block. Phân trang giống mục 3.6. Trả `200 OK`, `data` → `Page<UserProfileResponse>`.
@@ -140,14 +150,14 @@ Mute 1 user (ẩn nội dung của họ khỏi feed/thông báo — tuỳ servic
 
 Response `data` → `MuteResponse`: `{ "muterId": ..., "mutedId": ... }`.
 
-Lỗi: `CANNOT_MUTE_SELF` (400), `ALREADY_MUTED` (409).
+Lỗi: `CANNOT_MUTE_SELF` (400), `USER_PROFILE_NOT_FOUND` (404 — người bị mute không tồn tại), `ALREADY_MUTED` (409).
 
 > **Mute KHÔNG kiểm tra block, hoàn toàn độc lập với follow/block** (khác với `follow`, vốn bị chặn nếu có block). Có thể mute 1 người đang block mình (hoặc mình đang block họ) mà không lỗi — đây là thiết kế có chủ đích: (1) không dùng lỗi mute để dò xem ai đã block ai, (2) cho phép "hạ cấp" từ block xuống mute sau khi unblock. Flutter không nên giả định mute/block đồng bộ trạng thái với nhau — hiển thị UI 2 toggle độc lập.
 
 ### 3.12 `DELETE /{userId}/mute`
 Bỏ mute. Trả `200 OK`, `data` rỗng/null.
 
-Lỗi: `NOT_MUTED` (404).
+Lỗi: `NOT_MUTED` (404), `CONCURRENT_MODIFICATION` (409 — xem mục 3.5).
 
 ### 3.13 `GET /me/muted`
 Danh sách user mình đang mute. Phân trang giống mục 3.6. Trả `200 OK`, `data` → `Page<UserProfileResponse>`.
@@ -165,13 +175,14 @@ Không có enum nào ở user-service (không có trạng thái "visibility", "f
 | `CANNOT_BLOCK_SELF` | 400 | Gọi `block` lên chính mình |
 | `CANNOT_MUTE_SELF` | 400 | Gọi `mute` lên chính mình |
 | `USER_BLOCKED` | 403 | `follow` thất bại vì đang có quan hệ block (2 chiều) giữa 2 bên |
-| `USER_PROFILE_NOT_FOUND` | 404 | User không tồn tại, **hoặc** bị ẩn do có block giữa 2 bên (server cố tình gộp 2 case, xem mục 3.3) |
+| `USER_PROFILE_NOT_FOUND` | 404 | User không tồn tại, bị ẩn do có block giữa 2 bên (server cố tình gộp 2 case, xem mục 3.3), **hoặc** profile của chính người gọi chưa được tạo xong qua Kafka (xem mục 3.4) |
 | `ALREADY_FOLLOWING` | 409 | Follow lại người đã follow |
 | `ALREADY_BLOCKED` | 409 | Block lại người đã block |
 | `ALREADY_MUTED` | 409 | Mute lại người đã mute |
 | `NOT_FOLLOWING` | 404 | Unfollow người chưa follow |
 | `NOT_BLOCKED` | 404 | Unblock người chưa block |
 | `NOT_MUTED` | 404 | Unmute người chưa mute |
+| `CONCURRENT_MODIFICATION` | 409 | Hai request sửa cùng 1 bản ghi đúng lúc (2 lần bấm unfollow/unblock/unmute sát nhau, hoặc 2 thiết bị cùng thao tác). **Mã 409 duy nhất nên retry** — đọc lại trạng thái rồi thử lại 1 lần; các mã `ALREADY_*` là lỗi nghiệp vụ, retry vô ích |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 
 Ngoài ra `401 Unauthorized` (không có `code` riêng của user-service, đến từ `security-lib`/gateway) xảy ra ở **mọi** endpoint nếu thiếu/hết hạn/token bị blacklist — xử lý giống hệt cách auth-service doc đã mô tả (thử `/refresh` 1 lần rồi mới logout local).
@@ -188,4 +199,7 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của user-service, đế
 - Không giả định `block` tự động `mute` hoặc ngược lại — 2 trạng thái độc lập, phải gọi API riêng và hiển thị 2 toggle riêng trên UI.
 - Không tự build URL avatar phía client rồi gửi thẳng lên `PATCH /me` — chỉ dùng URL trả về từ luồng upload ảnh thật (ngoài phạm vi user-service), vì server chặn theo allow-list host + bắt buộc `https`.
 - Không coi `404` ở `GET /me` ngay sau khi vừa đăng ký/login lần đầu là lỗi cứng — profile được tạo bất đồng bộ qua Kafka, nên retry nhẹ trước khi báo lỗi cho user (xem mục 3.1).
+- Không dừng infinite scroll khi `content` ngắn hơn `size` — dùng `number + 1 >= totalPages`, vì server có thể bỏ qua vài id không còn profile trong trang (xem mục 2).
+- Không coi mọi `409` như nhau: `CONCURRENT_MODIFICATION` nên retry 1 lần, còn `ALREADY_FOLLOWING`/`ALREADY_BLOCKED`/`ALREADY_MUTED` thì phải đồng bộ lại UI chứ retry không giải quyết gì.
+- Không cho user bấm liên tục nút follow/unfollow (debounce nút sau khi bấm) — 2 request song song sẽ tạo `CONCURRENT_MODIFICATION` và counter hiển thị nhấp nháy.
 - Không gọi thẳng `user-service:8082` từ production build — luôn qua gateway `:8080`.
