@@ -2,11 +2,13 @@ package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.exception.TooManyLoginAttemptsException;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.Locale;
+import java.util.function.Supplier;
 
 /**
  * Per-account failed-login counter, keyed by username/email regardless of source IP —
@@ -17,6 +19,7 @@ import java.util.Locale;
  * counter would hand an attacker 5 tries per instance. Fails open if Redis is down — login
  * stays available but unthrottled, rather than locking every account out.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class LoginRateLimiter {
@@ -28,7 +31,7 @@ public class LoginRateLimiter {
     private final StringRedisTemplate redisTemplate;
 
     public void checkAllowed(String key) {
-        String value = redisTemplate.opsForValue().get(redisKey(key));
+        String value = failOpen(() -> redisTemplate.opsForValue().get(redisKey(key)), "read login attempts");
         if (value != null && Integer.parseInt(value) >= MAX_ATTEMPTS) {
             throw new TooManyLoginAttemptsException();
         }
@@ -36,14 +39,36 @@ public class LoginRateLimiter {
 
     public void recordFailure(String key) {
         String redisKey = redisKey(key);
-        Long count = redisTemplate.opsForValue().increment(redisKey);
+        Long count = failOpen(() -> redisTemplate.opsForValue().increment(redisKey), "record login failure");
         if (count != null && count == 1L) {
-            redisTemplate.expire(redisKey, WINDOW);
+            failOpen(() -> redisTemplate.expire(redisKey, WINDOW), "set login counter window");
         }
     }
 
     public void recordSuccess(String key) {
-        redisTemplate.delete(redisKey(key));
+        failOpen(() -> redisTemplate.delete(redisKey(key)), "clear login attempts");
+    }
+
+    /**
+     * Every Redis call here goes through this, because the counter is a throttle and not the
+     * authority on whether a login may proceed. An unreachable Redis is treated as a counter that
+     * isn't there: brute-force protection is lost for the duration of the outage — the trade the
+     * class javadoc describes — which is far cheaper than the alternative, a
+     * RedisConnectionFailureException escaping to the catch-all handler and turning every login in
+     * the system into a 500.
+     *
+     * <p>Same choice, same reason as {@link AccessTokenBlacklist#isBlacklisted}. Note that what is
+     * wrapped is the Redis call, not the limit check: TooManyLoginAttemptsException is a
+     * RuntimeException too, and catching it here would un-throttle exactly the accounts under
+     * attack.
+     */
+    private <T> T failOpen(Supplier<T> operation, String action) {
+        try {
+            return operation.get();
+        } catch (RuntimeException e) {
+            log.warn("Redis unavailable, failing open: {}", action, e);
+            return null;
+        }
     }
 
     /** Clears all tracked attempts. Used by tests to isolate state between cases. */
