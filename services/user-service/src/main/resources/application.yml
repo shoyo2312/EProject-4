@@ -42,6 +42,17 @@ spring:
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 
+user:
+  retention:
+    # Off-peak, and daily: nothing here is urgent, and the grace is measured in days.
+    cron: "0 45 3 * * *"
+    batch-size: 1000
+    max-batches-per-run: 100
+    # Must stay above the Kafka topic retention, not tuned for table size: while the broker can
+    # still replay an offset, the claim is the only thing standing between a redelivery and a
+    # double count. 30d matches video-service's TTL on processed_events.
+    processed-event-grace: 30d
+
 app:
   media:
     # Hosts allowed for UpdateProfileRequest.avatarUrl (must also be https - see @ValidMediaUrl).
