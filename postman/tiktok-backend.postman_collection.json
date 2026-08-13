@@ -1,19 +1,21 @@
 {
   "info": {
-    "name": "TikTok Backend - Auth & User Service",
-    "description": "Auth-service (8081) + User-service (8082). HOW TO RUN: import both files, select environment 'TikTok Backend - Local', then use Collection Runner on the WHOLE collection top-to-bottom (folders already numbered 0/1/2 in dependency order) - no manual variable editing needed. testUsername/testEmail/userId/accessToken/etc are all set automatically as you go; every later request reads what an earlier one wrote. Two exceptions that need a manual step: (1) 'otp' env var must be pasted in from your mail sink/DB before the two OTP-'Success' requests (verify-email, reset-password) - no API echoes the OTP back; (2) 'Login - Too Many Attempts' and 'Resend Verification - Too Many Requests' are single requests meant to be re-run several times via Runner iterations to trip the rate limiter, not one-shot.",
+    "name": "TikTok Backend - Auth, User & Video",
+    "description": "auth-service (8081) + user-service (8082) + video-service (8083).\n\nHOW TO RUN\n1. `make infra-up`, then start the three services (`make run-auth`, `run-user`, `run-video`).\n2. Import both files, select environment 'TikTok Backend - Local'.\n3. Run folder '0. Setup' FIRST - it creates two verified accounts (User A and User B) and fills testUsername/userId/accessToken/accessTokenB/... Every later folder reads what Setup wrote, so folders 1/2/3 can then be run in any order.\n\nTHE ONE MANUAL STEP: OTP\nLogin now requires a verified email (403 EMAIL_NOT_VERIFIED otherwise), so Setup has to verify both accounts, and no API ever echoes an OTP back. Read it from the auth-service console log - it prints `[DEV ONLY - REMOVE BEFORE COMMIT] verification OTP for <email> = <123456>` - and paste it into env var `otp` (User A) / `otpB` (User B) before running the two 'Verify Email' requests. Same for the reset-password OTP later. That is why the collection is NOT fully unattended in Collection Runner; run Setup request-by-request, then the rest with the Runner.\n\nRATE-LIMIT REQUESTS\n'Login - Too Many Attempts' and 'Resend Verification - Too Many Requests' are single requests meant to be fired several times in a row (Runner iterations) to trip the limiter, not one-shot.\n\nWHY 403 AND NOT 401 FOR A MISSING TOKEN\nThis collection talks to the services DIRECTLY (8081/8082/8083), and none of them registers an AuthenticationEntryPoint, so Spring Security falls back to Http403ForbiddenEntryPoint: a missing, malformed, expired or blacklisted token all come back 403 with an empty body. 401 only appears where the controller/service throws it (INVALID_CREDENTIALS, INVALID_REFRESH_TOKEN).\n\nThe docs/*-api.md files say 401 for the same case and are NOT wrong - they describe the path real clients take, through api-gateway :8080, which does register a RestAuthenticationEntryPoint and answers 401 with a proper {code:'UNAUTHORIZED'} envelope. Same rejection, different status and body depending on which door you knock on. If you point this collection at the gateway, expect 401 wherever a test here asserts 403.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "authBaseUrl", "value": "http://localhost:8081" },
-    { "key": "userBaseUrl", "value": "http://localhost:8082" }
+    { "key": "userBaseUrl", "value": "http://localhost:8082" },
+    { "key": "videoBaseUrl", "value": "http://localhost:8083" }
   ],
   "item": [
     {
       "name": "0. Setup",
+      "description": "Creates two VERIFIED accounts. Run these six requests top-to-bottom, pausing to paste {{otp}} and {{otpB}} from the auth-service log.",
       "item": [
         {
-          "name": "Register User A",
+          "name": "1. Register User A",
           "event": [
             { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
               "const rand = Date.now();",
@@ -24,7 +26,9 @@
               "pm.test('201 Created', () => pm.response.to.have.status(201));",
               "const body = pm.response.json();",
               "pm.test('returns user id', () => pm.expect(body.data.id).to.exist);",
-              "pm.environment.set('userId', body.data.id);"
+              "pm.test('emailVerified is false', () => pm.expect(body.data.emailVerified).to.eql(false));",
+              "pm.environment.set('userId', String(body.data.id));",
+              "console.log('Now read the OTP for ' + pm.environment.get('testEmail') + ' from the auth-service log and set env var `otp`.');"
             ] } }
           ],
           "request": {
@@ -35,7 +39,37 @@
           }
         },
         {
-          "name": "Register User B",
+          "name": "2. Verify Email A (paste {{otp}} first)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('204 No Content', () => pm.response.to.have.status(204));",
+            "if (pm.response.code === 400) { console.log('OTP wrong or expired (15 min TTL). Re-run Resend Verification and paste the new one.'); }"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"{{otp}}\"\n}" },
+            "url": "{{authBaseUrl}}/api/v1/auth/verify-email"
+          },
+          "description": "MANUAL STEP. Login refuses an unverified account, so this is not optional. OTP expires after 15 min (auth.otp.email-verification-expiry-millis)."
+        },
+        {
+          "name": "3. Login User A",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "if (pm.response.code === 403) { console.log('EMAIL_NOT_VERIFIED - go back and finish step 2.'); return; }",
+            "const body = pm.response.json();",
+            "pm.environment.set('accessToken', body.data.accessToken);",
+            "pm.environment.set('refreshToken', body.data.refreshToken);"
+          ] } } ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
+            "url": "{{authBaseUrl}}/api/v1/auth/login"
+          }
+        },
+        {
+          "name": "4. Register User B",
           "event": [
             { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
               "const rand = Date.now() + 1;",
@@ -44,8 +78,8 @@
             ] } },
             { "listen": "test", "script": { "type": "text/javascript", "exec": [
               "pm.test('201 Created', () => pm.response.to.have.status(201));",
-              "const body = pm.response.json();",
-              "pm.environment.set('userIdB', body.data.id);"
+              "pm.environment.set('userIdB', String(pm.response.json().data.id));",
+              "console.log('Now read the OTP for ' + pm.environment.get('testEmailB') + ' from the auth-service log and set env var `otpB`.');"
             ] } }
           ],
           "request": {
@@ -56,32 +90,25 @@
           }
         },
         {
-          "name": "Login User A",
-          "event": [
-            { "listen": "test", "script": { "type": "text/javascript", "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "const body = pm.response.json();",
-              "pm.environment.set('accessToken', body.data.accessToken);",
-              "pm.environment.set('refreshToken', body.data.refreshToken);"
-            ] } }
-          ],
+          "name": "5. Verify Email B (paste {{otpB}} first)",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+          ] } } ],
           "request": {
             "method": "POST",
             "header": [ { "key": "Content-Type", "value": "application/json" } ],
-            "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
-            "url": "{{authBaseUrl}}/api/v1/auth/login"
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmailB}}\",\n  \"otp\": \"{{otpB}}\"\n}" },
+            "url": "{{authBaseUrl}}/api/v1/auth/verify-email"
           }
         },
         {
-          "name": "Login User B",
-          "event": [
-            { "listen": "test", "script": { "type": "text/javascript", "exec": [
-              "pm.test('200 OK', () => pm.response.to.have.status(200));",
-              "const body = pm.response.json();",
-              "pm.environment.set('accessTokenB', body.data.accessToken);",
-              "pm.environment.set('refreshTokenB', body.data.refreshToken);"
-            ] } }
-          ],
+          "name": "6. Login User B",
+          "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.test('200 OK', () => pm.response.to.have.status(200));",
+            "const body = pm.response.json();",
+            "pm.environment.set('accessTokenB', body.data.accessToken);",
+            "pm.environment.set('refreshTokenB', body.data.refreshToken);"
+          ] } } ],
           "request": {
             "method": "POST",
             "header": [ { "key": "Content-Type", "value": "application/json" } ],
@@ -108,31 +135,8 @@
                 "header": [ { "key": "Content-Type", "value": "application/json" } ],
                 "body": { "mode": "raw", "raw": "{\n  \"username\": \"\",\n  \"email\": \"not-an-email\",\n  \"password\": \"123\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/register"
-              }
-            },
-            {
-              "name": "Register - Success",
-              "event": [
-                { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
-                  "const rand = Date.now();",
-                  "pm.environment.set('testUsername', 'userA_' + rand);",
-                  "pm.environment.set('testEmail', 'userA_' + rand + '@example.com');"
-                ] } },
-                { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                  "const body = pm.response.json();",
-                  "pm.test('emailVerified is false', () => pm.expect(body.data.emailVerified).to.eql(false));",
-                  "pm.test('status is ACTIVE', () => pm.expect(body.data.status).to.eql('ACTIVE'));",
-                  "pm.environment.set('userId', body.data.id);"
-                ] } }
-              ],
-              "request": {
-                "method": "POST",
-                "header": [ { "key": "Content-Type", "value": "application/json" } ],
-                "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{testUsername}}\",\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
-                "url": "{{authBaseUrl}}/api/v1/auth/register"
               },
-              "description": "Runs FIRST in this folder - sets testUsername/testEmail/userId, the same variables the whole rest of the collection reads from. Every request after this (Login, Get Me, User Service...) automatically targets this same account. Running this whole collection top-to-bottom via Collection Runner needs no manual variable editing."
+              "description": "username 3-50 chars, email must parse, password 8-100 chars."
             },
             {
               "name": "Register - Duplicate Username",
@@ -146,7 +150,7 @@
                 "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{testUsername}}\",\n  \"email\": \"someone-else-{{$timestamp}}@example.com\",\n  \"password\": \"{{testPassword}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/register"
               },
-              "description": "Must run after 'Register - Success' above (or '0. Setup / Register User A') so {{testUsername}} is already taken."
+              "description": "Needs '0. Setup' to have run so {{testUsername}} is taken."
             },
             {
               "name": "Register - Duplicate Email",
@@ -160,7 +164,7 @@
                 "body": { "mode": "raw", "raw": "{\n  \"username\": \"someone_else_{{$timestamp}}\",\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/register"
               },
-              "description": "Must run after 'Register - Success' above (or '0. Setup / Register User A') so {{testEmail}} is already taken."
+              "description": "Needs '0. Setup' to have run so {{testEmail}} is taken."
             }
           ]
         },
@@ -190,12 +194,14 @@
                 "header": [ { "key": "Content-Type", "value": "application/json" } ],
                 "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\",\n  \"password\": \"wrong-password-123\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/login"
-              }
+              },
+              "description": "Counts as a failed attempt against the 5-per-15-min limiter for this account."
             },
             {
               "name": "Login - Invalid Credentials (unknown user)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('401 INVALID_CREDENTIALS', () => pm.response.to.have.status(401));"
+                "pm.test('401 INVALID_CREDENTIALS', () => pm.response.to.have.status(401));",
+                "pm.test('same code as wrong-password - no user enumeration', () => pm.expect(pm.response.json().code).to.eql('INVALID_CREDENTIALS'));"
               ] } } ],
               "request": {
                 "method": "POST",
@@ -203,6 +209,40 @@
                 "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"no-such-user-{{$timestamp}}\",\n  \"password\": \"whatever123\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/login"
               }
+            },
+            {
+              "name": "Login - Email Not Verified (403) - step 1: register throwaway",
+              "event": [
+                { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+                  "const rand = Date.now();",
+                  "pm.environment.set('unverifiedUsername', 'unverified_' + rand);",
+                  "pm.environment.set('unverifiedEmail', 'unverified_' + rand + '@example.com');"
+                ] } },
+                { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));"
+                ] } }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"username\": \"{{unverifiedUsername}}\",\n  \"email\": \"{{unverifiedEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/register"
+              },
+              "description": "A deliberately unverified account, so the next request can prove login rejects it."
+            },
+            {
+              "name": "Login - Email Not Verified (403) - step 2",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403 EMAIL_NOT_VERIFIED', () => pm.response.to.have.status(403));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('EMAIL_NOT_VERIFIED'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{unverifiedUsername}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/login"
+              },
+              "description": "Deliberately a different code from INVALID_CREDENTIALS: the password WAS right, and the client needs to know to open the 'resend OTP' screen. The failed-attempt counter is also cleared on the way through - an unverified email is not a credential guess."
             },
             {
               "name": "Login - Too Many Attempts (run 6x via Collection Runner)",
@@ -220,16 +260,17 @@
                 "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\",\n  \"password\": \"wrong-password-123\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/login"
               },
-              "description": "LoginRateLimiter allows 5 failed attempts / 15min per account. Use Collection Runner to fire this 6 times back-to-back."
+              "description": "LoginRateLimiter allows 5 failed attempts / 15 min per ACCOUNT (keyed on the resolved user, not the string sent - alternating username and email does not buy extra attempts). Run 'Login - Success' afterwards to clear the counter, or the rest of the collection will be locked out for 15 min."
             },
             {
-              "name": "Login - Success",
+              "name": "Login - Success (clears the attempt counter)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('200 OK', () => pm.response.to.have.status(200));",
                 "const body = pm.response.json();",
-                "pm.test('has accessToken + refreshToken', () => {",
+                "pm.test('has accessToken + refreshToken + expiresInMillis', () => {",
                 "  pm.expect(body.data.accessToken).to.exist;",
                 "  pm.expect(body.data.refreshToken).to.exist;",
+                "  pm.expect(body.data.expiresInMillis).to.eql(900000);",
                 "});",
                 "pm.environment.set('accessToken', body.data.accessToken);",
                 "pm.environment.set('refreshToken', body.data.refreshToken);"
@@ -239,7 +280,8 @@
                 "header": [ { "key": "Content-Type", "value": "application/json" } ],
                 "body": { "mode": "raw", "raw": "{\n  \"usernameOrEmail\": \"{{testUsername}}\",\n  \"password\": \"{{testPassword}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/login"
-              }
+              },
+              "description": "Requires the account to be email-verified ('0. Setup' did that)."
             }
           ]
         },
@@ -270,13 +312,15 @@
                 "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{accessToken}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/refresh"
               },
-              "description": "tokenType claim is 'access', not 'refresh' -> must be rejected."
+              "description": "Both tokens are signed with the same secret; only the tokenType claim ('access' vs 'refresh') separates them, so this must be rejected."
             },
             {
               "name": "Refresh - Success (rotates tokens)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('200 OK', () => pm.response.to.have.status(200));",
                 "const body = pm.response.json();",
+                "pm.test('a NEW refresh token comes back', () => pm.expect(body.data.refreshToken).to.not.eql(pm.environment.get('refreshToken')));",
+                "pm.environment.set('rotatedRefreshToken', pm.environment.get('refreshToken'));",
                 "pm.environment.set('accessToken', body.data.accessToken);",
                 "pm.environment.set('refreshToken', body.data.refreshToken);"
               ] } } ],
@@ -285,7 +329,36 @@
                 "header": [ { "key": "Content-Type", "value": "application/json" } ],
                 "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/refresh"
-              }
+              },
+              "description": "Saves the consumed token into {{rotatedRefreshToken}} so the replay test below can present it again."
+            },
+            {
+              "name": "Refresh - Replay Within Grace Window (401, session survives)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401 INVALID_REFRESH_TOKEN', () => pm.response.to.have.status(401));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('INVALID_REFRESH_TOKEN'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{rotatedRefreshToken}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/refresh"
+              },
+              "description": "Run WITHIN 10s of 'Refresh - Success' (auth.jwt.rotation-grace-millis). Inside the grace the already-rotated token just gets a 401 - it looks exactly like a client retrying a /refresh whose response it never received. After the grace it is treated as theft instead: see the next request."
+            },
+            {
+              "name": "Refresh - Replay After Grace (kills every session)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401 INVALID_REFRESH_TOKEN', () => pm.response.to.have.status(401));",
+                "console.log('Every session for this user is now revoked. The current {{accessToken}} and {{refreshToken}} are dead - re-run 0. Setup / 3. Login User A.');"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{rotatedRefreshToken}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/refresh"
+              },
+              "description": "DESTRUCTIVE - run it MORE than 10s after 'Refresh - Success'. Presenting a rotated-but-unexpired token past the grace window is replay detection: SessionRevoker wipes all of the user's sessions (auth:blacklist:user:{userId} cut-off). Log in again before running other folders."
             }
           ]
         },
@@ -293,17 +366,42 @@
           "name": "Get Me",
           "item": [
             {
-              "name": "Get Me - Unauthorized (no token)",
+              "name": "Get Me - No Token (403)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('401', () => pm.response.to.have.status(401));"
+                "pm.test('403 - Http403ForbiddenEntryPoint, empty body', () => pm.response.to.have.status(403));"
               ] } } ],
               "request": { "method": "GET", "header": [], "url": "{{authBaseUrl}}/api/v1/auth/me" }
+            },
+            {
+              "name": "Get Me - Malformed Token (403)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403', () => pm.response.to.have.status(403));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer not-a-real-token" } ],
+                "url": "{{authBaseUrl}}/api/v1/auth/me"
+              }
+            },
+            {
+              "name": "Get Me - Refresh Token Rejected (403)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403 - refresh token is not an access token', () => pm.response.to.have.status(403));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{refreshToken}}" } ],
+                "url": "{{authBaseUrl}}/api/v1/auth/me"
+              },
+              "description": "The filter uses isValidAccessToken(), not isValid() - otherwise a 7-day refresh token would work as a bearer credential."
             },
             {
               "name": "Get Me - Success",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                "pm.test('returns username', () => pm.expect(pm.response.json().data.username).to.eql(pm.environment.get('testUsername')));"
+                "const data = pm.response.json().data;",
+                "pm.test('returns username', () => pm.expect(data.username).to.eql(pm.environment.get('testUsername')));",
+                "pm.test('emailVerified is true after Setup', () => pm.expect(data.emailVerified).to.eql(true));"
               ] } } ],
               "request": {
                 "method": "GET",
@@ -326,7 +424,8 @@
                 "header": [ { "key": "Content-Type", "value": "application/json" } ],
                 "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"abc\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/verify-email"
-              }
+              },
+              "description": "otp must match \\d{6}."
             },
             {
               "name": "Verify Email - Invalid OTP",
@@ -342,9 +441,9 @@
               }
             },
             {
-              "name": "Verify Email - Success (fill {{otp}} manually first)",
+              "name": "Verify Email - Already Verified (400 INVALID_OTP)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                "pm.test('400 - the token was consumed in Setup', () => pm.response.to.have.status(400));"
               ] } } ],
               "request": {
                 "method": "POST",
@@ -352,7 +451,7 @@
                 "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"{{otp}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/verify-email"
               },
-              "description": "OTP is only emailed (UserRegisteredEvent flow), never returned by any API. Pull it from your mail sink / DB and set env var `otp` before running."
+              "description": "Replays the same OTP '0. Setup / 2. Verify Email A' already used - a verification token is single-use."
             }
           ]
         },
@@ -360,9 +459,10 @@
           "name": "Resend Verification",
           "item": [
             {
-              "name": "Resend Verification - Success (no enumeration)",
+              "name": "Resend Verification - Success (204)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                "pm.test('204 No Content', () => pm.response.to.have.status(204));",
+                "console.log('A fresh OTP is now in the auth-service log for ' + pm.environment.get('testEmail'));"
               ] } } ],
               "request": {
                 "method": "POST",
@@ -386,16 +486,19 @@
             {
               "name": "Resend Verification - Too Many Requests (run 4x via Runner)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "// Fire this 4 times back-to-back for the SAME testEmail. 1-3 -> 204. 4th -> 429 TOO_MANY_OTP_REQUESTS.",
-                "pm.test('status is 204 or 429', () => pm.expect([204, 429]).to.include(pm.response.code));"
+                "// Fire this 4 times back-to-back for the SAME email. 1-3 -> 204. 4th -> 429 TOO_MANY_OTP_REQUESTS.",
+                "pm.test('status is 204 or 429', () => pm.expect([204, 429]).to.include(pm.response.code));",
+                "if (pm.response.code === 429) {",
+                "  pm.test('code is TOO_MANY_OTP_REQUESTS', () => pm.expect(pm.response.json().code).to.eql('TOO_MANY_OTP_REQUESTS'));",
+                "}"
               ] } } ],
               "request": {
                 "method": "POST",
                 "header": [ { "key": "Content-Type", "value": "application/json" } ],
-                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\"\n}" },
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{unverifiedEmail}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/resend-verification"
               },
-              "description": "send cap is 3 / 15min per email (checked before existence lookup)."
+              "description": "Send cap is 3 / 15 min per email, checked BEFORE the existence lookup. Targets {{unverifiedEmail}} (from the Login folder) rather than {{testEmail}}, so burning the quota does not block the rest of the collection."
             }
           ]
         },
@@ -405,14 +508,16 @@
             {
               "name": "Forgot Password - Success (always 204)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                "pm.test('204 No Content', () => pm.response.to.have.status(204));",
+                "console.log('Reset OTP for ' + pm.environment.get('testEmail') + ' is in the auth-service log - paste it into env var `otp`.');"
               ] } } ],
               "request": {
                 "method": "POST",
                 "header": [ { "key": "Content-Type", "value": "application/json" } ],
                 "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/forgot-password"
-              }
+              },
+              "description": "204 whether or not the email exists - no enumeration."
             },
             {
               "name": "Reset Password - Validation Error (short password)",
@@ -440,10 +545,13 @@
               }
             },
             {
-              "name": "Reset Password - Success (fill {{otp}} manually first)",
+              "name": "Reset Password - Success (paste the reset {{otp}} first)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('204 No Content', () => pm.response.to.have.status(204));",
-                "if (pm.response.code === 204) { pm.environment.set('testPassword', 'NewPassw0rd!23'); }"
+                "if (pm.response.code === 204) {",
+                "  pm.environment.set('testPassword', 'NewPassw0rd!23');",
+                "  console.log('Password changed and ALL sessions revoked - re-run 0. Setup / 3. Login User A before touching other folders.');",
+                "}"
               ] } } ],
               "request": {
                 "method": "POST",
@@ -451,7 +559,7 @@
                 "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"otp\": \"{{otp}}\",\n  \"newPassword\": \"NewPassw0rd!23\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/reset-password"
               },
-              "description": "Revokes ALL refresh tokens for the user on success -> old {{refreshToken}} becomes invalid, must re-login."
+              "description": "DESTRUCTIVE. Revokes every refresh token AND stamps auth:blacklist:user:{userId}, so the current {{accessToken}} dies too. Re-login afterwards - {{testPassword}} has already been updated for you."
             }
           ]
         },
@@ -459,7 +567,7 @@
           "name": "Logout",
           "item": [
             {
-              "name": "Logout - Success (idempotent, garbage refreshToken still 204)",
+              "name": "Logout - Success (idempotent)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('204 No Content', () => pm.response.to.have.status(204));"
               ] } } ],
@@ -471,19 +579,20 @@
                 ],
                 "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/logout"
-              }
+              },
+              "description": "Revokes the refresh token and blacklists the access token's jti. Still 204 for an already-revoked or garbage refresh token."
             },
             {
-              "name": "Get Me - Unauthorized (access token blacklisted after logout)",
+              "name": "Get Me - Access Token Blacklisted After Logout (403)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('401 - jti blacklisted', () => pm.response.to.have.status(401));"
+                "pm.test('403 - jti is in auth:blacklist:{jti}', () => pm.response.to.have.status(403));"
               ] } } ],
               "request": {
                 "method": "GET",
                 "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
                 "url": "{{authBaseUrl}}/api/v1/auth/me"
               },
-              "description": "Run right after 'Logout - Success' with the SAME accessToken still set in the env."
+              "description": "Run right after 'Logout - Success' with the SAME accessToken still in the env. Then re-run '0. Setup / 3. Login User A' to get a working token back."
             }
           ]
         }
@@ -496,27 +605,28 @@
           "name": "Profile",
           "item": [
             {
-              "name": "Get My Profile - Unauthorized",
+              "name": "Get My Profile - No Token (403)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('401', () => pm.response.to.have.status(401));"
+                "pm.test('403', () => pm.response.to.have.status(403));"
               ] } } ],
-              "request": { "method": "GET", "header": [], "url": "{{userBaseUrl}}/api/v1/users/me" }
+              "request": { "method": "GET", "header": [], "url": "{{userBaseUrl}}/api/v1/users/me" },
+              "description": "Every user-service endpoint is authenticated - there is no permitAll route besides swagger."
             },
             {
               "name": "Get My Profile - Success",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                "pm.test('has userId', () => pm.expect(pm.response.json().data.userId).to.exist);"
+                "pm.test('userId matches the auth-service id', () => pm.expect(String(pm.response.json().data.userId)).to.eql(pm.environment.get('userId')));"
               ] } } ],
               "request": {
                 "method": "GET",
                 "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
                 "url": "{{userBaseUrl}}/api/v1/users/me"
               },
-              "description": "May 404 USER_PROFILE_NOT_FOUND if the async UserRegisteredEvent consumer hasn't created the profile row yet - retry after a moment."
+              "description": "May 404 USER_PROFILE_NOT_FOUND right after registration: the profile row is created by the UserRegisteredEvent Kafka consumer. Retry after a moment (and check Kafka is up)."
             },
             {
-              "name": "Update My Profile - Validation Error (bad avatarUrl host)",
+              "name": "Update My Profile - Validation Error (avatarUrl on a foreign host)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));"
               ] } } ],
@@ -529,7 +639,7 @@
                 "body": { "mode": "raw", "raw": "{\n  \"avatarUrl\": \"http://evil.example.com/avatar.png\"\n}" },
                 "url": "{{userBaseUrl}}/api/v1/users/me"
               },
-              "description": "http (not https) AND disallowed host -> should fail @ValidMediaUrl."
+              "description": "@ValidMediaUrl: https only, and host must be in app.media.allowed-hosts (default cdn.tiktok-clone.local). This URL fails both."
             },
             {
               "name": "Update My Profile - Validation Error (blank displayName)",
@@ -544,14 +654,17 @@
                 ],
                 "body": { "mode": "raw", "raw": "{\n  \"displayName\": \"   \"\n}" },
                 "url": "{{userBaseUrl}}/api/v1/users/me"
-              }
+              },
+              "description": "displayName is optional (omit = leave unchanged) but NOT NULL in the DB, so whitespace-only is rejected rather than blanking the name."
             },
             {
               "name": "Update My Profile - Success",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                "const body = pm.response.json();",
-                "pm.test('displayName updated', () => pm.expect(body.data.displayName).to.eql('Test User A'));"
+                "const data = pm.response.json().data;",
+                "pm.test('displayName updated', () => pm.expect(data.displayName).to.eql('Test User A'));",
+                "pm.test('bio updated', () => pm.expect(data.bio).to.eql('Hello from Postman'));",
+                "pm.test('avatarUrl accepted', () => pm.expect(data.avatarUrl).to.eql('https://cdn.tiktok-clone.local/avatars/a.png'));"
               ] } } ],
               "request": {
                 "method": "PATCH",
@@ -559,9 +672,27 @@
                   { "key": "Content-Type", "value": "application/json" },
                   { "key": "Authorization", "value": "Bearer {{accessToken}}" }
                 ],
-                "body": { "mode": "raw", "raw": "{\n  \"displayName\": \"Test User A\",\n  \"bio\": \"Hello from Postman\"\n}" },
+                "body": { "mode": "raw", "raw": "{\n  \"displayName\": \"Test User A\",\n  \"bio\": \"Hello from Postman\",\n  \"avatarUrl\": \"https://cdn.tiktok-clone.local/avatars/a.png\"\n}" },
                 "url": "{{userBaseUrl}}/api/v1/users/me"
               }
+            },
+            {
+              "name": "Update My Profile - Clear bio (empty string -> null)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('bio cleared', () => pm.expect(pm.response.json().data.bio).to.be.oneOf([null, undefined]));",
+                "pm.test('displayName untouched by the PATCH', () => pm.expect(pm.response.json().data.displayName).to.eql('Test User A'));"
+              ] } } ],
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"bio\": \"\"\n}" },
+                "url": "{{userBaseUrl}}/api/v1/users/me"
+              },
+              "description": "PATCH semantics: omitted = unchanged, empty string = cleared to null."
             },
             {
               "name": "Get User By Id - Not Found",
@@ -578,7 +709,8 @@
             {
               "name": "Get User By Id - Success",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('is user B', () => pm.expect(String(pm.response.json().data.userId)).to.eql(pm.environment.get('userIdB')));"
               ] } } ],
               "request": {
                 "method": "GET",
@@ -654,7 +786,8 @@
                 "method": "GET",
                 "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
                 "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/following?size=99999"
-              }
+              },
+              "description": "spring.data.web.pageable.max-page-size = 50."
             },
             {
               "name": "Unfollow - Not Following",
@@ -730,7 +863,7 @@
                 "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
                 "url": "{{userBaseUrl}}/api/v1/users/{{userId}}/follow"
               },
-              "description": "User B tries to follow User A while A has B blocked -> block check runs in either direction."
+              "description": "User B tries to follow User A while A has B blocked -> the block check runs in either direction."
             },
             {
               "name": "Get Profile - Hidden by Block (404)",
@@ -746,7 +879,11 @@
             {
               "name": "List My Blocked Users - Success",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('user B is listed', () => {",
+                "  const content = pm.response.json().data.content;",
+                "  pm.expect(content.some(u => String(u.userId) === pm.environment.get('userIdB'))).to.be.true;",
+                "});"
               ] } } ],
               "request": {
                 "method": "GET",
@@ -775,7 +912,8 @@
                 "method": "DELETE",
                 "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
                 "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/block"
-              }
+              },
+              "description": "Leave the pair unblocked - the Video folder needs both users able to see each other."
             }
           ]
         },
@@ -817,9 +955,24 @@
               }
             },
             {
+              "name": "Get Profile - Mute Does NOT Hide (200)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK - unlike block, mute only affects feeds', () => pm.response.to.have.status(200));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}"
+              }
+            },
+            {
               "name": "List My Muted Users - Success",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
-                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('user B is listed', () => {",
+                "  const content = pm.response.json().data.content;",
+                "  pm.expect(content.some(u => String(u.userId) === pm.environment.get('userIdB'))).to.be.true;",
+                "});"
               ] } } ],
               "request": {
                 "method": "GET",
@@ -847,6 +1000,380 @@
                 "method": "DELETE",
                 "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
                 "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}/mute"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Video Service",
+      "description": "video-service :8083, MongoDB. Two things to know before reading the assertions:\n\n1. A published video starts as status=PROCESSING, not PUBLISHED. It only flips to PUBLISHED when media-worker consumes VideoPublishedEvent, transcodes, and emits VideoTranscodedEvent. With media-worker not running, videos stay PROCESSING forever - which is why the feed assertions below do not expect to find the video you just created.\n2. GET /api/v1/videos/** is permitAll (anonymous feed), everything else needs a token. Visibility is enforced in the service, not the filter chain: the owner sees all of their own videos, everyone else (including anonymous) sees only status=PUBLISHED AND visibility=PUBLIC - anything else is a 404, never a 403, so a private video's existence is not leaked.",
+      "item": [
+        {
+          "name": "Publish",
+          "item": [
+            {
+              "name": "Publish - No Token (403)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403', () => pm.response.to.have.status(403));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"title\": \"No token\",\n  \"rawFileUrl\": \"s3://video-media/raw/nope.mp4\",\n  \"visibility\": \"PUBLIC\"\n}" },
+                "url": "{{videoBaseUrl}}/api/v1/videos"
+              },
+              "description": "POST is not in the permitAll GET matcher."
+            },
+            {
+              "name": "Publish - Validation Error (blank title, missing visibility)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('VALIDATION_ERROR'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"title\": \"\",\n  \"description\": \"missing visibility too\",\n  \"rawFileUrl\": \"s3://video-media/raw/x.mp4\"\n}" },
+                "url": "{{videoBaseUrl}}/api/v1/videos"
+              },
+              "description": "title @NotBlank max 150, description max 2000, visibility @NotNull."
+            },
+            {
+              "name": "Publish - Rejected rawFileUrl (foreign https host)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"title\": \"SSRF attempt\",\n  \"rawFileUrl\": \"https://attacker.example.com/payload.mp4\",\n  \"visibility\": \"PUBLIC\"\n}" },
+                "url": "{{videoBaseUrl}}/api/v1/videos"
+              },
+              "description": "rawFileUrl goes into VideoPublishedEvent and media-worker then FETCHES it, so an unchecked value is a URL the client picks and our backend requests. @ValidMediaUrl(schemes={https,s3}) allows only app.media.allowed-hosts (cdn.tiktok-clone.local) / allowed-buckets (video-media)."
+            },
+            {
+              "name": "Publish - Rejected rawFileUrl (wrong s3 bucket)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"title\": \"Wrong bucket\",\n  \"rawFileUrl\": \"s3://someone-elses-bucket/raw/x.mp4\",\n  \"visibility\": \"PUBLIC\"\n}" },
+                "url": "{{videoBaseUrl}}/api/v1/videos"
+              },
+              "description": "For s3:// the authority is matched against allowed-buckets, not allowed-hosts."
+            },
+            {
+              "name": "Publish - Success (PUBLIC)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                "const data = pm.response.json().data;",
+                "pm.test('starts as PROCESSING, not PUBLISHED', () => pm.expect(data.status).to.eql('PROCESSING'));",
+                "pm.test('visibility is PUBLIC', () => pm.expect(data.visibility).to.eql('PUBLIC'));",
+                "pm.test('owned by user A', () => pm.expect(String(data.userId)).to.eql(pm.environment.get('userId')));",
+                "pm.test('counters start at zero', () => {",
+                "  pm.expect(data.viewCount).to.eql(0);",
+                "  pm.expect(data.likeCount).to.eql(0);",
+                "  pm.expect(data.commentCount).to.eql(0);",
+                "});",
+                "pm.test('hlsUrl not set until media-worker transcodes', () => pm.expect(data.hlsUrl).to.be.oneOf([null, undefined]));",
+                "pm.environment.set('videoId', data.id);"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"title\": \"Postman public video\",\n  \"description\": \"Created by the Postman collection\",\n  \"rawFileUrl\": \"s3://video-media/raw/{{$guid}}.mp4\",\n  \"visibility\": \"PUBLIC\"\n}" },
+                "url": "{{videoBaseUrl}}/api/v1/videos"
+              },
+              "description": "Sets {{videoId}}. The rest of this folder reads it."
+            },
+            {
+              "name": "Publish - Success (PRIVATE, https rawFileUrl)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                "const data = pm.response.json().data;",
+                "pm.test('visibility is PRIVATE', () => pm.expect(data.visibility).to.eql('PRIVATE'));",
+                "pm.environment.set('privateVideoId', data.id);"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"title\": \"Postman private video\",\n  \"description\": \"Only user A should ever see this\",\n  \"rawFileUrl\": \"https://cdn.tiktok-clone.local/raw/{{$guid}}.mp4\",\n  \"visibility\": \"PRIVATE\"\n}" },
+                "url": "{{videoBaseUrl}}/api/v1/videos"
+              },
+              "description": "Sets {{privateVideoId}} and also proves the https branch of @ValidMediaUrl accepts an allowed host."
+            }
+          ]
+        },
+        {
+          "name": "Get Video",
+          "item": [
+            {
+              "name": "Get Video - Not Found (bogus id)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404 VIDEO_NOT_FOUND', () => pm.response.to.have.status(404));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('VIDEO_NOT_FOUND'));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/1000000000000000000"
+              },
+              "description": "Video ids are Snowflake longs rendered as strings, so this is a well-formed id that simply does not exist - no id-parsing error is involved."
+            },
+            {
+              "name": "Get Video - Owner Sees Own PROCESSING Video",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const data = pm.response.json().data;",
+                "pm.test('is the video we published', () => pm.expect(data.id).to.eql(pm.environment.get('videoId')));",
+                "pm.test('still PROCESSING', () => pm.expect(data.status).to.eql('PROCESSING'));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/{{videoId}}"
+              },
+              "description": "The owner bypasses the PUBLISHED+PUBLIC filter."
+            },
+            {
+              "name": "Get Video - Stranger Cannot See Unpublished (404)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404, not 403 - existence is not leaked', () => pm.response.to.have.status(404));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('VIDEO_NOT_FOUND'));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/{{videoId}}"
+              },
+              "description": "User B asking for A's PUBLIC-but-still-PROCESSING video. Once media-worker transcodes it to PUBLISHED this same request returns 200 - that difference is the point."
+            },
+            {
+              "name": "Get Video - Anonymous Cannot See Unpublished (404)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404', () => pm.response.to.have.status(404));"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/{{videoId}}" },
+              "description": "No token at all. The endpoint is permitAll, so this reaches the service with requesterId=null and falls to the stranger branch - 404, not 403."
+            },
+            {
+              "name": "Get Video - Private Hidden From Other User (404)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404', () => pm.response.to.have.status(404));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/{{privateVideoId}}"
+              },
+              "description": "A PRIVATE video stays 404 for everyone but the owner even after it reaches PUBLISHED."
+            },
+            {
+              "name": "Get Video - Owner Sees Own Private Video",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('visibility PRIVATE', () => pm.expect(pm.response.json().data.visibility).to.eql('PRIVATE'));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/{{privateVideoId}}"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Feed",
+          "item": [
+            {
+              "name": "Get Feed - Anonymous (200)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK without a token', () => pm.response.to.have.status(200));",
+                "const page = pm.response.json().data;",
+                "pm.test('default page size is 20', () => pm.expect(page.size).to.eql(20));",
+                "pm.test('feed contains only PUBLISHED + PUBLIC videos', () => {",
+                "  page.content.forEach(v => {",
+                "    pm.expect(v.status).to.eql('PUBLISHED');",
+                "    pm.expect(v.visibility).to.eql('PUBLIC');",
+                "  });",
+                "});"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/feed" },
+              "description": "Sorted createdAt DESC, served by feed_idx. The video you just published is NOT here - it is still PROCESSING until media-worker transcodes it. An empty feed on a fresh database is the expected result, not a failure."
+            },
+            {
+              "name": "Get Feed - Pagination Cap Test (size=99999)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('page size clamped to max 50', () => pm.expect(pm.response.json().data.size).to.be.at.most(50));"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/feed?page=0&size=99999" },
+              "description": "video-service declares @EnableSpringDataWebSupport, which silently disables Boot's max-page-size handling; PageableConfig re-applies it by hand. This request is the manual counterpart of VideoControllerPageSizeTest - if it ever returns size=99999, that config regressed."
+            }
+          ]
+        },
+        {
+          "name": "List By User",
+          "item": [
+            {
+              "name": "List By User - Owner Sees Everything (incl. PROCESSING + PRIVATE)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const ids = pm.response.json().data.content.map(v => v.id);",
+                "pm.test('own PUBLIC video is listed', () => pm.expect(ids).to.include(pm.environment.get('videoId')));",
+                "pm.test('own PRIVATE video is listed', () => pm.expect(ids).to.include(pm.environment.get('privateVideoId')));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/users/{{userId}}"
+              },
+              "description": "User A listing user A: the whole shelf, minus soft-deleted."
+            },
+            {
+              "name": "List By User - Stranger Sees Only Published+Public",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const content = pm.response.json().data.content;",
+                "pm.test('nothing unpublished or private leaks', () => {",
+                "  content.forEach(v => {",
+                "    pm.expect(v.status).to.eql('PUBLISHED');",
+                "    pm.expect(v.visibility).to.eql('PUBLIC');",
+                "  });",
+                "});",
+                "pm.test('the PRIVATE video is absent', () => pm.expect(content.map(v => v.id)).to.not.include(pm.environment.get('privateVideoId')));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/users/{{userId}}"
+              },
+              "description": "User B listing user A. Same line getById draws, applied to the list."
+            },
+            {
+              "name": "List By User - Anonymous (200, filtered)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('the PRIVATE video is absent', () => pm.expect(pm.response.json().data.content.map(v => v.id)).to.not.include(pm.environment.get('privateVideoId')));"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/users/{{userId}}" }
+            },
+            {
+              "name": "List By User - Unknown User (empty page, not 404)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('empty content', () => pm.expect(pm.response.json().data.content).to.be.an('array').that.is.empty);"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/users/999999999" },
+              "description": "video-service does not know the user table - a user with no videos and a user who does not exist are the same empty page."
+            },
+            {
+              "name": "List By User - Pagination Cap Test (size=99999)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('page size clamped to max 50', () => pm.expect(pm.response.json().data.size).to.be.at.most(50));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/users/{{userId}}?size=99999"
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete",
+          "item": [
+            {
+              "name": "Delete - No Token (403)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403', () => pm.response.to.have.status(403));"
+              ] } } ],
+              "request": { "method": "DELETE", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/{{videoId}}" }
+            },
+            {
+              "name": "Delete - Not Owner (403 NOT_VIDEO_OWNER)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403 NOT_VIDEO_OWNER', () => pm.response.to.have.status(403));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('NOT_VIDEO_OWNER'));"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/{{videoId}}"
+              },
+              "description": "User B deleting A's video. Note this one IS a 403 with a code, unlike the read path's 404: the caller already knows the id, so there is nothing left to hide."
+            },
+            {
+              "name": "Delete - Success (soft delete)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('success envelope with null data', () => {",
+                "  const body = pm.response.json();",
+                "  pm.expect(body.success).to.eql(true);",
+                "  pm.expect(body.data).to.be.oneOf([null, undefined]);",
+                "});"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/{{videoId}}"
+              },
+              "description": "Sets deletedAt; the document stays in Mongo."
+            },
+            {
+              "name": "Get Video - Gone After Delete (404)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404 VIDEO_NOT_FOUND, even for the owner', () => pm.response.to.have.status(404));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/{{videoId}}"
+              },
+              "description": "Every read filters deletedAt IS NULL - the owner exemption is about visibility, not deletion."
+            },
+            {
+              "name": "Delete - Already Deleted (404)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('404 VIDEO_NOT_FOUND', () => pm.response.to.have.status(404));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('VIDEO_NOT_FOUND'));"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/{{videoId}}"
+              },
+              "description": "Delete is NOT idempotent - a second call 404s rather than returning 200."
+            },
+            {
+              "name": "Delete - Private Video (cleanup)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));"
+              ] } } ],
+              "request": {
+                "method": "DELETE",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{videoBaseUrl}}/api/v1/videos/{{privateVideoId}}"
               }
             }
           ]
