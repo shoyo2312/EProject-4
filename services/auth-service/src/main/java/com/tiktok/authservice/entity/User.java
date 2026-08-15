@@ -21,10 +21,17 @@ public class User extends BaseEntity {
     @Column(name = "username", nullable = false, unique = true)
     private String username;
 
-    @Column(name = "email", nullable = false, unique = true)
+    /**
+     * Null for an account created by a social login whose provider gave no address — Facebook's
+     * {@code email} permission is optional, and an account registered with a phone number has none
+     * to give. Such an account cannot reset a password or receive mail until it supplies one, so
+     * the client is told to ask; see {@code OAuthService}.
+     */
+    @Column(name = "email", unique = true)
     private String email;
 
-    @Column(name = "password_hash", nullable = false)
+    /** Null for an account that has only ever signed in through a provider and set no password. */
+    @Column(name = "password_hash")
     private String passwordHash;
 
     @Enumerated(EnumType.STRING)
@@ -41,6 +48,18 @@ public class User extends BaseEntity {
 
     @Column(name = "email_verified_at")
     private Instant emailVerifiedAt;
+
+    /**
+     * Claims an address for an account that has none. Verified state is cleared rather than left
+     * alone: the address is unproven until its OTP comes back, and an account that could set
+     * {@code email} while {@code emailVerified} stayed true would be able to receive password
+     * resets for an address nobody proved it owns.
+     */
+    public void changeEmail(String newEmail) {
+        this.email = newEmail;
+        this.emailVerified = false;
+        this.emailVerifiedAt = null;
+    }
 
     public void changePasswordHash(String newHash) {
         this.passwordHash = newHash;

@@ -1,5 +1,6 @@
 package com.tiktok.authservice.service;
 
+import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
@@ -21,6 +22,12 @@ public interface AuthService {
     void logout(RefreshTokenRequest request, String accessToken);
 
     UserResponse getCurrentUser(Long userId);
+
+    /**
+     * Gives an account created by a social login the address it never had, and sends the code that
+     * will prove it. The address only counts once {@link #verifyEmail} accepts that code.
+     */
+    void addEmail(Long userId, AddEmailRequest request);
 
     void verifyEmail(VerifyEmailRequest request);
 

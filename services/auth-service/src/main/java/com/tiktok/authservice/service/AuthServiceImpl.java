@@ -2,6 +2,7 @@ package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.config.JwtProperties;
 import com.tiktok.authservice.config.OtpProperties;
+import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
@@ -21,6 +22,7 @@ import com.tiktok.authservice.event.local.EmailVerificationRequestedEvent;
 import com.tiktok.authservice.event.local.PasswordResetRequestedEvent;
 import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
+import com.tiktok.authservice.exception.EmailAlreadyLinkedException;
 import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
@@ -46,8 +48,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
-import java.util.Map;
-import java.util.UUID;
 import java.util.function.Function;
 
 @Slf4j
@@ -55,7 +55,6 @@ import java.util.function.Function;
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
 
-    private static final String CLAIM_ROLE = "role";
     private static final String CLAIM_JTI = "jti";
     private static final String PURPOSE_EMAIL_VERIFICATION = "email-verification";
     private static final String PURPOSE_PASSWORD_RESET = "password-reset";
@@ -74,6 +73,7 @@ public class AuthServiceImpl implements AuthService {
     private final OtpRateLimiter otpRateLimiter;
     private final ApplicationEventPublisher eventPublisher;
     private final SessionRevoker sessionRevoker;
+    private final TokenIssuer tokenIssuer;
 
     @Override
     @Transactional
@@ -127,6 +127,11 @@ public class AuthServiceImpl implements AuthService {
         // bcrypt verification per attempt — the work an attacker would otherwise get for free.
         boolean valid = user != null
                 && user.getStatus() == UserStatus.ACTIVE
+                // An account created by a social login has no password to match. Stated rather
+                // than left to bcrypt — which does answer false for a null hash, after logging a
+                // warning about it on every attempt — because "there is no password" is a fact
+                // about the account, not an encoder edge case.
+                && user.getPasswordHash() != null
                 && HashUtils.bcryptMatches(request.password(), user.getPasswordHash());
 
         if (!valid) {
@@ -333,6 +338,37 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
+    public void addEmail(Long userId, AddEmailRequest request) {
+        String email = request.email().toLowerCase(Locale.ROOT);
+
+        User user = userRepository.findById(userId)
+                .filter(u -> !u.isDeleted())
+                .orElseThrow(() -> new UserNotFoundException(String.valueOf(userId)));
+
+        // Only an account with nothing to lose may take this path. Once an address is verified,
+        // replacing it is how an account gets stolen from someone who still holds the old one.
+        if (user.isEmailVerified()) {
+            throw new EmailAlreadyLinkedException();
+        }
+
+        otpRateLimiter.checkAllowed(PURPOSE_EMAIL_VERIFICATION, email);
+
+        if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
+            throw new EmailAlreadyExistsException(email);
+        }
+
+        // Stored before it is proven, exactly as a password signup stores it — which is also why
+        // the check above can be trusted: an address held by an unverified account is taken.
+        user.changeEmail(email);
+        saveUnique(user, user.getUsername(), email);
+
+        issueOtp(user, VerificationTokenType.EMAIL_VERIFICATION,
+                otpProperties.emailVerificationExpiryMillis(),
+                otp -> new EmailVerificationRequestedEvent(email, otp));
+    }
+
+    @Override
+    @Transactional
     public void verifyEmail(VerifyEmailRequest request) {
         User user = consumeOtp(PURPOSE_EMAIL_VERIFICATION, VerificationTokenType.EMAIL_VERIFICATION,
                 request.email(), request.otp());
@@ -509,28 +545,6 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private TokenResponse issueTokens(User user) {
-        String subject = String.valueOf(user.getId());
-
-        String accessToken = jwtProvider.generateToken(
-                subject,
-                Map.of(CLAIM_ROLE, user.getRole().name(),
-                        CLAIM_JTI, UUID.randomUUID().toString(),
-                        JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS),
-                jwtProperties.accessTokenExpiryMillis());
-
-        String refreshToken = jwtProvider.generateToken(
-                subject,
-                Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_REFRESH,
-                        CLAIM_JTI, UUID.randomUUID().toString()),
-                jwtProperties.refreshTokenExpiryMillis());
-
-        RefreshToken tokenRecord = RefreshToken.builder()
-                .userId(user.getId())
-                .tokenHash(HashUtils.sha256(refreshToken))
-                .expiresAt(Instant.now().plusMillis(jwtProperties.refreshTokenExpiryMillis()))
-                .build();
-        refreshTokenRepository.save(tokenRecord);
-
-        return new TokenResponse(accessToken, refreshToken, jwtProperties.accessTokenExpiryMillis());
+        return tokenIssuer.issue(user);
     }
 }

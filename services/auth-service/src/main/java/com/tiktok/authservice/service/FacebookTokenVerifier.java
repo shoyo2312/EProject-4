@@ -1,0 +1,115 @@
+package com.tiktok.authservice.service;
+
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.tiktok.authservice.config.OAuthProperties;
+import com.tiktok.authservice.entity.AuthProvider;
+import com.tiktok.authservice.exception.InvalidSocialTokenException;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestClient;
+import org.springframework.web.util.UriBuilder;
+
+import java.net.URI;
+import java.util.function.Function;
+
+/**
+ * Verifies the Facebook access token the client's SDK produced (Facebook JS SDK on web,
+ * {@code flutter_facebook_auth} on mobile).
+ *
+ * <p>Facebook issues no ID token, so there is nothing to check a signature on: the token is an
+ * opaque handle and only Facebook can say what it means. {@code /debug_token} is that question, and
+ * its answer carries the two facts that matter — whether the token is still valid, and
+ * <em>which app it was issued to</em>. The second is the one that does the security work: any app
+ * on Facebook can obtain a token for the same user, and without comparing {@code app_id} to our own
+ * a token harvested by an unrelated app would log its bearer in here as that user.
+ */
+@Component
+public class FacebookTokenVerifier implements SocialTokenVerifier {
+
+    private final RestClient facebookRestClient;
+    private final OAuthProperties properties;
+
+    public FacebookTokenVerifier(RestClient facebookRestClient, OAuthProperties properties) {
+        this.facebookRestClient = facebookRestClient;
+        this.properties = properties;
+    }
+
+    @Override
+    public AuthProvider provider() {
+        return AuthProvider.FACEBOOK;
+    }
+
+    @Override
+    public SocialProfile verify(String accessToken) {
+        DebugTokenData data = debugToken(accessToken);
+        if (data == null
+                || !data.isValid()
+                || data.userId() == null
+                || !properties.facebook().appId().equals(data.appId())) {
+            throw new InvalidSocialTokenException();
+        }
+
+        // The uid comes from /debug_token, which we have just authenticated with our app secret;
+        // /me is asked only for the address, and only because /debug_token does not carry it.
+        String email = me(accessToken).email();
+
+        // Facebook never states whether it has verified the address, so we must assume it has not.
+        // That means a Facebook login never auto-links to an existing account by email — it can
+        // only create a new one or match a uid we have already seen.
+        return new SocialProfile(
+                AuthProvider.FACEBOOK,
+                data.userId(),
+                email == null ? null : email.toLowerCase(),
+                false);
+    }
+
+    private DebugTokenData debugToken(String accessToken) {
+        // The app token is literally "{app-id}|{app-secret}"; it is what proves the question is
+        // coming from us, and is the reason the secret may never leave the server.
+        String appToken = properties.facebook().appId() + "|" + properties.facebook().appSecret();
+        DebugTokenResponse response = call(uri -> uri.path("/debug_token")
+                .queryParam("input_token", accessToken)
+                .queryParam("access_token", appToken)
+                .build(), DebugTokenResponse.class);
+        return response == null ? null : response.data();
+    }
+
+    private MeResponse me(String accessToken) {
+        MeResponse response = call(uri -> uri.path("/me")
+                .queryParam("fields", "id,email")
+                .queryParam("access_token", accessToken)
+                .build(), MeResponse.class);
+        if (response == null) {
+            throw new InvalidSocialTokenException();
+        }
+        return response;
+    }
+
+    private <T> T call(Function<UriBuilder, URI> uri, Class<T> type) {
+        try {
+            return facebookRestClient.get().uri(uri).retrieve().body(type);
+        } catch (HttpClientErrorException e) {
+            // Graph answers 4xx for an expired or revoked token. A 5xx or a timeout is Facebook
+            // being down and stays an error of ours, not a rejected login.
+            throw new InvalidSocialTokenException();
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record DebugTokenResponse(DebugTokenData data) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record DebugTokenData(
+            @JsonProperty("app_id") String appId,
+            @JsonProperty("is_valid") boolean isValid,
+            @JsonProperty("user_id") String userId
+    ) {
+    }
+
+    /** {@code email} is absent whenever the permission was declined or the account has none. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record MeResponse(String id, String email) {
+    }
+}

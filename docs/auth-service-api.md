@@ -196,6 +196,62 @@ Hệ quả cho client: thiết bị vừa reset password **cũng** mất phiên 
 
 Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400), `TOO_MANY_OTP_REQUESTS` (429 — nhập sai OTP quá **5 lần/15 phút** theo email, độc lập với giới hạn gửi lại OTP ở mục 3.8).
 
+### 3.10 `POST /oauth/google` và `POST /oauth/facebook`
+Không cần token. Trả `200 OK`. **Đăng ký và đăng nhập là cùng một lời gọi** — client không thể biết tài khoản đã tồn tại hay chưa, đó là chuyện chỉ server biết.
+
+Request (giống nhau cho cả 2 endpoint):
+```json
+{ "token": "..." }
+```
+
+`token` là thứ SDK của provider trả về, **không phải** authorization code:
+
+| Client | Google | Facebook |
+|---|---|---|
+| Next.js (web) | `credential` từ Google Identity Services (là ID token) | `authResponse.accessToken` từ Facebook JS SDK |
+| Flutter | `idToken` từ `google_sign_in` | `accessToken.tokenString` từ `flutter_facebook_auth` |
+
+Backend không có code riêng cho từng nền tảng. Điều kiện duy nhất: **mọi client ID của Google (web/iOS/Android) phải nằm trong `GOOGLE_CLIENT_IDS`**, vì mỗi nền tảng có một client ID riêng và server đối chiếu `aud` với danh sách đó — thiếu ID nào thì user nền tảng đó không đăng nhập được.
+
+Response `data` → `SocialLoginResponse`:
+```json
+{
+  "tokens": {
+    "accessToken": "eyJ...",
+    "refreshToken": "eyJ...",
+    "expiresInMillis": 900000
+  },
+  "requiresEmail": true
+}
+```
+
+`requiresEmail = true` nghĩa là tài khoản **chưa có email**. Phiên vẫn dùng được bình thường, nhưng client nên nhắc user bổ sung (mục 3.11) — không có email thì tài khoản không thể reset mật khẩu và mất tài khoản provider là mất luôn tài khoản này.
+
+Khi nào `requiresEmail = true`:
+- **Facebook: khi provider không trả email nào** — quyền `email` bị bỏ tick ở màn hình consent, hoặc tài khoản đăng ký bằng số điện thoại nên không có email.
+- **Facebook: hoặc khi email đó đã có chủ ở hệ thống ta.** Graph API không khẳng định email đã verify, nên nó không đủ tư cách đòi một tài khoản đang tồn tại — server bỏ email đi, tạo tài khoản mới trắng, rồi để client hỏi user một địa chỉ khác.
+- **Google: chỉ khi `email_verified = false`**, hiếm.
+
+Ngược lại, email chưa verify mà **chưa ai giữ** thì vẫn được lưu (`email_verified = false`) — không lấy mất gì của ai, và user đỡ được một màn hình. Cờ `email_verified` chỉ bật khi provider khẳng định, hoặc khi user tự xác thực bằng OTP của ta.
+
+Ghép tài khoản: server tìm theo `(provider, provider_uid)` trước. Nếu chưa từng thấy, **chỉ khi provider khẳng định email đã verify** mới ghép vào tài khoản sẵn có cùng email; còn lại tạo tài khoản mới. Ranh giới nằm đúng ở chỗ "được đòi tài khoản sẵn có", không phải ở chỗ "được lưu email": nếu email chưa verify mà đòi được tài khoản thì bất kỳ ai khai email của bạn trên Facebook đều chiếm được tài khoản của bạn ở đây. Tài khoản tạo bằng social có `password_hash = NULL` → gọi `/login` bằng mật khẩu luôn trả `401 INVALID_CREDENTIALS` cho tới khi user đặt mật khẩu qua `forgot-password` → `reset-password` (cần có email trước).
+
+Lỗi: `VALIDATION_ERROR` (400), `INVALID_SOCIAL_TOKEN` (401 — token sai/hết hạn/**cấp cho app khác**), `INVALID_CREDENTIALS` (401 — tài khoản bị khoá), `INTERNAL_ERROR` (500 — provider timeout hoặc lỗi 5xx; đây là lỗi phía ta, cho user retry).
+
+**Riêng web (Next.js)**: gọi 2 endpoint này qua route handler của Next.js (BFF proxy) chứ không gọi thẳng từ browser. Lý do: refresh token 7 ngày phải nằm trong cookie `httpOnly` để XSS không đọc được, còn access token giữ trong memory. Gọi thẳng từ browser vừa buộc phải mở CORS ở gateway, vừa đẩy refresh token vào JS.
+
+### 3.11 `POST /email`
+**Cần Bearer token.** Trả `204 No Content`. Dành cho tài khoản social chưa có email.
+
+Request:
+```json
+{ "email": "a@b.com" }
+```
+
+Server lưu email ở trạng thái **chưa xác thực** rồi gửi OTP 6 số. Xác nhận bằng `POST /verify-email` (mục 3.6) như luồng đăng ký thường — không có endpoint riêng.
+
+Lỗi: `VALIDATION_ERROR` (400), `EMAIL_ALREADY_EXISTS` (409 — email đang thuộc tài khoản khác), `EMAIL_ALREADY_LINKED` (409 — tài khoản này đã có email **đã verify**; đổi email đã verify là thao tác khác, chưa hỗ trợ), `TOO_MANY_OTP_REQUESTS` (429 — dùng chung counter với `resend-verification`), `401` nếu thiếu/sai access token.
+
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
 1. `register` → `verify-email` (OTP 6 số gửi qua mail) → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext). Bỏ qua bước verify thì `login` trả `403 EMAIL_NOT_VERIFIED`.
@@ -230,6 +286,8 @@ ACTIVE, LOCKED
 | `TOO_MANY_LOGIN_ATTEMPTS` | 429 | Quá 5 lần login sai trong 15 phút (theo tài khoản) |
 | `USERNAME_ALREADY_EXISTS` | 409 | Đăng ký trùng username |
 | `EMAIL_ALREADY_EXISTS` | 409 | Đăng ký trùng email |
+| `INVALID_SOCIAL_TOKEN` | 401 | Token Google/Facebook sai, hết hạn, hoặc **được cấp cho ứng dụng khác** (mục 3.10). Cố ý không nói rõ là lý do nào |
+| `EMAIL_ALREADY_LINKED` | 409 | Tài khoản đã có email đã verify nên không dùng `POST /email` được nữa (mục 3.11) |
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
 | `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`) |
 | `TOO_MANY_OTP_REQUESTS` | 429 | (a) Quá 3 lần gọi `resend-verification`/`forgot-password` trong 15 phút (theo email), **hoặc** (b) quá 5 lần nhập sai OTP trong 15 phút ở `verify-email`/`reset-password` (theo email) — 2 counter độc lập, client cần xử lý cả hai trường hợp |
