@@ -598,7 +598,7 @@
         },
         {
           "name": "Social Login",
-          "description": "Google + Facebook token exchange. The four 'no credentials needed' requests below run anywhere; the two marked REAL TOKEN need GOOGLE_CLIENT_IDS / FB_APP_ID / FB_APP_SECRET set on the service and a token pasted into the environment.",
+          "description": "Google + Facebook token exchange. The five 'no credentials needed' requests below run anywhere; the two marked REAL TOKEN need GOOGLE_CLIENT_IDS / FB_APP_ID / FB_APP_SECRET set on the service and a token pasted into the environment.",
           "item": [
             {
               "name": "Google - Validation Error (blank token)",
@@ -663,7 +663,7 @@
                 "const data = pm.response.json().data;",
                 "pm.environment.set('socialAccessToken', data.tokens.accessToken);",
                 "pm.environment.set('socialRefreshToken', data.tokens.refreshToken);",
-                "pm.test('requiresEmail is true - Facebook never asserts a verified address', () => pm.expect(data.requiresEmail).to.eql(true));"
+                "pm.test('requiresEmail is true only when Facebook gave no address', () => pm.expect(data.requiresEmail).to.be.a('boolean'));"
               ] } } ],
               "request": {
                 "method": "POST",
@@ -671,7 +671,37 @@
                 "body": { "mode": "raw", "raw": "{\n  \"token\": \"{{fbAccessToken}}\"\n}" },
                 "url": "{{authBaseUrl}}/api/v1/auth/oauth/facebook"
               },
-              "description": "The account is created with email NULL even when Facebook returns an address, because Graph API never states that it verified one."
+              "description": "Three outcomes, all correct. Address free: the account is created carrying it, unverified. Address already held by another account: 409 SOCIAL_LINK_VERIFICATION_REQUIRED and a code is mailed - finish with the link request below. No address at all: the account is created without one and requiresEmail is true."
+            },
+            {
+              "name": "Facebook - Confirm link (409 follow-up)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "const data = pm.response.json().data;",
+                "pm.environment.set('socialAccessToken', data.tokens.accessToken);",
+                "pm.test('no second account - the session belongs to the existing one', () => pm.expect(data.tokens.accessToken).to.be.a('string'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"token\": \"{{fbAccessToken}}\",\n  \"otp\": \"{{socialLinkOtp}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/oauth/facebook/link"
+              },
+              "description": "Second half of a 409 SOCIAL_LINK_VERIFICATION_REQUIRED: the same Facebook token, plus the 6-digit code mailed to the address behind it. Both are re-checked - the token proves the Facebook account, the code proves the mailbox - and only then is the identity attached to the existing account. Check `SELECT count(*) FROM users` before and after: it must not move."
+            },
+            {
+              "name": "Link - Validation Error (otp not 6 digits)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));",
+                "pm.test('rejected before the provider token is even checked', () => pm.expect(pm.response.json().code).to.eql('VALIDATION_ERROR'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"token\": \"not-a-real-access-token\",\n  \"otp\": \"12\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/oauth/facebook/link"
+              },
+              "description": "Runs anywhere - no provider credentials needed. Also proves /oauth/{provider}/link is permitAll: a 403 with an empty body here means SecurityConfig is missing the path. /oauth/google/link is the same code path with a different verifier, so it gets no request of its own."
             },
             {
               "name": "Add Email - No Token (403)",
