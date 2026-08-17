@@ -61,9 +61,24 @@ class VideoControllerPageSizeTest {
         }
     }
 
+    /**
+     * The feed builds its own page instead of going through Spring Data's Pageable resolver, so
+     * the cap has to be asserted separately from the offset endpoint below: PageableConfig no
+     * longer covers this path, and nothing else would notice if clampSize stopped being applied.
+     */
     @Test
     void getFeed_requestedSizeAboveMax_isClampedTo50() throws Exception {
         mockMvc.perform(get("/api/v1/videos/feed").param("size", "1000"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items.length()").value(50))
+                // 60 seeded, 50 served, so there is a next page and a cursor that reaches it.
+                .andExpect(jsonPath("$.data.nextCursor").isNotEmpty());
+    }
+
+    /** The profile listing still pages by offset, so the resolver's cap must still hold there. */
+    @Test
+    void listByUser_requestedSizeAboveMax_isClampedTo50() throws Exception {
+        mockMvc.perform(get("/api/v1/videos/users/1").param("size", "1000"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.content.length()").value(50))
                 // Nested under "page" because the app serializes with VIA_DTO, same as

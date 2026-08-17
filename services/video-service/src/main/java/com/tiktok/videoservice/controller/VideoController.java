@@ -2,6 +2,7 @@ package com.tiktok.videoservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.service.VideoService;
 import jakarta.validation.Valid;
@@ -27,9 +28,16 @@ public class VideoController {
         return ApiResponse.success(videoService.publish(currentUserId, request));
     }
 
+    /**
+     * Cursor-paged, unlike the profile listing below: pass back the previous response's
+     * {@code nextCursor} to continue, omit it to start at the newest video, stop when it comes back
+     * null. No {@code page} parameter and no total — see {@link CursorPage} for why.
+     */
     @GetMapping("/feed")
-    public ApiResponse<Page<VideoResponse>> getFeed(Pageable pageable) {
-        return ApiResponse.success(videoService.getFeed(pageable));
+    public ApiResponse<CursorPage<VideoResponse>> getFeed(
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) Integer size) {
+        return ApiResponse.success(videoService.getFeed(cursor, size));
     }
 
     @GetMapping("/{videoId}")

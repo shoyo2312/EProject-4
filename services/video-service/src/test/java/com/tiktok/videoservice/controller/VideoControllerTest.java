@@ -6,6 +6,7 @@ import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.videoservice.config.SecurityConfig;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -173,7 +174,7 @@ class VideoControllerTest {
 
     @Test
     void getFeed_withoutToken_isAllowed() throws Exception {
-        when(videoService.getFeed(any())).thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
+        when(videoService.getFeed(any(), any())).thenReturn(new CursorPage<>(List.of(), null));
 
         mockMvc.perform(get("/api/v1/videos/feed"))
                 .andExpect(status().isOk())
