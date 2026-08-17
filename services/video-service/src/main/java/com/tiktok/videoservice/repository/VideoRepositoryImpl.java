@@ -41,13 +41,6 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
-    public void updateModerationStatus(Video video) {
-        update(video.getId(), new Update()
-                .set("status", video.getStatus())
-                .set("statusBeforeTakedown", video.getStatusBeforeTakedown()));
-    }
-
-    @Override
     public void updateEventPublished(Video video) {
         update(video.getId(), new Update().set("eventPublishedAt", video.getEventPublishedAt()));
     }
