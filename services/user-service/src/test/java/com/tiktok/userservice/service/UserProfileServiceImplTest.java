@@ -2,6 +2,7 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
+import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.InboxEventRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
@@ -19,6 +20,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.util.List;
+import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -86,6 +90,62 @@ class UserProfileServiceImplTest {
         userProfileService.createFromRegisteredEvent(1L, "johndoe");
 
         assertThat(userProfileRepository.findAll()).hasSize(1);
+    }
+
+    /**
+     * The batch lookup drops what the single lookup would 404 on rather than failing the page: an
+     * unknown id, and an id on either side of a block. Asserted together because dropping only one
+     * of the two is the plausible regression — the block filter is a separate query from the
+     * profile fetch, so losing it leaves a page that still looks correct.
+     */
+    @Test
+    @Transactional
+    void getByUserIds_dropsUnknownAndBlockedIdsInsteadOfFailingThePage() {
+        userProfileService.createFromRegisteredEvent(1L, "alice");
+        userProfileService.createFromRegisteredEvent(2L, "bob");
+        userProfileService.createFromRegisteredEvent(3L, "carol");
+        blockService.block(3L, 1L);
+
+        List<UserProfileResponse> profiles =
+                userProfileService.getByUserIds(1L, List.of(2L, 3L, 999L));
+
+        assertThat(profiles).extracting(UserProfileResponse::userId).containsExactly(2L);
+    }
+
+    /** A block hides both sides, so which of the two pressed the button must not matter here. */
+    @Test
+    @Transactional
+    void getByUserIds_dropsBlockedIdInEitherDirection() {
+        userProfileService.createFromRegisteredEvent(1L, "alice");
+        userProfileService.createFromRegisteredEvent(2L, "bob");
+        blockService.block(1L, 2L);
+
+        assertThat(userProfileService.getByUserIds(1L, List.of(2L))).isEmpty();
+        assertThat(userProfileService.getByUserIds(2L, List.of(1L))).isEmpty();
+    }
+
+    @Test
+    @Transactional
+    void getByUserIds_answersInTheOrderAskedAndCollapsesDuplicates() {
+        userProfileService.createFromRegisteredEvent(1L, "alice");
+        userProfileService.createFromRegisteredEvent(2L, "bob");
+        userProfileService.createFromRegisteredEvent(3L, "carol");
+
+        List<UserProfileResponse> profiles =
+                userProfileService.getByUserIds(1L, List.of(3L, 1L, 2L, 3L));
+
+        assertThat(profiles).extracting(UserProfileResponse::userId).containsExactly(3L, 1L, 2L);
+    }
+
+    @Test
+    @Transactional
+    void getByUserIds_aboveTheCap_isRejected() {
+        List<Long> tooMany = LongStream.rangeClosed(1, UserProfileService.MAX_BATCH_IDS + 1)
+                .boxed()
+                .toList();
+
+        assertThatThrownBy(() -> userProfileService.getByUserIds(1L, tooMany))
+                .isInstanceOf(TooManyProfileIdsException.class);
     }
 
     @Test

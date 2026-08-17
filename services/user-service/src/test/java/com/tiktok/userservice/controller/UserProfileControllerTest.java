@@ -87,6 +87,30 @@ class UserProfileControllerTest {
                 Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS), 60_000L);
     }
 
+    /**
+     * The comma-separated list has to reach the service as ids, not as one string — the whole
+     * point of the endpoint is that a feed's worth of ids costs one request.
+     */
+    @Test
+    void getProfiles_withValidToken_bindsIdsAndReturnsTheBatch() throws Exception {
+        when(userProfileService.getByUserIds(eq(1L), eq(List.of(2L, 3L))))
+                .thenReturn(List.of(new UserProfileResponse(2L, "Bob", null, null, 0, 0)));
+
+        mockMvc.perform(get("/api/v1/users").param("ids", "2,3")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].userId").value(2));
+    }
+
+    @Test
+    void getProfiles_withoutToken_isRejectedBeforeReachingService() throws Exception {
+        mockMvc.perform(get("/api/v1/users").param("ids", "2,3"))
+                .andExpect(status().isForbidden());
+
+        verify(userProfileService, never()).getByUserIds(any(), any());
+    }
+
     @Test
     void getOwnProfile_withoutToken_isRejected() throws Exception {
         mockMvc.perform(get("/api/v1/users/me"))

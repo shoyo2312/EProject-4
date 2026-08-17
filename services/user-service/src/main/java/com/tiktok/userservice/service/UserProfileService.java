@@ -3,9 +3,31 @@ package com.tiktok.userservice.service;
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 
+import java.util.List;
+
 public interface UserProfileService {
 
+    /** Cap on {@link #getByUserIds}, mirrored by the caller's own page size. */
+    int MAX_BATCH_IDS = 100;
+
     UserProfileResponse getByUserId(Long viewerId, Long userId);
+
+    /**
+     * The same lookup for a page of ids in two queries flat, for callers rendering a list that
+     * carries user ids and nothing else — a video feed, a comment thread.
+     *
+     * <p>Ids the viewer cannot see are dropped, not raised: an id with no profile (the
+     * relationship outlived it, or its UserRegisteredEvent never landed) and an id on either side
+     * of a block are both simply absent from the answer. The block call is the same one
+     * {@link #getByUserId} makes — it answers 404 rather than 403, so a blocked id is
+     * indistinguishable from a missing one either way — but failing the whole page because one
+     * author blocked the viewer would cost every other row on it. Callers key the result by
+     * {@code userId}, so a short list reads fine; a 404'd page does not.
+     *
+     * <p>Duplicate ids collapse. More than {@code MAX_BATCH_IDS} ids is a
+     * {@link com.tiktok.userservice.exception.TooManyProfileIdsException}.
+     */
+    List<UserProfileResponse> getByUserIds(Long viewerId, List<Long> userIds);
 
     UserProfileResponse updateOwnProfile(Long userId, UpdateProfileRequest request);
 
