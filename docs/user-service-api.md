@@ -97,6 +97,17 @@ Response `data` → `UserProfileResponse` (giống mục 3.1).
 
 Lỗi: `USER_PROFILE_NOT_FOUND` (404) — xảy ra khi (a) user không tồn tại, **hoặc** (b) có quan hệ block giữa mình và `userId` đó (theo **cả 2 chiều** — mình block họ hoặc họ block mình). Server **cố tình** không phân biệt 2 trường hợp này (không trả `403` riêng) để không lộ thông tin "user này đã block bạn". Flutter nên coi `404` ở endpoint này là "không xem được profile" chung chung (ẩn nút, hiện placeholder "Người dùng không tồn tại"), không suy luận thêm là do bị block hay do sai id.
 
+### 3.3b `GET /?ids=1,2,3`
+Lấy nhiều profile trong **1 request**. Trả `200 OK`, `data` → **mảng** `UserProfileResponse` (không phải `Page`).
+
+Dành cho màn hình đã có sẵn danh sách `userId` mà chưa có profile: feed video (`VideoResponse` chỉ trả `userId`), danh sách comment. Gọi `GET /{userId}` 20 lần cho 1 trang feed là dùng sai.
+
+- Tối đa **100** id mỗi request → quá thì `TOO_MANY_PROFILE_IDS` (400).
+- Id trùng bị gộp.
+- Thứ tự trả về **đúng thứ tự gửi lên**.
+
+> **Mảng trả về có thể NGẮN HƠN `ids` gửi lên, và đó không phải lỗi.** Id không tồn tại, hoặc có quan hệ block giữa mình và id đó (cả 2 chiều, giống mục 3.3), sẽ **bị bỏ khỏi kết quả** chứ không làm hỏng cả trang. Client phải **dựng `Map<userId, profile>` từ kết quả rồi tra theo id**, tuyệt đối không ghép theo vị trí (`ids[i]` ↔ `data[i]`) — lệch một phần tử là gán nhầm avatar/tên sang người khác. Id không tra được thì hiện placeholder.
+
 ### 3.4 `POST /{userId}/follow`
 Follow 1 user. Trả `201 Created`.
 
@@ -171,6 +182,7 @@ Không có enum nào ở user-service (không có trạng thái "visibility", "f
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Body không đúng ràng buộc (`displayName`/`bio`/`avatarUrl` sai định dạng/độ dài) |
+| `TOO_MANY_PROFILE_IDS` | 400 | Gửi quá 100 id cho `GET /?ids=` (mục 3.3b). Chia nhỏ theo trang, đừng gộp cả feed vào 1 lần gọi |
 | `CANNOT_FOLLOW_SELF` | 400 | Gọi `follow` lên chính `userId` của mình |
 | `CANNOT_BLOCK_SELF` | 400 | Gọi `block` lên chính mình |
 | `CANNOT_MUTE_SELF` | 400 | Gọi `mute` lên chính mình |

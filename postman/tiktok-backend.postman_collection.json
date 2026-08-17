@@ -888,6 +888,70 @@
                 "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
                 "url": "{{userBaseUrl}}/api/v1/users/{{userIdB}}"
               }
+            },
+            {
+              "name": "Batch Get Profiles - Success",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const list = pm.response.json().data;",
+                "pm.test('data is a flat array, not a page', () => pm.expect(list).to.be.an('array'));",
+                "pm.test('both users returned', () => {",
+                "  const ids = list.map(u => String(u.userId));",
+                "  pm.expect(ids).to.include(pm.environment.get('userId'));",
+                "  pm.expect(ids).to.include(pm.environment.get('userIdB'));",
+                "});",
+                "pm.test('answered in the order asked', () => {",
+                "  pm.expect(String(list[0].userId)).to.eql(pm.environment.get('userId'));",
+                "});"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users?ids={{userId}},{{userIdB}}"
+              },
+              "description": "Batch lookup for callers holding ids and nothing else - the video feed (which returns userId only), a comment thread. One request instead of N. Rows come back in the order asked, so positional rendering is safe."
+            },
+            {
+              "name": "Batch Get Profiles - Missing And Duplicate Ids",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK - unknown ids do not fail the request', () => pm.response.to.have.status(200));",
+                "const list = pm.response.json().data;",
+                "pm.test('unknown id is simply absent', () => pm.expect(list.map(u => String(u.userId))).to.not.include('999999999'));",
+                "pm.test('duplicates collapse to one row', () => {",
+                "  const mine = list.filter(u => String(u.userId) === pm.environment.get('userId'));",
+                "  pm.expect(mine.length).to.eql(1);",
+                "});"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users?ids={{userId}},{{userId}},999999999"
+              },
+              "description": "The response is keyed by userId, never by position in ids: it can be shorter than what was asked. Missing, soft-deleted and blocked users all drop out silently - a partial answer, not a 404, because one dead id must not blank a whole feed screen."
+            },
+            {
+              "name": "Batch Get Profiles - No Token (403)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403', () => pm.response.to.have.status(403));"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{userBaseUrl}}/api/v1/users?ids={{userId}}" },
+              "description": "Same rule as the rest of user-service: every endpoint needs a token. The viewer id is what block filtering is computed against, so there is no anonymous form of this call."
+            },
+            {
+              "name": "Batch Get Profiles - Too Many Ids (400)",
+              "event": [ { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+                "// 101 ids - one past MAX_BATCH_IDS. Built here so the URL below stays readable.",
+                "pm.variables.set('tooManyIds', Array.from({ length: 101 }, (_, i) => i + 1).join(','));"
+              ] } }, { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400', () => pm.response.to.have.status(400));",
+                "pm.test('code is TOO_MANY_PROFILE_IDS', () => pm.expect(pm.response.json().code).to.eql('TOO_MANY_PROFILE_IDS'));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{userBaseUrl}}/api/v1/users?ids={{tooManyIds}}"
+              },
+              "description": "Cap is 100 ids (UserProfileService.MAX_BATCH_IDS), checked on the raw list before duplicates collapse - the cost being guarded is the query string being parsed and bound into an IN (...), and duplicates pay that in full. Clients holding more must chunk."
             }
           ]
         },
