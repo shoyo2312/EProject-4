@@ -14,6 +14,7 @@ import org.mockito.ArgumentCaptor;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -62,18 +63,22 @@ class SocialAccountRegistrarTest {
 
     /**
      * The takeover this guards against: anyone can put victim@example.com on a Facebook account.
-     * It must neither be handed the existing account nor allowed to store a duplicate address.
+     * It must not be handed the existing account — and it must not quietly start a second one
+     * either, which is what the caller's mailed challenge exists to avoid.
      */
     @Test
-    void unverifiedAddressThatAlreadyHasAnOwnerIsDropped() {
+    void unverifiedAddressThatAlreadyHasAnOwnerNeitherLinksNorRegisters() {
         User owner = existing("a@example.com");
         when(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("a@example.com"))
                 .thenReturn(Optional.of(owner));
 
-        User result = registrar.register(facebook("a@example.com"));
+        assertThatThrownBy(() -> registrar.register(facebook("a@example.com")))
+                .isInstanceOf(SocialLinkRequiredSignal.class)
+                .extracting(signal -> ((SocialLinkRequiredSignal) signal).owner())
+                .isSameAs(owner);
 
-        assertThat(result).isNotSameAs(owner);
-        assertThat(savedUser().getEmail()).isNull();
+        verify(userRepository, never()).saveAndFlush(any());
+        verify(identityRepository, never()).saveAndFlush(any());
     }
 
     /** Google does verify, so the existing account is the same person and gets the new identity. */

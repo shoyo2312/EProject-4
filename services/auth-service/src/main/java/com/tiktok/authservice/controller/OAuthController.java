@@ -1,5 +1,6 @@
 package com.tiktok.authservice.controller;
 
+import com.tiktok.authservice.dto.request.SocialLinkRequest;
 import com.tiktok.authservice.dto.request.SocialLoginRequest;
 import com.tiktok.authservice.dto.response.SocialLoginResponse;
 import com.tiktok.authservice.entity.AuthProvider;
@@ -37,5 +38,20 @@ public class OAuthController {
     @PostMapping("/facebook")
     public ApiResponse<SocialLoginResponse> facebook(@Valid @RequestBody SocialLoginRequest request) {
         return ApiResponse.success(oauthService.login(AuthProvider.FACEBOOK, request));
+    }
+
+    /**
+     * Second half of a login answered with {@code SOCIAL_LINK_VERIFICATION_REQUIRED}: the provider
+     * token again, plus the code we mailed. Unauthenticated like the login itself — the caller has
+     * no session yet, which is the whole point of being here.
+     */
+    @PostMapping("/google/link")
+    public ApiResponse<SocialLoginResponse> linkGoogle(@Valid @RequestBody SocialLinkRequest request) {
+        return ApiResponse.success(oauthService.confirmLink(AuthProvider.GOOGLE, request));
+    }
+
+    @PostMapping("/facebook/link")
+    public ApiResponse<SocialLoginResponse> linkFacebook(@Valid @RequestBody SocialLinkRequest request) {
+        return ApiResponse.success(oauthService.confirmLink(AuthProvider.FACEBOOK, request));
     }
 }

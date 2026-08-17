@@ -15,8 +15,11 @@ ALTER TABLE users ALTER COLUMN email         DROP NOT NULL;
 -- Postgres treats every NULL as distinct, so any number of email-less accounts coexist under it
 -- while two accounts still cannot share an address.
 
--- One row per (account, provider), so a single account can carry both a Google and a Facebook
--- identity. Infrastructure table, not a business entity: no BaseEntity, no soft delete.
+-- One row per provider account, so a single account of ours can carry both a Google and a Facebook
+-- identity. Note what is deliberately *not* constrained: (user_id, provider) is not unique, so one
+-- account may carry two Google identities — a user with two Gmail addresses linking both. Each link
+-- still costs an OTP mailed to the address, so nothing is claimed without proof.
+-- Infrastructure table, not a business entity: no BaseEntity, no soft delete.
 CREATE TABLE user_identities (
     id           BIGINT       PRIMARY KEY,
     user_id      BIGINT       NOT NULL REFERENCES users (id),

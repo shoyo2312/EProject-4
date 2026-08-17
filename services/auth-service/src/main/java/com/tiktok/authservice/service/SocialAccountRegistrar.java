@@ -51,11 +51,16 @@ public class SocialAccountRegistrar {
                 link(existing, profile);
                 return existing;
             }
-            // Address already has an owner and the provider vouches for nothing. Neither claim it
-            // nor store a duplicate of it — start clean and let the client ask for another.
-            email = null;
+            // Address already has an owner and the provider vouches for nothing. Both ways out of
+            // here are wrong on their own: claiming the account hands it over on an unverified
+            // claim, and starting a clean account leaves one person holding two of them for the
+            // same address — which is exactly what Google-then-Facebook used to produce. So
+            // neither; hand back to the caller, which mails a code and answers 409.
+            throw new SocialLinkRequiredSignal(existing);
         }
 
+        // Nobody holds the address, so a new account may carry it: storing it takes nothing from
+        // anyone, and the user is spared the add-email step.
         boolean verified = email != null && profile.emailVerified();
 
         User user = userRepository.saveAndFlush(User.builder()
@@ -86,8 +91,17 @@ public class SocialAccountRegistrar {
      * Flushed rather than merely saved: the id is assigned, so Hibernate would otherwise defer the
      * INSERT to commit and the uq_identity violation would surface after this method returned,
      * outside the caller's catch. Same reasoning as {@code AuthServiceImpl.saveUnique}.
+     *
+     * <p>Public for {@link SocialLinkChallenge}, which links an account the OTP has just proven
+     * ownership of. One insert, one place: uq_identity is what makes a link unique, and a second
+     * copy of this would be a second thing to keep in step with it.
+     *
+     * <p>No {@code @Transactional} of its own, and one here would be a lie: both callers are
+     * already inside a transaction — {@link #register} above by self-invocation, which the Spring
+     * proxy never sees, and {@code SocialLinkChallenge.confirm} through its own annotation. The row
+     * has to live or die with the caller's work either way.
      */
-    private void link(User user, SocialProfile profile) {
+    public void link(User user, SocialProfile profile) {
         userIdentityRepository.saveAndFlush(UserIdentity.builder()
                 .userId(user.getId())
                 .provider(profile.provider())

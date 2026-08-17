@@ -29,7 +29,8 @@ public class SecurityConfig {
                                 "/api/v1/auth/verify-email", "/api/v1/auth/resend-verification",
                                 "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
                                 // Sign-in endpoints: requiring a session to start one is circular.
-                                "/api/v1/auth/oauth/google", "/api/v1/auth/oauth/facebook").permitAll()
+                                "/api/v1/auth/oauth/google", "/api/v1/auth/oauth/facebook",
+                                "/api/v1/auth/oauth/google/link", "/api/v1/auth/oauth/facebook/link").permitAll()
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .anyRequest().authenticated()
                 )
