@@ -1,10 +1,12 @@
 package com.tiktok.videoservice.service;
 
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import com.tiktok.videoservice.exception.InvalidFeedCursorException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.repository.VideoRepository;
@@ -21,6 +23,9 @@ import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -92,10 +97,57 @@ class VideoServiceImplTest {
                 new CreateVideoRequest("Private published", null, "s3://video-media/raw/6.mp4", VideoVisibility.PRIVATE));
         markPublished(privatePublished.id());
 
-        Page<VideoResponse> feed = videoService.getFeed(PageRequest.of(0, 10));
+        CursorPage<VideoResponse> feed = videoService.getFeed(null, 10);
 
-        assertThat(feed.getContent()).extracting(VideoResponse::id).containsExactly(published.id());
-        assertThat(feed.getContent()).extracting(VideoResponse::id).doesNotContain(processing.id(), privatePublished.id());
+        assertThat(feed.items()).extracting(VideoResponse::id).containsExactly(published.id());
+        assertThat(feed.items()).extracting(VideoResponse::id).doesNotContain(processing.id(), privatePublished.id());
+        assertThat(feed.nextCursor()).as("one video, one page — nothing left to page to").isNull();
+    }
+
+    /**
+     * The property a keyset must hold and an offset page need not: walking the whole feed one page
+     * at a time visits every video exactly once. A cursor off by one row in either direction shows
+     * up here as a duplicate or a gap — the failure the tiebreak in FeedCursor exists to prevent —
+     * so the videos are seeded in one tight loop, where sharing a createdAt millisecond is likely
+     * rather than theoretical.
+     */
+    @Test
+    void getFeed_pagingByCursor_visitsEveryVideoExactlyOnce() {
+        List<String> publishedIds = new ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            VideoResponse video = videoService.publish(1L, new CreateVideoRequest(
+                    "video-" + i, null, "s3://video-media/raw/" + i + ".mp4", VideoVisibility.PUBLIC));
+            markPublished(video.id());
+            publishedIds.add(video.id());
+        }
+
+        List<String> walked = new ArrayList<>();
+        String cursor = null;
+        do {
+            CursorPage<VideoResponse> page = videoService.getFeed(cursor, 7);
+            walked.addAll(page.items().stream().map(VideoResponse::id).toList());
+            cursor = page.nextCursor();
+        } while (cursor != null);
+
+        // Newest first, so the walk is the seeding order reversed.
+        assertThat(walked).containsExactlyElementsOf(publishedIds.reversed());
+    }
+
+    @Test
+    void getFeed_sizeAboveMax_isClampedRatherThanRefused() {
+        for (int i = 0; i < 55; i++) {
+            VideoResponse video = videoService.publish(1L, new CreateVideoRequest(
+                    "video-" + i, null, "s3://video-media/raw/" + i + ".mp4", VideoVisibility.PUBLIC));
+            markPublished(video.id());
+        }
+
+        assertThat(videoService.getFeed(null, 1000).items()).hasSize(50);
+    }
+
+    @Test
+    void getFeed_unusableCursor_isRejected() {
+        assertThatThrownBy(() -> videoService.getFeed("not-a-cursor", 10))
+                .isInstanceOf(InvalidFeedCursorException.class);
     }
 
     @Test
@@ -185,6 +237,6 @@ class VideoServiceImplTest {
     private void markTakenDown(String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
         video.markTakenDown();
-        videoRepository.updateModerationStatus(video);
+        videoRepository.updateStatus(video);
     }
 }

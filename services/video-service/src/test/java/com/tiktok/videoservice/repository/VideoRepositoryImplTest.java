@@ -82,11 +82,11 @@ class VideoRepositoryImplTest {
     }
 
     @Test
-    void updateModerationStatus_keepsConcurrentLikes() {
+    void updateStatus_moderation_keepsConcurrentLikes() {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PUBLISHED, 7);
 
         stale.markTakenDown();
-        videoRepository.updateModerationStatus(stale);
+        videoRepository.updateStatus(stale);
 
         Video after = reload(stale);
         assertThat(after.getLikeCount()).isEqualTo(7);
@@ -95,14 +95,14 @@ class VideoRepositoryImplTest {
     }
 
     @Test
-    void updateModerationStatus_restoreClearsStatusBeforeTakedown() {
+    void updateStatus_moderation_restoreClearsStatusBeforeTakedown() {
         Video video = save(VideoStatus.PUBLISHED);
         video.markTakenDown();
-        videoRepository.updateModerationStatus(video);
+        videoRepository.updateStatus(video);
 
         Video takenDown = reload(video);
         takenDown.markRestored();
-        videoRepository.updateModerationStatus(takenDown);
+        videoRepository.updateStatus(takenDown);
 
         Video after = reload(video);
         assertThat(after.getStatus()).isEqualTo(VideoStatus.PUBLISHED);

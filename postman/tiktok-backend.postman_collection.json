@@ -1444,25 +1444,56 @@
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('200 OK without a token', () => pm.response.to.have.status(200));",
                 "const page = pm.response.json().data;",
-                "pm.test('default page size is 20', () => pm.expect(page.size).to.eql(20));",
+                "pm.test('cursor page shape - items + nextCursor, no totals', () => {",
+                "  pm.expect(page.items).to.be.an('array');",
+                "  pm.expect(page).to.have.property('nextCursor');",
+                "  pm.expect(page).to.not.have.property('totalElements');",
+                "});",
+                "pm.test('default size is 20', () => pm.expect(page.items.length).to.be.at.most(20));",
                 "pm.test('feed contains only PUBLISHED + PUBLIC videos', () => {",
-                "  page.content.forEach(v => {",
+                "  page.items.forEach(v => {",
                 "    pm.expect(v.status).to.eql('PUBLISHED');",
                 "    pm.expect(v.visibility).to.eql('PUBLIC');",
                 "  });",
-                "});"
+                "});",
+                "pm.environment.set('feedCursor', page.nextCursor || '');"
               ] } } ],
               "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/feed" },
-              "description": "Sorted createdAt DESC, served by feed_idx. The video you just published is NOT here - it is still PROCESSING until media-worker transcodes it. An empty feed on a fresh database is the expected result, not a failure."
+              "description": "First page = no cursor at all. Sorted createdAt DESC then _id DESC, served by feed_idx - the same compound key the cursor encodes. The video you just published is NOT here - it is still PROCESSING until media-worker transcodes it. An empty feed on a fresh database is the expected result, not a failure; nextCursor is null there and feedCursor is stored empty."
+            },
+            {
+              "name": "Get Feed - Next Page via Cursor",
+              "event": [ { "listen": "prerequest", "script": { "type": "text/javascript", "exec": [
+                "// Nothing to page through when the previous request already ended the feed.",
+                "if (!pm.environment.get('feedCursor')) { pm.execution.skipRequest(); }"
+              ] } }, { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const page = pm.response.json().data;",
+                "pm.test('page 2 does not repeat page 1', () => {",
+                "  pm.expect(page.items.map(v => v.id)).to.not.include(pm.environment.get('videoId'));",
+                "});",
+                "pm.environment.set('feedCursor', page.nextCursor || '');"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/feed?cursor={{feedCursor}}&size=20" },
+              "description": "Pass the previous response's nextCursor back verbatim - it is opaque, do not parse it or build one. nextCursor === null is the only end-of-feed signal; there is no totalPages to compare against. Because the cursor anchors on the last video of the previous page, videos published mid-scroll no longer shift items into a page already read - the exact bug the old ?page=N feed had."
+            },
+            {
+              "name": "Get Feed - Invalid Cursor (400)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400', () => pm.response.to.have.status(400));",
+                "pm.test('code is INVALID_FEED_CURSOR', () => pm.expect(pm.response.json().code).to.eql('INVALID_FEED_CURSOR'));"
+              ] } } ],
+              "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/feed?cursor=not-a-cursor" },
+              "description": "A cursor this server did not issue is rejected loudly instead of being read as page one - a client that silently restarted from the top here would scroll in circles forever. Client fix: drop the stored cursor and reload the feed."
             },
             {
               "name": "Get Feed - Pagination Cap Test (size=99999)",
               "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
                 "pm.test('200 OK', () => pm.response.to.have.status(200));",
-                "pm.test('page size clamped to max 50', () => pm.expect(pm.response.json().data.size).to.be.at.most(50));"
+                "pm.test('size clamped to max 50', () => pm.expect(pm.response.json().data.items.length).to.be.at.most(50));"
               ] } } ],
-              "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/feed?page=0&size=99999" },
-              "description": "video-service declares @EnableSpringDataWebSupport, which silently disables Boot's max-page-size handling; PageableConfig re-applies it by hand. This request is the manual counterpart of VideoControllerPageSizeTest - if it ever returns size=99999, that config regressed."
+              "request": { "method": "GET", "header": [], "url": "{{videoBaseUrl}}/api/v1/videos/feed?size=99999" },
+              "description": "The feed clamps size itself now (VideoServiceImpl.clampSize) - it no longer goes through Pageable. /users/{userId} still does, via PageableConfig. Manual counterpart of VideoControllerPageSizeTest; needs more than 50 published videos to actually catch a regression."
             }
           ]
         },

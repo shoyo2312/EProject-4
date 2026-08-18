@@ -53,7 +53,7 @@ public class AdminModerationEventConsumer {
                 videoRepository.findByIdAndDeletedAtIsNull(event.videoId()).ifPresentOrElse(
                         video -> {
                             video.markTakenDown();
-                            videoRepository.updateModerationStatus(video);
+                            videoRepository.updateStatus(video);
                         },
                         () -> log.warn("VideoTakenDownEvent for unknown or deleted videoId={}", event.videoId())));
     }
@@ -63,7 +63,7 @@ public class AdminModerationEventConsumer {
                 videoRepository.findByIdAndDeletedAtIsNull(event.videoId()).ifPresentOrElse(
                         video -> {
                             video.markRestored();
-                            videoRepository.updateModerationStatus(video);
+                            videoRepository.updateStatus(video);
                         },
                         () -> log.warn("VideoRestoredEvent for unknown or deleted videoId={}", event.videoId())));
     }

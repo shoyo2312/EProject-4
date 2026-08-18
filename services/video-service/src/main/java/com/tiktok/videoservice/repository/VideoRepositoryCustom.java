@@ -2,6 +2,9 @@ package com.tiktok.videoservice.repository;
 
 import com.tiktok.videoservice.entity.Video;
 
+import java.time.Instant;
+import java.util.List;
+
 /**
  * Field-scoped writes for every path that changes an existing Video.
  *
@@ -32,14 +35,39 @@ import com.tiktok.videoservice.entity.Video;
  */
 public interface VideoRepositoryCustom {
 
+    /**
+     * One page of the public feed, positioned by keyset rather than by {@code skip}.
+     *
+     * <p>{@code Page} + {@code skip} was the wrong shape for an infinite feed twice over: the count
+     * query behind {@code Page} re-walks the whole match set on every request to produce a total no
+     * feed screen displays, and {@code skip(n)} makes Mongo step over n documents before returning
+     * anything, so the cost of page 500 is paid in full every time someone scrolls that far. A
+     * range on the sort key starts where the last page ended and reads only what it returns.
+     *
+     * <p>Derived queries cannot express the {@code (createdAt < c) OR (createdAt = c AND _id < id)}
+     * that the tiebreak needs, which is why this lives here and not on {@link VideoRepository}.
+     *
+     * @param beforeCreatedAt null for the first page, together with {@code beforeId}
+     * @param limit           ask for one more than the page holds — a row beyond it is how the
+     *                        caller learns there is a next page without counting anything
+     */
+    List<Video> findFeedPage(Instant beforeCreatedAt, String beforeId, int limit);
+
     /** Transcode succeeded: the media fields it produced, plus where the outcome was recorded. */
     void updateTranscodeResult(Video video);
 
-    /** Transcode failed — the outcome alone, with no media fields to write. */
+    /**
+     * The status pair alone, with no media fields to write: a failed transcode, and a moderation
+     * takedown or restore.
+     *
+     * <p>One method for all three, not two identical ones. They write the same pair for the same
+     * reason — {@code statusBeforeTakedown} is where a transcode outcome goes while the video is
+     * down, and where a takedown parks the state a restore returns to — so the second copy was a
+     * second body to keep in step with {@link Video} for nothing. What each call means is already
+     * on the line above it at the call site: {@code markFailed()}, {@code markTakenDown()},
+     * {@code markRestored()}.
+     */
     void updateStatus(Video video);
-
-    /** Moderation takedown/restore: the status and the state to restore to. */
-    void updateModerationStatus(Video video);
 
     /** Outbox flag, set once the broker acknowledges the VideoPublishedEvent. */
     void updateEventPublished(Video video);

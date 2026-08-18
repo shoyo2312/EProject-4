@@ -16,7 +16,12 @@ Khác `user-service` (bắt buộc token ở mọi endpoint): ở đây **mọi 
 
 ## 2. Response envelope & phân trang
 
-Giống hệt `auth-service`/`user-service` — mọi response bọc trong `ApiResponse<T>` (`success`/`data`/`code`/`message`/`timestamp`). Các endpoint trả danh sách (`/feed`, `/users/{userId}`) dùng **đúng format phân trang của user-service**, nên dùng chung 1 wrapper `PageResponse<T>` ở phía Dart:
+Giống hệt `auth-service`/`user-service` — mọi response bọc trong `ApiResponse<T>` (`success`/`data`/`code`/`message`/`timestamp`). Nhưng **hai endpoint danh sách phân trang theo hai kiểu khác nhau**, nên phía Dart cần hai wrapper riêng:
+
+- `/users/{userId}` — phân trang theo `page`, đúng format của user-service (`PageResponse<T>`, mô tả ngay dưới);
+- `/feed` — phân trang theo **cursor**, không có `page`/`totalElements`/`totalPages`. Xem mục 3.2.
+
+`PageResponse<T>` — chỉ áp dụng cho `/users/{userId}`:
 
 ```json
 {
@@ -29,11 +34,11 @@ Giống hệt `auth-service`/`user-service` — mọi response bọc trong `ApiR
 }
 ```
 
-`size` bị chặn trên ở **50** (xin lớn hơn thì bị kẹp xuống, không báo lỗi); không truyền thì mặc định **20**. `last` = `number + 1 >= totalPages`.
+`size` bị chặn trên ở **50** (xin lớn hơn thì bị kẹp xuống, không báo lỗi); không truyền thì mặc định **20**. Hai giới hạn này giống nhau ở cả hai endpoint. `last` = `number + 1 >= totalPages` (chỉ có ở `PageResponse`).
 
 **Sắp xếp là cố định, không cấu hình được:** cả `/feed` lẫn `/users/{userId}` luôn trả theo `createdAt` giảm dần (mới nhất trước) — thứ tự này nằm sẵn trong query ở server. Đừng thiết kế UI dựa trên việc truyền `sort`.
 
-**Cẩn thận trùng/nhảy item khi infinite scroll.** Đây là phân trang theo offset trên một danh sách liên tục có video mới chèn vào **đầu**: giữa lúc load trang 0 và trang 1, vài video mới xuất hiện sẽ đẩy các item cũ lùi xuống, làm chúng bị trả lại lần nữa ở trang sau. Chưa có API cursor/keyset. Phía Flutter phải **khử trùng lặp theo `id`** khi append vào list (giữ một `Set<String>` các id đã có), đừng giả định các trang rời nhau.
+**Cẩn thận trùng/nhảy item khi infinite scroll — chỉ với `/users/{userId}`.** Đó là phân trang theo offset: nếu có video mới chèn vào **đầu** danh sách giữa lúc load trang 0 và trang 1, các item cũ bị đẩy lùi xuống và trả lại lần nữa ở trang sau. Phía Flutter phải **khử trùng lặp theo `id`** khi append (giữ một `Set<String>` các id đã có). `/feed` không có vấn đề này vì cursor neo vào video cuối của trang trước.
 
 ## 3. Endpoints
 
@@ -85,9 +90,31 @@ Response `data` → `VideoResponse`:
 Lỗi: `VALIDATION_ERROR` (400), `401` (thiếu/hết hạn token).
 
 ### 3.2 `GET /feed`
-Không cần token. Query param phân trang: `?page=0&size=20`. Trả `200 OK`, `data` → `Page<VideoResponse>`.
+Không cần token. **Phân trang bằng cursor, không phải `page`** — khác mục 3.4. Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CursorPage<VideoResponse>`:
+
+```json
+{
+  "items": [ /* VideoResponse[] */ ],
+  "nextCursor": "1755400000000_7312458901234567"
+}
+```
+
+Cách dùng:
+- Trang đầu: **không gửi** `cursor`.
+- Trang tiếp: gửi lại **nguyên văn** `nextCursor` của response trước.
+- `nextCursor = null` là hết feed. Đó là tín hiệu dừng duy nhất — **không có `totalElements`, `totalPages`, hay `page`**.
+
+`nextCursor` là **chuỗi mờ (opaque)**: client truyền lại y nguyên, không parse, không tự dựng, không hiển thị. Định dạng bên trong là chuyện của server và có thể đổi bất cứ lúc nào.
+
+`size` mặc định 20, tối đa 50. Gửi lớn hơn thì bị **kẹp xuống 50**, không báo lỗi.
+
+Vì sao bỏ `?page=`: feed là danh sách vô hạn, mà `page=500` bắt Mongo bước qua 10.000 document rồi vứt đi, và mỗi request còn tốn thêm một lần đếm toàn bộ collection để trả con số không màn hình nào hiển thị. Cursor bắt đầu đúng chỗ trang trước dừng, nên trang 500 rẻ ngang trang 1.
+
+> **Feed đổi trong lúc user đang cuộn là bình thường.** Cursor neo vào video cuối của trang trước, nên video mới đăng sau đó **không** chen vào giữa và **không** gây lặp/nhảy item như `page` cũ. Muốn thấy video mới thì kéo-để-làm-mới, tức gọi lại mà không kèm `cursor`.
 
 Chỉ trả video **`PUBLISHED` + `PUBLIC`** và chưa bị xoá. Video của chính mình đang `PROCESSING`/`PRIVATE` **không** xuất hiện ở đây kể cả khi có gửi token — muốn xem video của mình thì dùng mục 3.4.
+
+Lỗi: `INVALID_FEED_CURSOR` (400 — cursor không phải do server này cấp, thường do client tự sửa hoặc lưu nhầm). Xử lý: bỏ cursor đang giữ và tải lại từ đầu.
 
 ### 3.3 `GET /{videoId}`
 Không bắt buộc token, **nhưng nên gửi nếu đã đăng nhập**. Trả `200 OK`, `data` → `VideoResponse`.
@@ -99,7 +126,7 @@ Quy tắc hiển thị:
 Lỗi: `VIDEO_NOT_FOUND` (404) — dùng chung cho **cả 4 trường hợp**: id không tồn tại, video đã bị xoá, video `PRIVATE` của người khác, hoặc video chưa/không còn `PUBLISHED` (đang `PROCESSING`, `FAILED`, hoặc bị `TAKEN_DOWN`). Server **cố tình** không phân biệt để không lộ sự tồn tại của video riêng tư. Hệ quả phía client: **404 ở đây không chứng minh video không tồn tại** — nếu đang poll sau khi upload mà nhận 404, khả năng cao là quên gửi token chứ không phải video biến mất.
 
 ### 3.4 `GET /users/{userId}`
-Danh sách video của 1 user. Không bắt buộc token, phân trang giống mục 3.2. Trả `200 OK`, `data` → `Page<VideoResponse>`.
+Danh sách video của 1 user. Không bắt buộc token. **Phân trang bằng `?page=0&size=20` (offset), KHÁC feed ở mục 3.2** — đây là lưới hữu hạn, người dùng nhảy trang được và chủ tài khoản có nhu cầu biết tổng số, nên `Page` vẫn đúng chỗ ở đây. Trả `200 OK`, `data` → `Page<VideoResponse>`.
 
 - Gọi **chính mình** (token khớp `userId`): trả **tất cả** video chưa xoá, gồm cả `PROCESSING`, `PRIVATE`, `FAILED`, `TAKEN_DOWN`. Đây là endpoint cho màn "Video của tôi".
 - Gọi user khác (hoặc không token): chỉ `PUBLISHED` + `PUBLIC`.
@@ -139,6 +166,7 @@ Phía Flutter: **cập nhật lạc quan (optimistic) trên UI** ngay khi bấm,
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `title` rỗng/quá 150 ký tự, `description` quá 2000, `visibility` thiếu hoặc sai giá trị enum, `rawFileUrl` sai scheme/host/bucket (mục 3.1) |
+| `INVALID_FEED_CURSOR` | 400 | `cursor` ở mục 3.2 không phải do server cấp. Bỏ cursor đang giữ, tải lại feed từ đầu |
 | `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.3) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |

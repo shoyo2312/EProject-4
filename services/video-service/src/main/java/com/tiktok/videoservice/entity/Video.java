@@ -28,7 +28,13 @@ import java.time.Instant;
 @AllArgsConstructor
 @Document(collection = "videos")
 @CompoundIndexes({
-        @CompoundIndex(name = "feed_idx", def = "{'status': 1, 'visibility': 1, 'deletedAt': 1, 'createdAt': -1}"),
+        // _id is in the key, and not as decoration: the feed pages by keyset on (createdAt, _id)
+        // — see VideoRepositoryCustom.findFeedPage — and Mongo can only take a compound sort from
+        // an index carrying every field of that sort. Without _id here the range would still read
+        // the index but the sort would become a blocking in-memory sort of the whole match set,
+        // which is the same 32MB ceiling the profile index below was shaped to stay under.
+        @CompoundIndex(name = "feed_idx",
+                def = "{'status': 1, 'visibility': 1, 'deletedAt': 1, 'createdAt': -1, '_id': -1}"),
         // Profile listing. feed_idx cannot serve it — userId is not a prefix there. Every field
         // ahead of createdAt is matched by equality, so both the owner variant (userId +
         // deletedAt) and the stranger variant (all four) read this index and take the sort from
