@@ -34,6 +34,11 @@ public class VerificationToken {
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 
+    /**
+     * Both the validity check and the write that spends a code live in
+     * {@code VerificationTokenRepository.claimForUse}, as one UPDATE — see there for why they
+     * cannot be an {@code isValid()} read followed by a {@code markUsed()} write.
+     */
     @Column(name = "used_at")
     private Instant usedAt;
 
@@ -46,13 +51,5 @@ public class VerificationToken {
             id = SnowflakeIdGenerator.nextId();
         }
         createdAt = Instant.now();
-    }
-
-    public boolean isValid() {
-        return usedAt == null && expiresAt.isAfter(Instant.now());
-    }
-
-    public void markUsed() {
-        this.usedAt = Instant.now();
     }
 }

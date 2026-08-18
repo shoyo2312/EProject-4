@@ -107,9 +107,6 @@ class AuthServiceImplTest {
     private JwtProvider jwtProvider;
 
     @Autowired
-    private LoginRateLimiter loginRateLimiter;
-
-    @Autowired
     private StringRedisTemplate redisTemplate;
 
     @Autowired
@@ -124,7 +121,6 @@ class AuthServiceImplTest {
         refreshTokenRepository.deleteAll();
         verificationTokenRepository.deleteAll();
         userRepository.deleteAll();
-        loginRateLimiter.reset();
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushDb();
     }
 
@@ -630,6 +626,41 @@ class AuthServiceImplTest {
 
         User user = userRepository.findById(registered.id()).orElseThrow();
         assertThat(user.isEmailVerified()).isTrue();
+    }
+
+    /**
+     * The code is spent by a single UPDATE guarded on {@code used_at IS NULL}, so a second
+     * submission matches no row — a read-then-write would let two concurrent submissions of one
+     * code both succeed. See VerificationTokenRepository.claimForUse.
+     */
+    @Test
+    void verifyEmail_withAlreadySpentOtp_throwsInvalidOtp() {
+        authService.register(validRegisterRequest());
+
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), otpCaptor.capture());
+
+        authService.verifyEmail(new VerifyEmailRequest("john@example.com", otpCaptor.getValue()));
+
+        assertThatThrownBy(() -> authService.verifyEmail(
+                new VerifyEmailRequest("john@example.com", otpCaptor.getValue())))
+                .isInstanceOf(InvalidOtpException.class);
+    }
+
+    /** Expiry is part of the same UPDATE's predicate, and is aged here rather than waited out. */
+    @Test
+    void verifyEmail_withExpiredOtp_throwsInvalidOtp() {
+        UserResponse registered = authService.register(validRegisterRequest());
+
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), otpCaptor.capture());
+
+        jdbcTemplate.update("update verification_tokens set expires_at = now() - interval '1 hour'");
+
+        assertThatThrownBy(() -> authService.verifyEmail(
+                new VerifyEmailRequest("john@example.com", otpCaptor.getValue())))
+                .isInstanceOf(InvalidOtpException.class);
+        assertThat(userRepository.findById(registered.id()).orElseThrow().isEmailVerified()).isFalse();
     }
 
     @Test

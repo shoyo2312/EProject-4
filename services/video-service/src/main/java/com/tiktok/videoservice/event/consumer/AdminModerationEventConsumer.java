@@ -38,8 +38,16 @@ public class AdminModerationEventConsumer {
             handleTakenDown(objectMapper.readValue(payload, VideoTakenDownEvent.class));
         } else if (VIDEO_RESTORED.equals(eventType)) {
             handleRestored(objectMapper.readValue(payload, VideoRestoredEvent.class));
+        } else if (eventType == null) {
+            // A moderation event with no eventType header is a producer bug, not a foreign event:
+            // routing here is header-only, so a takedown that arrives without one is dropped in
+            // silence and the video stays up with nothing to say why. Warned rather than thrown —
+            // retrying cannot add a header — so it is at least visible in the log and in metrics.
+            log.warn("Moderation event without an eventType header, dropped: {}", payload);
+        } else {
+            // UserBanned, ProductSuspended, ... — other services' events on a shared topic.
+            log.debug("Ignoring moderation eventType={}", eventType);
         }
-        // Any other eventType (UserBanned, ProductSuspended, ...) is not relevant to video-service.
     }
 
     /**

@@ -345,11 +345,13 @@ public class AuthServiceImpl implements AuthService {
             throw new EmailAlreadyLinkedException();
         }
 
-        otpRateLimiter.checkAllowed(PURPOSE_EMAIL_VERIFICATION, email);
-
+        // Ahead of the send budget: a request that ends in 409 sends no mail, so charging it for
+        // one leaves a user who mistyped an address unable to retry with the right one.
         if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
             throw new EmailAlreadyExistsException(email);
         }
+
+        otpRateLimiter.checkAllowed(PURPOSE_EMAIL_VERIFICATION, email);
 
         // Stored before it is proven, exactly as a password signup stores it — which is also why
         // the check above can be trusted: an address held by an unverified account is taken.

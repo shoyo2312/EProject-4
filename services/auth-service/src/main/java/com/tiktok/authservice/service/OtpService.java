@@ -75,13 +75,13 @@ public class OtpService {
             User user = userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(email)
                     .orElseThrow(InvalidOtpException::new);
 
-            VerificationToken token = verificationTokenRepository
-                    .findByTokenHashAndTokenType(hash(user.getId(), type, otp), type)
-                    .filter(VerificationToken::isValid)
-                    .orElseThrow(InvalidOtpException::new);
-
-            token.markUsed();
-            verificationTokenRepository.save(token);
+            // The claim is the check: a single UPDATE decides whether this code was still
+            // spendable and spends it, so two submissions of the same code cannot both win.
+            // See VerificationTokenRepository.claimForUse.
+            if (verificationTokenRepository.claimForUse(
+                    hash(user.getId(), type, otp), type, Instant.now()) == 0) {
+                throw new InvalidOtpException();
+            }
 
             otpRateLimiter.recordGuessSuccess(purpose, email);
             return user;

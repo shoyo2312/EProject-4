@@ -71,14 +71,6 @@ public class LoginRateLimiter {
         }
     }
 
-    /** Clears all tracked attempts. Used by tests to isolate state between cases. */
-    public void reset() {
-        var keys = redisTemplate.keys(KEY_PREFIX + "*");
-        if (keys != null && !keys.isEmpty()) {
-            redisTemplate.delete(keys);
-        }
-    }
-
     private String redisKey(String key) {
         return KEY_PREFIX + key.toLowerCase(Locale.ROOT);
     }
