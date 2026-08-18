@@ -22,11 +22,31 @@ class FacebookTokenVerifierTest {
 
     private final RestClient.Builder builder = RestClient.builder().baseUrl("https://graph.facebook.com/v21.0");
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+    private final OAuthProperties properties = new OAuthProperties(
+            new OAuthProperties.Google(List.of("web-client-id")),
+            new OAuthProperties.Facebook(OUR_APP_ID, "app-secret"));
+    private final RestClient.Builder jwksBuilder = RestClient.builder().baseUrl("https://www.facebook.com");
+    private final MockRestServiceServer jwksServer = MockRestServiceServer.bindTo(jwksBuilder).build();
     private final FacebookTokenVerifier verifier = new FacebookTokenVerifier(
             builder.build(),
-            new OAuthProperties(
-                    new OAuthProperties.Google(List.of("web-client-id")),
-                    new OAuthProperties.Facebook(OUR_APP_ID, "app-secret")));
+            properties,
+            new FacebookLimitedLoginVerifier(jwksBuilder.build(), properties));
+
+    /**
+     * An iPhone whose owner declined App Tracking Transparency sends a JWT, not a Graph token.
+     * Asking /debug_token about it is what used to turn a good login into "invalid or expired", so
+     * the shape of the token, not the platform, decides which check runs.
+     */
+    @Test
+    void sendsALimitedLoginJwtToTheOidcCheckInsteadOfDebugToken() {
+        assertThatThrownBy(() -> verifier.verify("header.payload.signature"))
+                .isInstanceOf(InvalidSocialTokenException.class);
+
+        // No expectation was set on either mock server, so this passes only if the JWT went down
+        // the local OIDC path and never reached /debug_token.
+        server.verify();
+        jwksServer.verify();
+    }
 
     /**
      * Facebook hands every app a token for the same user, and the token itself says nothing. Only

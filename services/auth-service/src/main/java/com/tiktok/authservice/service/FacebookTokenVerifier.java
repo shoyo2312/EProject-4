@@ -27,12 +27,20 @@ import java.util.function.Function;
 @Component
 public class FacebookTokenVerifier implements SocialTokenVerifier {
 
+    /** A JWT and nothing else has two dots; a Graph access token is an opaque blob without any. */
+    private static final int JWT_SEGMENT_SEPARATORS = 2;
+
     private final RestClient facebookRestClient;
     private final OAuthProperties properties;
+    private final FacebookLimitedLoginVerifier limitedLoginVerifier;
 
-    public FacebookTokenVerifier(RestClient facebookRestClient, OAuthProperties properties) {
+    public FacebookTokenVerifier(
+            RestClient facebookRestClient,
+            OAuthProperties properties,
+            FacebookLimitedLoginVerifier limitedLoginVerifier) {
         this.facebookRestClient = facebookRestClient;
         this.properties = properties;
+        this.limitedLoginVerifier = limitedLoginVerifier;
     }
 
     @Override
@@ -42,6 +50,12 @@ public class FacebookTokenVerifier implements SocialTokenVerifier {
 
     @Override
     public SocialProfile verify(String accessToken) {
+        // iOS downgrades to Limited Login whenever App Tracking Transparency was not granted, and
+        // then the client has an OIDC token rather than a Graph one. It is a different kind of
+        // evidence and is checked differently — see FacebookLimitedLoginVerifier.
+        if (isJwt(accessToken)) {
+            return limitedLoginVerifier.verify(accessToken);
+        }
         DebugTokenData data = debugToken(accessToken);
         if (data == null
                 || !data.isValid()
@@ -62,6 +76,10 @@ public class FacebookTokenVerifier implements SocialTokenVerifier {
                 data.userId(),
                 email == null ? null : email.toLowerCase(),
                 false);
+    }
+
+    private static boolean isJwt(String token) {
+        return token != null && token.chars().filter(c -> c == '.').count() == JWT_SEGMENT_SEPARATORS;
     }
 
     private DebugTokenData debugToken(String accessToken) {
