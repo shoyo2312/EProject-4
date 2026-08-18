@@ -128,7 +128,7 @@ Những thứ dưới đây cố ý nằm trong repo để test thủ công (Pos
 
 | Cái gì | Ở đâu | Rủi ro nếu lên production |
 |---|---|---|
-| `log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] ... OTP ...")` | `auth-service/event/local/EmailNotificationListener.java` (2 chỗ: verify email + reset password) | OTP hiện nguyên văn trong log — ai đọc được log là chiếm được tài khoản bất kỳ |
+| `log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] ... OTP ...")` | `auth-service/event/local/EmailNotificationListener.java` (3 chỗ: verify email + social link + reset password) | OTP hiện nguyên văn trong log — ai đọc được log là chiếm được tài khoản bất kỳ. Riêng mã social link còn tệ hơn một bậc: nó là nửa còn lại của việc gắn tài khoản provider vào tài khoản sẵn có, nên chỉ cần đọc log rồi tạo một tài khoản Facebook khai email nạn nhân là chiếm được |
 
 **Trước mỗi lần deploy thật**: `grep -rn "DEV ONLY" services/` phải trả về rỗng.
 

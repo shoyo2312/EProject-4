@@ -2,6 +2,7 @@ package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.config.JwtProperties;
 import com.tiktok.authservice.config.OtpProperties;
+import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
@@ -15,12 +16,12 @@ import com.tiktok.authservice.entity.RefreshToken;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
-import com.tiktok.authservice.entity.VerificationToken;
 import com.tiktok.authservice.entity.VerificationTokenType;
 import com.tiktok.authservice.event.local.EmailVerificationRequestedEvent;
 import com.tiktok.authservice.event.local.PasswordResetRequestedEvent;
 import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
+import com.tiktok.authservice.exception.EmailAlreadyLinkedException;
 import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
@@ -30,7 +31,6 @@ import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.mapper.UserMapper;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
-import com.tiktok.authservice.repository.VerificationTokenRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.event.user.UserRegisteredEvent;
@@ -38,7 +38,6 @@ import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.exception.ConstraintViolationException;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,16 +45,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
-import java.util.Map;
-import java.util.UUID;
-import java.util.function.Function;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
 
-    private static final String CLAIM_ROLE = "role";
     private static final String CLAIM_JTI = "jti";
     private static final String PURPOSE_EMAIL_VERIFICATION = "email-verification";
     private static final String PURPOSE_PASSWORD_RESET = "password-reset";
@@ -68,12 +63,11 @@ public class AuthServiceImpl implements AuthService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final LoginRateLimiter loginRateLimiter;
     private final AccessTokenBlacklist accessTokenBlacklist;
-    private final VerificationTokenRepository verificationTokenRepository;
-    private final OtpGenerator otpGenerator;
     private final OtpProperties otpProperties;
+    private final OtpService otpService;
     private final OtpRateLimiter otpRateLimiter;
-    private final ApplicationEventPublisher eventPublisher;
     private final SessionRevoker sessionRevoker;
+    private final TokenIssuer tokenIssuer;
 
     @Override
     @Transactional
@@ -102,7 +96,7 @@ public class AuthServiceImpl implements AuthService {
         userEventProducer.publishUserRegistered(
                 UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail()));
 
-        issueOtp(saved, VerificationTokenType.EMAIL_VERIFICATION, otpProperties.emailVerificationExpiryMillis(),
+        otpService.issue(saved, VerificationTokenType.EMAIL_VERIFICATION, otpProperties.emailVerificationExpiryMillis(),
                 otp -> new EmailVerificationRequestedEvent(saved.getEmail(), otp));
 
         return userMapper.toResponse(saved);
@@ -127,6 +121,11 @@ public class AuthServiceImpl implements AuthService {
         // bcrypt verification per attempt — the work an attacker would otherwise get for free.
         boolean valid = user != null
                 && user.getStatus() == UserStatus.ACTIVE
+                // An account created by a social login has no password to match. Stated rather
+                // than left to bcrypt — which does answer false for a null hash, after logging a
+                // warning about it on every attempt — because "there is no password" is a fact
+                // about the account, not an encoder edge case.
+                && user.getPasswordHash() != null
                 && HashUtils.bcryptMatches(request.password(), user.getPasswordHash());
 
         if (!valid) {
@@ -333,8 +332,39 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
+    public void addEmail(Long userId, AddEmailRequest request) {
+        String email = request.email().toLowerCase(Locale.ROOT);
+
+        User user = userRepository.findById(userId)
+                .filter(u -> !u.isDeleted())
+                .orElseThrow(() -> new UserNotFoundException(String.valueOf(userId)));
+
+        // Only an account with nothing to lose may take this path. Once an address is verified,
+        // replacing it is how an account gets stolen from someone who still holds the old one.
+        if (user.isEmailVerified()) {
+            throw new EmailAlreadyLinkedException();
+        }
+
+        otpRateLimiter.checkAllowed(PURPOSE_EMAIL_VERIFICATION, email);
+
+        if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
+            throw new EmailAlreadyExistsException(email);
+        }
+
+        // Stored before it is proven, exactly as a password signup stores it — which is also why
+        // the check above can be trusted: an address held by an unverified account is taken.
+        user.changeEmail(email);
+        saveUnique(user, user.getUsername(), email);
+
+        otpService.issue(user, VerificationTokenType.EMAIL_VERIFICATION,
+                otpProperties.emailVerificationExpiryMillis(),
+                otp -> new EmailVerificationRequestedEvent(email, otp));
+    }
+
+    @Override
+    @Transactional
     public void verifyEmail(VerifyEmailRequest request) {
-        User user = consumeOtp(PURPOSE_EMAIL_VERIFICATION, VerificationTokenType.EMAIL_VERIFICATION,
+        User user = otpService.consume(PURPOSE_EMAIL_VERIFICATION, VerificationTokenType.EMAIL_VERIFICATION,
                 request.email(), request.otp());
 
         user.markEmailVerified();
@@ -348,7 +378,7 @@ public class AuthServiceImpl implements AuthService {
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .filter(user -> !user.isEmailVerified())
-                .ifPresent(user -> issueOtp(user, VerificationTokenType.EMAIL_VERIFICATION,
+                .ifPresent(user -> otpService.issue(user, VerificationTokenType.EMAIL_VERIFICATION,
                         otpProperties.emailVerificationExpiryMillis(),
                         otp -> new EmailVerificationRequestedEvent(user.getEmail(), otp)));
     }
@@ -360,7 +390,7 @@ public class AuthServiceImpl implements AuthService {
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .filter(user -> user.getStatus() == UserStatus.ACTIVE)
-                .ifPresent(user -> issueOtp(user, VerificationTokenType.PASSWORD_RESET,
+                .ifPresent(user -> otpService.issue(user, VerificationTokenType.PASSWORD_RESET,
                         otpProperties.passwordResetExpiryMillis(),
                         otp -> new PasswordResetRequestedEvent(user.getEmail(), otp)));
     }
@@ -368,7 +398,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void resetPassword(ResetPasswordRequest request) {
-        User user = consumeOtp(PURPOSE_PASSWORD_RESET, VerificationTokenType.PASSWORD_RESET,
+        User user = otpService.consume(PURPOSE_PASSWORD_RESET, VerificationTokenType.PASSWORD_RESET,
                 request.email(), request.otp());
 
         user.changePasswordHash(HashUtils.bcryptHash(request.newPassword()));
@@ -444,93 +474,7 @@ public class AuthServiceImpl implements AuthService {
         return ex;
     }
 
-    /**
-     * Resolves the account, burns its one-time code, and returns the account — throwing
-     * {@link InvalidOtpException} for every failure mode (unknown email, wrong code, expired
-     * code, already-used code) so the response never reveals which one occurred.
-     *
-     * <p>Wrong guesses are counted in Redis and blocked past the limit. The counter is bumped on
-     * the unknown-email path too: skipping it there would leak account existence through timing
-     * and through which addresses can be probed indefinitely. Redis writes are not part of the
-     * surrounding transaction, so a failure still increments even though the tx rolls back.
-     */
-    private User consumeOtp(String purpose, VerificationTokenType type, String email, String otp) {
-        otpRateLimiter.checkGuessAllowed(purpose, email);
-
-        try {
-            User user = userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(email)
-                    .orElseThrow(InvalidOtpException::new);
-
-            VerificationToken token = verificationTokenRepository
-                    .findByTokenHashAndTokenType(hashOtp(user.getId(), type, otp), type)
-                    .filter(VerificationToken::isValid)
-                    .orElseThrow(InvalidOtpException::new);
-
-            token.markUsed();
-            verificationTokenRepository.save(token);
-
-            otpRateLimiter.recordGuessSuccess(purpose, email);
-            return user;
-        } catch (InvalidOtpException e) {
-            otpRateLimiter.recordGuessFailure(purpose, email);
-            throw e;
-        }
-    }
-
-    private void issueOtp(User user, VerificationTokenType type, long expiryMillis,
-                           Function<String, ?> eventFactory) {
-        // Flushed here rather than at the end of the transaction: a derived delete is queued as
-        // em.remove(), and Hibernate orders inserts ahead of deletes at flush time. token_hash is
-        // UNIQUE and folds in the OTP, so a resend that happens to draw the same digits for the
-        // same user and type would collide with the row this delete is about to remove and fail
-        // the request with a 500. Rare — 1e-6 per resend — and unexplainable when it happens.
-        verificationTokenRepository.deleteAllByUserIdAndTokenType(user.getId(), type);
-        verificationTokenRepository.flush();
-
-        String otp = otpGenerator.generate();
-        VerificationToken token = VerificationToken.builder()
-                .userId(user.getId())
-                .tokenHash(hashOtp(user.getId(), type, otp))
-                .tokenType(type)
-                .expiresAt(Instant.now().plusMillis(expiryMillis))
-                .build();
-        verificationTokenRepository.save(token);
-
-        eventPublisher.publishEvent(eventFactory.apply(otp));
-    }
-
-    /**
-     * A 6-digit OTP alone has only 1e6 possible values, so hashing it in isolation would let
-     * different users collide on the same token_hash. Folding in the user id + token type keeps
-     * the stored hash unique per (user, purpose) even when two users are issued the same digits.
-     */
-    private String hashOtp(Long userId, VerificationTokenType type, String otp) {
-        return HashUtils.sha256(userId + ":" + type + ":" + otp);
-    }
-
     private TokenResponse issueTokens(User user) {
-        String subject = String.valueOf(user.getId());
-
-        String accessToken = jwtProvider.generateToken(
-                subject,
-                Map.of(CLAIM_ROLE, user.getRole().name(),
-                        CLAIM_JTI, UUID.randomUUID().toString(),
-                        JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS),
-                jwtProperties.accessTokenExpiryMillis());
-
-        String refreshToken = jwtProvider.generateToken(
-                subject,
-                Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_REFRESH,
-                        CLAIM_JTI, UUID.randomUUID().toString()),
-                jwtProperties.refreshTokenExpiryMillis());
-
-        RefreshToken tokenRecord = RefreshToken.builder()
-                .userId(user.getId())
-                .tokenHash(HashUtils.sha256(refreshToken))
-                .expiresAt(Instant.now().plusMillis(jwtProperties.refreshTokenExpiryMillis()))
-                .build();
-        refreshTokenRepository.save(tokenRecord);
-
-        return new TokenResponse(accessToken, refreshToken, jwtProperties.accessTokenExpiryMillis());
+        return tokenIssuer.issue(user);
     }
 }

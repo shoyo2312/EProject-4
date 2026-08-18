@@ -53,6 +53,14 @@
             <groupId>com.tiktok</groupId>
             <artifactId>event-schema</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.tiktok</groupId>
+            <artifactId>crypto-lib</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.tiktok</groupId>
+            <artifactId>security-lib</artifactId>
+        </dependency>
 
         <!-- Test -->
         <dependency>

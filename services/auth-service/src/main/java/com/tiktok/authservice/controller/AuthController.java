@@ -1,5 +1,6 @@
 package com.tiktok.authservice.controller;
 
+import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
@@ -56,6 +57,17 @@ public class AuthController {
     @GetMapping("/me")
     public ApiResponse<UserResponse> me(@AuthenticationPrincipal Long userId) {
         return ApiResponse.success(authService.getCurrentUser(userId));
+    }
+
+    /**
+     * Authenticated, unlike the rest of the email flow: the account being given an address is the
+     * one holding the token, and there is no address yet to name it by.
+     */
+    @PostMapping("/email")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void addEmail(@AuthenticationPrincipal Long userId,
+                          @Valid @RequestBody AddEmailRequest request) {
+        authService.addEmail(userId, request);
     }
 
     @PostMapping("/verify-email")

@@ -63,6 +63,15 @@ auth:
     published-outbox-grace: 7d
   mail:
     from: ${MAIL_FROM:no-reply@tiktok-clone.dev}
+  oauth:
+    google:
+      # Every client id we ship — web (Next.js), iOS and Android each have their own, and an ID
+      # token's `aud` is whichever one signed the user in. Comma-separated in the env var.
+      client-ids: ${GOOGLE_CLIENT_IDS:}
+    facebook:
+      app-id: ${FB_APP_ID:}
+      # A password for our Facebook app: env var only, never a value committed here.
+      app-secret: ${FB_APP_SECRET:}
 
 springdoc:
   api-docs:

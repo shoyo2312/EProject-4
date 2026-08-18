@@ -595,6 +595,177 @@
               "description": "Run right after 'Logout - Success' with the SAME accessToken still in the env. Then re-run '0. Setup / 3. Login User A' to get a working token back."
             }
           ]
+        },
+        {
+          "name": "Social Login",
+          "description": "Google + Facebook token exchange. The five 'no credentials needed' requests below run anywhere; the two marked REAL TOKEN need GOOGLE_CLIENT_IDS / FB_APP_ID / FB_APP_SECRET set on the service and a token pasted into the environment.",
+          "item": [
+            {
+              "name": "Google - Validation Error (blank token)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"token\": \"\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/oauth/google"
+              }
+            },
+            {
+              "name": "Google - Garbage Token (401 INVALID_SOCIAL_TOKEN)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401', () => pm.response.to.have.status(401));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('INVALID_SOCIAL_TOKEN'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"token\": \"not-a-real-id-token\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/oauth/google"
+              },
+              "description": "Also proves the endpoint is permitAll: a 403 with an empty body here means SecurityConfig is missing the path, not that the token was rejected."
+            },
+            {
+              "name": "Facebook - Garbage Token (401 INVALID_SOCIAL_TOKEN)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('401', () => pm.response.to.have.status(401));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('INVALID_SOCIAL_TOKEN'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"token\": \"not-a-real-access-token\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/oauth/facebook"
+              }
+            },
+            {
+              "name": "Google - REAL TOKEN (paste {{googleIdToken}} first)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "const data = pm.response.json().data;",
+                "pm.environment.set('socialAccessToken', data.tokens.accessToken);",
+                "pm.environment.set('socialRefreshToken', data.tokens.refreshToken);",
+                "pm.test('requiresEmail is false for a verified Google address', () => pm.expect(data.requiresEmail).to.eql(false));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"token\": \"{{googleIdToken}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/oauth/google"
+              },
+              "description": "Run twice. The second run must NOT create a second account - check `SELECT count(*) FROM users` before and after. Registration and login are the same call."
+            },
+            {
+              "name": "Facebook - REAL TOKEN (paste {{fbAccessToken}} first)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "const data = pm.response.json().data;",
+                "pm.environment.set('socialAccessToken', data.tokens.accessToken);",
+                "pm.environment.set('socialRefreshToken', data.tokens.refreshToken);",
+                "pm.test('requiresEmail is true only when Facebook gave no address', () => pm.expect(data.requiresEmail).to.be.a('boolean'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"token\": \"{{fbAccessToken}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/oauth/facebook"
+              },
+              "description": "Three outcomes, all correct. Address free: the account is created carrying it, unverified. Address already held by another account: 409 SOCIAL_LINK_VERIFICATION_REQUIRED and a code is mailed - finish with the link request below. No address at all: the account is created without one and requiresEmail is true."
+            },
+            {
+              "name": "Facebook - Confirm link (409 follow-up)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "const data = pm.response.json().data;",
+                "pm.environment.set('socialAccessToken', data.tokens.accessToken);",
+                "pm.test('no second account - the session belongs to the existing one', () => pm.expect(data.tokens.accessToken).to.be.a('string'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"token\": \"{{fbAccessToken}}\",\n  \"otp\": \"{{socialLinkOtp}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/oauth/facebook/link"
+              },
+              "description": "Second half of a 409 SOCIAL_LINK_VERIFICATION_REQUIRED: the same Facebook token, plus the 6-digit code mailed to the address behind it. Both are re-checked - the token proves the Facebook account, the code proves the mailbox - and only then is the identity attached to the existing account. Check `SELECT count(*) FROM users` before and after: it must not move."
+            },
+            {
+              "name": "Link - Validation Error (otp not 6 digits)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400 VALIDATION_ERROR', () => pm.response.to.have.status(400));",
+                "pm.test('rejected before the provider token is even checked', () => pm.expect(pm.response.json().code).to.eql('VALIDATION_ERROR'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"token\": \"not-a-real-access-token\",\n  \"otp\": \"12\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/oauth/facebook/link"
+              },
+              "description": "Runs anywhere - no provider credentials needed. Also proves /oauth/{provider}/link is permitAll: a 403 with an empty body here means SecurityConfig is missing the path. /oauth/google/link is the same code path with a different verifier, so it gets no request of its own."
+            },
+            {
+              "name": "Add Email - No Token (403)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403 - this endpoint is deliberately NOT permitAll', () => pm.response.to.have.status(403));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{socialEmail}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/email"
+              }
+            },
+            {
+              "name": "Add Email - Success (204)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('204', () => pm.response.to.have.status(204));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{socialAccessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{socialEmail}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/email"
+              },
+              "description": "Needs socialAccessToken from a Facebook login (requiresEmail = true). The address is stored UNVERIFIED - confirm it with '1. Auth Service / Verify Email' using {{socialEmail}} and the OTP from the service log."
+            },
+            {
+              "name": "Add Email - Already Taken (409 EMAIL_ALREADY_EXISTS)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('409', () => pm.response.to.have.status(409));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('EMAIL_ALREADY_EXISTS'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{socialAccessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{testEmail}}\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/email"
+              },
+              "description": "testEmail already belongs to User A from '0. Setup'."
+            },
+            {
+              "name": "Add Email - Already Linked (409 EMAIL_ALREADY_LINKED)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('409', () => pm.response.to.have.status(409));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('EMAIL_ALREADY_LINKED'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"someone.else@example.com\"\n}" },
+                "url": "{{authBaseUrl}}/api/v1/auth/email"
+              },
+              "description": "Uses User A's token - a password account whose email is already verified. Changing a verified address is a different operation and does not exist yet."
+            }
+          ]
         }
       ]
     },

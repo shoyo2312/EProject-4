@@ -28,6 +28,25 @@ public class EmailNotificationListener {
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSocialLinkRequested(SocialLinkRequestedEvent event) {
+        try {
+            log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] social OTP for {} = {}", event.email(), event.otp());
+            mailService.sendSocialLinkOtp(event.email(), event.otp(), providerName(event));
+        } catch (Exception e) {
+            log.error("Failed to send social link email to {}", event.email(), e);
+        }
+    }
+
+    /**
+     * "FACEBOOK" is shouting at the reader; the mail says Facebook.
+     */
+    private String providerName(SocialLinkRequestedEvent event) {
+        String name = event.provider().name().toLowerCase();
+        return Character.toUpperCase(name.charAt(0)) + name.substring(1);
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPasswordResetRequested(PasswordResetRequestedEvent event) {
         try {
             log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] password reset OTP for {} = {}", event.email(), event.otp());
