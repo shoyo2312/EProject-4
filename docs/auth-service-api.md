@@ -213,6 +213,8 @@ Request (giống nhau cho cả 2 endpoint):
 
 Backend không có code riêng cho từng nền tảng. Điều kiện duy nhất: **mọi client ID của Google (web/iOS/Android) phải nằm trong `GOOGLE_CLIENT_IDS`**, vì mỗi nền tảng có một client ID riêng và server đối chiếu `aud` với danh sách đó — thiếu ID nào thì user nền tảng đó không đăng nhập được.
 
+**Facebook trên iOS gửi hai loại token khác nhau, server tự nhận dạng theo hình dạng token.** Khi App Tracking Transparency chưa được cấp, SDK hạ xuống **Limited Login** và trả về một JWT (OIDC ID token) thay vì access token của Graph — client không chọn được, `LoginTracking.enabled` cũng bị SDK ghi đè. Token có 3 phần ngăn bởi dấu chấm thì server verify cục bộ: chữ ký RS256 theo JWKS `https://www.facebook.com/.well-known/oauth/openid/jwks/`, `iss = https://www.facebook.com`, `aud = FB_APP_ID`. Token không phải JWT thì đi đường cũ `/debug_token`. Cả hai đường đều đối chiếu app ID, và cả hai đều coi email là **chưa verify**.
+
 Response `data` → `SocialLoginResponse`:
 ```json
 {

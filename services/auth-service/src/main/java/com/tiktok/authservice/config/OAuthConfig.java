@@ -21,6 +21,8 @@ public class OAuthConfig {
 
     private static final String GOOGLE_BASE_URL = "https://oauth2.googleapis.com";
     private static final String FACEBOOK_BASE_URL = "https://graph.facebook.com/v21.0";
+    /** Limited Login's signing keys live on the main domain, not on the Graph one. */
+    private static final String FACEBOOK_JWKS_BASE_URL = "https://www.facebook.com";
 
     /**
      * Both calls sit inside a user's login request, so they get explicit timeouts: the default is
@@ -49,6 +51,15 @@ public class OAuthConfig {
                             + "our own app without them.");
         }
         return build(FACEBOOK_BASE_URL);
+    }
+
+    /**
+     * Split from {@link #facebookRestClient} only because the keys sit on another host; the app id
+     * check that guards the Graph client guards this path too, via the {@code aud} claim.
+     */
+    @Bean
+    public RestClient facebookJwksRestClient() {
+        return build(FACEBOOK_JWKS_BASE_URL);
     }
 
     private RestClient build(String baseUrl) {
