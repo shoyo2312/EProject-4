@@ -7,7 +7,9 @@
   "variable": [
     { "key": "authBaseUrl", "value": "http://localhost:8081" },
     { "key": "userBaseUrl", "value": "http://localhost:8082" },
-    { "key": "videoBaseUrl", "value": "http://localhost:8083" }
+    { "key": "videoBaseUrl", "value": "http://localhost:8083" },
+    { "key": "rawFileUrl", "value": "" },
+    { "key": "uploadUrl", "value": "" }
   ],
   "item": [
     {
@@ -1245,6 +1247,64 @@
       "name": "3. Video Service",
       "description": "video-service :8083, MongoDB. Two things to know before reading the assertions:\n\n1. A published video starts as status=PROCESSING, not PUBLISHED. It only flips to PUBLISHED when media-worker consumes VideoPublishedEvent, transcodes, and emits VideoTranscodedEvent. With media-worker not running, videos stay PROCESSING forever - which is why the feed assertions below do not expect to find the video you just created.\n2. GET /api/v1/videos/** is permitAll (anonymous feed), everything else needs a token. Visibility is enforced in the service, not the filter chain: the owner sees all of their own videos, everyone else (including anonymous) sees only status=PUBLISHED AND visibility=PUBLIC - anything else is a 404, never a 403, so a private video's existence is not leaked.",
       "item": [
+        {
+          "name": "Upload URL",
+          "description": "Step 1 of publishing: POST /upload-url, PUT the file bytes straight to MinIO with the presigned URL, then Publish with rawFileUrl = the returned fileUrl. The bytes never pass through video-service.",
+          "item": [
+            {
+              "name": "Upload URL - No Token (403)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403', () => pm.response.to.have.status(403));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "body": { "mode": "raw", "raw": "{\n  \"contentType\": \"video/mp4\"\n}" },
+                "url": "{{videoBaseUrl}}/api/v1/videos/upload-url"
+              },
+              "description": "POST is not in the permitAll GET matcher."
+            },
+            {
+              "name": "Upload URL - Unsupported Type (400)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('400', () => pm.response.to.have.status(400));",
+                "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('UNSUPPORTED_UPLOAD_TYPE'));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"contentType\": \"application/zip\"\n}" },
+                "url": "{{videoBaseUrl}}/api/v1/videos/upload-url"
+              },
+              "description": "Only video/mp4, video/quicktime and video/webm are accepted, and the refusal comes before the client spends a minute uploading."
+            },
+            {
+              "name": "Upload URL - Success (saves {{rawFileUrl}})",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200', () => pm.response.to.have.status(200));",
+                "const data = pm.response.json().data;",
+                "pm.test('fileUrl is an s3 URI in the allowed bucket', () => pm.expect(data.fileUrl).to.match(/^s3:\\/\\/video-media\\/raw\\//));",
+                "pm.test('uploadUrl is presigned', () => pm.expect(data.uploadUrl).to.include('X-Amz-Signature'));",
+                "// fileUrl, never uploadUrl: the presigned signature expires in minutes and fails @ValidMediaUrl on Publish.",
+                "pm.collectionVariables.set('rawFileUrl', data.fileUrl);",
+                "pm.collectionVariables.set('uploadUrl', data.uploadUrl);"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+                ],
+                "body": { "mode": "raw", "raw": "{\n  \"contentType\": \"video/mp4\"\n}" },
+                "url": "{{videoBaseUrl}}/api/v1/videos/upload-url"
+              },
+              "description": "Requires MinIO running (make infra-up). To finish the upload by hand: PUT the file to {{uploadUrl}} with header Content-Type: video/mp4 and NO Authorization header - the signature is already in the query string, and an extra Authorization header makes S3 reject it."
+            }
+          ]
+        },
         {
           "name": "Publish",
           "item": [

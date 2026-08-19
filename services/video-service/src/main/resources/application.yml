@@ -51,6 +51,19 @@ app:
     allowed-hosts: ${MEDIA_ALLOWED_HOSTS:cdn.tiktok-clone.local}
     allowed-buckets: ${MEDIA_ALLOWED_BUCKETS:video-media}
 
+minio:
+  # Must match media-worker's MinIO settings — it transcodes out of the same bucket these
+  # presigned uploads land in. endpoint is what the browser PUTs to, so in any deployment where
+  # the client is not on the service network this is the public address, not the internal one.
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin123}
+  bucket: ${MINIO_BUCKET:video-media}
+  region: ${MINIO_REGION:us-east-1}
+  # Long enough for a phone on a slow connection to finish a clip, short enough that a URL
+  # leaked from a client log is not a lasting write grant on the bucket.
+  url-expiry: ${MINIO_URL_EXPIRY:15m}
+
 springdoc:
   api-docs:
     path: /v3/api-docs

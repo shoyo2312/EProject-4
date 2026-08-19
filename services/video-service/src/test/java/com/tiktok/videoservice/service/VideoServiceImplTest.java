@@ -1,13 +1,16 @@
 package com.tiktok.videoservice.service;
 
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
+import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.InvalidFeedCursorException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.repository.VideoRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,6 +54,37 @@ class VideoServiceImplTest {
     @BeforeEach
     void cleanUp() {
         videoRepository.deleteAll();
+    }
+
+    /**
+     * The point of the assertion on fileUrl: it is fed straight back into publish() below, where
+     * CreateVideoRequest.rawFileUrl is checked by @ValidMediaUrl against app.media.allowed-buckets.
+     * A bucket or scheme change on either side silently makes every upload unpublishable, and this
+     * is the only place the two ends meet.
+     */
+    @Test
+    void createUploadUrl_returnsPresignedPutAndAStorageUrlPublishAccepts() {
+        UploadUrlResponse response = videoService.createUploadUrl(42L, new UploadUrlRequest("video/mp4"));
+
+        assertThat(response.fileUrl()).startsWith("s3://video-media/raw/42/").endsWith(".mp4");
+        assertThat(response.uploadUrl())
+                .contains("/video-media/raw/42/")
+                .contains("X-Amz-Signature");
+        assertThat(response.expiresInSeconds()).isPositive();
+
+        String key = response.fileUrl().substring("s3://video-media/".length());
+        assertThat(response.uploadUrl()).contains(key);
+
+        VideoResponse published = videoService.publish(42L,
+                new CreateVideoRequest("uploaded", null, response.fileUrl(), VideoVisibility.PUBLIC));
+        assertThat(videoRepository.findById(published.id()).orElseThrow().getRawFileUrl())
+                .isEqualTo(response.fileUrl());
+    }
+
+    @Test
+    void createUploadUrl_rejectsATypeTheTranscoderCannotRead() {
+        assertThatThrownBy(() -> videoService.createUploadUrl(42L, new UploadUrlRequest("application/zip")))
+                .isInstanceOf(UnsupportedUploadTypeException.class);
     }
 
     @Test
