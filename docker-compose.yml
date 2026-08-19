@@ -379,6 +379,40 @@ services:
     networks:
       - tiktok-network
 
+  # Creates the media bucket and its retention rule. Without this, video-service happily signs
+  # an upload URL for a bucket that does not exist -- presigning is a local signature and never
+  # contacts the server -- and the client only finds out when its PUT returns NoSuchBucket,
+  # mid-upload. media-worker creates the bucket on startup, but video-service can be run alone.
+  #
+  # The lifecycle rule expires abandoned uploads: /upload-url persists nothing, so a client that
+  # never calls /videos leaves an object no row references and nothing else would ever delete.
+  # Seven days is well past the point media-worker has read a raw file it was told about.
+  #
+  # ilm import replaces the whole config rather than appending, which is what makes re-running
+  # this container a no-op instead of a duplicate-rule error.
+  minio-init:
+    image: minio/mc:latest
+    container_name: tt-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        mc alias set tt http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
+        mc mb --ignore-existing "tt/$$MINIO_BUCKET"
+        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}}]}' \
+          | mc ilm import "tt/$$MINIO_BUCKET"
+        echo "minio-init: bucket $$MINIO_BUCKET ready"
+    networks:
+      - tiktok-network
+
 # ─────────────────────────────────────────────────────────────────
 # Volumes
 # ─────────────────────────────────────────────────────────────────

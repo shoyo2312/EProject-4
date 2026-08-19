@@ -72,9 +72,9 @@ Luồng đầy đủ phía client:
 
 > **URL hết hạn thì xin lại, đừng cache.** Quá `expiresInSeconds` mà chưa `PUT` xong → S3 trả 403, gọi lại `/upload-url` để lấy URL mới (key mới, không ghi đè cái cũ).
 
-Không có bước "báo upload xong": nếu client bỏ ngang giữa chừng thì chỉ còn một object mồ côi trong bucket, không có bản ghi Video nào được tạo.
+Không có bước "báo upload xong": nếu client bỏ ngang giữa chừng thì chỉ còn một object mồ côi trong bucket, không có bản ghi Video nào được tạo. Object mồ côi tự hết hạn sau 7 ngày — bucket có lifecycle rule trên prefix `raw/` (khai ở service `minio-init` trong `docker-compose.yml`). Nghĩa là **đã `PUT` xong thì gọi `POST /` (mục 3.2) trong vòng 7 ngày**, quá hạn file biến mất dù `fileUrl` vẫn còn trong tay client.
 
-Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token).
+Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không ký được URL — lỗi phía server, không phải request sai.
 
 ### 3.2 `POST /` — đăng video
 **Bắt buộc token.** Trả `201 Created`.
@@ -212,6 +212,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
+| `UPLOAD_URL_UNAVAILABLE` | 503 | Không ký được presigned URL ở mục 3.1. Cấu hình storage sai hoặc storage chết — retry được, nhưng sửa request không giúp gì |
 
 Ngoài ra `401 Unauthorized` (không có `code` riêng của video-service, đến từ `security-lib`/gateway) xảy ra ở `POST`/`DELETE` khi thiếu/hết hạn/token bị thu hồi — xử lý giống auth-service doc (thử `/refresh` **một lần** rồi mới logout local).
 
