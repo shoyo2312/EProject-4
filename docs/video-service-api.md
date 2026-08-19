@@ -189,9 +189,18 @@ Xoá mềm nên video biến mất khỏi mọi endpoint đọc ngay lập tức
 
 ## 5. Counter (`viewCount` / `likeCount` / `commentCount`)
 
-Ba con số này được cập nhật **bất đồng bộ qua Kafka**, không phải trong request like/comment. Sau khi user bấm like ở `interaction-service`, `likeCount` trong `VideoResponse` có thể còn giá trị cũ trong một khoảng ngắn.
+Ba con số này được cập nhật **bất đồng bộ qua Kafka**, không phải trong request like/comment/view. Sau khi user bấm like ở `interaction-service`, `likeCount` trong `VideoResponse` có thể còn giá trị cũ trong một khoảng ngắn.
 
 Phía Flutter: **cập nhật lạc quan (optimistic) trên UI** ngay khi bấm, và coi số từ video-service là nguồn để đồng bộ lại khi load lại màn hình — đừng gọi `GET /{videoId}` ngay sau khi like để lấy số mới, sẽ ra số cũ và làm UI nhảy ngược.
+
+### `viewCount` — client phải chủ động báo
+
+Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọi **`POST /api/v1/interactions/videos/{videoId}/view`** (interaction-service, **bắt buộc token**). Không gọi thì số này đứng yên mãi mãi.
+
+- Gọi **một lần mỗi lần bắt đầu xem**, không gọi theo tick thời gian. Gọi thừa cũng không sai: interaction-service khử trùng lặp theo từng người xem trong **24 giờ**, lần thứ hai của cùng user trả `counted: false` và không đổi số.
+- Response: `{ "videoId": ..., "counted": true, "viewCount": 12 }`. `counted: false` nghĩa là "hôm nay bạn đã được tính cho video này rồi", không phải lỗi.
+- Xem ẩn danh **không được tính** — không có token thì không có danh tính để khử trùng lặp.
+- Số `viewCount` trong response trên là của interaction-service. Số trong `VideoResponse` của video-service đến sau qua Kafka nên trễ hơn một chút.
 
 ## 6. Bảng mã lỗi (`code`) đầy đủ
 

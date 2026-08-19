@@ -4,6 +4,7 @@ public record InteractionCountResponse(
         Long videoId,
         long likeCount,
         long commentCount,
-        long shareCount
+        long shareCount,
+        long viewCount
 ) {
 }

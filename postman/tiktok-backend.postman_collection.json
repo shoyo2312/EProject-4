@@ -1,15 +1,17 @@
 {
   "info": {
     "name": "TikTok Backend - Auth, User & Video",
-    "description": "auth-service (8081) + user-service (8082) + video-service (8083).\n\nHOW TO RUN\n1. `make infra-up`, then start the three services (`make run-auth`, `run-user`, `run-video`).\n2. Import both files, select environment 'TikTok Backend - Local'.\n3. Run folder '0. Setup' FIRST - it creates two verified accounts (User A and User B) and fills testUsername/userId/accessToken/accessTokenB/... Every later folder reads what Setup wrote, so folders 1/2/3 can then be run in any order.\n\nTHE ONE MANUAL STEP: OTP\nLogin now requires a verified email (403 EMAIL_NOT_VERIFIED otherwise), so Setup has to verify both accounts, and no API ever echoes an OTP back. Read it from the auth-service console log - it prints `[DEV ONLY - REMOVE BEFORE COMMIT] verification OTP for <email> = <123456>` - and paste it into env var `otp` (User A) / `otpB` (User B) before running the two 'Verify Email' requests. Same for the reset-password OTP later. That is why the collection is NOT fully unattended in Collection Runner; run Setup request-by-request, then the rest with the Runner.\n\nRATE-LIMIT REQUESTS\n'Login - Too Many Attempts' and 'Resend Verification - Too Many Requests' are single requests meant to be fired several times in a row (Runner iterations) to trip the limiter, not one-shot.\n\nWHY 403 AND NOT 401 FOR A MISSING TOKEN\nThis collection talks to the services DIRECTLY (8081/8082/8083), and none of them registers an AuthenticationEntryPoint, so Spring Security falls back to Http403ForbiddenEntryPoint: a missing, malformed, expired or blacklisted token all come back 403 with an empty body. 401 only appears where the controller/service throws it (INVALID_CREDENTIALS, INVALID_REFRESH_TOKEN).\n\nThe docs/*-api.md files say 401 for the same case and are NOT wrong - they describe the path real clients take, through api-gateway :8080, which does register a RestAuthenticationEntryPoint and answers 401 with a proper {code:'UNAUTHORIZED'} envelope. Same rejection, different status and body depending on which door you knock on. If you point this collection at the gateway, expect 401 wherever a test here asserts 403.",
+    "description": "auth-service (8081) + user-service (8082) + video-service (8083) + interaction-service (8085).\n\nHOW TO RUN\n1. `make infra-up`, then start the services (`make run-auth`, `run-user`, `run-video`, and `run-interaction` for folder 4).\n2. Import both files, select environment 'TikTok Backend - Local'.\n3. Run folder '0. Setup' FIRST - it creates two verified accounts (User A and User B) and fills testUsername/userId/accessToken/accessTokenB/... Every later folder reads what Setup wrote, so folders 1/2/3 can then be run in any order.\n\nTHE ONE MANUAL STEP: OTP\nLogin now requires a verified email (403 EMAIL_NOT_VERIFIED otherwise), so Setup has to verify both accounts, and no API ever echoes an OTP back. Read it from the auth-service console log - it prints `[DEV ONLY - REMOVE BEFORE COMMIT] verification OTP for <email> = <123456>` - and paste it into env var `otp` (User A) / `otpB` (User B) before running the two 'Verify Email' requests. Same for the reset-password OTP later. That is why the collection is NOT fully unattended in Collection Runner; run Setup request-by-request, then the rest with the Runner.\n\nRATE-LIMIT REQUESTS\n'Login - Too Many Attempts' and 'Resend Verification - Too Many Requests' are single requests meant to be fired several times in a row (Runner iterations) to trip the limiter, not one-shot.\n\nWHY 403 AND NOT 401 FOR A MISSING TOKEN\nThis collection talks to the services DIRECTLY (8081/8082/8083), and none of them registers an AuthenticationEntryPoint, so Spring Security falls back to Http403ForbiddenEntryPoint: a missing, malformed, expired or blacklisted token all come back 403 with an empty body. 401 only appears where the controller/service throws it (INVALID_CREDENTIALS, INVALID_REFRESH_TOKEN).\n\nThe docs/*-api.md files say 401 for the same case and are NOT wrong - they describe the path real clients take, through api-gateway :8080, which does register a RestAuthenticationEntryPoint and answers 401 with a proper {code:'UNAUTHORIZED'} envelope. Same rejection, different status and body depending on which door you knock on. If you point this collection at the gateway, expect 401 wherever a test here asserts 403.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "authBaseUrl", "value": "http://localhost:8081" },
     { "key": "userBaseUrl", "value": "http://localhost:8082" },
     { "key": "videoBaseUrl", "value": "http://localhost:8083" },
+    { "key": "interactionBaseUrl", "value": "http://localhost:8085" },
     { "key": "rawFileUrl", "value": "" },
-    { "key": "uploadUrl", "value": "" }
+    { "key": "uploadUrl", "value": "" },
+    { "key": "viewCountAfterFirst", "value": "" }
   ],
   "item": [
     {
@@ -1701,6 +1703,88 @@
                 "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
                 "url": "{{videoBaseUrl}}/api/v1/videos/{{privateVideoId}}"
               }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Interaction Service",
+      "description": "interaction-service :8085, Cassandra + Redis. Only the view flow is covered here. Views are deduplicated per viewer for 24h in Cassandra (views_by_video rows carry the window as their TTL); a counted view also emits interaction.view-events, which video-service consumes to move Video.viewCount. Run '3. Video Service > Publish > Publish - Success (PUBLIC)' first - these requests read {{videoId}}.",
+      "item": [
+        {
+          "name": "View",
+          "item": [
+            {
+              "name": "View - No Token (403)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('403', () => pm.response.to.have.status(403));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view"
+              },
+              "description": "Deduplication is per viewer, so an anonymous view has no identity to deduplicate against - the endpoint requires a token on purpose."
+            },
+            {
+              "name": "View - First Time (counted)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const data = pm.response.json().data;",
+                "pm.test('counted', () => pm.expect(data.counted).to.be.true);",
+                "pm.test('viewCount is at least 1', () => pm.expect(data.viewCount).to.be.at.least(1));",
+                "pm.collectionVariables.set('viewCountAfterFirst', data.viewCount);"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view"
+              },
+              "description": "First view by this user inside the 24h window: the Cassandra LWT insert wins, the counter moves, and VideoViewedEvent is published."
+            },
+            {
+              "name": "View - Same User Again (not counted)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const data = pm.response.json().data;",
+                "pm.test('not counted a second time', () => pm.expect(data.counted).to.be.false);",
+                "pm.test('count did not move', () => pm.expect(data.viewCount).to.eql(Number(pm.collectionVariables.get('viewCountAfterFirst'))));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessToken}}" } ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view"
+              },
+              "description": "counted=false is the normal answer for a replay or a client retry, not an error. The dedup row only expires after 24h."
+            },
+            {
+              "name": "View - Different User (counted again)",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "const data = pm.response.json().data;",
+                "pm.test('counted for the second viewer', () => pm.expect(data.counted).to.be.true);",
+                "pm.test('count went up', () => pm.expect(data.viewCount).to.be.above(Number(pm.collectionVariables.get('viewCountAfterFirst'))));"
+              ] } } ],
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Authorization", "value": "Bearer {{accessTokenB}}" } ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view"
+              },
+              "description": "Dedup is per viewer, not per video - user B's view counts even though user A already viewed. Needs '0. Setup > 6. Login User B'."
+            },
+            {
+              "name": "Counts - includes viewCount",
+              "event": [ { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                "pm.test('viewCount is present', () => pm.expect(pm.response.json().data).to.have.property('viewCount'));"
+              ] } } ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/counts"
+              },
+              "description": "Public endpoint, cached in Redis for 300s and invalidated on every counted view."
             }
           ]
         }
