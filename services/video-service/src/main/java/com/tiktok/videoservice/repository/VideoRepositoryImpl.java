@@ -54,8 +54,8 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     // goes while the video is down — see Video.applyTranscodeOutcome. Leaving it out would drop
     // the only record of the result on exactly the videos that need it at restore time.
     @Override
-    public void updateTranscodeResult(Video video) {
-        update(video.getId(), new Update()
+    public boolean updateTranscodeResult(Video video, VideoStatus expectedStatus) {
+        return compareAndSet(video.getId(), expectedStatus, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("thumbnailUrl", video.getThumbnailUrl())
@@ -64,8 +64,8 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
-    public void updateStatus(Video video) {
-        update(video.getId(), new Update()
+    public boolean updateStatus(Video video, VideoStatus expectedStatus) {
+        return compareAndSet(video.getId(), expectedStatus, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown()));
     }
@@ -81,13 +81,34 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     /**
+     * The status the caller read is part of the filter, so a write only lands if nothing else
+     * moved the video in between. Both callers are Kafka consumers on different topics, running
+     * on different listener threads: a transcode result that takes minutes to arrive is routinely
+     * overtaken by a moderator, and without this filter the later write wins by arriving last
+     * rather than by being correct — a takedown silently replaced by PUBLISHED.
+     *
+     * <p>The filter is on status rather than on {@code @Version} on purpose. Spring Data does bump
+     * the version on these field-scoped updates, so a version filter would also fail whenever a
+     * like landed concurrently — the exact competition {@link VideoRepositoryCustom} was shaped to
+     * remove. Status is the field being contended; a like moving likeCount is not a conflict.
+     *
+     * @return false when nothing matched, meaning the status changed underneath: the caller must
+     *         re-read and re-apply against the new state, never simply write again
+     */
+    private boolean compareAndSet(String videoId, VideoStatus expectedStatus, Update update) {
+        return write(Query.query(where("_id").is(videoId).and("status").is(expectedStatus)), update) > 0;
+    }
+
+    private void update(String videoId, Update update) {
+        write(Query.query(where("_id").is(videoId)), update);
+    }
+
+    /**
      * updatedAt is written explicitly: {@code @LastModifiedDate} auditing only runs for
      * entity-based saves, so a field-scoped update would otherwise leave it stale.
      */
-    private void update(String videoId, Update update) {
-        mongoTemplate.updateFirst(
-                Query.query(where("_id").is(videoId)),
-                update.set("updatedAt", Instant.now()),
-                Video.class);
+    private long write(Query query, Update update) {
+        return mongoTemplate.updateFirst(query, update.set("updatedAt", Instant.now()), Video.class)
+                .getMatchedCount();
     }
 }

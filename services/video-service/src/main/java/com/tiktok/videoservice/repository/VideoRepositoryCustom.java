@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.repository;
 
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoStatus;
 
 import java.time.Instant;
 import java.util.List;
@@ -53,8 +54,14 @@ public interface VideoRepositoryCustom {
      */
     List<Video> findFeedPage(Instant beforeCreatedAt, String beforeId, int limit);
 
-    /** Transcode succeeded: the media fields it produced, plus where the outcome was recorded. */
-    void updateTranscodeResult(Video video);
+    /**
+     * Transcode succeeded: the media fields it produced, plus where the outcome was recorded.
+     *
+     * @param expectedStatus the status read before the change was applied — see
+     *                       {@link #updateStatus} for what conditioning on it prevents
+     * @return whether the write landed
+     */
+    boolean updateTranscodeResult(Video video, VideoStatus expectedStatus);
 
     /**
      * The status pair alone, with no media fields to write: a failed transcode, and a moderation
@@ -66,8 +73,18 @@ public interface VideoRepositoryCustom {
      * second body to keep in step with {@link Video} for nothing. What each call means is already
      * on the line above it at the call site: {@code markFailed()}, {@code markTakenDown()},
      * {@code markRestored()}.
+     *
+     * <p>Conditioned on the status the caller read, because these three race each other across
+     * two Kafka topics and two listener threads. Transcoding takes minutes, so a moderator's
+     * takedown routinely lands while a transcode result is in flight; an unconditional write
+     * lets whichever arrives last win, which puts a taken-down video back on the feed with
+     * nothing left to say it was ever removed.
+     *
+     * @param expectedStatus the status read before the change was applied
+     * @return false when the status moved underneath — re-read and re-apply, do not retry the
+     *         same write
      */
-    void updateStatus(Video video);
+    boolean updateStatus(Video video, VideoStatus expectedStatus);
 
     /** Outbox flag, set once the broker acknowledges the VideoPublishedEvent. */
     void updateEventPublished(Video video);

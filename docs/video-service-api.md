@@ -84,7 +84,7 @@ Request (`CreateVideoRequest`):
 {
   "title": "Tiêu đề",                                // bắt buộc, tối đa 150 ký tự, không được toàn khoảng trắng
   "description": "Mô tả",                             // optional, tối đa 2000 ký tự
-  "rawFileUrl": "s3://video-media/raw/7312.mp4",      // bắt buộc, tối đa 500 ký tự, xem ràng buộc bên dưới
+  "rawFileUrl": "s3://video-media/raw/123456789012345/7312.mp4",  // bắt buộc, tối đa 500 ký tự, xem ràng buộc bên dưới
   "visibility": "PUBLIC"                              // bắt buộc: PUBLIC | PRIVATE
 }
 ```
@@ -95,6 +95,8 @@ Request (`CreateVideoRequest`):
 - với `s3://`: phần authority là **tên bucket**, phải nằm trong danh sách bucket được cấu hình.
 
 Sai bất kỳ điều nào → `VALIDATION_ERROR` (400). Lý do chặn: URL này được backend (media-worker) tự đi tải về, nên một URL tuỳ ý sẽ biến server thành công cụ gọi ra ngoài hộ kẻ tấn công.
+
+Ngoài allow-list còn một ràng buộc nữa: object key phải nằm dưới `raw/{userId}/` của **chính tài khoản đang gọi** — đúng key mà mục 3.1 vừa cấp. Trỏ vào `raw/` của người khác (hoặc vào key không do mục 3.1 cấp, ví dụ file đã transcode) → `FOREIGN_UPLOAD` (400). Cứ dùng nguyên `fileUrl` nhận được, đừng ghép tay.
 
 Response `data` → `VideoResponse`:
 ```json
@@ -208,6 +210,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `title` rỗng/quá 150 ký tự, `description` quá 2000, `visibility` thiếu hoặc sai giá trị enum, `rawFileUrl` sai scheme/host/bucket (mục 3.2) |
 | `UNSUPPORTED_UPLOAD_TYPE` | 400 | `contentType` ở mục 3.1 không phải `video/mp4`, `video/quicktime` hoặc `video/webm` |
+| `FOREIGN_UPLOAD` | 400 | `rawFileUrl` trỏ vào file của tài khoản khác, hoặc vào key không do mục 3.1 cấp. Chỉ publish được đúng `fileUrl` mà chính token này vừa nhận |
 | `INVALID_FEED_CURSOR` | 400 | `cursor` ở mục 3.3 không phải do server cấp. Bỏ cursor đang giữ, tải lại feed từ đầu |
 | `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |

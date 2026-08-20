@@ -3,6 +3,7 @@ package com.tiktok.videoservice.event.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
+import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.repository.VideoRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -25,6 +26,7 @@ public class AdminModerationEventConsumer {
     private static final String VIDEO_RESTORED = "VideoRestoredEvent";
 
     private final IdempotentEventProcessor idempotentEventProcessor;
+    private final VideoStateUpdater videoStateUpdater;
     private final VideoRepository videoRepository;
     private final ObjectMapper objectMapper;
 
@@ -51,28 +53,19 @@ public class AdminModerationEventConsumer {
     }
 
     /**
-     * Soft-deleted videos are skipped, same as in {@link VideoTranscodedEventConsumer}: an owner
-     * can delete between the moderator's click and this event arriving, and a restore landing
-     * afterwards would leave a document that is both deleted and PUBLISHED. Nothing displays it,
-     * so nothing corrects it either.
+     * Soft-deleted videos are skipped and a status change landing mid-flight is re-read rather
+     * than overwritten — both live in {@link VideoStateUpdater}, which the transcode consumer
+     * races against on this exact field.
      */
     private void handleTakenDown(VideoTakenDownEvent event) {
         idempotentEventProcessor.runOnce(event.eventId(), VIDEO_TAKEN_DOWN, () ->
-                videoRepository.findByIdAndDeletedAtIsNull(event.videoId()).ifPresentOrElse(
-                        video -> {
-                            video.markTakenDown();
-                            videoRepository.updateStatus(video);
-                        },
-                        () -> log.warn("VideoTakenDownEvent for unknown or deleted videoId={}", event.videoId())));
+                videoStateUpdater.apply(event.videoId(), Video::markTakenDown,
+                        videoRepository::updateStatus, VIDEO_TAKEN_DOWN));
     }
 
     private void handleRestored(VideoRestoredEvent event) {
         idempotentEventProcessor.runOnce(event.eventId(), VIDEO_RESTORED, () ->
-                videoRepository.findByIdAndDeletedAtIsNull(event.videoId()).ifPresentOrElse(
-                        video -> {
-                            video.markRestored();
-                            videoRepository.updateStatus(video);
-                        },
-                        () -> log.warn("VideoRestoredEvent for unknown or deleted videoId={}", event.videoId())));
+                videoStateUpdater.apply(event.videoId(), Video::markRestored,
+                        videoRepository::updateStatus, VIDEO_RESTORED));
     }
 }

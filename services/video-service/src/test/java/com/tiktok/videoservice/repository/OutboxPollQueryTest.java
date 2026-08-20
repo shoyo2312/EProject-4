@@ -3,12 +3,14 @@ package com.tiktok.videoservice.repository;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.MongoDBContainer;
@@ -36,6 +38,9 @@ class OutboxPollQueryTest {
 
     @Autowired
     private VideoRepository videoRepository;
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
 
     @BeforeEach
     void cleanUp() {
@@ -78,6 +83,27 @@ class OutboxPollQueryTest {
 
         assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .isEmpty();
+    }
+
+    /**
+     * The poll runs every five seconds against the collection that only ever grows, and neither
+     * of its filter fields is a prefix of the feed or profile indexes — so without an index of its
+     * own it is a full scan plus an in-memory sort, which looks fine in every test and degrades
+     * only in production. Asserted on the chosen plan rather than on the index list: an index that
+     * exists but that the planner does not pick buys nothing.
+     */
+    @Test
+    void theOutboxPollIsIndexed() {
+        Document explain = mongoTemplate.getDb().runCommand(new Document("explain",
+                new Document("find", "videos")
+                        .append("filter", new Document("eventPublishedAt", null).append("deletedAt", null))
+                        .append("sort", new Document("createdAt", 1))));
+
+        assertThat(explain.toJson())
+                .as("the poll must read an index, not walk the collection")
+                .contains("IXSCAN")
+                .contains("outbox_idx")
+                .doesNotContain("SORT_KEY_GENERATOR");
     }
 
     private Video save(boolean deleted) {

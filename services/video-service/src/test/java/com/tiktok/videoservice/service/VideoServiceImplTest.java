@@ -8,6 +8,7 @@ import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.InvalidFeedCursorException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
@@ -90,10 +91,38 @@ class VideoServiceImplTest {
     @Test
     void publish_createsVideoWithProcessingStatus() {
         VideoResponse response = videoService.publish(1L,
-                new CreateVideoRequest("My first video", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("My first video", "desc", "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC));
 
         assertThat(response.status()).isEqualTo(VideoStatus.PROCESSING);
         assertThat(response.userId()).isEqualTo(1L);
+    }
+
+    /**
+     * {@code @ValidMediaUrl} proves the URL points at our storage, not whose file it is. Upload
+     * keys are namespaced by uploader, so without this check publishing someone else's raw key
+     * republishes their video under the caller's name — the pipeline does the rest of the work.
+     */
+    @Test
+    void publish_someoneElsesUploadKey_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Not mine", null, "s3://video-media/raw/2/stolen.mp4", VideoVisibility.PUBLIC)))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /** Same key over the CDN host instead — one segment further in, equally not theirs. */
+    @Test
+    void publish_someoneElsesUploadKeyOverHttps_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Not mine", null, "https://cdn.tiktok-clone.local/video-media/raw/2/stolen.mp4",
+                VideoVisibility.PUBLIC)))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    @Test
+    void publish_aKeyThisServiceNeverIssued_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Transcoded output", null, "s3://video-media/hls/2/master.m3u8", VideoVisibility.PUBLIC)))
+                .isInstanceOf(ForeignUploadException.class);
     }
 
     @Test
@@ -105,7 +134,7 @@ class VideoServiceImplTest {
     @Test
     void getById_privateVideo_notOwner_throwsNotFound() {
         VideoResponse video = videoService.publish(1L,
-                new CreateVideoRequest("Private", null, "s3://video-media/raw/2.mp4", VideoVisibility.PRIVATE));
+                new CreateVideoRequest("Private", null, "s3://video-media/raw/1/2.mp4", VideoVisibility.PRIVATE));
 
         assertThatThrownBy(() -> videoService.getById(2L, video.id()))
                 .isInstanceOf(VideoNotFoundException.class);
@@ -114,7 +143,7 @@ class VideoServiceImplTest {
     @Test
     void getById_privateVideo_owner_canView() {
         VideoResponse video = videoService.publish(1L,
-                new CreateVideoRequest("Private", null, "s3://video-media/raw/3.mp4", VideoVisibility.PRIVATE));
+                new CreateVideoRequest("Private", null, "s3://video-media/raw/1/3.mp4", VideoVisibility.PRIVATE));
 
         VideoResponse fetched = videoService.getById(1L, video.id());
         assertThat(fetched.id()).isEqualTo(video.id());
@@ -123,12 +152,12 @@ class VideoServiceImplTest {
     @Test
     void getFeed_onlyReturnsPublishedPublicVideos() {
         VideoResponse processing = videoService.publish(1L,
-                new CreateVideoRequest("Processing", null, "s3://video-media/raw/4.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("Processing", null, "s3://video-media/raw/1/4.mp4", VideoVisibility.PUBLIC));
         VideoResponse published = videoService.publish(1L,
-                new CreateVideoRequest("Published", null, "s3://video-media/raw/5.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("Published", null, "s3://video-media/raw/1/5.mp4", VideoVisibility.PUBLIC));
         markPublished(published.id());
         VideoResponse privatePublished = videoService.publish(1L,
-                new CreateVideoRequest("Private published", null, "s3://video-media/raw/6.mp4", VideoVisibility.PRIVATE));
+                new CreateVideoRequest("Private published", null, "s3://video-media/raw/1/6.mp4", VideoVisibility.PRIVATE));
         markPublished(privatePublished.id());
 
         CursorPage<VideoResponse> feed = videoService.getFeed(null, 10);
@@ -150,7 +179,7 @@ class VideoServiceImplTest {
         List<String> publishedIds = new ArrayList<>();
         for (int i = 0; i < 25; i++) {
             VideoResponse video = videoService.publish(1L, new CreateVideoRequest(
-                    "video-" + i, null, "s3://video-media/raw/" + i + ".mp4", VideoVisibility.PUBLIC));
+                    "video-" + i, null, "s3://video-media/raw/1/" + i + ".mp4", VideoVisibility.PUBLIC));
             markPublished(video.id());
             publishedIds.add(video.id());
         }
@@ -171,7 +200,7 @@ class VideoServiceImplTest {
     void getFeed_sizeAboveMax_isClampedRatherThanRefused() {
         for (int i = 0; i < 55; i++) {
             VideoResponse video = videoService.publish(1L, new CreateVideoRequest(
-                    "video-" + i, null, "s3://video-media/raw/" + i + ".mp4", VideoVisibility.PUBLIC));
+                    "video-" + i, null, "s3://video-media/raw/1/" + i + ".mp4", VideoVisibility.PUBLIC));
             markPublished(video.id());
         }
 
@@ -240,7 +269,7 @@ class VideoServiceImplTest {
     @Test
     void delete_notOwner_throwsNotVideoOwner() {
         VideoResponse video = videoService.publish(1L,
-                new CreateVideoRequest("Mine", null, "s3://video-media/raw/7.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("Mine", null, "s3://video-media/raw/1/7.mp4", VideoVisibility.PUBLIC));
 
         assertThatThrownBy(() -> videoService.delete(2L, video.id()))
                 .isInstanceOf(NotVideoOwnerException.class);
@@ -249,7 +278,7 @@ class VideoServiceImplTest {
     @Test
     void delete_owner_softDeletesVideo() {
         VideoResponse video = videoService.publish(1L,
-                new CreateVideoRequest("Mine", null, "s3://video-media/raw/8.mp4", VideoVisibility.PUBLIC));
+                new CreateVideoRequest("Mine", null, "s3://video-media/raw/1/8.mp4", VideoVisibility.PUBLIC));
 
         videoService.delete(1L, video.id());
 
@@ -259,7 +288,7 @@ class VideoServiceImplTest {
 
     private VideoResponse publishAs(long userId, String title, VideoVisibility visibility) {
         return videoService.publish(userId,
-                new CreateVideoRequest(title, null, "s3://video-media/raw/" + title.replace(' ', '-') + ".mp4", visibility));
+                new CreateVideoRequest(title, null, "s3://video-media/raw/" + userId + "/" + title.replace(' ', '-') + ".mp4", visibility));
     }
 
     private void markPublished(String videoId) {
@@ -271,6 +300,6 @@ class VideoServiceImplTest {
     private void markTakenDown(String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
         video.markTakenDown();
-        videoRepository.updateStatus(video);
+        videoRepository.updateStatus(video, VideoStatus.PUBLISHED);
     }
 }
