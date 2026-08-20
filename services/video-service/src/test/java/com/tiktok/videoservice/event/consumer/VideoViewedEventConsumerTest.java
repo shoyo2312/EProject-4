@@ -103,6 +103,23 @@ class VideoViewedEventConsumerTest {
         assertThat(videoRepository.findById(video.getId()).orElseThrow().getViewCount()).isZero();
     }
 
+    /**
+     * A moderated video is off every read path, so the views still arriving are stale clients.
+     * Counting them builds a number nobody can see and nobody can account for the moment a
+     * restore puts the video back.
+     */
+    @Test
+    void onMessage_takenDownVideo_leavesTheCountAlone() throws Exception {
+        Video video = publishedVideo();
+        video.markTakenDown();
+        videoRepository.save(video);
+
+        consumer.onMessage(objectMapper.writeValueAsString(
+                VideoViewedEvent.of(Long.valueOf(video.getId()), 1L)));
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getViewCount()).isZero();
+    }
+
     @Test
     void onMessage_unknownVideo_isNoOp() throws Exception {
         consumer.onMessage(objectMapper.writeValueAsString(VideoViewedEvent.of(999L, 1L)));
@@ -115,7 +132,7 @@ class VideoViewedEventConsumerTest {
                 .id(Video.newId())
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://video-media/raw/1.mp4")
+                .rawFileUrl("s3://video-media/raw/1/%s.mp4".formatted(Video.newId()))
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PUBLISHED)
                 .build();

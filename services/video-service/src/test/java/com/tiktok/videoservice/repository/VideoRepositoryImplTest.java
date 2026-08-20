@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -19,6 +20,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 
 /**
@@ -193,12 +195,76 @@ class VideoRepositoryImplTest {
         return stale;
     }
 
+    /**
+     * The other half of the same race. VideoStateUpdater checks deletedAt when it reads, but a
+     * transcode runs for minutes and an owner can delete inside that window — so the check has to
+     * be in the write filter too. Without it the stale write lands on a deleted document and
+     * leaves it both deleted and PUBLISHED, which is the combination VideoStateUpdater's own
+     * javadoc says nothing later corrects.
+     */
+    @Test
+    void updateStatus_whenTheVideoWasDeletedAfterItWasRead_doesNotLand() {
+        Video video = save(VideoStatus.PROCESSING);
+        Video staleReadByTranscode = reload(video);
+
+        Video readByOwner = reload(video);
+        readByOwner.markDeleted();
+        videoRepository.updateSoftDeleted(readByOwner);
+
+        staleReadByTranscode.markPublished("http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
+
+        assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, VideoStatus.PROCESSING))
+                .as("the video was deleted after it was read, so this write must be refused")
+                .isFalse();
+
+        Video after = reload(video);
+        assertThat(after.getDeletedAt()).isNotNull();
+        assertThat(after.getStatus())
+                .as("a deleted video must never come back as PUBLISHED")
+                .isEqualTo(VideoStatus.PROCESSING);
+        assertThat(after.getHlsUrl()).isNull();
+    }
+
+    /**
+     * One upload is one video. A client retrying POST /videos after a timeout would otherwise get
+     * a second document, a second VideoPublishedEvent, and a second transcode job off one file,
+     * with nothing downstream able to tell the copies apart.
+     */
+    @Test
+    void save_theSameRawFileTwice_isRefusedByTheIndex() {
+        String rawFileUrl = "s3://video-media/raw/1/shared.mp4";
+        save(VideoStatus.PROCESSING, rawFileUrl);
+
+        assertThatThrownBy(() -> save(VideoStatus.PROCESSING, rawFileUrl))
+                .isInstanceOf(DuplicateKeyException.class);
+    }
+
+    /**
+     * Deleting a video does not hand its raw object back for republishing. Scoping the index to
+     * undeleted rows would, and would also need a partialFilterExpression that cannot test a
+     * field for null.
+     */
+    @Test
+    void save_theSameRawFileAfterADelete_isStillRefused() {
+        String rawFileUrl = "s3://video-media/raw/1/deleted-then-reused.mp4";
+        Video first = save(VideoStatus.PUBLISHED, rawFileUrl);
+        first.markDeleted();
+        videoRepository.updateSoftDeleted(first);
+
+        assertThatThrownBy(() -> save(VideoStatus.PROCESSING, rawFileUrl))
+                .isInstanceOf(DuplicateKeyException.class);
+    }
+
     private Video save(VideoStatus status) {
+        return save(status, "s3://video-media/raw/1/%s.mp4".formatted(Video.newId()));
+    }
+
+    private Video save(VideoStatus status, String rawFileUrl) {
         return videoRepository.save(Video.builder()
                 .id(Video.newId())
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://video-media/raw/1.mp4")
+                .rawFileUrl(rawFileUrl)
                 .visibility(VideoVisibility.PUBLIC)
                 .status(status)
                 .build());

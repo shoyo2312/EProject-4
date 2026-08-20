@@ -96,7 +96,15 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
      *         re-read and re-apply against the new state, never simply write again
      */
     private boolean compareAndSet(String videoId, VideoStatus expectedStatus, Update update) {
-        return write(Query.query(where("_id").is(videoId).and("status").is(expectedStatus)), update) > 0;
+        // deletedAt belongs in the filter alongside status. VideoStateUpdater checks it when it
+        // reads, but a delete landing between that read and this write would still match on
+        // _id and status alone, producing the deleted-and-PUBLISHED document that class says it
+        // prevents. Transcoding runs for minutes, so the gap is not a theoretical one. Failing
+        // here is harmless: a false return sends the caller back to re-read, and the re-read
+        // finds the video deleted and stops.
+        Query query = Query.query(
+                where("_id").is(videoId).and("status").is(expectedStatus).and("deletedAt").is(null));
+        return write(query, update) > 0;
     }
 
     private void update(String videoId, Update update) {

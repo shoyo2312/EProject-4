@@ -51,6 +51,7 @@ Request (`UploadUrlRequest`):
 ```json
 {
   "contentType": "video/mp4"    // bắt buộc; chỉ nhận video/mp4, video/quicktime, video/webm
+                                // tham số đi kèm được bỏ qua: "video/mp4; charset=utf-8" vẫn hợp lệ
 }
 ```
 
@@ -99,7 +100,9 @@ Sai bất kỳ điều nào → `VALIDATION_ERROR` (400). Lý do chặn: URL nà
 
 `tags` được server **chuẩn hoá** trước khi lưu: lowercase, cắt khoảng trắng, bỏ dấu `#` đầu, bỏ tag rỗng, bỏ trùng, giữ nguyên thứ tự client gửi. Nên `["#Dance", " dance ", "Food"]` lưu thành `["dance", "food"]` — client đừng tự so sánh tag với chuỗi chưa chuẩn hoá. Quá 10 tag hoặc một tag quá 50 ký tự → `VALIDATION_ERROR` (400).
 
-Ngoài allow-list còn một ràng buộc nữa: object key phải nằm dưới `raw/{userId}/` của **chính tài khoản đang gọi** — đúng key mà mục 3.1 vừa cấp. Trỏ vào `raw/` của người khác (hoặc vào key không do mục 3.1 cấp, ví dụ file đã transcode) → `FOREIGN_UPLOAD` (400). Cứ dùng nguyên `fileUrl` nhận được, đừng ghép tay.
+Ngoài allow-list còn một ràng buộc nữa: object key phải nằm dưới `raw/{userId}/` của **chính tài khoản đang gọi** — đúng key mà mục 3.1 vừa cấp. Trỏ vào `raw/` của người khác (hoặc vào key không do mục 3.1 cấp, ví dụ file đã transcode) → `FOREIGN_UPLOAD` (400). Đường dẫn được chuẩn hoá trước khi kiểm tra, nên `raw/{mình}/../{người khác}/` cũng bị chặn. Cứ dùng nguyên `fileUrl` nhận được, đừng ghép tay.
+
+**Một upload là một video.** Publish lại cùng `rawFileUrl` → `RAW_FILE_ALREADY_PUBLISHED` (400), kể cả khi video cũ đã bị xoá. Đây là chỗ hay gặp khi client **retry sau timeout**: lần đầu có thể đã thành công dù response không về tới nơi. Gặp mã này thì coi như đã publish xong, đừng xin `fileUrl` mới rồi upload lại — cứ đọc lại danh sách video của mình.
 
 Response `data` → `VideoResponse`:
 ```json
@@ -215,6 +218,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `VALIDATION_ERROR` | 400 | `title` rỗng/quá 150 ký tự, `description` quá 2000, `visibility` thiếu hoặc sai giá trị enum, `rawFileUrl` sai scheme/host/bucket (mục 3.2) |
 | `UNSUPPORTED_UPLOAD_TYPE` | 400 | `contentType` ở mục 3.1 không phải `video/mp4`, `video/quicktime` hoặc `video/webm` |
 | `FOREIGN_UPLOAD` | 400 | `rawFileUrl` trỏ vào file của tài khoản khác, hoặc vào key không do mục 3.1 cấp. Chỉ publish được đúng `fileUrl` mà chính token này vừa nhận |
+| `RAW_FILE_ALREADY_PUBLISHED` | 400 | `rawFileUrl` này đã có video rồi. Thường là retry sau timeout — lần trước đã thành công |
 | `INVALID_FEED_CURSOR` | 400 | `cursor` ở mục 3.3 không phải do server cấp. Bỏ cursor đang giữ, tải lại feed từ đầu |
 | `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |

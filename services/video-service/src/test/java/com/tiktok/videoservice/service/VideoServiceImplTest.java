@@ -8,6 +8,7 @@ import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import com.tiktok.videoservice.exception.AlreadyPublishedException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.InvalidFeedCursorException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
@@ -116,6 +117,56 @@ class VideoServiceImplTest {
                 "Not mine", null, "https://cdn.tiktok-clone.local/video-media/raw/2/stolen.mp4",
                 VideoVisibility.PUBLIC, List.of())))
                 .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /**
+     * The check reads the segment after the first {@code raw}, so a key that starts under the
+     * caller's own prefix and then climbs back out of it passes on the raw string. java.net.URI
+     * leaves dot segments exactly where they are; every HTTP client that later fetches the URL
+     * resolves them, which is how "mine" on the way in becomes someone else's file on the way
+     * out.
+     */
+    @Test
+    void publish_aKeyThatClimbsOutOfTheCallersPrefix_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Traversal", null,
+                "https://cdn.tiktok-clone.local/video-media/raw/1/../2/stolen.mp4",
+                VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /** The same trick over s3://, where the bucket sits in the authority instead of the path. */
+    @Test
+    void publish_anS3KeyThatClimbsOutOfTheCallersPrefix_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Traversal", null, "s3://video-media/raw/1/../2/stolen.mp4",
+                VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /**
+     * A media type may carry parameters. Rejecting {@code video/mp4; charset=utf-8} tells the
+     * client its file is unsupported when the type is one this service accepts.
+     */
+    @Test
+    void createUploadUrl_acceptsAMediaTypeCarryingParameters() {
+        assertThat(videoService.createUploadUrl(42L, new UploadUrlRequest("video/mp4; charset=utf-8")).fileUrl())
+                .endsWith(".mp4");
+    }
+
+    /**
+     * One upload is one video. A client retrying POST /videos after a timeout would otherwise get
+     * a second document, a second VideoPublishedEvent, and a second transcode job off one file,
+     * with nothing downstream able to tell the copies apart.
+     */
+    @Test
+    void publish_aRawFileThatAlreadyHasAVideo_isRejected() {
+        CreateVideoRequest request = new CreateVideoRequest(
+                "Retried", null, "s3://video-media/raw/1/again.mp4", VideoVisibility.PUBLIC, List.of());
+        videoService.publish(1L, request);
+
+        assertThatThrownBy(() -> videoService.publish(1L, request))
+                .isInstanceOf(AlreadyPublishedException.class);
     }
 
     @Test

@@ -9,6 +9,7 @@ import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import com.tiktok.videoservice.exception.AlreadyPublishedException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
@@ -24,6 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -76,7 +78,7 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
-        String extension = UPLOAD_EXTENSIONS.get(request.contentType().toLowerCase(Locale.ROOT));
+        String extension = UPLOAD_EXTENSIONS.get(mediaType(request.contentType()));
         if (extension == null) {
             throw new UnsupportedUploadTypeException(request.contentType(), UPLOAD_EXTENSIONS.keySet());
         }
@@ -122,8 +124,24 @@ public class VideoServiceImpl implements VideoService {
                 .commentCount(0)
                 .build();
 
-        Video saved = videoRepository.save(video);
-        return videoMapper.toResponse(saved);
+        try {
+            return videoMapper.toResponse(videoRepository.save(video));
+        } catch (DuplicateKeyException e) {
+            // raw_file_idx. The only unique index on this collection besides _id, and _id is a
+            // fresh Snowflake generated a few lines above.
+            throw new AlreadyPublishedException();
+        }
+    }
+
+    /**
+     * A media type may carry parameters — {@code video/mp4; charset=utf-8} is the same type as
+     * {@code video/mp4}, and rejecting it with a 400 tells the client its file is unsupported
+     * when the type is one we accept.
+     */
+    private String mediaType(String contentType) {
+        int parameters = contentType.indexOf(';');
+        String type = parameters < 0 ? contentType : contentType.substring(0, parameters);
+        return type.strip().toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -160,7 +178,12 @@ public class VideoServiceImpl implements VideoService {
      * segment at all is rejected too: it is not something this service ever handed out.
      */
     private void requireOwnUpload(Long userId, String rawFileUrl) {
-        String path = URI.create(rawFileUrl).getPath();
+        // normalize() before reading segments, because java.net.URI does not resolve dot
+        // segments on its own and every HTTP client downstream does. Without it,
+        // ".../raw/{attacker}/../{victim}/file.mp4" satisfies the check below on the segment
+        // after the first "raw" and then addresses the victim's object the moment anything
+        // fetches it.
+        String path = URI.create(rawFileUrl).normalize().getPath();
         if (path == null) {
             throw new ForeignUploadException();
         }

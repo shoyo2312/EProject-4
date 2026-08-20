@@ -107,11 +107,14 @@ class OutboxPollQueryTest {
     }
 
     private Video save(boolean deleted) {
+        String id = Video.newId();
         Video video = Video.builder()
-                .id(Video.newId())
+                .id(id)
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://video-media/raw/1.mp4")
+                // Distinct per video: rawFileUrl is uniquely indexed, because one upload is one
+                // video. Sharing a key across fixtures is the thing that index exists to stop.
+                .rawFileUrl("s3://video-media/raw/1/%s.mp4".formatted(id))
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build();

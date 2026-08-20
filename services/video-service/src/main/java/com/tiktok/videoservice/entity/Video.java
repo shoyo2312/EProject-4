@@ -51,7 +51,16 @@ import java.util.List;
         // the match set. A partial index over the unpublished rows alone would be smaller still,
         // but partialFilterExpression accepts neither an equality against null nor $exists: false.
         @CompoundIndex(name = "outbox_idx",
-                def = "{'eventPublishedAt': 1, 'deletedAt': 1, 'createdAt': 1}")
+                def = "{'eventPublishedAt': 1, 'deletedAt': 1, 'createdAt': 1}"),
+        // One upload is one video. Enforced here rather than by checking before the insert,
+        // because a check followed by an insert lets two concurrent publishes of the same key
+        // both pass and produce two documents, two VideoPublishedEvents, and two transcode jobs
+        // off one file.
+        //
+        // Deliberately not scoped to undeleted rows: deleting a video does not free its raw
+        // object for republishing, and the partialFilterExpression that would express that scope
+        // cannot test a field for null anyway (see outbox_idx above).
+        @CompoundIndex(name = "raw_file_idx", def = "{'rawFileUrl': 1}", unique = true)
 })
 public class Video {
 
