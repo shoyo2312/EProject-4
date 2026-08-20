@@ -67,7 +67,7 @@ Bảng xếp hạng tính trên **24 giờ gần nhất**, giờ mới nặng h�
 - `reasons` là **công cụ debug**, không phải nội dung để hiển thị. Nó cho biết vì sao video lọt vào danh sách: `trending` (đang thịnh hành), `tag:<tag>` (khớp sở thích), và `model` (thứ tự do mô hình ML quyết định, xem `docs/ranking-model.md`). Format có thể đổi.
 - `score` cũng chỉ có nghĩa trong một response, như mục 3.1. **Thang đo không cố định**: khi có `model` trong `reasons`, score là xác suất xem hết (0..1); khi không có, score là điểm heuristic (thường 0..4). Đừng hiển thị nó, đừng so sánh giữa hai response, đừng lọc theo ngưỡng cứng.
 - Người dùng mới chưa xem gì sẽ nhận **đúng danh sách trending** — đó là hành vi đúng, không phải lỗi.
-- Danh sách **đã loại các video người này đã xem**, dựa trên `POST /interactions/videos/{id}/watch`. Xem mục 5.
+- Danh sách **đã loại các video người này đã xem** (dựa trên `POST /interactions/videos/{id}/watch`, xem mục 5) **và những gì `/feed` vừa trả cho chính người này trong 30 phút qua**. Gọi `/feed` hai lần liên tiếp ra hai danh sách khác nhau — đó là cách phân trang, xem mục 7.
 - Có thể trả về **mảng rỗng** khi hệ thống chưa có dữ liệu (mới deploy, Redis vừa bị xoá). Client phải xử lý được trạng thái này thay vì hiện màn hình trắng.
 - Nếu `rank-service` chết hoặc chưa được huấn luyện, endpoint **vẫn trả về đủ video**, chỉ là thứ tự do heuristic quyết định và `reasons` không có `model`. Client không cần biết và không được xử lý khác đi.
 
@@ -110,7 +110,9 @@ Không có mã lỗi nghiệp vụ riêng: hai endpoint đều là đọc và đ
 
 ## 7. Ghi chú tích hợp
 
-- **Phân trang**: chưa có. `limit` tối đa `100` và không có con trỏ trang. Feed vô hạn ở client nên gọi lại `/feed` khi gần hết danh sách — vì các video đã xem đã bị loại, lần gọi sau sẽ ra nội dung khác.
-- **Cache**: đừng cache response quá vài phút. Bảng xếp hạng được dựng lại mỗi phút.
+- **Phân trang: gọi lại `/feed`, không có con trỏ trang.** `limit` tối đa `100`. Server nhớ những gì vừa trả cho bạn trong **30 phút** và không trả lại chúng, nên cứ gọi `/feed` khi gần hết danh sách là ra nội dung mới. Không cần gửi kèm id đã có, không cần `offset` — và cũng đừng cố tự chế: thứ hạng được tính lại mỗi request nên `offset` sẽ vừa trùng vừa sót.
+  - Hệ quả cần biết: **video đã trả về coi như đã dùng, kể cả khi người dùng chưa kịp nhìn thấy.** Prefetch 100 rồi chỉ hiển thị 10 thì 90 cái kia mất 30 phút mới quay lại. Xin đúng số lượng sắp hiển thị, đừng xin thừa cho chắc.
+  - Cái này **độc lập với `/watch`**: `/watch` loại video vĩnh viễn (đã xem thật), cửa sổ 30 phút chỉ chống lặp trong một phiên cuộn. Vẫn phải gọi `/watch` — xem mục 5.
+- **Cache**: đừng cache response quá vài phút. Bảng xếp hạng được dựng lại mỗi phút. Và đừng retry `/feed` một cách mù quáng — mỗi lần gọi là một lần đốt video khỏi cửa sổ 30 phút.
 - **Đừng gọi `/feed` cho từng video**. Một lần gọi cho cả trang.
 - Hạn mức theo IP dùng chung với mọi endpoint khác qua gateway; nhiều thiết bị sau cùng một NAT chia nhau hạn mức này.

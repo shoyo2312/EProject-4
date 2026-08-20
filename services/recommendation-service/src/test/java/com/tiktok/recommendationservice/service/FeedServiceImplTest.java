@@ -22,7 +22,9 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -50,6 +52,7 @@ class FeedServiceImplTest {
         givenTrending();
         givenTags();
         givenSeen();
+        givenServed();
         givenNoQualityData();
         givenNoPublishTimes();
         // The default for every existing case: no model, so the heuristic ordering is asserted.
@@ -207,6 +210,50 @@ class FeedServiceImplTest {
         assertThat(features.tagOverlap()).isEqualTo(1);
     }
 
+    /**
+     * How the feed pages without a cursor. The ranking is recomputed every request and the
+     * scores move, so an offset into the ranked list points at nothing stable — what makes the
+     * next call return different videos is that this call remembers what it handed out.
+     */
+    @Test
+    void getFeed_dropsWhatWasServedRecently_evenThoughItWasNeverWatched() {
+        givenTrending(tuple("vid1", 10.0), tuple("vid2", 5.0));
+        givenServed("vid1");
+
+        assertThat(feedService.getFeed(VIEWER, 20))
+                .extracting(FeedItemResponse::videoId)
+                .containsExactly("vid2");
+    }
+
+    /**
+     * Only what the client actually received is suppressed. Recording the whole candidate pool
+     * would burn five hundred videos on one request and empty the feed within a few scrolls.
+     */
+    @Test
+    void getFeed_marksOnlyTheVideosItReturned_notTheWholeCandidatePool() {
+        givenTrending(tuple("vid1", 10.0), tuple("vid2", 5.0), tuple("vid3", 1.0));
+
+        feedService.getFeed(VIEWER, 2);
+
+        verify(zSetOperations).add(eq("reco:user:served:7"), eq("vid1"), anyDouble());
+        verify(zSetOperations).add(eq("reco:user:served:7"), eq("vid2"), anyDouble());
+        verify(zSetOperations, never()).add(eq("reco:user:served:7"), eq("vid3"), anyDouble());
+    }
+
+    /**
+     * The window covers a scrolling session, so it has to be pushed out while the session is
+     * still going. Setting it once would expire the head of the feed under a viewer who is
+     * still scrolling through it.
+     */
+    @Test
+    void getFeed_refreshesTheServedWindowOnEveryRequest() {
+        givenTrending(tuple("vid1", 10.0));
+
+        feedService.getFeed(VIEWER, 20);
+
+        verify(redisTemplate).expire("reco:user:served:7", RecoKeys.SERVED_TTL);
+    }
+
     @SafeVarargs
     private void givenTrending(ZSetOperations.TypedTuple<String>... tuples) {
         when(zSetOperations.reverseRangeWithScores("reco:trending", 0, 299))
@@ -217,6 +264,11 @@ class FeedServiceImplTest {
     private void givenTags(ZSetOperations.TypedTuple<String>... tuples) {
         when(zSetOperations.reverseRangeWithScores("reco:user:tags:7", 0, 4))
                 .thenReturn(new LinkedHashSet<>(List.of(tuples)));
+    }
+
+    private void givenServed(String... videoIds) {
+        when(zSetOperations.range("reco:user:served:7", 0, -1))
+                .thenReturn(new LinkedHashSet<>(List.of(videoIds)));
     }
 
     private void givenSeen(String... videoIds) {

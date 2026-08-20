@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -86,9 +87,9 @@ public class FeedServiceImpl implements FeedService {
         Set<String> pool = new LinkedHashSet<>(affinityByVideo.keySet());
         pool.addAll(trending.keySet());
 
-        Set<String> seen = seen(userId);
+        Set<String> excluded = alreadyDelivered(userId);
         List<String> candidates = pool.stream()
-                .filter(videoId -> !seen.contains(videoId))
+                .filter(videoId -> !excluded.contains(videoId))
                 .limit(CANDIDATE_POOL)
                 .toList();
 
@@ -109,7 +110,7 @@ public class FeedServiceImpl implements FeedService {
             candidates.forEach(videoId -> reasons.computeIfAbsent(videoId, id -> new ArrayList<>()).add("model"));
         }
 
-        return candidates.stream()
+        List<FeedItemResponse> feed = candidates.stream()
                 .map(videoId -> new FeedItemResponse(
                         videoId,
                         round(scores.getOrDefault(videoId, 0.0)),
@@ -117,6 +118,9 @@ public class FeedServiceImpl implements FeedService {
                 .sorted(Comparator.comparingDouble(FeedItemResponse::score).reversed())
                 .limit(limit)
                 .toList();
+
+        markServed(userId, feed);
+        return feed;
     }
 
     private List<CandidateFeatures> features(List<String> candidates,
@@ -195,9 +199,43 @@ public class FeedServiceImpl implements FeedService {
         return videoIds == null ? Set.of() : videoIds;
     }
 
-    private Set<String> seen(Long userId) {
-        Set<String> videoIds = redisTemplate.opsForZSet().range(RecoKeys.userSeen(userId), 0, -1);
-        return videoIds == null ? Set.of() : videoIds;
+    /**
+     * Everything this viewer must not be handed again: what they watched, plus what they were
+     * offered in the last half hour. Reading both is what lets the client page through the feed
+     * by simply asking again — see {@link RecoKeys#userServed} for why a cursor does not work
+     * here and why the two sets are not one.
+     */
+    private Set<String> alreadyDelivered(Long userId) {
+        Set<String> excluded = new HashSet<>();
+        Set<String> seen = redisTemplate.opsForZSet().range(RecoKeys.userSeen(userId), 0, -1);
+        if (seen != null) {
+            excluded.addAll(seen);
+        }
+        Set<String> served = redisTemplate.opsForZSet().range(RecoKeys.userServed(userId), 0, -1);
+        if (served != null) {
+            excluded.addAll(served);
+        }
+        return excluded;
+    }
+
+    /**
+     * Records only what the client was actually handed, not the whole candidate pool. Suppressing
+     * five hundred videos because one request ranked them would empty the feed within a few
+     * scrolls.
+     */
+    private void markServed(Long userId, List<FeedItemResponse> feed) {
+        if (feed.isEmpty()) {
+            return;
+        }
+        String key = RecoKeys.userServed(userId);
+        double now = Instant.now().getEpochSecond();
+        for (FeedItemResponse item : feed) {
+            redisTemplate.opsForZSet().add(key, item.videoId(), now);
+        }
+        redisTemplate.opsForZSet().removeRange(key, 0, -RecoKeys.TRIM_TO - 1);
+        // Refreshed on every request on purpose: the window is meant to cover a scrolling
+        // session, and a session that is still going should not have its head expire under it.
+        redisTemplate.expire(key, RecoKeys.SERVED_TTL);
     }
 
     /** Raw watch counts alongside the completion rate, because the model wants both. */

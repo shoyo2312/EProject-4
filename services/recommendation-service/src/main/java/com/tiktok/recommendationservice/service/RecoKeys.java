@@ -70,10 +70,32 @@ public final class RecoKeys {
         return "reco:user:tags:" + userId;
     }
 
-    /** Videos one viewer has already been served content for, scored by epoch second. */
+    /** Videos one viewer has already watched, scored by epoch second. */
     public static String userSeen(Long userId) {
         return "reco:user:seen:" + userId;
     }
+
+    /**
+     * Videos handed to one viewer recently, whether or not they watched them. This is what makes
+     * an endless feed possible without a cursor: the ranking is recomputed on every request and
+     * the scores move between calls, so an offset into a ranked list points at nothing stable.
+     * The watched set alone is not enough either — a client that prefetches twenty videos and
+     * reports the two it played would be handed the other eighteen again on the next scroll.
+     *
+     * <p>Kept separate from {@link #userSeen} rather than folded into it, because the two answer
+     * different questions and only one of them is allowed to expire. Having watched a video is
+     * permanent. Having been offered one the viewer never scrolled far enough to see is not, and
+     * burning those forever would shrink the catalogue every time somebody closed the app.
+     */
+    public static String userServed(Long userId) {
+        return "reco:user:served:" + userId;
+    }
+
+    /**
+     * How long a served video stays suppressed. Long enough to cover one scrolling session, short
+     * enough that anything offered but never actually looked at comes back the same afternoon.
+     */
+    public static final Duration SERVED_TTL = Duration.ofMinutes(30);
 
     /**
      * Global watch and completion counters, kept as two sorted sets rather than a hash per video

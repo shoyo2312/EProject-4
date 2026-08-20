@@ -36,6 +36,10 @@
     {
       "key": "recommendationBaseUrl",
       "value": "http://localhost:8087"
+    },
+    {
+      "key": "firstPageIds",
+      "value": "[]"
     }
   ],
   "item": [
@@ -3765,7 +3769,9 @@
                   "if (data.length) {",
                   "    pm.test('carries a reason', () => pm.expect(data[0].reasons).to.be.an('array').that.is.not.empty);",
                   "    pm.test('ids only, no video content', () => pm.expect(data[0]).to.not.have.property('title'));",
-                  "}"
+                  "}",
+                  "// Kept for the paging request below, which asserts the next call does not repeat these.",
+                  "pm.collectionVariables.set('firstPageIds', JSON.stringify(data.map(i => i.videoId)));"
                 ]
               }
             }
@@ -3781,6 +3787,37 @@
             "url": "{{recommendationBaseUrl}}/api/v1/recommendations/feed?limit=20"
           },
           "description": "Ids and a score, never video content: this service has no read path into video-service's data. The client takes these ids and fetches whatever it does not already hold."
+        },
+        {
+          "name": "Feed - Second Call Does Not Repeat The First",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const first = JSON.parse(pm.collectionVariables.get('firstPageIds') || '[]');",
+                  "const second = pm.response.json().data.map(i => i.videoId);",
+                  "pm.test('no video comes back twice', () => {",
+                  "    const repeated = second.filter(id => first.includes(id));",
+                  "    pm.expect(repeated, `served again: ${repeated}`).to.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{recommendationBaseUrl}}/api/v1/recommendations/feed?limit=20"
+          },
+          "description": "Run straight after 'Feed - Success'. This is the whole of pagination: there is no cursor and no offset, because the ranking is recomputed every request and the scores move between calls -- an offset into a ranked list would both repeat and skip. What makes the next call different is that the previous one recorded what it handed out and suppresses it for 30 minutes. Needs enough videos in the system for a second page to exist."
         },
         {
           "name": "Feed - No Token (401)",
