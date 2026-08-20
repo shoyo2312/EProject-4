@@ -82,4 +82,11 @@ public final class RecoKeys {
      */
     public static final String VIDEO_WATCHES = "reco:video:watches";
     public static final String VIDEO_COMPLETIONS = "reco:video:completions";
+
+    /**
+     * Publish time per video, epoch seconds. Held separately from the per-tag indexes because the
+     * ranking model needs a video's age whether or not the viewer has any interest in its tags,
+     * and reading it out of one of those indexes would mean knowing which tag to look under.
+     */
+    public static final String VIDEO_PUBLISHED = "reco:video:published";
 }

@@ -1,12 +1,16 @@
 package com.tiktok.recommendationservice.service;
 
+import com.tiktok.recommendationservice.client.RankClient;
+import com.tiktok.recommendationservice.dto.rank.CandidateFeatures;
 import com.tiktok.recommendationservice.dto.response.FeedItemResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -15,6 +19,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * Candidate generation stays rule-based; only the ordering is learned.
+ *
+ * <p>The split is deliberate. Which videos are considered at all is decided by trending and by
+ * the viewer's tags — both readable from Redis, both reconstructible offline, both cheap. How
+ * those candidates are ordered is where a model earns its keep, and where being wrong costs an
+ * ordering rather than an empty feed. It also sidesteps the failure that kills most first
+ * ranking models: trending is a decayed engagement score with no equivalent in the historical
+ * event log, so a model trained to lean on it would be trained on a number that does not exist
+ * at serving time. Nothing handed to the model here is computed differently in training.
+ */
 @Service
 @RequiredArgsConstructor
 public class FeedServiceImpl implements FeedService {
@@ -43,17 +58,23 @@ public class FeedServiceImpl implements FeedService {
     private static final long MIN_WATCHES_FOR_QUALITY = 5;
     private static final double NEUTRAL_QUALITY = 0.5;
 
+    /** Stands in for a video whose publish time has aged out of the trimmed sorted set. */
+    private static final double UNKNOWN_AGE_HOURS = 24.0;
+
     private final StringRedisTemplate redisTemplate;
+    private final RankClient rankClient;
 
     @Override
     public List<FeedItemResponse> getFeed(Long userId, int limit) {
         Map<String, Double> trending = trendingCandidates();
         Map<String, Double> affinityByVideo = new HashMap<>();
+        Map<String, Integer> tagOverlap = new HashMap<>();
         Map<String, List<String>> reasons = new HashMap<>();
 
         for (Map.Entry<String, Double> tag : topTags(userId).entrySet()) {
             for (String videoId : videosTagged(tag.getKey())) {
                 affinityByVideo.merge(videoId, tag.getValue(), Double::sum);
+                tagOverlap.merge(videoId, 1, Integer::sum);
                 reasons.computeIfAbsent(videoId, id -> new ArrayList<>()).add("tag:" + tag.getKey());
             }
         }
@@ -75,20 +96,65 @@ public class FeedServiceImpl implements FeedService {
             return List.of();
         }
 
-        double maxTrend = max(trending.values());
-        double maxAffinity = max(affinityByVideo.values());
-        Map<String, Double> quality = completionRates(candidates);
+        Counters counters = counters(candidates);
+        Map<String, Double> ages = ageHours(candidates);
+
+        Map<String, Double> modelScores = rankClient.score(userId,
+                features(candidates, counters, ages, affinityByVideo, tagOverlap));
+
+        Map<String, Double> scores = modelScores.isEmpty()
+                ? heuristicScores(candidates, trending, affinityByVideo, counters)
+                : modelScores;
+        if (!modelScores.isEmpty()) {
+            candidates.forEach(videoId -> reasons.computeIfAbsent(videoId, id -> new ArrayList<>()).add("model"));
+        }
 
         return candidates.stream()
                 .map(videoId -> new FeedItemResponse(
                         videoId,
-                        round(TREND_WEIGHT * trending.getOrDefault(videoId, 0.0) / maxTrend
-                                + AFFINITY_WEIGHT * affinityByVideo.getOrDefault(videoId, 0.0) / maxAffinity
-                                + QUALITY_WEIGHT * quality.getOrDefault(videoId, NEUTRAL_QUALITY)),
+                        round(scores.getOrDefault(videoId, 0.0)),
                         reasons.getOrDefault(videoId, List.of())))
                 .sorted(Comparator.comparingDouble(FeedItemResponse::score).reversed())
                 .limit(limit)
                 .toList();
+    }
+
+    private List<CandidateFeatures> features(List<String> candidates,
+                                             Counters counters,
+                                             Map<String, Double> ages,
+                                             Map<String, Double> affinityByVideo,
+                                             Map<String, Integer> tagOverlap) {
+        return candidates.stream()
+                .map(videoId -> new CandidateFeatures(
+                        videoId,
+                        Math.log1p(counters.watches().getOrDefault(videoId, 0.0)),
+                        counters.completionRates().getOrDefault(videoId, NEUTRAL_QUALITY),
+                        ages.getOrDefault(videoId, UNKNOWN_AGE_HOURS),
+                        affinityByVideo.getOrDefault(videoId, 0.0),
+                        tagOverlap.getOrDefault(videoId, 0)))
+                .toList();
+    }
+
+    /**
+     * The ordering that shipped before there was a model, kept as the fallback rather than
+     * deleted: it is what the feed serves whenever the ranker is down or has no model file yet,
+     * which includes every deployment made before the first training run.
+     */
+    private Map<String, Double> heuristicScores(List<String> candidates,
+                                                Map<String, Double> trending,
+                                                Map<String, Double> affinityByVideo,
+                                                Counters counters) {
+        double maxTrend = max(trending.values());
+        double maxAffinity = max(affinityByVideo.values());
+
+        Map<String, Double> scores = new HashMap<>();
+        for (String videoId : candidates) {
+            scores.put(videoId,
+                    TREND_WEIGHT * trending.getOrDefault(videoId, 0.0) / maxTrend
+                            + AFFINITY_WEIGHT * affinityByVideo.getOrDefault(videoId, 0.0) / maxAffinity
+                            + QUALITY_WEIGHT * counters.completionRates().getOrDefault(videoId, NEUTRAL_QUALITY));
+        }
+        return scores;
     }
 
     private Map<String, Double> trendingCandidates() {
@@ -134,33 +200,58 @@ public class FeedServiceImpl implements FeedService {
         return videoIds == null ? Set.of() : videoIds;
     }
 
+    /** Raw watch counts alongside the completion rate, because the model wants both. */
+    private record Counters(Map<String, Double> watches, Map<String, Double> completionRates) {
+    }
+
     /**
      * Two ZMSCORE calls for the whole candidate set rather than a round trip per video: at 500
-     * candidates the difference is a feed that answers in one hop and one that answers in a
+     * candidates the difference is a feed that answers in two hops and one that answers in a
      * thousand.
      */
-    private Map<String, Double> completionRates(List<String> videoIds) {
+    private Counters counters(List<String> videoIds) {
         Object[] members = videoIds.toArray();
         List<Double> watches = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_WATCHES, members);
         List<Double> completions = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_COMPLETIONS, members);
         if (watches == null || completions == null) {
-            return Map.of();
+            return new Counters(Map.of(), Map.of());
         }
 
+        Map<String, Double> watchCounts = new HashMap<>();
         Map<String, Double> rates = new HashMap<>();
         for (int i = 0; i < videoIds.size(); i++) {
             Double watched = watches.get(i);
-            if (watched == null || watched < MIN_WATCHES_FOR_QUALITY) {
+            if (watched == null) {
+                continue;
+            }
+            watchCounts.put(videoIds.get(i), watched);
+            if (watched < MIN_WATCHES_FOR_QUALITY) {
                 continue;
             }
             Double completed = completions.get(i);
             rates.put(videoIds.get(i), (completed == null ? 0.0 : completed) / watched);
         }
-        return rates;
+        return new Counters(watchCounts, rates);
+    }
+
+    private Map<String, Double> ageHours(List<String> videoIds) {
+        List<Double> publishedAt = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_PUBLISHED, videoIds.toArray());
+        if (publishedAt == null) {
+            return Map.of();
+        }
+        double now = Instant.now().getEpochSecond();
+        Map<String, Double> ages = new HashMap<>();
+        for (int i = 0; i < videoIds.size(); i++) {
+            Double published = publishedAt.get(i);
+            if (published != null) {
+                ages.put(videoIds.get(i), Math.max(0.0, (now - published) / 3600.0));
+            }
+        }
+        return ages;
     }
 
     /** Guards the normalization divide: an empty or all-zero source contributes nothing. */
-    private double max(java.util.Collection<Double> values) {
+    private double max(Collection<Double> values) {
         double max = values.stream().mapToDouble(Double::doubleValue).max().orElse(0.0);
         return max > 0 ? max : 1.0;
     }

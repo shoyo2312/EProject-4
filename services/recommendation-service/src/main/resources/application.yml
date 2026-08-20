@@ -21,6 +21,16 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
+reco:
+  rank:
+    # The LightGBM ranker. Internal network only — it holds no user data and does no auth, and
+    # nothing outside this service should be able to reach it.
+    base-url: ${RANK_SERVICE_URL:http://localhost:8098}
+    enabled: ${RANK_ENABLED:true}
+    # Inside a request a person is waiting on. A ranker that stops answering must cost the feed
+    # a fraction of a second and then be ignored.
+    timeout-millis: 150
+
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 

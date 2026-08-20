@@ -1,9 +1,12 @@
 package com.tiktok.recommendationservice.service;
 
+import com.tiktok.recommendationservice.client.RankClient;
+import com.tiktok.recommendationservice.dto.rank.CandidateFeatures;
 import com.tiktok.recommendationservice.dto.response.FeedItemResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -13,11 +16,14 @@ import org.springframework.data.redis.core.ZSetOperations;
 
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -32,16 +38,22 @@ class FeedServiceImplTest {
     @Mock
     private ZSetOperations<String, String> zSetOperations;
 
+    @Mock
+    private RankClient rankClient;
+
     private FeedServiceImpl feedService;
 
     @BeforeEach
     void setUp() {
-        feedService = new FeedServiceImpl(redisTemplate);
+        feedService = new FeedServiceImpl(redisTemplate, rankClient);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         givenTrending();
         givenTags();
         givenSeen();
         givenNoQualityData();
+        givenNoPublishTimes();
+        // The default for every existing case: no model, so the heuristic ordering is asserted.
+        when(rankClient.score(any(), any())).thenReturn(Map.of());
     }
 
     /**
@@ -132,6 +144,69 @@ class FeedServiceImplTest {
         assertThat(feedService.getFeed(VIEWER, 2)).hasSize(2);
     }
 
+    /**
+     * The point of the whole exercise: when the model has an opinion it decides the order, and
+     * it is allowed to disagree with the heuristic completely. Here trending says "popular"
+     * first and the model says the opposite.
+     */
+    @Test
+    void getFeed_whenTheModelAnswers_itsScoresDecideTheOrder() {
+        givenTrending(tuple("popular", 100.0), tuple("sleeper", 1.0));
+        when(rankClient.score(eq(VIEWER), any())).thenReturn(Map.of("sleeper", 0.9, "popular", 0.1));
+
+        List<FeedItemResponse> feed = feedService.getFeed(VIEWER, 20);
+
+        assertThat(feed).extracting(FeedItemResponse::videoId).containsExactly("sleeper", "popular");
+        assertThat(feed.get(0).score()).isEqualTo(0.9);
+        assertThat(feed.get(0).reasons()).contains("model");
+    }
+
+    /**
+     * A ranker that is down must cost the feed its ordering, not its contents. Returning nothing
+     * here would turn a model outage into an empty For You page.
+     */
+    @Test
+    void getFeed_whenTheRankerIsDown_fallsBackToTheHeuristicOrder() {
+        givenTrending(tuple("popular", 100.0), tuple("sleeper", 1.0));
+        when(rankClient.score(any(), any())).thenReturn(Map.of());
+
+        List<FeedItemResponse> feed = feedService.getFeed(VIEWER, 20);
+
+        assertThat(feed).extracting(FeedItemResponse::videoId).containsExactly("popular", "sleeper");
+        assertThat(feed.get(0).reasons()).doesNotContain("model");
+    }
+
+    /**
+     * The training/serving contract. The model was fitted on these exact quantities computed
+     * from the event log; if the serving side hands it something else under the same names, it
+     * still returns confident-looking floats and nothing anywhere reports a fault.
+     */
+    @Test
+    void getFeed_handsTheRankerTheFeaturesRedisActuallyHolds() {
+        givenTrending(tuple("vid1", 10.0));
+        givenTags(tuple("dance", 3.0));
+        when(zSetOperations.reverseRange("reco:tag:dance", 0, 99)).thenReturn(Set.of("vid1"));
+        when(zSetOperations.score(eq("reco:video:watches"), any(Object[].class))).thenReturn(List.of(20.0));
+        when(zSetOperations.score(eq("reco:video:completions"), any(Object[].class))).thenReturn(List.of(15.0));
+        double twoHoursAgo = java.time.Instant.now().getEpochSecond() - 7_200;
+        when(zSetOperations.score(eq("reco:video:published"), any(Object[].class)))
+                .thenReturn(List.of(twoHoursAgo));
+
+        feedService.getFeed(VIEWER, 20);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<CandidateFeatures>> captor = ArgumentCaptor.forClass(List.class);
+        verify(rankClient).score(eq(VIEWER), captor.capture());
+
+        CandidateFeatures features = captor.getValue().get(0);
+        assertThat(features.videoId()).isEqualTo("vid1");
+        assertThat(features.logWatches()).isEqualTo(Math.log1p(20.0));
+        assertThat(features.completionRate()).isEqualTo(0.75);
+        assertThat(features.ageHours()).isCloseTo(2.0, within(0.01));
+        assertThat(features.tagAffinity()).isEqualTo(3.0);
+        assertThat(features.tagOverlap()).isEqualTo(1);
+    }
+
     @SafeVarargs
     private void givenTrending(ZSetOperations.TypedTuple<String>... tuples) {
         when(zSetOperations.reverseRangeWithScores("reco:trending", 0, 299))
@@ -147,6 +222,10 @@ class FeedServiceImplTest {
     private void givenSeen(String... videoIds) {
         when(zSetOperations.range("reco:user:seen:7", 0, -1))
                 .thenReturn(new LinkedHashSet<>(List.of(videoIds)));
+    }
+
+    private void givenNoPublishTimes() {
+        when(zSetOperations.score(eq("reco:video:published"), any(Object[].class))).thenReturn(null);
     }
 
     private void givenNoQualityData() {

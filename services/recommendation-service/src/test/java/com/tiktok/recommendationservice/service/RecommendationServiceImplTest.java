@@ -68,6 +68,18 @@ class RecommendationServiceImplTest {
         verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
     }
 
+    /**
+     * Publish time is a ranking feature in its own right, so it has to be recorded for videos
+     * with no tags too. Writing it alongside the tag indexes would have skipped exactly those
+     * videos, and they would then have been ranked as if they were a day old.
+     */
+    @Test
+    void recordVideoPublished_withoutTags_stillRecordsWhenItWasPublished() {
+        recommendationService.recordVideoPublished("vid1", List.of());
+
+        verify(zSetOperations).add(eq("reco:video:published"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
     @Test
     void recordLike_unliked_takesTheScoreBackOff() {
         recommendationService.recordLike("vid1", false);

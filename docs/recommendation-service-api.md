@@ -64,11 +64,12 @@ Bảng xếp hạng tính trên **24 giờ gần nhất**, giờ mới nặng h�
 }
 ```
 
-- `reasons` là **công cụ debug**, không phải nội dung để hiển thị. Nó cho biết vì sao video lọt vào danh sách: `trending` (đang thịnh hành) hoặc `tag:<tag>` (khớp sở thích). Format có thể đổi.
-- `score` cũng chỉ có nghĩa trong một response, như mục 3.1.
+- `reasons` là **công cụ debug**, không phải nội dung để hiển thị. Nó cho biết vì sao video lọt vào danh sách: `trending` (đang thịnh hành), `tag:<tag>` (khớp sở thích), và `model` (thứ tự do mô hình ML quyết định, xem `docs/ranking-model.md`). Format có thể đổi.
+- `score` cũng chỉ có nghĩa trong một response, như mục 3.1. **Thang đo không cố định**: khi có `model` trong `reasons`, score là xác suất xem hết (0..1); khi không có, score là điểm heuristic (thường 0..4). Đừng hiển thị nó, đừng so sánh giữa hai response, đừng lọc theo ngưỡng cứng.
 - Người dùng mới chưa xem gì sẽ nhận **đúng danh sách trending** — đó là hành vi đúng, không phải lỗi.
 - Danh sách **đã loại các video người này đã xem**, dựa trên `POST /interactions/videos/{id}/watch`. Xem mục 5.
 - Có thể trả về **mảng rỗng** khi hệ thống chưa có dữ liệu (mới deploy, Redis vừa bị xoá). Client phải xử lý được trạng thái này thay vì hiện màn hình trắng.
+- Nếu `rank-service` chết hoặc chưa được huấn luyện, endpoint **vẫn trả về đủ video**, chỉ là thứ tự do heuristic quyết định và `reasons` không có `model`. Client không cần biết và không được xử lý khác đi.
 
 Lỗi: `401` (thiếu/hết hạn token).
 

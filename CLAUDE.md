@@ -29,7 +29,7 @@ tiktok-backend/
     ├── media-worker/     :8084  MinIO + Kafka consumer
     ├── interaction-service/ :8085  Cassandra + Redis
     ├── story-service/    :8086  MongoDB (TTL 24h)
-    ├── recommendation-service/ :8087  Kafka consumer + Redis (trending + feed cá nhân hoá)
+    ├── recommendation-service/ :8087  Kafka consumer + Redis (trending + feed cá nhân hoá, xếp hạng qua rank-service)
     ├── chat-service/     :8088  MongoDB + WebSocket
     ├── notification-service/   :8089  MongoDB + FCM
     ├── product-service/  :8090  PostgreSQL + Flyway
@@ -39,8 +39,11 @@ tiktok-backend/
     ├── inventory-service/ :8094  PostgreSQL + Outbox + optimistic lock
     ├── search-service/   :8095  Elasticsearch
     ├── admin-service/    :8096  PostgreSQL + Security
-    └── analytics-service/ :8097  ClickHouse / Kafka consumer
+    ├── analytics-service/ :8097  ClickHouse / Kafka consumer (+ sink dữ liệu huấn luyện)
+    └── rank-service/      :8098  **Python** FastAPI + LightGBM — KHÔNG phải module Maven
 ```
+
+`rank-service` là ngoại lệ duy nhất không phải Java: nó không nằm trong `pom.xml` gốc, `./mvnw` không build nó, và `make build` không đụng đến nó. Build/test qua `make rank-up` / `make rank-test`. Nó chỉ đến được từ mạng nội bộ, không có route ở gateway và không xác thực JWT — xem `docs/ranking-model.md`.
 
 ## 3. Package Structure (mỗi service)
 ```
@@ -161,6 +164,7 @@ make help           # Xem tất cả lệnh
 - [ ] Mọi Kafka consumer PHẢI idempotent (claim eventId trước khi xử lý, xem §Kafka)
 - [ ] MongoDB service: BẬT `spring.data.mongodb.auto-index-creation` — mặc định TẮT từ Spring Data Mongo 3.x, `@Indexed`/`@CompoundIndex` sẽ im lặng không được tạo
 - [ ] `api-gateway` dùng WebFlux — KHÔNG import `spring-boot-starter-web`
+- [ ] **Feature của ranking model chỉ được định nghĩa một chỗ**: `services/rank-service/features.py`. Đổi tên, đổi thứ tự, hay đổi công thức một feature ở một phía (Java `CandidateFeatures` / Python `FEATURE_NAMES` / cột ClickHouse) mà không đổi phía kia là lỗi **không có triệu chứng**: mô hình vẫn trả về số, API vẫn 200, chỉ có feed là tệ đi. Xem `docs/ranking-model.md` §2 trước khi động vào
 
 ## 7. Khi Claude sinh code — checklist
 - [ ] Package đúng convention: `com.tiktok.{service}.{layer}`

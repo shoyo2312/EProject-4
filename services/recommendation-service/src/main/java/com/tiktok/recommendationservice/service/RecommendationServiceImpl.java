@@ -47,6 +47,10 @@ public class RecommendationServiceImpl implements RecommendationService {
     @Override
     public void recordVideoPublished(String videoId, List<String> tags) {
         addEngagement(videoId, PUBLISH_SCORE);
+        double publishedAt = Instant.now().getEpochSecond();
+        // Recorded for every video, not only tagged ones: the ranking model asks how old a video
+        // is whether or not this viewer has any interest in its tags.
+        redisTemplate.opsForZSet().add(RecoKeys.VIDEO_PUBLISHED, videoId, publishedAt);
 
         if (tags.isEmpty()) {
             return;
@@ -55,7 +59,6 @@ public class RecommendationServiceImpl implements RecommendationService {
         redisTemplate.opsForSet().add(tagKey, tags.toArray(String[]::new));
         redisTemplate.expire(tagKey, RecoKeys.PROFILE_TTL);
 
-        double publishedAt = Instant.now().getEpochSecond();
         for (String tag : tags) {
             String index = RecoKeys.tagIndex(tag);
             redisTemplate.opsForZSet().add(index, videoId, publishedAt);
@@ -122,6 +125,8 @@ public class RecommendationServiceImpl implements RecommendationService {
             // realistically surface anyway.
             redisTemplate.opsForZSet().removeRange(RecoKeys.VIDEO_WATCHES, 0, -RecoKeys.QUALITY_TRIM_TO - 1);
             redisTemplate.opsForZSet().removeRange(RecoKeys.VIDEO_COMPLETIONS, 0, -RecoKeys.QUALITY_TRIM_TO - 1);
+            // Trimmed lowest-score-first, which here means oldest-published-first.
+            redisTemplate.opsForZSet().removeRange(RecoKeys.VIDEO_PUBLISHED, 0, -RecoKeys.QUALITY_TRIM_TO - 1);
         } catch (RuntimeException e) {
             // A failed rebuild leaves the previous ranking in place, which is stale but serving.
             log.warn("Trending rebuild failed, serving the previous ranking: {}", e.getMessage());
