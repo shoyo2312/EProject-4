@@ -72,9 +72,9 @@ Luồng đầy đủ phía client:
 
 > **URL hết hạn thì xin lại, đừng cache.** Quá `expiresInSeconds` mà chưa `PUT` xong → S3 trả 403, gọi lại `/upload-url` để lấy URL mới (key mới, không ghi đè cái cũ).
 
-Không có bước "báo upload xong": nếu client bỏ ngang giữa chừng thì chỉ còn một object mồ côi trong bucket, không có bản ghi Video nào được tạo.
+Không có bước "báo upload xong": nếu client bỏ ngang giữa chừng thì chỉ còn một object mồ côi trong bucket, không có bản ghi Video nào được tạo. Object mồ côi tự hết hạn sau 7 ngày — bucket có lifecycle rule trên prefix `raw/` (khai ở service `minio-init` trong `docker-compose.yml`). Nghĩa là **đã `PUT` xong thì gọi `POST /` (mục 3.2) trong vòng 7 ngày**, quá hạn file biến mất dù `fileUrl` vẫn còn trong tay client.
 
-Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token).
+Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không ký được URL — lỗi phía server, không phải request sai.
 
 ### 3.2 `POST /` — đăng video
 **Bắt buộc token.** Trả `201 Created`.
@@ -189,9 +189,18 @@ Xoá mềm nên video biến mất khỏi mọi endpoint đọc ngay lập tức
 
 ## 5. Counter (`viewCount` / `likeCount` / `commentCount`)
 
-Ba con số này được cập nhật **bất đồng bộ qua Kafka**, không phải trong request like/comment. Sau khi user bấm like ở `interaction-service`, `likeCount` trong `VideoResponse` có thể còn giá trị cũ trong một khoảng ngắn.
+Ba con số này được cập nhật **bất đồng bộ qua Kafka**, không phải trong request like/comment/view. Sau khi user bấm like ở `interaction-service`, `likeCount` trong `VideoResponse` có thể còn giá trị cũ trong một khoảng ngắn.
 
 Phía Flutter: **cập nhật lạc quan (optimistic) trên UI** ngay khi bấm, và coi số từ video-service là nguồn để đồng bộ lại khi load lại màn hình — đừng gọi `GET /{videoId}` ngay sau khi like để lấy số mới, sẽ ra số cũ và làm UI nhảy ngược.
+
+### `viewCount` — client phải chủ động báo
+
+Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọi **`POST /api/v1/interactions/videos/{videoId}/view`** (interaction-service, **bắt buộc token**). Không gọi thì số này đứng yên mãi mãi.
+
+- Gọi **một lần mỗi lần bắt đầu xem**, không gọi theo tick thời gian. Gọi thừa cũng không sai: interaction-service khử trùng lặp theo từng người xem trong **24 giờ**, lần thứ hai của cùng user trả `counted: false` và không đổi số.
+- Response: `{ "videoId": ..., "counted": true, "viewCount": 12 }`. `counted: false` nghĩa là "hôm nay bạn đã được tính cho video này rồi", không phải lỗi.
+- Xem ẩn danh **không được tính** — không có token thì không có danh tính để khử trùng lặp.
+- Số `viewCount` trong response trên là của interaction-service. Số trong `VideoResponse` của video-service đến sau qua Kafka nên trễ hơn một chút.
 
 ## 6. Bảng mã lỗi (`code`) đầy đủ
 
@@ -203,6 +212,7 @@ Phía Flutter: **cập nhật lạc quan (optimistic) trên UI** ngay khi bấm,
 | `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
+| `UPLOAD_URL_UNAVAILABLE` | 503 | Không ký được presigned URL ở mục 3.1. Cấu hình storage sai hoặc storage chết — retry được, nhưng sửa request không giúp gì |
 
 Ngoài ra `401 Unauthorized` (không có `code` riêng của video-service, đến từ `security-lib`/gateway) xảy ra ở `POST`/`DELETE` khi thiếu/hết hạn/token bị thu hồi — xử lý giống auth-service doc (thử `/refresh` **một lần** rồi mới logout local).
 

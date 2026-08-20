@@ -33,6 +33,6 @@ public class ShareController {
     public ApiResponse<InteractionCountResponse> counts(@PathVariable Long videoId) {
         VideoCounts counts = counterCacheService.getCounts(videoId);
         return ApiResponse.success(new InteractionCountResponse(
-                videoId, counts.likeCount(), counts.commentCount(), counts.shareCount()));
+                videoId, counts.likeCount(), counts.commentCount(), counts.shareCount(), counts.viewCount()));
     }
 }

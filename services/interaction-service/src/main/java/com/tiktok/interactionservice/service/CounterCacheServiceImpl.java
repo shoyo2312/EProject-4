@@ -21,6 +21,7 @@ public class CounterCacheServiceImpl implements CounterCacheService {
 
     private static final String KEY_PREFIX = "interaction:counters:";
     private static final Duration TTL = Duration.ofSeconds(300);
+    private static final int FIELDS = 4;
 
     private final VideoCountersRepository videoCountersRepository;
     private final StringRedisTemplate redisTemplate;
@@ -30,11 +31,15 @@ public class CounterCacheServiceImpl implements CounterCacheService {
         String key = KEY_PREFIX + videoId;
         Map<Object, Object> cached = redisTemplate.opsForHash().entries(key);
 
-        if (!cached.isEmpty()) {
+        // Full hash only. A hash written before a counter was added to this record is missing
+        // that field, and reading it back would parse null; treating the short hash as a miss
+        // reloads from Cassandra and rewrites the key, so a deploy heals itself on first read.
+        if (cached.size() == FIELDS) {
             return new VideoCounts(
                     Long.parseLong((String) cached.get("like")),
                     Long.parseLong((String) cached.get("comment")),
-                    Long.parseLong((String) cached.get("share"))
+                    Long.parseLong((String) cached.get("share")),
+                    Long.parseLong((String) cached.get("view"))
             );
         }
 
@@ -45,7 +50,8 @@ public class CounterCacheServiceImpl implements CounterCacheService {
         redisTemplate.opsForHash().putAll(key, Map.of(
                 "like", String.valueOf(counts.likeCount()),
                 "comment", String.valueOf(counts.commentCount()),
-                "share", String.valueOf(counts.shareCount())
+                "share", String.valueOf(counts.shareCount()),
+                "view", String.valueOf(counts.viewCount())
         ));
         redisTemplate.expire(key, TTL);
 
@@ -61,7 +67,8 @@ public class CounterCacheServiceImpl implements CounterCacheService {
         return new VideoCounts(
                 orZero(counters.getLikeCount()),
                 orZero(counters.getCommentCount()),
-                orZero(counters.getShareCount()));
+                orZero(counters.getShareCount()),
+                orZero(counters.getViewCount()));
     }
 
     private long orZero(Long value) {

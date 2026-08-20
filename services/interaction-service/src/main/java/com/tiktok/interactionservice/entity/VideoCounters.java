@@ -35,4 +35,7 @@ public class VideoCounters {
 
     @Column("share_count")
     private Long shareCount;
+
+    @Column("view_count")
+    private Long viewCount;
 }

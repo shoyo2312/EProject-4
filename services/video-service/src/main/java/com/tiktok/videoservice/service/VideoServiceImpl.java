@@ -11,6 +11,7 @@ import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
+import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.VideoRepository;
@@ -18,7 +19,7 @@ import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.http.Method;
 import lombok.RequiredArgsConstructor;
-import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -29,6 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class VideoServiceImpl implements VideoService {
@@ -64,7 +66,6 @@ public class VideoServiceImpl implements VideoService {
      * the storage edge.
      */
     @Override
-    @SneakyThrows
     public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
         String extension = UPLOAD_EXTENSIONS.get(request.contentType().toLowerCase(Locale.ROOT));
         if (extension == null) {
@@ -74,12 +75,21 @@ public class VideoServiceImpl implements VideoService {
         String objectKey = "raw/%d/%s.%s".formatted(userId, Video.newId(), extension);
         long expirySeconds = minioProperties.urlExpiry().toSeconds();
 
-        String uploadUrl = minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
-                .method(Method.PUT)
-                .bucket(minioProperties.bucket())
-                .object(objectKey)
-                .expiry((int) expirySeconds, TimeUnit.SECONDS)
-                .build());
+        String uploadUrl;
+        try {
+            uploadUrl = minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+                    .method(Method.PUT)
+                    .bucket(minioProperties.bucket())
+                    .object(objectKey)
+                    .expiry((int) expirySeconds, TimeUnit.SECONDS)
+                    .build());
+        } catch (Exception e) {
+            // minio-java declares half a dozen checked exceptions here and they all mean the same
+            // thing to a caller: no URL. Logged with the bucket because the realistic cause is
+            // configuration, and the message the client gets deliberately omits it.
+            log.error("Failed to presign an upload URL for bucket {}", minioProperties.bucket(), e);
+            throw new UploadUrlUnavailableException(e);
+        }
 
         return new UploadUrlResponse(
                 uploadUrl, "s3://%s/%s".formatted(minioProperties.bucket(), objectKey), expirySeconds);
