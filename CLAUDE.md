@@ -29,7 +29,7 @@ tiktok-backend/
     ├── media-worker/     :8084  MinIO + Kafka consumer
     ├── interaction-service/ :8085  Cassandra + Redis
     ├── story-service/    :8086  MongoDB (TTL 24h)
-    ├── recommendation-service/ :8087  Kafka consumer + Redis
+    ├── recommendation-service/ :8087  Kafka consumer + Redis (trending + feed cá nhân hoá)
     ├── chat-service/     :8088  MongoDB + WebSocket
     ├── notification-service/   :8089  MongoDB + FCM
     ├── product-service/  :8090  PostgreSQL + Flyway
@@ -99,14 +99,14 @@ com.tiktok.{service}/
 - Event class lấy từ `libs/event-schema`
 - **Topic trộn nhiều event type** (vd. `admin.moderation-events`): payload JSON không có field phân biệt loại — dùng Kafka header `eventType` (đọc qua `@Header(name = "eventType")`) để route, KHÔNG suy đoán từ shape JSON
 - **kafka-lib usage**: dependency `<artifactId>kafka-lib</artifactId>`, auto-config qua Spring Boot — không cần `@Configuration` cục bộ. Hai thứ độc lập nhau:
-  - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `user-service`, `video-service`
+  - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `user-service`, `video-service`, `recommendation-service`
   - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`
-  - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, inventory, media-worker, notification, order, payment, recommendation, search) — vẫn dùng default retry-vô-hạn của Spring Kafka
+  - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, inventory, media-worker, notification, order, payment, search) — vẫn dùng default retry-vô-hạn của Spring Kafka
   - CÓ outbox nhưng CHƯA migrate dispatcher (inventory, order, payment, product) — vẫn `markPublished()` ngay sau `send()`, tức là đang mất event khi broker từ chối. **Khi động vào 1 trong 4 service này, migrate luôn**: các bước trong `docs/outbox-migration.md`, marker `TODO(outbox)` nằm ngay tại chỗ lỗi trong từng `OutboxPublisher`
   - interaction, story không có consumer lẫn outbox — không cần `kafka-lib`
 
 ### JWT Authentication & security-lib
-- **security-lib usage**: 12 services (admin, cart, chat, interaction, inventory, notification, order, payment, product, story, user, video) dùng centralized `security-lib` để validate JWT token
+- **security-lib usage**: 13 services (admin, cart, chat, interaction, inventory, notification, order, payment, product, recommendation, story, user, video) dùng centralized `security-lib` để validate JWT token
   - Dependency: `<artifactId>security-lib</artifactId>`
   - Auto-configured via Spring Boot auto-configuration (`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`)
   - Services KHÔNG cần `@Configuration` cục bộ cho JWT — được inject tự động

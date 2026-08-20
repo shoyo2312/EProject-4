@@ -32,6 +32,10 @@
     {
       "key": "viewCountAfterFirst",
       "value": ""
+    },
+    {
+      "key": "recommendationBaseUrl",
+      "value": "http://localhost:8087"
     }
   ],
   "item": [
@@ -3690,6 +3694,143 @@
               "description": "Anonymous playback produces no label: there is no viewer to attribute it to."
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "5. Recommendation Service",
+      "item": [
+        {
+          "name": "Trending - Success (No Token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json().data;",
+                  "pm.test('is an array', () => pm.expect(data).to.be.an('array'));",
+                  "pm.test('ranked descending', () => {",
+                  "    const scores = data.map(i => i.score);",
+                  "    pm.expect(scores).to.eql([...scores].sort((a, b) => b - a));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{recommendationBaseUrl}}/api/v1/recommendations/trending?limit=20"
+          },
+          "description": "Trending is the same list for everybody, so it needs no token - a signed-out home screen still has something to show. May legitimately be empty on a fresh Redis."
+        },
+        {
+          "name": "Trending - Limit Is Capped, Not Rejected",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK, not a validation error', () => pm.response.to.have.status(200));",
+                  "pm.test('at most 100 items', () => pm.expect(pm.response.json().data.length).to.be.at.most(100));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{recommendationBaseUrl}}/api/v1/recommendations/trending?limit=500"
+          },
+          "description": "An oversized limit is clamped to 100 rather than refused, so a client bug degrades into a smaller page instead of a broken screen."
+        },
+        {
+          "name": "Feed - Success",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const data = pm.response.json().data;",
+                  "pm.test('is an array', () => pm.expect(data).to.be.an('array'));",
+                  "pm.test('ranked descending', () => {",
+                  "    const scores = data.map(i => i.score);",
+                  "    pm.expect(scores).to.eql([...scores].sort((a, b) => b - a));",
+                  "});",
+                  "if (data.length) {",
+                  "    pm.test('carries a reason', () => pm.expect(data[0].reasons).to.be.an('array').that.is.not.empty);",
+                  "    pm.test('ids only, no video content', () => pm.expect(data[0]).to.not.have.property('title'));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{recommendationBaseUrl}}/api/v1/recommendations/feed?limit=20"
+          },
+          "description": "Ids and a score, never video content: this service has no read path into video-service's data. The client takes these ids and fetches whatever it does not already hold."
+        },
+        {
+          "name": "Feed - No Token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{recommendationBaseUrl}}/api/v1/recommendations/feed"
+          },
+          "description": "The feed is per-viewer, so there is nothing to return without an identity."
+        },
+        {
+          "name": "Feed - A Watched Video Stops Being Served",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "// Run '4. Interaction Service > Watch > Watch - Completed Session' first: that is the",
+                  "// only thing that tells this service the video has been seen. Kafka delivery is async,",
+                  "// so allow a second before running this.",
+                  "const ids = pm.response.json().data.map(i => i.videoId);",
+                  "pm.test('the watched video is gone', () => pm.expect(ids).to.not.include(pm.collectionVariables.get('videoId')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{recommendationBaseUrl}}/api/v1/recommendations/feed?limit=100"
+          },
+          "description": "The single most visible way a feed can look broken: serving back the video someone just finished. Nothing but POST /watch marks a video as seen."
         }
       ]
     }

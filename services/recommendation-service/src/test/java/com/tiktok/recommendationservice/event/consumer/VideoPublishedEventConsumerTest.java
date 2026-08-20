@@ -30,22 +30,22 @@ class VideoPublishedEventConsumerTest {
     @Test
     void onMessage_newEvent_recordsPublish() throws Exception {
         VideoPublishedEventConsumer consumer = new VideoPublishedEventConsumer(recommendationService, inboxService, objectMapper);
-        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of());
+        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of("dance"));
         when(inboxService.markIfNew(event.eventId())).thenReturn(true);
 
         consumer.onMessage(objectMapper.writeValueAsString(event));
 
-        verify(recommendationService).recordVideoPublished("vid1");
+        verify(recommendationService).recordVideoPublished("vid1", List.of("dance"));
     }
 
     @Test
     void onMessage_duplicateEvent_isSkipped() throws Exception {
         VideoPublishedEventConsumer consumer = new VideoPublishedEventConsumer(recommendationService, inboxService, objectMapper);
-        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of());
+        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of("dance"));
         when(inboxService.markIfNew(event.eventId())).thenReturn(false);
 
         consumer.onMessage(objectMapper.writeValueAsString(event));
 
-        verify(recommendationService, never()).recordVideoPublished("vid1");
+        verify(recommendationService, never()).recordVideoPublished("vid1", List.of("dance"));
     }
 }

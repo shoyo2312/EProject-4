@@ -26,6 +26,6 @@ public class VideoPublishedEventConsumer {
             return;
         }
 
-        recommendationService.recordVideoPublished(event.videoId());
+        recommendationService.recordVideoPublished(event.videoId(), event.tags());
     }
 }

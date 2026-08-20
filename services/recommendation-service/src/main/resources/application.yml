@@ -21,6 +21,9 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
+jwt:
+  secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
+
 springdoc:
   api-docs:
     path: /v3/api-docs
