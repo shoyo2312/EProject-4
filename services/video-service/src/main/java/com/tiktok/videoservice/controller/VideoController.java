@@ -2,7 +2,9 @@ package com.tiktok.videoservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
+import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.service.VideoService;
 import jakarta.validation.Valid;
@@ -19,6 +21,17 @@ import org.springframework.web.bind.annotation.*;
 public class VideoController {
 
     private final VideoService videoService;
+
+    /**
+     * Call before {@link #publish}: upload the file to the returned {@code uploadUrl} with a plain
+     * PUT, then send the returned {@code fileUrl} back as {@code rawFileUrl}.
+     */
+    @PostMapping("/upload-url")
+    public ApiResponse<UploadUrlResponse> createUploadUrl(
+            @AuthenticationPrincipal Long currentUserId,
+            @Valid @RequestBody UploadUrlRequest request) {
+        return ApiResponse.success(videoService.createUploadUrl(currentUserId, request));
+    }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)

@@ -1,30 +1,89 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
+import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.VideoRepository;
+import io.minio.GetPresignedObjectUrlArgs;
+import io.minio.MinioClient;
+import io.minio.http.Method;
 import lombok.RequiredArgsConstructor;
+import lombok.SneakyThrows;
 import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
 public class VideoServiceImpl implements VideoService {
 
+    /**
+     * Upload types accepted, and the extension each is stored under. Deliberately short: every
+     * entry is a format the transcode pipeline has to be able to read, so widening it is a
+     * media-worker decision, not a client one.
+     */
+    private static final Map<String, String> UPLOAD_EXTENSIONS = Map.of(
+            "video/mp4", "mp4",
+            "video/quicktime", "mov",
+            "video/webm", "webm");
+
     private final VideoRepository videoRepository;
     private final VideoMapper videoMapper;
     private final SpringDataWebProperties pageableProperties;
+    private final MinioClient minioClient;
+    private final MinioProperties minioProperties;
+
+    /**
+     * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
+     * once cannot land on the same object, and a key seen in storage says who put it there.
+     *
+     * <p>The returned {@code fileUrl} is an {@code s3://} URI rather than the presigned URL: the
+     * presigned one carries a signature that expires in minutes, and it is the raw location that
+     * gets stored on the Video and read by media-worker, possibly hours later.
+     *
+     * <p>ponytail: the presigned PUT pins neither content type nor size — S3 query-signing covers
+     * the key and expiry only, so a client can send anything to a key we handed out. media-worker
+     * is what actually reads the file and is where a real pipeline rejects it. Move to a POST
+     * policy (which can sign content-length-range and content-type) if uploads need refusing at
+     * the storage edge.
+     */
+    @Override
+    @SneakyThrows
+    public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
+        String extension = UPLOAD_EXTENSIONS.get(request.contentType().toLowerCase(Locale.ROOT));
+        if (extension == null) {
+            throw new UnsupportedUploadTypeException(request.contentType(), UPLOAD_EXTENSIONS.keySet());
+        }
+
+        String objectKey = "raw/%d/%s.%s".formatted(userId, Video.newId(), extension);
+        long expirySeconds = minioProperties.urlExpiry().toSeconds();
+
+        String uploadUrl = minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+                .method(Method.PUT)
+                .bucket(minioProperties.bucket())
+                .object(objectKey)
+                .expiry((int) expirySeconds, TimeUnit.SECONDS)
+                .build());
+
+        return new UploadUrlResponse(
+                uploadUrl, "s3://%s/%s".formatted(minioProperties.bucket(), objectKey), expirySeconds);
+    }
 
     @Override
     public VideoResponse publish(Long userId, CreateVideoRequest request) {
