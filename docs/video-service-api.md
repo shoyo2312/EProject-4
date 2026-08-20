@@ -85,7 +85,8 @@ Request (`CreateVideoRequest`):
   "title": "Tiêu đề",                                // bắt buộc, tối đa 150 ký tự, không được toàn khoảng trắng
   "description": "Mô tả",                             // optional, tối đa 2000 ký tự
   "rawFileUrl": "s3://video-media/raw/123456789012345/7312.mp4",  // bắt buộc, tối đa 500 ký tự, xem ràng buộc bên dưới
-  "visibility": "PUBLIC"                              // bắt buộc: PUBLIC | PRIVATE
+  "visibility": "PUBLIC",                             // bắt buộc: PUBLIC | PRIVATE
+  "tags": ["dance", "food"]                           // optional, tối đa 10 tag, mỗi tag tối đa 50 ký tự
 }
 ```
 
@@ -95,6 +96,8 @@ Request (`CreateVideoRequest`):
 - với `s3://`: phần authority là **tên bucket**, phải nằm trong danh sách bucket được cấu hình.
 
 Sai bất kỳ điều nào → `VALIDATION_ERROR` (400). Lý do chặn: URL này được backend (media-worker) tự đi tải về, nên một URL tuỳ ý sẽ biến server thành công cụ gọi ra ngoài hộ kẻ tấn công.
+
+`tags` được server **chuẩn hoá** trước khi lưu: lowercase, cắt khoảng trắng, bỏ dấu `#` đầu, bỏ tag rỗng, bỏ trùng, giữ nguyên thứ tự client gửi. Nên `["#Dance", " dance ", "Food"]` lưu thành `["dance", "food"]` — client đừng tự so sánh tag với chuỗi chưa chuẩn hoá. Quá 10 tag hoặc một tag quá 50 ký tự → `VALIDATION_ERROR` (400).
 
 Ngoài allow-list còn một ràng buộc nữa: object key phải nằm dưới `raw/{userId}/` của **chính tài khoản đang gọi** — đúng key mà mục 3.1 vừa cấp. Trỏ vào `raw/` của người khác (hoặc vào key không do mục 3.1 cấp, ví dụ file đã transcode) → `FOREIGN_UPLOAD` (400). Cứ dùng nguyên `fileUrl` nhận được, đừng ghép tay.
 
@@ -113,6 +116,7 @@ Response `data` → `VideoResponse`:
   "viewCount": 0,
   "likeCount": 0,
   "commentCount": 0,
+  "tags": ["dance", "food"],      // đã chuẩn hoá, có thể rỗng nhưng không bao giờ null
   "createdAt": "2026-08-12T10:00:00Z"
 }
 ```

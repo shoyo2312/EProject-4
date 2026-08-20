@@ -10,6 +10,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
+
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -28,7 +30,7 @@ class VideoPublishedEventConsumerTest {
     @Test
     void onMessage_newEvent_recordsPublish() throws Exception {
         VideoPublishedEventConsumer consumer = new VideoPublishedEventConsumer(recommendationService, inboxService, objectMapper);
-        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4");
+        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of());
         when(inboxService.markIfNew(event.eventId())).thenReturn(true);
 
         consumer.onMessage(objectMapper.writeValueAsString(event));
@@ -39,7 +41,7 @@ class VideoPublishedEventConsumerTest {
     @Test
     void onMessage_duplicateEvent_isSkipped() throws Exception {
         VideoPublishedEventConsumer consumer = new VideoPublishedEventConsumer(recommendationService, inboxService, objectMapper);
-        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4");
+        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of());
         when(inboxService.markIfNew(event.eventId())).thenReturn(false);
 
         consumer.onMessage(objectMapper.writeValueAsString(event));

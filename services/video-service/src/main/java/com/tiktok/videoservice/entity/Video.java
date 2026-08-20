@@ -15,6 +15,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Mongo has no multi-document transactions on this single-node deployment, so the
@@ -82,6 +83,15 @@ public class Video {
     private VideoStatus statusBeforeTakedown;
 
     private VideoVisibility visibility;
+
+    /**
+     * Normalised at publish time and indexed because tag affinity is the only content signal
+     * recommendation has: every other thing it knows about a video is engagement, which is the
+     * thing it is trying to predict. Multikey — Mongo indexes each element — so a lookup by one
+     * tag reads the index rather than the collection. Never null; an untagged video is empty.
+     */
+    @Indexed
+    private List<String> tags;
 
     private long viewCount;
 

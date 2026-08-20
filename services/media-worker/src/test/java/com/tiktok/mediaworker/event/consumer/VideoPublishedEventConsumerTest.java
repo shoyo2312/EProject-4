@@ -13,6 +13,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.verify;
@@ -32,7 +34,7 @@ class VideoPublishedEventConsumerTest {
     @Test
     void onMessage_transcodeSucceeds_publishesSuccessEvent() throws Exception {
         VideoPublishedEventConsumer consumer = new VideoPublishedEventConsumer(transcodeService, eventProducer, objectMapper);
-        VideoPublishedEvent published = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4");
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of());
 
         when(transcodeService.transcode("vid1", "s3://raw/vid1.mp4"))
                 .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/master.m3u8", 30));
@@ -52,7 +54,7 @@ class VideoPublishedEventConsumerTest {
     @Test
     void onMessage_transcodeThrows_publishesFailureEvent() throws Exception {
         VideoPublishedEventConsumer consumer = new VideoPublishedEventConsumer(transcodeService, eventProducer, objectMapper);
-        VideoPublishedEvent published = VideoPublishedEvent.of("vid2", 1L, "Broken video", "s3://raw/vid2.mp4");
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid2", 1L, "Broken video", "s3://raw/vid2.mp4", List.of());
 
         when(transcodeService.transcode(anyString(), anyString())).thenThrow(new RuntimeException("MinIO unreachable"));
 

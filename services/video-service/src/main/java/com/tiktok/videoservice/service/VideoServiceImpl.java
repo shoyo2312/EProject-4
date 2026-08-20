@@ -115,6 +115,7 @@ public class VideoServiceImpl implements VideoService {
                 .description(request.description())
                 .rawFileUrl(request.rawFileUrl())
                 .visibility(request.visibility())
+                .tags(normalizeTags(request.tags()))
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)
                 .likeCount(0)
@@ -123,6 +124,27 @@ public class VideoServiceImpl implements VideoService {
 
         Video saved = videoRepository.save(video);
         return videoMapper.toResponse(saved);
+    }
+
+    /**
+     * Tags are normalised here rather than trusted as typed, because everything downstream
+     * compares them as strings: a candidate generator matching a viewer's affinity against a
+     * video's tags treats "#Dance", "dance" and "Dance " as three unrelated interests, which
+     * splits the signal exactly where it is thinnest. Lowercased, trimmed, {@code #} stripped,
+     * blanks dropped, duplicates collapsed — and order kept, since it is the uploader's own
+     * ranking of what the video is about.
+     */
+    private List<String> normalizeTags(List<String> tags) {
+        if (tags == null) {
+            return List.of();
+        }
+
+        return tags.stream()
+                .map(tag -> tag.strip().toLowerCase(Locale.ROOT))
+                .map(tag -> tag.startsWith("#") ? tag.substring(1).strip() : tag)
+                .filter(tag -> !tag.isEmpty())
+                .distinct()
+                .toList();
     }
 
     /**

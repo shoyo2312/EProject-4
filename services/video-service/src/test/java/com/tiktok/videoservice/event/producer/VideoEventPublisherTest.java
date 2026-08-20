@@ -81,7 +81,9 @@ class VideoEventPublisherTest {
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.topic()).isEqualTo("video.video-events");
         assertThat(record.key()).isEqualTo(video.getId());
-        assertThat(record.value()).contains(video.getId()).contains(video.getTitle());
+        // tags ride on the event because recommendation-service has no read path into this
+        // service's Mongo, and they are the only content feature it gets.
+        assertThat(record.value()).contains(video.getId()).contains(video.getTitle()).contains("dance");
 
         assertThat(video.getEventPublishedAt()).isNotNull();
         verify(videoRepository).updateEventPublished(video);
@@ -165,6 +167,7 @@ class VideoEventPublisherTest {
                 .title("My video")
                 .rawFileUrl("s3://video-media/raw/1.mp4")
                 .visibility(VideoVisibility.PUBLIC)
+                .tags(List.of("dance"))
                 .status(VideoStatus.PUBLISHED)
                 .build();
     }

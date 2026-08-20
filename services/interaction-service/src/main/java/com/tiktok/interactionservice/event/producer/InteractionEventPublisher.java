@@ -5,6 +5,7 @@ import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.event.interaction.VideoViewedEvent;
+import com.tiktok.event.interaction.VideoWatchEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -25,6 +26,7 @@ public class InteractionEventPublisher {
     private static final String COMMENT_TOPIC = "interaction.comment-events";
     private static final String SHARE_TOPIC = "interaction.share-events";
     private static final String VIEW_TOPIC = "interaction.view-events";
+    private static final String WATCH_TOPIC = "interaction.watch-events";
 
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
@@ -46,6 +48,17 @@ public class InteractionEventPublisher {
     public void publishView(Long videoId, Long userId) {
         VideoViewedEvent event = VideoViewedEvent.of(videoId, userId);
         kafkaTemplate.send(VIEW_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event));
+    }
+
+    /**
+     * Every session, unlike {@link #publishView} — see ViewService.recordWatch for why the label
+     * stream and the counter stream cannot be the same one. Keyed by video so one video's
+     * sessions stay ordered within a partition, matching the other four topics.
+     */
+    @SneakyThrows
+    public void publishWatch(Long videoId, Long userId, long watchedMs, long durationMs, boolean completed) {
+        VideoWatchEvent event = VideoWatchEvent.of(videoId, userId, watchedMs, durationMs, completed);
+        kafkaTemplate.send(WATCH_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event));
     }
 
     @SneakyThrows

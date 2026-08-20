@@ -88,7 +88,7 @@ class VideoControllerTest {
 
     @Test
     void publish_withoutToken_isRejected() throws Exception {
-        CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC);
+        CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, List.of());
 
         mockMvc.perform(post("/api/v1/videos")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -100,9 +100,9 @@ class VideoControllerTest {
 
     @Test
     void publish_withValidToken_createsVideo() throws Exception {
-        CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC);
+        CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, List.of());
         VideoResponse response = new VideoResponse("v1", 42L, "title", "desc", null, null, null,
-                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0, Instant.now());
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0, List.of(), Instant.now());
         when(videoService.publish(eq(42L), any())).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/videos")
@@ -119,7 +119,7 @@ class VideoControllerTest {
 
     @Test
     void publish_withBlankTitle_returnsValidationError() throws Exception {
-        CreateVideoRequest invalidRequest = new CreateVideoRequest("", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC);
+        CreateVideoRequest invalidRequest = new CreateVideoRequest("", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, List.of());
 
         mockMvc.perform(post("/api/v1/videos")
                         .header("Authorization", "Bearer " + tokenFor(1L))
@@ -145,7 +145,7 @@ class VideoControllerTest {
             "file:///etc/passwd"
     })
     void publish_rawFileUrlOffOurStorage_returnsValidationError(String rawFileUrl) throws Exception {
-        CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC);
+        CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC, List.of());
 
         mockMvc.perform(post("/api/v1/videos")
                         .header("Authorization", "Bearer " + tokenFor(1L))
@@ -160,9 +160,9 @@ class VideoControllerTest {
     @ParameterizedTest
     @ValueSource(strings = {"s3://video-media/raw/1.mp4", "https://cdn.example.com/raw/1.mp4"})
     void publish_rawFileUrlOnOurStorage_isAccepted(String rawFileUrl) throws Exception {
-        CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC);
+        CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC, List.of());
         VideoResponse response = new VideoResponse("v1", 1L, "title", "desc", null, null, null,
-                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0, Instant.now());
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0, List.of(), Instant.now());
         when(videoService.publish(eq(1L), any())).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/videos")

@@ -16,6 +16,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
@@ -51,7 +53,7 @@ class VideoIndexingConsumerTest {
 
     @Test
     void onMessage_indexesVideoThenAppliesTranscoding() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("v1", 1L, "My first video", "s3://raw/1.mp4");
+        VideoPublishedEvent published = VideoPublishedEvent.of("v1", 1L, "My first video", "s3://raw/1.mp4", List.of());
         videoPublishedEventConsumer.onMessage(objectMapper.writeValueAsString(published));
 
         VideoDocument indexed = videoDocumentRepository.findById("v1").orElseThrow();
@@ -68,7 +70,7 @@ class VideoIndexingConsumerTest {
 
     @Test
     void onMessage_replay_isNoOp() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("v2", 1L, "title", "s3://raw/2.mp4");
+        VideoPublishedEvent published = VideoPublishedEvent.of("v2", 1L, "title", "s3://raw/2.mp4", List.of());
         String payload = objectMapper.writeValueAsString(published);
 
         videoPublishedEventConsumer.onMessage(payload);

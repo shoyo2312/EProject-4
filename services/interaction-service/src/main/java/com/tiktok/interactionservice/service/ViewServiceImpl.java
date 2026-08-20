@@ -1,7 +1,9 @@
 package com.tiktok.interactionservice.service;
 
 import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
+import com.tiktok.interactionservice.dto.request.WatchRequest;
 import com.tiktok.interactionservice.dto.response.ViewResponse;
+import com.tiktok.interactionservice.dto.response.WatchResponse;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.InteractionConflictException;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
@@ -25,6 +27,13 @@ public class ViewServiceImpl implements ViewService {
      */
     private static final int DEDUP_WINDOW_SECONDS = (int) Duration.ofDays(1).toSeconds();
 
+    /**
+     * What counts as watching to the end. Not 1.0: players stop reporting a frame or two early,
+     * and a viewer who sat through 95% did not abandon the video — treating them as a negative
+     * would teach the ranker that finishing is rare when it is not.
+     */
+    private static final double COMPLETION_RATIO = 0.9;
+
     private final ViewByVideoRepository viewByVideoRepository;
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
@@ -42,6 +51,20 @@ public class ViewServiceImpl implements ViewService {
         }
 
         return new ViewResponse(videoId, counted, counterCacheService.getCounts(videoId).viewCount());
+    }
+
+    @Override
+    public WatchResponse recordWatch(Long videoId, Long currentUserId, WatchRequest request) {
+        // Clamped because watchedMs comes from the client and nothing stops it claiming an hour on
+        // a fifteen-second video. Left unclamped that is not merely a wrong row, it is the most
+        // attractive row in the training set — the label is a ratio, and the highest ratios are
+        // what a ranker learns hardest from.
+        long watchedMs = Math.min(request.watchedMs(), request.durationMs());
+        boolean completed = watchedMs >= request.durationMs() * COMPLETION_RATIO;
+
+        eventPublisher.publishWatch(videoId, currentUserId, watchedMs, request.durationMs(), completed);
+
+        return new WatchResponse(videoId, watchedMs, completed);
     }
 
     /**
