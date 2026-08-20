@@ -23,6 +23,7 @@ import java.util.concurrent.CompletableFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -120,6 +121,41 @@ class VideoEventPublisherTest {
         assertThat(failing.getEventPublishedAt()).isNull();
         assertThat(succeeding.getEventPublishedAt()).isNotNull();
         verify(videoRepository).updateEventPublished(succeeding);
+    }
+
+    /**
+     * The duplicate this guards against is routine, not exotic: an ack that times out leaves the
+     * row unmarked even though the broker took the record, and every replica polls. Consumers
+     * deduplicate on eventId, so a fresh id on the retry is a second published video as far as
+     * they can tell — recommendation-service scores it twice, analytics stores a second row.
+     */
+    @Test
+    void publishPending_resendingTheSameVideo_reusesTheSameEventId() {
+        Video video = pendingVideo();
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(video));
+        CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
+        failed.completeExceptionally(new RuntimeException("no ack in time"));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(failed, CompletableFuture.completedFuture(null));
+
+        publisher.publishPending();
+        publisher.publishPending();
+
+        ArgumentCaptor<ProducerRecord<String, String>> captor =
+                ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaOperations, times(2)).send(captor.capture());
+
+        assertThat(eventIdOf(captor.getAllValues().get(0)))
+                .isEqualTo(eventIdOf(captor.getAllValues().get(1)));
+    }
+
+    private String eventIdOf(ProducerRecord<String, String> record) {
+        try {
+            return objectMapper.readTree(record.value()).get("eventId").asText();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private Video pendingVideo() {

@@ -9,6 +9,7 @@ import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
@@ -25,6 +26,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -34,6 +36,13 @@ import java.util.concurrent.TimeUnit;
 @Service
 @RequiredArgsConstructor
 public class VideoServiceImpl implements VideoService {
+
+    /**
+     * First segment of every upload key, with the uploader's id as the second. Both halves are
+     * load-bearing: {@link #requireOwnUpload} reads the id back out at publish time, and the
+     * bucket's lifecycle rule expires abandoned uploads by matching this prefix.
+     */
+    private static final String UPLOAD_PREFIX = "raw";
 
     /**
      * Upload types accepted, and the extension each is stored under. Deliberately short: every
@@ -72,7 +81,7 @@ public class VideoServiceImpl implements VideoService {
             throw new UnsupportedUploadTypeException(request.contentType(), UPLOAD_EXTENSIONS.keySet());
         }
 
-        String objectKey = "raw/%d/%s.%s".formatted(userId, Video.newId(), extension);
+        String objectKey = "%s/%d/%s.%s".formatted(UPLOAD_PREFIX, userId, Video.newId(), extension);
         long expirySeconds = minioProperties.urlExpiry().toSeconds();
 
         String uploadUrl;
@@ -97,6 +106,8 @@ public class VideoServiceImpl implements VideoService {
 
     @Override
     public VideoResponse publish(Long userId, CreateVideoRequest request) {
+        requireOwnUpload(userId, request.rawFileUrl());
+
         Video video = Video.builder()
                 .id(Video.newId())
                 .userId(userId)
@@ -112,6 +123,37 @@ public class VideoServiceImpl implements VideoService {
 
         Video saved = videoRepository.save(video);
         return videoMapper.toResponse(saved);
+    }
+
+    /**
+     * {@code @ValidMediaUrl} answers "does this point at our storage" — scheme, host, bucket. It
+     * says nothing about <em>whose</em> file it is, and every upload key already carries that:
+     * createUploadUrl above issues {@code raw/{userId}/...} and nothing else can write there.
+     * Without this check, publishing someone else's raw key republishes their video under the
+     * caller's name, and the transcode pipeline does the rest.
+     *
+     * <p>Matched on the segment after {@code raw/} rather than on a fixed prefix, because the
+     * same key reaches this method as an {@code s3://bucket/key} URI and as an {@code https} CDN
+     * URL, which put a different number of segments in front of it. A URL with no {@code raw}
+     * segment at all is rejected too: it is not something this service ever handed out.
+     */
+    private void requireOwnUpload(Long userId, String rawFileUrl) {
+        String path = URI.create(rawFileUrl).getPath();
+        if (path == null) {
+            throw new ForeignUploadException();
+        }
+
+        String[] segments = path.split("/");
+        for (int i = 0; i < segments.length - 1; i++) {
+            if (UPLOAD_PREFIX.equals(segments[i])) {
+                if (!String.valueOf(userId).equals(segments[i + 1])) {
+                    throw new ForeignUploadException();
+                }
+                return;
+            }
+        }
+
+        throw new ForeignUploadException();
     }
 
     @Override

@@ -127,7 +127,7 @@ class VideoTranscodedEventConsumerTest {
                 .status(VideoStatus.PROCESSING)
                 .build());
         video.markTakenDown();
-        videoRepository.updateStatus(video);
+        videoRepository.updateStatus(video, VideoStatus.PROCESSING);
 
         VideoTranscodedEvent event = VideoTranscodedEvent.success(
                 video.getId(), "http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
@@ -154,7 +154,7 @@ class VideoTranscodedEventConsumerTest {
                 .status(VideoStatus.PROCESSING)
                 .build());
         video.markTakenDown();
-        videoRepository.updateStatus(video);
+        videoRepository.updateStatus(video, VideoStatus.PROCESSING);
 
         VideoTranscodedEvent event = VideoTranscodedEvent.failure(video.getId(), "boom");
         consumer.onMessage(objectMapper.writeValueAsString(event));

@@ -2,6 +2,7 @@ package com.tiktok.videoservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoTranscodedEvent;
+import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.repository.VideoRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -14,7 +15,10 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class VideoTranscodedEventConsumer {
 
+    private static final String EVENT = "VideoTranscodedEvent";
+
     private final IdempotentEventProcessor idempotentEventProcessor;
+    private final VideoStateUpdater videoStateUpdater;
     private final VideoRepository videoRepository;
     private final ObjectMapper objectMapper;
 
@@ -30,20 +34,15 @@ public class VideoTranscodedEventConsumer {
     private void apply(VideoTranscodedEvent event) {
         if (!event.success()) {
             log.warn("VideoTranscodedEvent failure for videoId={}: {}", event.videoId(), event.failureReason());
+            videoStateUpdater.apply(event.videoId(), Video::markFailed, videoRepository::updateStatus, EVENT);
+            return;
         }
 
-        // Deleted videos are skipped rather than updated. Transcoding takes far longer than the
-        // window in which an owner can delete, so the event routinely comes back for a video that
-        // is already gone; writing the result anyway leaves a document that is both soft-deleted
-        // and PUBLISHED, a combination no read path expects and nothing later corrects.
-        videoRepository.findByIdAndDeletedAtIsNull(event.videoId()).ifPresentOrElse(video -> {
-            if (event.success()) {
-                video.markPublished(event.thumbnailUrl(), event.hlsUrl(), event.durationSeconds());
-                videoRepository.updateTranscodeResult(video);
-            } else {
-                video.markFailed();
-                videoRepository.updateStatus(video);
-            }
-        }, () -> log.warn("VideoTranscodedEvent for unknown or deleted videoId={}", event.videoId()));
+        // Deleted videos and takedowns landing mid-transcode are both handled by the updater; see
+        // VideoStateUpdater for why the result is re-read rather than written twice.
+        videoStateUpdater.apply(event.videoId(),
+                video -> video.markPublished(event.thumbnailUrl(), event.hlsUrl(), event.durationSeconds()),
+                videoRepository::updateTranscodeResult,
+                EVENT);
     }
 }

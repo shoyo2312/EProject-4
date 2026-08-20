@@ -41,7 +41,16 @@ import java.time.Instant;
         // it rather than sorting the match set in memory, which a prolific uploader would
         // eventually grow past Mongo's 32MB in-memory sort limit.
         @CompoundIndex(name = "user_videos_idx",
-                def = "{'userId': 1, 'deletedAt': 1, 'status': 1, 'visibility': 1, 'createdAt': -1}")
+                def = "{'userId': 1, 'deletedAt': 1, 'status': 1, 'visibility': 1, 'createdAt': -1}"),
+        // The outbox poll runs every five seconds and matches on eventPublishedAt and deletedAt,
+        // neither of which is a prefix of the two indexes above — so without this it is a full
+        // collection scan plus an in-memory sort, on the one collection that only ever grows, and
+        // nothing about it degrades visibly until it is already far too slow. Equality fields
+        // lead, then the sort field, so Mongo takes the ordering from the index instead of sorting
+        // the match set. A partial index over the unpublished rows alone would be smaller still,
+        // but partialFilterExpression accepts neither an equality against null nor $exists: false.
+        @CompoundIndex(name = "outbox_idx",
+                def = "{'eventPublishedAt': 1, 'deletedAt': 1, 'createdAt': 1}")
 })
 public class Video {
 

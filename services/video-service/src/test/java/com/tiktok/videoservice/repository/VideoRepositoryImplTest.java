@@ -59,7 +59,7 @@ class VideoRepositoryImplTest {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PROCESSING, 5);
 
         stale.markPublished("http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
-        videoRepository.updateTranscodeResult(stale);
+        assertThat(videoRepository.updateTranscodeResult(stale, VideoStatus.PROCESSING)).isTrue();
 
         Video after = reload(stale);
         assertThat(after.getLikeCount()).isEqualTo(5);
@@ -74,7 +74,7 @@ class VideoRepositoryImplTest {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PROCESSING, 3);
 
         stale.markFailed();
-        videoRepository.updateStatus(stale);
+        assertThat(videoRepository.updateStatus(stale, VideoStatus.PROCESSING)).isTrue();
 
         Video after = reload(stale);
         assertThat(after.getLikeCount()).isEqualTo(3);
@@ -86,7 +86,7 @@ class VideoRepositoryImplTest {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PUBLISHED, 7);
 
         stale.markTakenDown();
-        videoRepository.updateStatus(stale);
+        assertThat(videoRepository.updateStatus(stale, VideoStatus.PUBLISHED)).isTrue();
 
         Video after = reload(stale);
         assertThat(after.getLikeCount()).isEqualTo(7);
@@ -98,15 +98,43 @@ class VideoRepositoryImplTest {
     void updateStatus_moderation_restoreClearsStatusBeforeTakedown() {
         Video video = save(VideoStatus.PUBLISHED);
         video.markTakenDown();
-        videoRepository.updateStatus(video);
+        videoRepository.updateStatus(video, VideoStatus.PUBLISHED);
 
         Video takenDown = reload(video);
         takenDown.markRestored();
-        videoRepository.updateStatus(takenDown);
+        videoRepository.updateStatus(takenDown, VideoStatus.TAKEN_DOWN);
 
         Video after = reload(video);
         assertThat(after.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
         assertThat(after.getStatusBeforeTakedown()).isNull();
+    }
+
+    /**
+     * The interleaving that costs a takedown: the transcode consumer reads a PROCESSING video, a
+     * moderator takes it down while the transcode is still running, and the consumer then writes
+     * PUBLISHED from what it read minutes ago. Unconditional, that write wins by arriving last
+     * and the video is back on the feed with nothing recording it was ever removed.
+     */
+    @Test
+    void updateTranscodeResult_whenAModeratorGotThereFirst_doesNotLand() {
+        Video video = save(VideoStatus.PROCESSING);
+        Video staleReadByTranscode = reload(video);
+
+        Video readByModerator = reload(video);
+        readByModerator.markTakenDown();
+        assertThat(videoRepository.updateStatus(readByModerator, VideoStatus.PROCESSING)).isTrue();
+
+        staleReadByTranscode.markPublished("http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
+
+        assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, VideoStatus.PROCESSING))
+                .as("the status moved after it was read, so this write must be refused")
+                .isFalse();
+
+        Video after = reload(video);
+        assertThat(after.getStatus()).isEqualTo(VideoStatus.TAKEN_DOWN);
+        assertThat(after.getHlsUrl())
+                .as("a refused write must leave every field alone, not only status")
+                .isNull();
     }
 
     @Test
@@ -142,7 +170,7 @@ class VideoRepositoryImplTest {
         var before = reload(video).getUpdatedAt();
 
         video.markFailed();
-        videoRepository.updateStatus(video);
+        videoRepository.updateStatus(video, VideoStatus.PROCESSING);
 
         // @LastModifiedDate auditing does not run for MongoTemplate updates, so the timestamp
         // is written by hand — without that it would silently freeze at creation time.
