@@ -166,6 +166,25 @@ Quy tắc hiển thị:
 
 Lỗi: `VIDEO_NOT_FOUND` (404) — dùng chung cho **cả 4 trường hợp**: id không tồn tại, video đã bị xoá, video `PRIVATE` của người khác, hoặc video chưa/không còn `PUBLISHED` (đang `PROCESSING`, `FAILED`, hoặc bị `TAKEN_DOWN`). Server **cố tình** không phân biệt để không lộ sự tồn tại của video riêng tư. Hệ quả phía client: **404 ở đây không chứng minh video không tồn tại** — nếu đang poll sau khi upload mà nhận 404, khả năng cao là quên gửi token chứ không phải video biến mất.
 
+### 3.4b `GET /batch?ids=…`
+Nạp **một danh sách id đã có sẵn** trong đúng một request. Sinh ra cho trường hợp client cầm một bảng xếp hạng mà không cầm video: `GET /api/v1/recommendations/feed` chỉ trả `videoId` + `score`, vì recommendation-service không có đường đọc vào Mongo của video-service và không được phép có.
+
+Không bắt buộc token, nhưng gửi nếu đã đăng nhập — quy tắc hiển thị y hệt mục 3.4.
+
+```
+GET /api/v1/videos/batch?ids=7312458901234567,7312458901234568
+```
+
+Trả `200 OK`, `data` → `VideoResponse[]`.
+
+Ba điều phải biết, cả ba đều là chỗ dễ sai:
+
+1. **Thứ tự trả về = thứ tự hỏi.** Danh sách id chính là thứ hạng; trả theo thứ tự Mongo sẽ vứt bỏ thứ hạng đó **mà không có triệu chứng gì** — feed vẫn hiện, chỉ là hết xếp hạng.
+2. **Kết quả có thể ngắn hơn đầu vào.** Id không giải ra thứ người gọi được xem — đã xoá, đang `PROCESSING`, `PRIVATE` của người khác, hoặc không tồn tại — **bị bỏ im lặng**, không phải lỗi. Feed gọi tên một video vừa bị xoá vài giây trước là chuyện bình thường: `VideoDeletedEvent` mất khoảng 5 giây để lan.
+3. **Tối đa 50 id** (cùng trần với `size` ở mục 3.3). Id trùng được lọc trước khi đếm, nên nhồi một id lặp lại không ăn hết hạn mức.
+
+Vì sao không gọi `GET /{videoId}` 20 lần: gateway giới hạn **20 req/s theo IP**, mà mọi người xem đứng sau cùng một proxy thì dùng chung một IP. Một lần cuộn feed là hết sạch hạn mức.
+
 ### 3.5 `GET /users/{userId}`
 Danh sách video của 1 user. Không bắt buộc token. **Phân trang bằng `?page=0&size=20` (offset), KHÁC feed ở mục 3.3** — đây là lưới hữu hạn, người dùng nhảy trang được và chủ tài khoản có nhu cầu biết tổng số, nên `Page` vẫn đúng chỗ ở đây. Trả `200 OK`, `data` → `Page<VideoResponse>`.
 

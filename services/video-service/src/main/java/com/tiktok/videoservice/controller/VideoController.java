@@ -15,6 +15,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/v1/videos")
 @RequiredArgsConstructor
@@ -58,6 +60,21 @@ public class VideoController {
             @AuthenticationPrincipal Long currentUserId,
             @PathVariable String videoId) {
         return ApiResponse.success(videoService.getById(currentUserId, videoId));
+    }
+
+    /**
+     * Hydrates a list of ids in one hop, in the order given — for callers that already hold a
+     * ranking and only need the videos behind it (recommendation-service's feed returns ids and
+     * no more). Literal path, so it is matched ahead of {@code /{videoId}} above.
+     *
+     * <p>Ids that resolve to nothing the caller may see are absent from the response rather than
+     * failing it, so a feed naming a video deleted seconds ago still renders.
+     */
+    @GetMapping("/batch")
+    public ApiResponse<List<VideoResponse>> getByIds(
+            @AuthenticationPrincipal Long currentUserId,
+            @RequestParam List<String> ids) {
+        return ApiResponse.success(videoService.getByIds(currentUserId, ids));
     }
 
     @GetMapping("/users/{userId}")

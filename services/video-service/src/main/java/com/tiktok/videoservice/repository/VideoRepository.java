@@ -7,12 +7,21 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 public interface VideoRepository extends MongoRepository<Video, String>, VideoRepositoryCustom {
 
     Optional<Video> findByIdAndDeletedAtIsNull(String id);
+
+    /**
+     * Batch counterpart of the single lookup above, for hydrating a list of ids the caller already
+     * has — recommendation-service's feed returns ids and nothing else. Ids that do not resolve are
+     * simply absent from the result: a feed that named a video deleted a moment ago is the normal
+     * case, not an error.
+     */
+    List<Video> findByIdInAndDeletedAtIsNull(Collection<String> ids);
 
     /** Owner's own listing: everything they uploaded, whatever state it is in. */
     Page<Video> findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(Long userId, Pageable pageable);

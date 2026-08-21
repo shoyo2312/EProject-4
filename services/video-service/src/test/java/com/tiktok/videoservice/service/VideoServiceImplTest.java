@@ -225,6 +225,54 @@ class VideoServiceImplTest {
         assertThat(fetched.id()).isEqualTo(video.id());
     }
 
+    /**
+     * The ranking arrives as the id order and has to survive the round trip. Mongo answers an
+     * $in query in whatever order it likes, so a straight pass-through of the query result would
+     * hand back a feed that looks ranked and is not — a failure with no visible symptom.
+     */
+    @Test
+    void getByIds_answersInTheOrderAsked() {
+        VideoResponse first = publishedPublic(1L, "s3://video-media/raw/1/b1.mp4");
+        VideoResponse second = publishedPublic(1L, "s3://video-media/raw/1/b2.mp4");
+        VideoResponse third = publishedPublic(1L, "s3://video-media/raw/1/b3.mp4");
+
+        List<VideoResponse> hydrated = videoService.getByIds(
+                null, List.of(third.id(), first.id(), second.id()));
+
+        assertThat(hydrated).extracting(VideoResponse::id)
+                .containsExactly(third.id(), first.id(), second.id());
+    }
+
+    /**
+     * A feed can name a video that was deleted or hidden since it was ranked — the deletion event
+     * takes seconds to propagate — so the caller gets a shorter list, not an error.
+     */
+    @Test
+    void getByIds_dropsWhatTheCallerMayNotSee() {
+        VideoResponse visible = publishedPublic(1L, "s3://video-media/raw/1/b4.mp4");
+        VideoResponse stillProcessing = videoService.publish(1L,
+                new CreateVideoRequest("Processing", null, "s3://video-media/raw/1/b5.mp4", VideoVisibility.PUBLIC, List.of()));
+        VideoResponse someoneElsesPrivate = videoService.publish(2L,
+                new CreateVideoRequest("Private", null, "s3://video-media/raw/2/b6.mp4", VideoVisibility.PRIVATE, List.of()));
+        markPublished(someoneElsesPrivate.id());
+        VideoResponse deleted = publishedPublic(1L, "s3://video-media/raw/1/b7.mp4");
+        videoService.delete(1L, deleted.id());
+
+        List<VideoResponse> hydrated = videoService.getByIds(1L, List.of(
+                stillProcessing.id(), visible.id(), someoneElsesPrivate.id(), deleted.id(), "no-such-id"));
+
+        // stillProcessing survives: it is the caller's own, and an owner sees their whole shelf.
+        assertThat(hydrated).extracting(VideoResponse::id)
+                .containsExactly(stillProcessing.id(), visible.id());
+    }
+
+    private VideoResponse publishedPublic(Long userId, String rawFileUrl) {
+        VideoResponse video = videoService.publish(userId,
+                new CreateVideoRequest("Batch", null, rawFileUrl, VideoVisibility.PUBLIC, List.of()));
+        markPublished(video.id());
+        return video;
+    }
+
     @Test
     void getFeed_onlyReturnsPublishedPublicVideos() {
         VideoResponse processing = videoService.publish(1L,

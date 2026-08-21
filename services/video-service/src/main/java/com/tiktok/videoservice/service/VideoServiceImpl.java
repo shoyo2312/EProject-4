@@ -31,8 +31,10 @@ import org.springframework.stereotype.Service;
 import java.net.URI;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -211,6 +213,45 @@ public class VideoServiceImpl implements VideoService {
         }
 
         return videoMapper.toResponse(video);
+    }
+
+    /**
+     * Ordered by the request, not by the database. The caller's order is a ranking — this is what
+     * recommendation-service's feed hands back — and returning documents in Mongo's order would
+     * throw it away silently, leaving a feed that looks ranked and is not.
+     *
+     * <p>Capped at the same page maximum as every other listing: the id list arrives in a query
+     * string, and nothing else stops a caller asking for ten thousand documents in one hop.
+     */
+    @Override
+    public List<VideoResponse> getByIds(Long requesterId, List<String> videoIds) {
+        if (videoIds == null || videoIds.isEmpty()) {
+            return List.of();
+        }
+
+        // Distinct first, so a list padded with one repeated id cannot use up the cap.
+        List<String> wanted = videoIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .limit(maxBatchSize())
+                .toList();
+        if (wanted.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, Video> found = videoRepository.findByIdInAndDeletedAtIsNull(wanted).stream()
+                .filter(video -> isOwner(requesterId, video) || isPubliclyVisible(video))
+                .collect(Collectors.toMap(Video::getId, video -> video));
+
+        return wanted.stream()
+                .map(found::get)
+                .filter(Objects::nonNull)
+                .map(videoMapper::toResponse)
+                .toList();
+    }
+
+    private int maxBatchSize() {
+        return pageableProperties.getPageable().getMaxPageSize();
     }
 
     /**
