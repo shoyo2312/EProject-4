@@ -8,6 +8,8 @@ import com.tiktok.videoservice.dto.response.VideoResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.util.List;
+
 public interface VideoService {
 
     /**
@@ -20,6 +22,13 @@ public interface VideoService {
     VideoResponse publish(Long userId, CreateVideoRequest request);
 
     VideoResponse getById(Long requesterId, String videoId);
+
+    /**
+     * The same visibility rule as {@link #getById}, applied to a list, and answering in the order
+     * asked. Ids that do not resolve — deleted, still processing, someone else's private video —
+     * are dropped rather than reported, so the caller gets a shorter list instead of a failure.
+     */
+    List<VideoResponse> getByIds(Long requesterId, List<String> videoIds);
 
     /**
      * @param cursor the previous page's {@code nextCursor}, or null to start at the newest video

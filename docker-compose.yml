@@ -356,6 +356,34 @@ services:
       - tiktok-network
 
   # ─────────────────────────────────────────────────────────────────
+  # rank-service (LightGBM feed ranker — Python)
+  # ─────────────────────────────────────────────────────────────────
+
+  # No published port and no auth: recommendation-service reaches it by service name over this
+  # network, and nothing outside should be able to reach it at all. It is also not routed at the
+  # gateway. If you need to poke at it by hand, use `docker compose exec` rather than adding a
+  # port mapping.
+  #
+  # The model directory is a bind mount so `python train.py` on the host produces a file this
+  # container can load with POST /reload -- no rebuild, no restart. Empty until the first
+  # training run, which is fine: with no model the service answers with no scores and
+  # recommendation-service falls back to its own ordering.
+  rank-service:
+    build: ./services/rank-service
+    container_name: tt-rank-service
+    environment:
+      MODEL_PATH: /app/model/model.txt
+    volumes:
+      - ./services/rank-service/model:/app/model
+    healthcheck:
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8098/health')\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tiktok-network
+
+  # ─────────────────────────────────────────────────────────────────
   # MinIO (Object Storage — Videos, Images)
   # ─────────────────────────────────────────────────────────────────
 

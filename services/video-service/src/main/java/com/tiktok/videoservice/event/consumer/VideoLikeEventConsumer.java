@@ -3,6 +3,7 @@ package com.tiktok.videoservice.event.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -45,7 +46,12 @@ public class VideoLikeEventConsumer {
         // fresh as the last event it saw, so likes keep arriving for a video its owner has
         // already removed. Counting them moves a number nothing will ever display and that no
         // later event corrects — the same reason VideoTranscodedEventConsumer skips deleted ids.
-        Criteria target = where("_id").is(String.valueOf(event.videoId())).and("deletedAt").is(null);
+        // TAKEN_DOWN alongside deletedAt: a moderated video is off every read path too, so likes
+        // still arriving are stale clients, and the count they build stays invisible until a
+        // restore puts the video back showing a number nobody can account for.
+        Criteria target = where("_id").is(String.valueOf(event.videoId()))
+                .and("deletedAt").is(null)
+                .and("status").ne(VideoStatus.TAKEN_DOWN);
 
         // An unlike is only allowed to remove a like that is actually counted here. $inc has no
         // floor, and the events that reach it are not guaranteed to pair up: two partitions can

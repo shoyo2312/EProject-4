@@ -9,6 +9,7 @@ import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import com.tiktok.videoservice.exception.AlreadyPublishedException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
@@ -24,13 +25,16 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -76,7 +80,7 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
-        String extension = UPLOAD_EXTENSIONS.get(request.contentType().toLowerCase(Locale.ROOT));
+        String extension = UPLOAD_EXTENSIONS.get(mediaType(request.contentType()));
         if (extension == null) {
             throw new UnsupportedUploadTypeException(request.contentType(), UPLOAD_EXTENSIONS.keySet());
         }
@@ -115,14 +119,52 @@ public class VideoServiceImpl implements VideoService {
                 .description(request.description())
                 .rawFileUrl(request.rawFileUrl())
                 .visibility(request.visibility())
+                .tags(normalizeTags(request.tags()))
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)
                 .likeCount(0)
                 .commentCount(0)
                 .build();
 
-        Video saved = videoRepository.save(video);
-        return videoMapper.toResponse(saved);
+        try {
+            return videoMapper.toResponse(videoRepository.save(video));
+        } catch (DuplicateKeyException e) {
+            // raw_file_idx. The only unique index on this collection besides _id, and _id is a
+            // fresh Snowflake generated a few lines above.
+            throw new AlreadyPublishedException();
+        }
+    }
+
+    /**
+     * A media type may carry parameters — {@code video/mp4; charset=utf-8} is the same type as
+     * {@code video/mp4}, and rejecting it with a 400 tells the client its file is unsupported
+     * when the type is one we accept.
+     */
+    private String mediaType(String contentType) {
+        int parameters = contentType.indexOf(';');
+        String type = parameters < 0 ? contentType : contentType.substring(0, parameters);
+        return type.strip().toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Tags are normalised here rather than trusted as typed, because everything downstream
+     * compares them as strings: a candidate generator matching a viewer's affinity against a
+     * video's tags treats "#Dance", "dance" and "Dance " as three unrelated interests, which
+     * splits the signal exactly where it is thinnest. Lowercased, trimmed, {@code #} stripped,
+     * blanks dropped, duplicates collapsed — and order kept, since it is the uploader's own
+     * ranking of what the video is about.
+     */
+    private List<String> normalizeTags(List<String> tags) {
+        if (tags == null) {
+            return List.of();
+        }
+
+        return tags.stream()
+                .map(tag -> tag.strip().toLowerCase(Locale.ROOT))
+                .map(tag -> tag.startsWith("#") ? tag.substring(1).strip() : tag)
+                .filter(tag -> !tag.isEmpty())
+                .distinct()
+                .toList();
     }
 
     /**
@@ -138,7 +180,12 @@ public class VideoServiceImpl implements VideoService {
      * segment at all is rejected too: it is not something this service ever handed out.
      */
     private void requireOwnUpload(Long userId, String rawFileUrl) {
-        String path = URI.create(rawFileUrl).getPath();
+        // normalize() before reading segments, because java.net.URI does not resolve dot
+        // segments on its own and every HTTP client downstream does. Without it,
+        // ".../raw/{attacker}/../{victim}/file.mp4" satisfies the check below on the segment
+        // after the first "raw" and then addresses the victim's object the moment anything
+        // fetches it.
+        String path = URI.create(rawFileUrl).normalize().getPath();
         if (path == null) {
             throw new ForeignUploadException();
         }
@@ -166,6 +213,45 @@ public class VideoServiceImpl implements VideoService {
         }
 
         return videoMapper.toResponse(video);
+    }
+
+    /**
+     * Ordered by the request, not by the database. The caller's order is a ranking — this is what
+     * recommendation-service's feed hands back — and returning documents in Mongo's order would
+     * throw it away silently, leaving a feed that looks ranked and is not.
+     *
+     * <p>Capped at the same page maximum as every other listing: the id list arrives in a query
+     * string, and nothing else stops a caller asking for ten thousand documents in one hop.
+     */
+    @Override
+    public List<VideoResponse> getByIds(Long requesterId, List<String> videoIds) {
+        if (videoIds == null || videoIds.isEmpty()) {
+            return List.of();
+        }
+
+        // Distinct first, so a list padded with one repeated id cannot use up the cap.
+        List<String> wanted = videoIds.stream()
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .limit(maxBatchSize())
+                .toList();
+        if (wanted.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, Video> found = videoRepository.findByIdInAndDeletedAtIsNull(wanted).stream()
+                .filter(video -> isOwner(requesterId, video) || isPubliclyVisible(video))
+                .collect(Collectors.toMap(Video::getId, video -> video));
+
+        return wanted.stream()
+                .map(found::get)
+                .filter(Objects::nonNull)
+                .map(videoMapper::toResponse)
+                .toList();
+    }
+
+    private int maxBatchSize() {
+        return pageableProperties.getPageable().getMaxPageSize();
     }
 
     /**

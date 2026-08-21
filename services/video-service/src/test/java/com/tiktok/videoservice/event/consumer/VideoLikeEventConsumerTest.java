@@ -143,12 +143,29 @@ class VideoLikeEventConsumerTest {
         assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isZero();
     }
 
+    /**
+     * Same reason as the soft-deleted case above: a moderated video is off every read path, so
+     * likes still arriving are stale clients, and the count they build stays invisible right up
+     * until a restore puts the video back showing a number nobody can account for.
+     */
+    @Test
+    void onMessage_takenDownVideo_leavesTheCountAlone() throws Exception {
+        Video video = publishedVideo();
+        video.markTakenDown();
+        videoRepository.save(video);
+
+        consumer.onMessage(objectMapper.writeValueAsString(
+                VideoLikeEvent.of(Long.valueOf(video.getId()), 1L, true)));
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isZero();
+    }
+
     private Video publishedVideo() {
         return Video.builder()
                 .id(Video.newId())
                 .userId(1L)
                 .title("t")
-                .rawFileUrl("s3://video-media/raw/1.mp4")
+                .rawFileUrl("s3://video-media/raw/1/%s.mp4".formatted(Video.newId()))
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PUBLISHED)
                 .build();

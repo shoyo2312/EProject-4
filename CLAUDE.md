@@ -29,7 +29,7 @@ tiktok-backend/
     ├── media-worker/     :8084  MinIO + Kafka consumer
     ├── interaction-service/ :8085  Cassandra + Redis
     ├── story-service/    :8086  MongoDB (TTL 24h)
-    ├── recommendation-service/ :8087  Kafka consumer + Redis
+    ├── recommendation-service/ :8087  Kafka consumer + Redis (trending + feed cá nhân hoá, xếp hạng qua rank-service)
     ├── chat-service/     :8088  MongoDB + WebSocket
     ├── notification-service/   :8089  MongoDB + FCM
     ├── product-service/  :8090  PostgreSQL + Flyway
@@ -39,8 +39,11 @@ tiktok-backend/
     ├── inventory-service/ :8094  PostgreSQL + Outbox + optimistic lock
     ├── search-service/   :8095  Elasticsearch
     ├── admin-service/    :8096  PostgreSQL + Security
-    └── analytics-service/ :8097  ClickHouse / Kafka consumer
+    ├── analytics-service/ :8097  ClickHouse / Kafka consumer (+ sink dữ liệu huấn luyện)
+    └── rank-service/      :8098  **Python** FastAPI + LightGBM — KHÔNG phải module Maven
 ```
+
+`rank-service` là ngoại lệ duy nhất không phải Java: nó không nằm trong `pom.xml` gốc, `./mvnw` không build nó, và `make build` không đụng đến nó. Build/test qua `make rank-up` / `make rank-test`. Nó chỉ đến được từ mạng nội bộ, không có route ở gateway và không xác thực JWT — xem `docs/ranking-model.md`.
 
 ## 3. Package Structure (mỗi service)
 ```
@@ -97,16 +100,16 @@ com.tiktok.{service}/
   - PostgreSQL: `INSERT ... ON CONFLICT DO NOTHING` trong transaction (xem `user-service/InboxEventRepository.tryClaim`)
   - MongoDB: insert dựa vào unique index trên `eventId`; không có transaction nên phải release claim khi xử lý lỗi (xem `video-service/IdempotentEventProcessor`)
 - Event class lấy từ `libs/event-schema`
-- **Topic trộn nhiều event type** (vd. `admin.moderation-events`): payload JSON không có field phân biệt loại — dùng Kafka header `eventType` (đọc qua `@Header(name = "eventType")`) để route, KHÔNG suy đoán từ shape JSON
+- **Topic trộn nhiều event type** (`admin.moderation-events`, `video.video-events`): payload JSON không có field phân biệt loại — dùng Kafka header `eventType` (đọc qua `@Header(name = "eventType")`) để route, KHÔNG suy đoán từ shape JSON. Thiếu route thì Jackson **vẫn parse được** sang class sai với mọi field vắng mặt là null, không exception, không log — service chỉ âm thầm làm sai việc. `video.video-events` mang `VideoPublishedEvent` + `VideoDeletedEvent` cùng key `videoId`, nên Kafka đảm bảo thứ tự: không consumer nào nhận lệnh xoá một video nó chưa từng nghe nói tới. Consumer coi **header vắng mặt = `VideoPublishedEvent`** (producer đời cũ chỉ gửi loại đó)
 - **kafka-lib usage**: dependency `<artifactId>kafka-lib</artifactId>`, auto-config qua Spring Boot — không cần `@Configuration` cục bộ. Hai thứ độc lập nhau:
-  - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `user-service`, `video-service`
+  - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `user-service`, `video-service`, `recommendation-service`
   - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`
-  - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, inventory, media-worker, notification, order, payment, recommendation, search) — vẫn dùng default retry-vô-hạn của Spring Kafka
+  - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, inventory, media-worker, notification, order, payment, search) — vẫn dùng default retry-vô-hạn của Spring Kafka
   - CÓ outbox nhưng CHƯA migrate dispatcher (inventory, order, payment, product) — vẫn `markPublished()` ngay sau `send()`, tức là đang mất event khi broker từ chối. **Khi động vào 1 trong 4 service này, migrate luôn**: các bước trong `docs/outbox-migration.md`, marker `TODO(outbox)` nằm ngay tại chỗ lỗi trong từng `OutboxPublisher`
   - interaction, story không có consumer lẫn outbox — không cần `kafka-lib`
 
 ### JWT Authentication & security-lib
-- **security-lib usage**: 12 services (admin, cart, chat, interaction, inventory, notification, order, payment, product, story, user, video) dùng centralized `security-lib` để validate JWT token
+- **security-lib usage**: 13 services (admin, cart, chat, interaction, inventory, notification, order, payment, product, recommendation, story, user, video) dùng centralized `security-lib` để validate JWT token
   - Dependency: `<artifactId>security-lib</artifactId>`
   - Auto-configured via Spring Boot auto-configuration (`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`)
   - Services KHÔNG cần `@Configuration` cục bộ cho JWT — được inject tự động
@@ -161,6 +164,7 @@ make help           # Xem tất cả lệnh
 - [ ] Mọi Kafka consumer PHẢI idempotent (claim eventId trước khi xử lý, xem §Kafka)
 - [ ] MongoDB service: BẬT `spring.data.mongodb.auto-index-creation` — mặc định TẮT từ Spring Data Mongo 3.x, `@Indexed`/`@CompoundIndex` sẽ im lặng không được tạo
 - [ ] `api-gateway` dùng WebFlux — KHÔNG import `spring-boot-starter-web`
+- [ ] **Feature của ranking model chỉ được định nghĩa một chỗ**: `services/rank-service/features.py`. Đổi tên, đổi thứ tự, hay đổi công thức một feature ở một phía (Java `CandidateFeatures` / Python `FEATURE_NAMES` / cột ClickHouse) mà không đổi phía kia là lỗi **không có triệu chứng**: mô hình vẫn trả về số, API vẫn 200, chỉ có feed là tệ đi. Xem `docs/ranking-model.md` §2 trước khi động vào
 
 ## 7. Khi Claude sinh code — checklist
 - [ ] Package đúng convention: `com.tiktok.{service}.{layer}`

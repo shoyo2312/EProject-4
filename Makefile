@@ -73,6 +73,9 @@ help:
 	@echo "    make run-inventory      Run inventory-service"
 	@echo "    make run-admin          Run admin-service :8096"
 	@echo "    make run-analytics      Run analytics-service :8097"
+	@echo "    make rank-up            Start rank-service :8098 (internal)"
+	@echo "    make rank-train         Train the feed ranking model from ClickHouse"
+	@echo "    make rank-test          Run rank-service tests"
 	@echo ""
 	@echo "  Database:"
 	@echo "    make migrate-auth       Chạy Flyway migration cho auth-service"
@@ -217,6 +220,31 @@ run-admin:
 
 run-analytics:
 	./mvnw spring-boot:run -pl services/analytics-service -Dspring-boot.run.profiles=local
+
+# ─────────────────────────────────────────────────────────────────
+# rank-service (Python)
+# ─────────────────────────────────────────────────────────────────
+
+rank-up:
+	docker compose up -d --build rank-service
+
+# Trains from the watch log analytics-service has been filling, then tells the running service
+# to load the result. Needs ClickHouse up and some watch history in it.
+rank-train:
+	docker compose run --rm --no-deps \
+		-e CLICKHOUSE_HOST=clickhouse \
+		-v "$$(pwd)/services/rank-service/model:/app/model" \
+		rank-service python train.py
+	docker compose exec rank-service python -c \
+		"import urllib.request; print(urllib.request.urlopen(urllib.request.Request('http://localhost:8098/reload', method='POST')).read())"
+
+# The image does not carry the tests or pytest, so the source is mounted in. Running them in
+# the image rather than a host venv is not fussiness: LightGBM needs libgomp, which macOS does
+# not ship, and the Dockerfile is the only place that dependency is written down.
+rank-test:
+	docker compose run --rm --no-deps --entrypoint sh \
+		-v "$$(pwd)/services/rank-service:/app" rank-service -c \
+		"pip install -q -r requirements-dev.txt && python -m pytest -q"
 
 # ──────────────────────────────────────────────
 # Database migrations

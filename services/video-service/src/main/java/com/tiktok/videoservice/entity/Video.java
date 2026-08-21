@@ -15,6 +15,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Mongo has no multi-document transactions on this single-node deployment, so the
@@ -50,7 +51,22 @@ import java.time.Instant;
         // the match set. A partial index over the unpublished rows alone would be smaller still,
         // but partialFilterExpression accepts neither an equality against null nor $exists: false.
         @CompoundIndex(name = "outbox_idx",
-                def = "{'eventPublishedAt': 1, 'deletedAt': 1, 'createdAt': 1}")
+                def = "{'eventPublishedAt': 1, 'eventFailedAt': 1, 'deletedAt': 1, 'createdAt': 1}"),
+        // The deletion poll, same reasoning as outbox_idx: equality fields lead, then the sort
+        // field. eventPublishedAt is left out and filtered in memory instead — it would have to
+        // sit between the two as a range, which stops the index from supplying the sort, and the
+        // rows reaching this poll are already narrowed to deleted-but-unannounced.
+        @CompoundIndex(name = "delete_outbox_idx",
+                def = "{'deleteEventPublishedAt': 1, 'deletedAt': 1}"),
+        // One upload is one video. Enforced here rather than by checking before the insert,
+        // because a check followed by an insert lets two concurrent publishes of the same key
+        // both pass and produce two documents, two VideoPublishedEvents, and two transcode jobs
+        // off one file.
+        //
+        // Deliberately not scoped to undeleted rows: deleting a video does not free its raw
+        // object for republishing, and the partialFilterExpression that would express that scope
+        // cannot test a field for null anyway (see outbox_idx above).
+        @CompoundIndex(name = "raw_file_idx", def = "{'rawFileUrl': 1}", unique = true)
 })
 public class Video {
 
@@ -83,6 +99,15 @@ public class Video {
 
     private VideoVisibility visibility;
 
+    /**
+     * Normalised at publish time and indexed because tag affinity is the only content signal
+     * recommendation has: every other thing it knows about a video is engagement, which is the
+     * thing it is trying to predict. Multikey — Mongo indexes each element — so a lookup by one
+     * tag reads the index rather than the collection. Never null; an untagged video is empty.
+     */
+    @Indexed
+    private List<String> tags;
+
     private long viewCount;
 
     private long likeCount;
@@ -90,6 +115,27 @@ public class Video {
     private long commentCount;
 
     private Instant eventPublishedAt;
+
+    /**
+     * Set when building this video's VideoPublishedEvent threw, which takes it out of the poll.
+     *
+     * <p>Without it the row parks at the head of the batch forever: the poll reads the oldest
+     * hundred unpublished videos, the dispatcher skips the one it cannot serialize, and five
+     * seconds later the same query returns the same row in the same first position. Retrying is
+     * pointless — the same document serializes the same way every time — and every later video
+     * queues behind it. Cleared only by a human who has fixed whatever made the document
+     * unserializable; there is no code path that unsets it, because there is nothing a retry
+     * could do differently.
+     */
+    private Instant eventFailedAt;
+
+    /**
+     * The second outbox slot, for this video's VideoDeletedEvent. A separate field rather than a
+     * reuse of {@code eventPublishedAt}, because both events have to go out and in that order:
+     * the publication is what tells consumers the video exists, and the deletion is meaningless
+     * to anyone who never received it.
+     */
+    private Instant deleteEventPublishedAt;
 
     @CreatedDate
     private Instant createdAt;
@@ -164,5 +210,13 @@ public class Video {
 
     public void markEventPublished() {
         this.eventPublishedAt = Instant.now();
+    }
+
+    public void markEventFailed() {
+        this.eventFailedAt = Instant.now();
+    }
+
+    public void markDeleteEventPublished() {
+        this.deleteEventPublishedAt = Instant.now();
     }
 }

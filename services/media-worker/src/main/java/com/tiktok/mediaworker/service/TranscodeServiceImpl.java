@@ -30,8 +30,8 @@ public class TranscodeServiceImpl implements TranscodeService {
     @Override
     @SneakyThrows
     public TranscodeResult transcode(String videoId, String rawFileUrl) {
-        String thumbnailKey = "thumbnails/%s.jpg".formatted(videoId);
-        String hlsKey = "hls/%s/master.m3u8".formatted(videoId);
+        String thumbnailKey = MediaKeys.thumbnail(videoId);
+        String hlsKey = MediaKeys.hlsPlaylist(videoId);
 
         putPlaceholder(thumbnailKey, "placeholder-thumbnail".getBytes(StandardCharsets.UTF_8), THUMBNAIL_CONTENT_TYPE);
         putPlaceholder(hlsKey, "#EXTM3U\n#EXT-X-ENDLIST\n".getBytes(StandardCharsets.UTF_8), HLS_CONTENT_TYPE);

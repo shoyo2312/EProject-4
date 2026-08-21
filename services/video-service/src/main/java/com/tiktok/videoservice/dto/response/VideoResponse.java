@@ -4,6 +4,7 @@ import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 
 import java.time.Instant;
+import java.util.List;
 
 public record VideoResponse(
         String id,
@@ -18,6 +19,7 @@ public record VideoResponse(
         long viewCount,
         long likeCount,
         long commentCount,
+        List<String> tags,
         Instant createdAt
 ) {
 }

@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.event.producer;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
@@ -16,6 +17,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.support.SendResult;
 
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -56,7 +59,7 @@ class VideoEventPublisherTest {
 
     @Test
     void publishPending_noPendingVideos_doesNotTouchKafka() {
-        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .thenReturn(List.of());
 
         publisher.publishPending();
@@ -67,7 +70,7 @@ class VideoEventPublisherTest {
     @Test
     void publishPending_sendsEventAndMarksPublished() {
         Video video = pendingVideo();
-        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .thenReturn(List.of(video));
         when(kafkaOperations.send(any(ProducerRecord.class)))
                 .thenReturn(CompletableFuture.completedFuture(null));
@@ -81,7 +84,9 @@ class VideoEventPublisherTest {
         ProducerRecord<String, String> record = captor.getValue();
         assertThat(record.topic()).isEqualTo("video.video-events");
         assertThat(record.key()).isEqualTo(video.getId());
-        assertThat(record.value()).contains(video.getId()).contains(video.getTitle());
+        // tags ride on the event because recommendation-service has no read path into this
+        // service's Mongo, and they are the only content feature it gets.
+        assertThat(record.value()).contains(video.getId()).contains(video.getTitle()).contains("dance");
 
         assertThat(video.getEventPublishedAt()).isNotNull();
         verify(videoRepository).updateEventPublished(video);
@@ -90,7 +95,7 @@ class VideoEventPublisherTest {
     @Test
     void publishPending_sendFailure_leavesVideoPendingForNextPoll() {
         Video video = pendingVideo();
-        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .thenReturn(List.of(video));
         CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
         failed.completeExceptionally(new RuntimeException("broker unreachable"));
@@ -108,7 +113,7 @@ class VideoEventPublisherTest {
     void publishPending_oneFailureDoesNotBlockTheRest() {
         Video failing = pendingVideo();
         Video succeeding = pendingVideo();
-        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .thenReturn(List.of(failing, succeeding));
 
         CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
@@ -132,7 +137,7 @@ class VideoEventPublisherTest {
     @Test
     void publishPending_resendingTheSameVideo_reusesTheSameEventId() {
         Video video = pendingVideo();
-        when(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .thenReturn(List.of(video));
         CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
         failed.completeExceptionally(new RuntimeException("no ack in time"));
@@ -150,6 +155,127 @@ class VideoEventPublisherTest {
                 .isEqualTo(eventIdOf(captor.getAllValues().get(1)));
     }
 
+    /**
+     * The topic now carries two event shapes with no type field between them, so the header is
+     * the only thing a consumer can route on — and a deletion read as a publication indexes the
+     * video it was meant to remove.
+     */
+    @Test
+    void publishPending_labelsTheRecordWithItsEventType() {
+        Video video = pendingVideo();
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPending();
+
+        assertThat(eventTypeOf(captureRecord())).isEqualTo("VideoPublishedEvent");
+    }
+
+    /**
+     * The row is parked rather than left pending. The poll reads the oldest hundred unpublished
+     * videos every five seconds, so a document that cannot be serialized comes back in the same
+     * first position for ever and every video behind it waits on a retry that cannot succeed.
+     */
+    @Test
+    void publishPending_unserializableVideo_isParkedInsteadOfBlockingThePoll() throws Exception {
+        Video video = pendingVideo();
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(video));
+
+        ObjectMapper broken = org.mockito.Mockito.mock(ObjectMapper.class);
+        when(broken.writeValueAsString(any())).thenThrow(new JsonProcessingException("no") {
+        });
+        VideoEventPublisher brokenPublisher = new VideoEventPublisher(
+                videoRepository, new OutboxDispatcher(kafkaOperations, Duration.ofSeconds(5)), broken);
+
+        brokenPublisher.publishPending();
+
+        assertThat(video.getEventFailedAt()).isNotNull();
+        verify(videoRepository).updateEventFailed(video);
+        verify(videoRepository, never()).updateEventPublished(any(Video.class));
+        verifyNoInteractions(kafkaOperations);
+    }
+
+    @Test
+    void publishPendingDeletions_announcesTheRemovalAndMarksIt() {
+        Video video = deletedVideo(true);
+        when(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
+                .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPendingDeletions();
+
+        ProducerRecord<String, String> record = captureRecord();
+        assertThat(record.topic()).isEqualTo("video.video-events");
+        // Same key as the publication, so Kafka orders the pair: no consumer can be handed the
+        // removal of a video it has not been told about.
+        assertThat(record.key()).isEqualTo(video.getId());
+        assertThat(eventTypeOf(record)).isEqualTo("VideoDeletedEvent");
+        // media-worker is the only party that can reclaim the source object, and this event is
+        // the last thing that knows where it is.
+        assertThat(record.value()).contains(video.getRawFileUrl());
+
+        assertThat(video.getDeleteEventPublishedAt()).isNotNull();
+        verify(videoRepository).updateDeleteEventPublished(video);
+    }
+
+    /**
+     * publishPending skips soft-deleted rows, so a video deleted within five seconds of upload was
+     * never announced to anyone. Announcing its removal would ask every consumer to delete
+     * something it never received.
+     */
+    @Test
+    void publishPendingDeletions_neverAnnouncedVideo_isMarkedWithoutSendingAnything() {
+        Video video = deletedVideo(false);
+        when(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
+                .thenReturn(List.of(video));
+
+        publisher.publishPendingDeletions();
+
+        verifyNoInteractions(kafkaOperations);
+        // Still marked, or the poll returns this row on every run for the life of the collection.
+        assertThat(video.getDeleteEventPublishedAt()).isNotNull();
+        verify(videoRepository).updateDeleteEventPublished(video);
+    }
+
+    @Test
+    void publishPendingDeletions_sendFailure_leavesTheDeletionPendingForNextPoll() {
+        Video video = deletedVideo(true);
+        when(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
+                .thenReturn(List.of(video));
+        CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
+        failed.completeExceptionally(new RuntimeException("broker unreachable"));
+        when(kafkaOperations.send(any(ProducerRecord.class))).thenReturn(failed);
+
+        publisher.publishPendingDeletions();
+
+        assertThat(video.getDeleteEventPublishedAt()).isNull();
+        verify(videoRepository, never()).updateDeleteEventPublished(any(Video.class));
+    }
+
+    private ProducerRecord<String, String> captureRecord() {
+        ArgumentCaptor<ProducerRecord<String, String>> captor =
+                ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaOperations).send(captor.capture());
+        return captor.getValue();
+    }
+
+    private String eventTypeOf(ProducerRecord<String, String> record) {
+        return new String(record.headers().lastHeader("eventType").value(), StandardCharsets.UTF_8);
+    }
+
+    private Video deletedVideo(boolean alreadyAnnounced) {
+        Video video = pendingVideo();
+        if (alreadyAnnounced) {
+            video.markEventPublished();
+        }
+        video.markDeleted();
+        return video;
+    }
+
     private String eventIdOf(ProducerRecord<String, String> record) {
         try {
             return objectMapper.readTree(record.value()).get("eventId").asText();
@@ -165,6 +291,7 @@ class VideoEventPublisherTest {
                 .title("My video")
                 .rawFileUrl("s3://video-media/raw/1.mp4")
                 .visibility(VideoVisibility.PUBLIC)
+                .tags(List.of("dance"))
                 .status(VideoStatus.PUBLISHED)
                 .build();
     }

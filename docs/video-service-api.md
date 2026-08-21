@@ -51,6 +51,7 @@ Request (`UploadUrlRequest`):
 ```json
 {
   "contentType": "video/mp4"    // bắt buộc; chỉ nhận video/mp4, video/quicktime, video/webm
+                                // tham số đi kèm được bỏ qua: "video/mp4; charset=utf-8" vẫn hợp lệ
 }
 ```
 
@@ -85,7 +86,8 @@ Request (`CreateVideoRequest`):
   "title": "Tiêu đề",                                // bắt buộc, tối đa 150 ký tự, không được toàn khoảng trắng
   "description": "Mô tả",                             // optional, tối đa 2000 ký tự
   "rawFileUrl": "s3://video-media/raw/123456789012345/7312.mp4",  // bắt buộc, tối đa 500 ký tự, xem ràng buộc bên dưới
-  "visibility": "PUBLIC"                              // bắt buộc: PUBLIC | PRIVATE
+  "visibility": "PUBLIC",                             // bắt buộc: PUBLIC | PRIVATE
+  "tags": ["dance", "food"]                           // optional, tối đa 10 tag, mỗi tag tối đa 50 ký tự
 }
 ```
 
@@ -96,7 +98,11 @@ Request (`CreateVideoRequest`):
 
 Sai bất kỳ điều nào → `VALIDATION_ERROR` (400). Lý do chặn: URL này được backend (media-worker) tự đi tải về, nên một URL tuỳ ý sẽ biến server thành công cụ gọi ra ngoài hộ kẻ tấn công.
 
-Ngoài allow-list còn một ràng buộc nữa: object key phải nằm dưới `raw/{userId}/` của **chính tài khoản đang gọi** — đúng key mà mục 3.1 vừa cấp. Trỏ vào `raw/` của người khác (hoặc vào key không do mục 3.1 cấp, ví dụ file đã transcode) → `FOREIGN_UPLOAD` (400). Cứ dùng nguyên `fileUrl` nhận được, đừng ghép tay.
+`tags` được server **chuẩn hoá** trước khi lưu: lowercase, cắt khoảng trắng, bỏ dấu `#` đầu, bỏ tag rỗng, bỏ trùng, giữ nguyên thứ tự client gửi. Nên `["#Dance", " dance ", "Food"]` lưu thành `["dance", "food"]` — client đừng tự so sánh tag với chuỗi chưa chuẩn hoá. Quá 10 tag hoặc một tag quá 50 ký tự → `VALIDATION_ERROR` (400).
+
+Ngoài allow-list còn một ràng buộc nữa: object key phải nằm dưới `raw/{userId}/` của **chính tài khoản đang gọi** — đúng key mà mục 3.1 vừa cấp. Trỏ vào `raw/` của người khác (hoặc vào key không do mục 3.1 cấp, ví dụ file đã transcode) → `FOREIGN_UPLOAD` (400). Đường dẫn được chuẩn hoá trước khi kiểm tra, nên `raw/{mình}/../{người khác}/` cũng bị chặn. Cứ dùng nguyên `fileUrl` nhận được, đừng ghép tay.
+
+**Một upload là một video.** Publish lại cùng `rawFileUrl` → `RAW_FILE_ALREADY_PUBLISHED` (400), kể cả khi video cũ đã bị xoá. Đây là chỗ hay gặp khi client **retry sau timeout**: lần đầu có thể đã thành công dù response không về tới nơi. Gặp mã này thì coi như đã publish xong, đừng xin `fileUrl` mới rồi upload lại — cứ đọc lại danh sách video của mình.
 
 Response `data` → `VideoResponse`:
 ```json
@@ -113,6 +119,7 @@ Response `data` → `VideoResponse`:
   "viewCount": 0,
   "likeCount": 0,
   "commentCount": 0,
+  "tags": ["dance", "food"],      // đã chuẩn hoá, có thể rỗng nhưng không bao giờ null
   "createdAt": "2026-08-12T10:00:00Z"
 }
 ```
@@ -159,6 +166,25 @@ Quy tắc hiển thị:
 
 Lỗi: `VIDEO_NOT_FOUND` (404) — dùng chung cho **cả 4 trường hợp**: id không tồn tại, video đã bị xoá, video `PRIVATE` của người khác, hoặc video chưa/không còn `PUBLISHED` (đang `PROCESSING`, `FAILED`, hoặc bị `TAKEN_DOWN`). Server **cố tình** không phân biệt để không lộ sự tồn tại của video riêng tư. Hệ quả phía client: **404 ở đây không chứng minh video không tồn tại** — nếu đang poll sau khi upload mà nhận 404, khả năng cao là quên gửi token chứ không phải video biến mất.
 
+### 3.4b `GET /batch?ids=…`
+Nạp **một danh sách id đã có sẵn** trong đúng một request. Sinh ra cho trường hợp client cầm một bảng xếp hạng mà không cầm video: `GET /api/v1/recommendations/feed` chỉ trả `videoId` + `score`, vì recommendation-service không có đường đọc vào Mongo của video-service và không được phép có.
+
+Không bắt buộc token, nhưng gửi nếu đã đăng nhập — quy tắc hiển thị y hệt mục 3.4.
+
+```
+GET /api/v1/videos/batch?ids=7312458901234567,7312458901234568
+```
+
+Trả `200 OK`, `data` → `VideoResponse[]`.
+
+Ba điều phải biết, cả ba đều là chỗ dễ sai:
+
+1. **Thứ tự trả về = thứ tự hỏi.** Danh sách id chính là thứ hạng; trả theo thứ tự Mongo sẽ vứt bỏ thứ hạng đó **mà không có triệu chứng gì** — feed vẫn hiện, chỉ là hết xếp hạng.
+2. **Kết quả có thể ngắn hơn đầu vào.** Id không giải ra thứ người gọi được xem — đã xoá, đang `PROCESSING`, `PRIVATE` của người khác, hoặc không tồn tại — **bị bỏ im lặng**, không phải lỗi. Feed gọi tên một video vừa bị xoá vài giây trước là chuyện bình thường: `VideoDeletedEvent` mất khoảng 5 giây để lan.
+3. **Tối đa 50 id** (cùng trần với `size` ở mục 3.3). Id trùng được lọc trước khi đếm, nên nhồi một id lặp lại không ăn hết hạn mức.
+
+Vì sao không gọi `GET /{videoId}` 20 lần: gateway giới hạn **20 req/s theo IP**, mà mọi người xem đứng sau cùng một proxy thì dùng chung một IP. Một lần cuộn feed là hết sạch hạn mức.
+
 ### 3.5 `GET /users/{userId}`
 Danh sách video của 1 user. Không bắt buộc token. **Phân trang bằng `?page=0&size=20` (offset), KHÁC feed ở mục 3.3** — đây là lưới hữu hạn, người dùng nhảy trang được và chủ tài khoản có nhu cầu biết tổng số, nên `Page` vẫn đúng chỗ ở đây. Trả `200 OK`, `data` → `Page<VideoResponse>`.
 
@@ -173,6 +199,12 @@ Không có lỗi `USER_NOT_FOUND` — `userId` không tồn tại chỉ trả v�
 Lỗi: `VIDEO_NOT_FOUND` (404 — id không tồn tại hoặc đã xoá), `NOT_VIDEO_OWNER` (403 — video tồn tại nhưng của người khác), `401`.
 
 Xoá mềm nên video biến mất khỏi mọi endpoint đọc ngay lập tức, và **kết quả transcode đến sau sẽ bị bỏ qua** thay vì làm video sống lại. Xoá là một chiều, không có API khôi phục.
+
+Ở các service khác thì **không tức thì**: `200 OK` chỉ nói video-service đã ghi xong. `VideoDeletedEvent` đi qua Kafka trong vòng ~5 giây (chu kỳ outbox poll), rồi search-service mới xoá document và recommendation-service mới gỡ video khỏi trending cùng các tag index. Trong khoảng đó video vẫn có thể xuất hiện ở kết quả tìm kiếm hoặc trong feed đề xuất, và bấm vào sẽ nhận `VIDEO_NOT_FOUND`. Client nên tự ẩn video vừa xoá ở phía mình thay vì đợi list load lại.
+
+Video bị xoá **trong vòng ~5 giây đầu sau khi publish** có thể chưa từng được công bố ra ngoài; khi đó không có `VideoDeletedEvent` nào cả, vì không service nào từng biết tới nó.
+
+File trên MinIO (bản gốc, thumbnail, và toàn bộ output HLS) do media-worker xoá khi nhận event này. Không có API nào để lấy lại.
 
 ## 4. Enums
 
@@ -211,6 +243,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `VALIDATION_ERROR` | 400 | `title` rỗng/quá 150 ký tự, `description` quá 2000, `visibility` thiếu hoặc sai giá trị enum, `rawFileUrl` sai scheme/host/bucket (mục 3.2) |
 | `UNSUPPORTED_UPLOAD_TYPE` | 400 | `contentType` ở mục 3.1 không phải `video/mp4`, `video/quicktime` hoặc `video/webm` |
 | `FOREIGN_UPLOAD` | 400 | `rawFileUrl` trỏ vào file của tài khoản khác, hoặc vào key không do mục 3.1 cấp. Chỉ publish được đúng `fileUrl` mà chính token này vừa nhận |
+| `RAW_FILE_ALREADY_PUBLISHED` | 400 | `rawFileUrl` này đã có video rồi. Thường là retry sau timeout — lần trước đã thành công |
 | `INVALID_FEED_CURSOR` | 400 | `cursor` ở mục 3.3 không phải do server cấp. Bỏ cursor đang giữ, tải lại feed từ đầu |
 | `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |

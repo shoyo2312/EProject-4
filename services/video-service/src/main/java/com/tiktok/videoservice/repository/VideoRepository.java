@@ -7,12 +7,21 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 public interface VideoRepository extends MongoRepository<Video, String>, VideoRepositoryCustom {
 
     Optional<Video> findByIdAndDeletedAtIsNull(String id);
+
+    /**
+     * Batch counterpart of the single lookup above, for hydrating a list of ids the caller already
+     * has — recommendation-service's feed returns ids and nothing else. Ids that do not resolve are
+     * simply absent from the result: a feed that named a video deleted a moment ago is the normal
+     * case, not an error.
+     */
+    List<Video> findByIdInAndDeletedAtIsNull(Collection<String> ids);
 
     /** Owner's own listing: everything they uploaded, whatever state it is in. */
     Page<Video> findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(Long userId, Pageable pageable);
@@ -31,6 +40,19 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      * Outbox poll. Excludes soft-deleted videos: the poll runs every five seconds, so a video
      * deleted inside that window would otherwise still be announced to the rest of the system
      * and transcoded after its owner removed it.
+     *
+     * <p>Also excludes rows whose event could not be built — see {@link Video#markEventFailed} for
+     * why one such row would otherwise stall every video queued behind it.
      */
-    List<Video> findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc();
+    List<Video> findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc();
+
+    /**
+     * Deletion outbox poll: videos removed by their owner whose VideoDeletedEvent has not gone
+     * out yet. The published-events poll above cannot serve this — it excludes exactly these rows.
+     *
+     * <p>{@code eventPublishedAt} is filtered by the caller rather than here, so this query stays
+     * on {@code delete_outbox_idx}: a video deleted before its publication was ever announced must
+     * not have its removal announced either, but that is a handful of rows, not a scan.
+     */
+    List<Video> findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc();
 }
