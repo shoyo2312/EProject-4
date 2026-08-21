@@ -5,6 +5,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.tiktok.analyticsservice.repository.EngagementEventRepository;
 import com.tiktok.analyticsservice.repository.TrainingDataRepository;
 import com.tiktok.event.interaction.VideoWatchEvent;
+import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,6 +18,7 @@ import java.util.List;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
  * These two listeners are the only source of training data in the system. If either stops
@@ -53,9 +55,26 @@ class TrainingSinkConsumerTest {
         VideoPublishedEvent event = VideoPublishedEvent.of(
                 "vid1", 7L, "A title", "raw.mp4", List.of("dance", "music"));
 
-        new VideoPublishedEventConsumer(engagementEventRepository, trainingDataRepository, objectMapper)
-                .onMessage(objectMapper.writeValueAsString(event));
+        new VideoEventConsumer(engagementEventRepository, trainingDataRepository, objectMapper)
+                .onMessage(objectMapper.writeValueAsString(event),
+                        "VideoPublishedEvent".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         verify(trainingDataRepository).insertTags(eq("vid1"), eq(List.of("dance", "music")), any());
+    }
+
+    /**
+     * A deletion parses as a publication with every field it does not carry set to null, so
+     * without header routing analytics records a PUBLISHED row for an event that is not one and
+     * wipes the tags the ranker trains on.
+     */
+    @Test
+    void deletedEvent_isIgnoredRatherThanReadAsAPublication() throws Exception {
+        VideoDeletedEvent event = VideoDeletedEvent.of("vid2", 7L, "raw.mp4");
+
+        new VideoEventConsumer(engagementEventRepository, trainingDataRepository, objectMapper)
+                .onMessage(objectMapper.writeValueAsString(event),
+                        "VideoDeletedEvent".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        verifyNoInteractions(engagementEventRepository, trainingDataRepository);
     }
 }

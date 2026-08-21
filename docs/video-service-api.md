@@ -181,6 +181,12 @@ Lỗi: `VIDEO_NOT_FOUND` (404 — id không tồn tại hoặc đã xoá), `NOT_
 
 Xoá mềm nên video biến mất khỏi mọi endpoint đọc ngay lập tức, và **kết quả transcode đến sau sẽ bị bỏ qua** thay vì làm video sống lại. Xoá là một chiều, không có API khôi phục.
 
+Ở các service khác thì **không tức thì**: `200 OK` chỉ nói video-service đã ghi xong. `VideoDeletedEvent` đi qua Kafka trong vòng ~5 giây (chu kỳ outbox poll), rồi search-service mới xoá document và recommendation-service mới gỡ video khỏi trending cùng các tag index. Trong khoảng đó video vẫn có thể xuất hiện ở kết quả tìm kiếm hoặc trong feed đề xuất, và bấm vào sẽ nhận `VIDEO_NOT_FOUND`. Client nên tự ẩn video vừa xoá ở phía mình thay vì đợi list load lại.
+
+Video bị xoá **trong vòng ~5 giây đầu sau khi publish** có thể chưa từng được công bố ra ngoài; khi đó không có `VideoDeletedEvent` nào cả, vì không service nào từng biết tới nó.
+
+File trên MinIO (bản gốc, thumbnail, và toàn bộ output HLS) do media-worker xoá khi nhận event này. Không có API nào để lấy lại.
+
 ## 4. Enums
 
 ### `VideoStatus`

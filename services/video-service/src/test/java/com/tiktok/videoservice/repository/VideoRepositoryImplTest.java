@@ -149,7 +149,7 @@ class VideoRepositoryImplTest {
         Video after = reload(stale);
         assertThat(after.getLikeCount()).isEqualTo(2);
         assertThat(after.getEventPublishedAt()).isNotNull();
-        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .isEmpty();
     }
 

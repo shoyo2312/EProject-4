@@ -76,6 +76,16 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
+    public void updateDeleteEventPublished(Video video) {
+        update(video.getId(), new Update().set("deleteEventPublishedAt", video.getDeleteEventPublishedAt()));
+    }
+
+    @Override
+    public void updateEventFailed(Video video) {
+        update(video.getId(), new Update().set("eventFailedAt", video.getEventFailedAt()));
+    }
+
+    @Override
     public void updateSoftDeleted(Video video) {
         update(video.getId(), new Update().set("deletedAt", video.getDeletedAt()));
     }

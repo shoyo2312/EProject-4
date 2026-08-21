@@ -25,6 +25,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -78,6 +79,34 @@ class RecommendationServiceImplTest {
         recommendationService.recordVideoPublished("vid1", List.of());
 
         verify(zSetOperations).add(eq("reco:video:published"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    @Test
+    void recordVideoDeleted_dropsTheVideoFromTheRankingAndEveryTagIndex() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordVideoDeleted("vid1");
+
+        verify(zSetOperations).remove("reco:tag:dance", (Object) "vid1");
+        verify(redisTemplate).delete("reco:video:tags:vid1");
+        verify(zSetOperations).remove("reco:trending", (Object) "vid1");
+        verify(zSetOperations).remove("reco:video:published", (Object) "vid1");
+        verify(zSetOperations).remove("reco:video:watches", (Object) "vid1");
+        verify(zSetOperations).remove("reco:video:completions", (Object) "vid1");
+    }
+
+    /**
+     * The ranking is rebuilt from the hourly buckets every minute, so clearing it without
+     * clearing them puts the deleted video back within the minute, and keeps doing so for a day.
+     */
+    @Test
+    void recordVideoDeleted_clearsTheHourlyBucketsTheRankingIsRebuiltFrom() {
+        when(setOperations.members(anyString())).thenReturn(Set.of());
+
+        recommendationService.recordVideoDeleted("vid1");
+
+        verify(zSetOperations, times(RecoKeys.TRENDING_WINDOW_HOURS))
+                .remove(startsWith("reco:trend:"), eq((Object) "vid1"));
     }
 
     @Test

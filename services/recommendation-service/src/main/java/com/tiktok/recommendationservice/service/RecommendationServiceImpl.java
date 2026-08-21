@@ -69,6 +69,35 @@ public class RecommendationServiceImpl implements RecommendationService {
         }
     }
 
+    /**
+     * The hourly buckets are cleared as well as the ranking they feed, and that is the part worth
+     * getting right: {@link #rebuildTrending} unions the last 24 buckets back into TRENDING every
+     * minute, so removing the video from TRENDING alone puts it back within the minute and keeps
+     * doing so for a day.
+     *
+     * <p>The two per-user sets are deliberately left alone. They only ever exclude a video from
+     * someone's feed, so a stale entry costs nothing, and reaching every viewer who was offered
+     * this video would mean scanning a key per user.
+     */
+    @Override
+    public void recordVideoDeleted(String videoId) {
+        Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
+        if (tags != null) {
+            for (String tag : tags) {
+                redisTemplate.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+            }
+        }
+        redisTemplate.delete(RecoKeys.videoTags(videoId));
+
+        RecoKeys.trendingWindow(Instant.now())
+                .forEach(bucket -> redisTemplate.opsForZSet().remove(bucket, videoId));
+
+        redisTemplate.opsForZSet().remove(RecoKeys.TRENDING, videoId);
+        redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_PUBLISHED, videoId);
+        redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_WATCHES, videoId);
+        redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_COMPLETIONS, videoId);
+    }
+
     @Override
     public void recordLike(String videoId, boolean liked) {
         addEngagement(videoId, liked ? LIKE_SCORE : -LIKE_SCORE);

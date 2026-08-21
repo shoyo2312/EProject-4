@@ -12,6 +12,13 @@ public interface RecommendationService {
 
     void recordVideoPublished(String videoId, List<String> tags);
 
+    /**
+     * Removes every trace of a video from the ranking side. Without it a deleted video keeps
+     * being handed out: it stays in the trending ranking, and in the per-tag indexes candidate
+     * generation reads from, until it happens to fall out by trimming.
+     */
+    void recordVideoDeleted(String videoId);
+
     void recordLike(String videoId, boolean liked);
 
     void recordShare(String videoId);

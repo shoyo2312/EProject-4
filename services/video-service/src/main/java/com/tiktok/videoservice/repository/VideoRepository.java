@@ -31,6 +31,19 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      * Outbox poll. Excludes soft-deleted videos: the poll runs every five seconds, so a video
      * deleted inside that window would otherwise still be announced to the rest of the system
      * and transcoded after its owner removed it.
+     *
+     * <p>Also excludes rows whose event could not be built — see {@link Video#markEventFailed} for
+     * why one such row would otherwise stall every video queued behind it.
      */
-    List<Video> findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc();
+    List<Video> findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc();
+
+    /**
+     * Deletion outbox poll: videos removed by their owner whose VideoDeletedEvent has not gone
+     * out yet. The published-events poll above cannot serve this — it excludes exactly these rows.
+     *
+     * <p>{@code eventPublishedAt} is filtered by the caller rather than here, so this query stays
+     * on {@code delete_outbox_idx}: a video deleted before its publication was ever announced must
+     * not have its removal announced either, but that is a handful of rows, not a scan.
+     */
+    List<Video> findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc();
 }

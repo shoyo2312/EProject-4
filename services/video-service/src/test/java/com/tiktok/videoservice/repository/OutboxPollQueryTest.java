@@ -51,7 +51,7 @@ class OutboxPollQueryTest {
     void pendingVideoIsPicked() {
         Video video = save(false);
 
-        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .extracting(Video::getId)
                 .containsExactly(video.getId());
     }
@@ -60,7 +60,7 @@ class OutboxPollQueryTest {
     void deletedVideoIsSkipped() {
         save(true);
 
-        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .as("a video deleted before the poll ran must never be announced")
                 .isEmpty();
     }
@@ -70,7 +70,7 @@ class OutboxPollQueryTest {
         save(true);
         Video live = save(false);
 
-        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .extracting(Video::getId)
                 .containsExactly(live.getId());
     }
@@ -81,7 +81,7 @@ class OutboxPollQueryTest {
         video.markEventPublished();
         videoRepository.save(video);
 
-        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+        assertThat(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
                 .isEmpty();
     }
 
@@ -96,13 +96,77 @@ class OutboxPollQueryTest {
     void theOutboxPollIsIndexed() {
         Document explain = mongoTemplate.getDb().runCommand(new Document("explain",
                 new Document("find", "videos")
-                        .append("filter", new Document("eventPublishedAt", null).append("deletedAt", null))
+                        .append("filter", new Document("eventPublishedAt", null)
+                                .append("eventFailedAt", null)
+                                .append("deletedAt", null))
                         .append("sort", new Document("createdAt", 1))));
 
         assertThat(explain.toJson())
                 .as("the poll must read an index, not walk the collection")
                 .contains("IXSCAN")
                 .contains("outbox_idx")
+                .doesNotContain("SORT_KEY_GENERATOR");
+    }
+
+    /**
+     * A row whose event could not be built parks at the head of the poll otherwise: the query
+     * returns the oldest hundred unpublished videos every five seconds, so the same document
+     * comes back in the same first position for ever and everything behind it waits on a retry
+     * that cannot succeed.
+     */
+    @Test
+    void parkedVideoIsSkippedWhileALivePendingOneIsStillPicked() {
+        Video parked = save(false);
+        parked.markEventFailed();
+        videoRepository.save(parked);
+        Video live = save(false);
+
+        assertThat(videoRepository
+                .findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .extracting(Video::getId)
+                .containsExactly(live.getId());
+    }
+
+    @Test
+    void deletedVideoIsPickedByTheDeletionPoll() {
+        Video video = save(true);
+
+        assertThat(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
+                .extracting(Video::getId)
+                .containsExactly(video.getId());
+    }
+
+    @Test
+    void liveVideoIsNotPickedByTheDeletionPoll() {
+        save(false);
+
+        assertThat(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
+                .isEmpty();
+    }
+
+    @Test
+    void alreadyAnnouncedDeletionIsSkipped() {
+        Video video = save(true);
+        video.markDeleteEventPublished();
+        videoRepository.save(video);
+
+        assertThat(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
+                .isEmpty();
+    }
+
+    /** Same reasoning as {@link #theOutboxPollIsIndexed}, for the poll that runs beside it. */
+    @Test
+    void theDeletionPollIsIndexed() {
+        Document explain = mongoTemplate.getDb().runCommand(new Document("explain",
+                new Document("find", "videos")
+                        .append("filter", new Document("deletedAt", new Document("$ne", null))
+                                .append("deleteEventPublishedAt", null))
+                        .append("sort", new Document("deletedAt", 1))));
+
+        assertThat(explain.toJson())
+                .as("the deletion poll must read an index, not walk the collection")
+                .contains("IXSCAN")
+                .contains("delete_outbox_idx")
                 .doesNotContain("SORT_KEY_GENERATOR");
     }
 

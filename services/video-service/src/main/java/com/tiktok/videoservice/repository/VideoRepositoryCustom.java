@@ -89,6 +89,15 @@ public interface VideoRepositoryCustom {
     /** Outbox flag, set once the broker acknowledges the VideoPublishedEvent. */
     void updateEventPublished(Video video);
 
+    /** Outbox flag, set once the broker acknowledges the VideoDeletedEvent. */
+    void updateDeleteEventPublished(Video video);
+
+    /**
+     * Parks a row whose event could not be built, taking it out of the poll — see
+     * {@link Video#markEventFailed}.
+     */
+    void updateEventFailed(Video video);
+
     /** Soft delete. */
     void updateSoftDeleted(Video video);
 }
