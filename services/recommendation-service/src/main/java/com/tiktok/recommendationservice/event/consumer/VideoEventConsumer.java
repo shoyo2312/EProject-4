@@ -42,14 +42,12 @@ public class VideoEventConsumer {
 
         if (VIDEO_PUBLISHED.equals(eventType)) {
             VideoPublishedEvent event = objectMapper.readValue(payload, VideoPublishedEvent.class);
-            if (inboxService.markIfNew(event.eventId())) {
-                recommendationService.recordVideoPublished(event.videoId(), event.tags());
-            }
+            inboxService.runOnce(event.eventId(), () ->
+                    recommendationService.recordVideoPublished(event.videoId(), event.tags()));
         } else if (VIDEO_DELETED.equals(eventType)) {
             VideoDeletedEvent event = objectMapper.readValue(payload, VideoDeletedEvent.class);
-            if (inboxService.markIfNew(event.eventId())) {
-                recommendationService.recordVideoDeleted(event.videoId());
-            }
+            inboxService.runOnce(event.eventId(), () ->
+                    recommendationService.recordVideoDeleted(event.videoId()));
         } else {
             log.debug("Ignoring video eventType={}", eventType);
         }
