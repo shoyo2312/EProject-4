@@ -23,6 +23,15 @@ public final class MediaKeys {
         return "hls/%s/".formatted(videoId);
     }
 
+    /**
+     * What viewers actually load. It sits under {@link #hlsPrefix} so the cleanup that lists that
+     * prefix removes it too — the current pipeline copies the upload here instead of segmenting
+     * it, and a real HLS transcode would drop its playlist and segments alongside.
+     */
+    public static String playback(String videoId) {
+        return hlsPrefix(videoId) + "source.mp4";
+    }
+
     public static String hlsPlaylist(String videoId) {
         return hlsPrefix(videoId) + "master.m3u8";
     }
