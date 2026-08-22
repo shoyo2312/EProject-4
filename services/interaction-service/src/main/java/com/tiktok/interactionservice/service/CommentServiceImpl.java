@@ -112,6 +112,7 @@ public class CommentServiceImpl implements CommentService {
 
         videoCountersRepository.incrementCommentCount(videoId, -1);
         counterCacheService.invalidate(videoId);
+        eventPublisher.publishCommentDeleted(commentId, videoId, currentUserId);
     }
 
     private CassandraPageRequest decodeCursor(String cursor, int size) {
