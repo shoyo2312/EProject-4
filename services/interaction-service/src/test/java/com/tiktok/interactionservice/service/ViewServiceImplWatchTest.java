@@ -4,7 +4,6 @@ import com.tiktok.interactionservice.dto.request.WatchRequest;
 import com.tiktok.interactionservice.dto.response.WatchResponse;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
-import com.tiktok.interactionservice.repository.ViewByVideoRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -34,9 +33,6 @@ import static org.mockito.Mockito.when;
 class ViewServiceImplWatchTest {
 
     @Mock
-    private ViewByVideoRepository viewByVideoRepository;
-
-    @Mock
     private VideoCountersRepository videoCountersRepository;
 
     @Mock
@@ -55,8 +51,8 @@ class ViewServiceImplWatchTest {
     private ViewService viewServiceAtSession(long session) {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(valueOperations.increment(anyString())).thenReturn(session);
-        return new ViewServiceImpl(viewByVideoRepository, videoCountersRepository,
-                counterCacheService, eventPublisher, redisTemplate);
+        return new ViewServiceImpl(videoCountersRepository, counterCacheService,
+                eventPublisher, redisTemplate);
     }
 
     private ViewService viewService() {
@@ -70,7 +66,7 @@ class ViewServiceImplWatchTest {
         assertThat(response.completed()).isTrue();
         assertThat(response.watchedMs()).isEqualTo(9_000L);
         verify(eventPublisher).publishWatch(7L, 1L, 9_000L, 10_000L, true);
-        verifyNoInteractions(viewByVideoRepository, videoCountersRepository, counterCacheService);
+        verifyNoInteractions(videoCountersRepository, counterCacheService);
     }
 
     @Test

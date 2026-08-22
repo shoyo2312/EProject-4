@@ -1,19 +1,19 @@
 package com.tiktok.interactionservice.service;
 
-import com.datastax.oss.driver.api.core.CqlSession;
-import com.datastax.oss.driver.api.core.cql.Row;
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
+import com.tiktok.interactionservice.dto.request.ViewRequest;
 import com.tiktok.interactionservice.dto.response.ViewResponse;
+import com.tiktok.interactionservice.exception.ViewRateLimitedException;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
-import com.tiktok.interactionservice.repository.ViewByVideoRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.time.Duration;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ViewServiceImplTest extends AbstractInteractionServiceIT {
 
@@ -21,68 +21,88 @@ class ViewServiceImplTest extends AbstractInteractionServiceIT {
     private ViewService viewService;
 
     @Autowired
-    private ViewByVideoRepository viewByVideoRepository;
-
-    @Autowired
     private VideoCountersRepository videoCountersRepository;
 
     @Autowired
     private StringRedisTemplate redisTemplate;
 
-    @Autowired
-    private CqlSession cqlSession;
-
     @BeforeEach
     void cleanUp() {
-        viewByVideoRepository.deleteAll();
         videoCountersRepository.deleteAll();
         redisTemplate.getConnectionFactory().getConnection().flushAll();
     }
 
+    private static ViewRequest play() {
+        return new ViewRequest(UUID.randomUUID().toString());
+    }
+
     @Test
     void recordView_firstTime_countsIt() {
-        ViewResponse response = viewService.recordView(20L, 1L);
+        ViewResponse response = viewService.recordView(20L, 1L, play());
 
         assertThat(response.counted()).isTrue();
         assertThat(response.viewCount()).isEqualTo(1L);
     }
 
     /**
-     * The whole point of the dedup row: a viewer who replays the video, or a client retrying a
-     * request whose response it never saw, must not move the counter a second time.
+     * The whole reason the count is per playback rather than per viewer: somebody who watches the
+     * same video three times moved it three times, which is what everyone reading the number
+     * assumes it means.
      */
     @Test
-    void recordView_sameUserAgain_countsNothingMore() {
-        viewService.recordView(21L, 1L);
+    void recordView_sameUserPlayingAgain_countsAgain() {
+        viewService.recordView(21L, 1L, play());
 
-        ViewResponse response = viewService.recordView(21L, 1L);
+        ViewResponse response = viewService.recordView(21L, 1L, play());
+
+        assertThat(response.counted()).isTrue();
+        assertThat(response.viewCount()).isEqualTo(2L);
+    }
+
+    /**
+     * What the playId is for. A client retrying a request whose response it never saw sends the
+     * same playId, and that is the one case that must not move the counter — otherwise a flaky
+     * network reads as popularity.
+     */
+    @Test
+    void recordView_samePlayIdTwice_countsOnce() {
+        ViewRequest samePlay = play();
+        viewService.recordView(25L, 1L, samePlay);
+
+        ViewResponse response = viewService.recordView(25L, 1L, samePlay);
 
         assertThat(response.counted()).isFalse();
         assertThat(response.viewCount()).isEqualTo(1L);
     }
 
     /**
-     * The dedup row's TTL is the window, and nothing else expires it. Without {@code USING TTL}
-     * the insert would still deduplicate — permanently — so every viewer would count exactly once
-     * in the video's lifetime and no other assertion here would notice.
+     * The playId is untrusted input. Keying the claim on it alone would let one viewer's value
+     * swallow another viewer's view — and colliding on purpose costs an attacker nothing.
      */
     @Test
-    void recordView_writesTheDedupRowWithTheWindowAsItsTtl() {
-        viewService.recordView(24L, 1L);
+    void recordView_samePlayIdFromAnotherViewer_stillCounts() {
+        ViewRequest samePlay = play();
+        viewService.recordView(26L, 1L, samePlay);
 
-        Row row = cqlSession.execute(
-                "SELECT TTL(viewed_at) AS ttl FROM views_by_video WHERE video_id = 24 AND user_id = 1").one();
+        ViewResponse response = viewService.recordView(26L, 2L, samePlay);
 
-        assertThat(row).isNotNull();
-        assertThat(row.getInt("ttl")).isPositive().isLessThanOrEqualTo((int) Duration.ofDays(1).toSeconds());
+        assertThat(response.counted()).isTrue();
+        assertThat(response.viewCount()).isEqualTo(2L);
     }
 
+    /**
+     * With replays counting, the rate limit is the only thing left standing between the counter
+     * and a script minting a fresh playId per request.
+     */
     @Test
-    void recordView_isPerUser_countReflectsEachViewer() {
-        viewService.recordView(22L, 1L);
-        viewService.recordView(22L, 2L);
+    void recordView_pastTheHourlyLimit_isRefused() {
+        for (int i = 0; i < 60; i++) {
+            viewService.recordView(27L, 1L, play());
+        }
 
-        assertThat(viewService.recordView(22L, 2L).viewCount()).isEqualTo(2L);
+        assertThatThrownBy(() -> viewService.recordView(27L, 1L, play()))
+                .isInstanceOf(ViewRateLimitedException.class);
+        assertThat(viewService.recordView(27L, 2L, play()).viewCount()).isEqualTo(61L);
     }
 
     /**
@@ -92,8 +112,8 @@ class ViewServiceImplTest extends AbstractInteractionServiceIT {
      */
     @Test
     void recordView_afterTheCounterWasCached_returnsTheFreshCount() {
-        viewService.recordView(23L, 1L);
+        viewService.recordView(23L, 1L, play());
 
-        assertThat(viewService.recordView(23L, 2L).viewCount()).isEqualTo(2L);
+        assertThat(viewService.recordView(23L, 2L, play()).viewCount()).isEqualTo(2L);
     }
 }

@@ -40,6 +40,10 @@
     {
       "key": "firstPageIds",
       "value": "[]"
+    },
+    {
+      "key": "playId",
+      "value": ""
     }
   ],
   "item": [
@@ -3394,7 +3398,7 @@
     },
     {
       "name": "4. Interaction Service",
-      "description": "interaction-service :8085, Cassandra + Redis. Only the view flow is covered here. Views are deduplicated per viewer for 24h in Cassandra (views_by_video rows carry the window as their TTL); a counted view also emits interaction.view-events, which video-service consumes to move Video.viewCount. Run '3. Video Service > Publish > Publish - Success (PUBLIC)' first - these requests read {{videoId}}.",
+      "description": "interaction-service :8085, Cassandra + Redis. Only the view flow is covered here. A view is counted once per playback: the client sends the playId it generated when playback started, interaction-service claims it in Redis, and only a first claim moves the counter and emits interaction.view-events, which video-service consumes to move Video.viewCount. Replays count again; per-viewer plays are capped at 60/hour. Run '3. Video Service > Publish > Publish - Success (PUBLIC)' first - these requests read {{videoId}}.",
       "item": [
         {
           "name": "View",
@@ -3414,14 +3418,38 @@
               ],
               "request": {
                 "method": "POST",
-                "header": [],
-                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view"
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"playId\": \"{{playId}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
               },
-              "description": "Deduplication is per viewer, so an anonymous view has no identity to deduplicate against - the endpoint requires a token on purpose."
+              "description": "The per-viewer rate limit is what keeps a counted-every-play number honest, so an anonymous view has no identity to limit against - the endpoint requires a token on purpose."
             },
             {
               "name": "View - First Time (counted)",
               "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// A fresh playId means a fresh playback: this is what makes the view count again.",
+                      "pm.collectionVariables.set('playId', pm.variables.replaceIn('{{$guid}}'));"
+                    ]
+                  }
+                },
                 {
                   "listen": "test",
                   "script": {
@@ -3442,14 +3470,27 @@
                   {
                     "key": "Authorization",
                     "value": "Bearer {{accessToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
                   }
                 ],
-                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view"
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"playId\": \"{{playId}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
               },
-              "description": "First view by this user inside the 24h window: the Cassandra LWT insert wins, the counter moves, and VideoViewedEvent is published."
+              "description": "First request carrying this playId: the Redis claim wins, the counter moves, and VideoViewedEvent is published."
             },
             {
-              "name": "View - Same User Again (not counted)",
+              "name": "View - Same playId Again (retry, not counted)",
               "event": [
                 {
                   "listen": "test",
@@ -3470,11 +3511,76 @@
                   {
                     "key": "Authorization",
                     "value": "Bearer {{accessToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
                   }
                 ],
-                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view"
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"playId\": \"{{playId}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
               },
-              "description": "counted=false is the normal answer for a replay or a client retry, not an error. The dedup row only expires after 24h."
+              "description": "Same playId as the previous request, i.e. a client retrying a request whose response it never saw. counted=false is the normal answer, not an error - a flaky network must not read as popularity."
+            },
+            {
+              "name": "View - Replay (counted again)",
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// A fresh playId means a fresh playback: this is what makes the view count again.",
+                      "pm.collectionVariables.set('playId', pm.variables.replaceIn('{{$guid}}'));"
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "const data = pm.response.json().data;",
+                      "pm.test('counted again', () => pm.expect(data.counted).to.be.true);",
+                      "pm.test('count went up', () => pm.expect(data.viewCount).to.be.above(Number(pm.collectionVariables.get('viewCountAfterFirst'))));",
+                      "pm.collectionVariables.set('viewCountAfterFirst', data.viewCount);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"playId\": \"{{playId}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "description": "The same viewer playing the video a second time. A new playId, so it counts again - views are per playback, the way the number is read everywhere."
             },
             {
               "name": "View - Different User (counted again)",
@@ -3498,11 +3604,24 @@
                   {
                     "key": "Authorization",
                     "value": "Bearer {{accessTokenB}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
                   }
                 ],
-                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view"
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/view",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"playId\": \"{{playId}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
               },
-              "description": "Dedup is per viewer, not per video - user B's view counts even though user A already viewed. Needs '0. Setup > 6. Login User B'."
+              "description": "The claim is keyed on the viewer as well as the playId, so user B's view counts even while reusing user A's playId - the playId is untrusted input. Needs '0. Setup > 6. Login User B'."
             },
             {
               "name": "Counts - includes viewCount",
@@ -3520,8 +3639,22 @@
               ],
               "request": {
                 "method": "GET",
-                "header": [],
-                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/counts"
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/counts",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"playId\": \"{{playId}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
               },
               "description": "Public endpoint, cached in Redis for 300s and invalidated on every counted view."
             }
@@ -3666,7 +3799,7 @@
                 },
                 "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/watch"
               },
-              "description": "Unlike /view, which deduplicates per viewer per day, every session is published: a rewatch is the strongest positive signal there is."
+              "description": "Every session is published, replays included: a rewatch is the strongest positive signal there is."
             },
             {
               "name": "Watch - No Token (403)",
