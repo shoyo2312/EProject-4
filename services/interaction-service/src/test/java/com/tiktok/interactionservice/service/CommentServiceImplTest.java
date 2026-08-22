@@ -74,6 +74,25 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(secondPage.hasMore()).isFalse();
     }
 
+    /**
+     * Deletion is filtered after Cassandra has cut the page, so a page whose rows were all deleted
+     * comes back empty next to hasMore=true. A client that stops on an empty page would never see
+     * the comments behind it.
+     */
+    @Test
+    void listComments_pageOfOnlyDeletedComments_isSkipped() {
+        // Newest first, so the two deleted below are exactly the first page of size 2.
+        commentService.addComment(27L, 1L, "still here");
+        CommentResponse second = commentService.addComment(27L, 1L, "gone");
+        CommentResponse third = commentService.addComment(27L, 1L, "also gone");
+        commentService.deleteComment(27L, second.commentId(), 1L);
+        commentService.deleteComment(27L, third.commentId(), 1L);
+
+        CommentPageResponse page = commentService.listComments(27L, null, 2);
+
+        assertThat(page.items()).extracting(CommentResponse::content).containsExactly("still here");
+    }
+
     @Test
     void deleteComment_owner_softDeletesAndExcludesFromListing() {
         CommentResponse comment = commentService.addComment(23L, 1L, "to be deleted");
@@ -90,6 +109,25 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
 
         assertThatThrownBy(() -> commentService.deleteComment(24L, comment.commentId(), 2L))
                 .isInstanceOf(NotCommentOwnerException.class);
+    }
+
+    /**
+     * Both deletes pass the ownership read — it says nothing about whether the comment is still
+     * there. Only the conditional write can, and only the caller it applies for may move the
+     * counter: a counter table has no way back from a double decrement.
+     */
+    @Test
+    void deleteComment_twice_decrementsTheCountOnce() {
+        CommentResponse comment = commentService.addComment(26L, 1L, "delete me twice");
+        commentService.deleteComment(26L, comment.commentId(), 1L);
+
+        assertThatThrownBy(() -> commentService.deleteComment(26L, comment.commentId(), 1L))
+                .isInstanceOf(CommentNotFoundException.class);
+
+        assertThat(videoCountersRepository.findById(26L))
+                .get()
+                .extracting(counters -> counters.getCommentCount())
+                .isEqualTo(0L);
     }
 
     @Test
