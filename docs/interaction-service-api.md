@@ -171,7 +171,16 @@ Lỗi: `401`.
 ### 3.8 `POST /videos/{videoId}/view` — đếm lượt xem
 **Bắt buộc token.** Trả `200 OK`. Đây là endpoint làm `viewCount` nhích lên; **server không tự biết ai đang xem**, không gọi thì con số đứng yên mãi mãi.
 
-Không có request body. Response `data` → `ViewResponse`:
+Request (`ViewRequest`):
+```json
+{
+  "playId": "9f1c0f4e-6b7a-4f3e-9a2b-1d8c5e0a7431"   // bắt buộc, không rỗng, tối đa 64 ký tự
+}
+```
+
+`playId` là **định danh của một lần phát**, do client tự sinh (UUID) **khi bắt đầu phát** và **vứt đi khi phát xong**. Lần phát sau sinh `playId` mới.
+
+Response `data` → `ViewResponse`:
 ```json
 {
   "videoId": 7312458901234567,
@@ -181,13 +190,14 @@ Không có request body. Response `data` → `ViewResponse`:
 ```
 
 - Gọi **một lần khi bắt đầu xem** một video, không gọi theo tick thời gian.
-- Khử trùng lặp **theo từng người xem trong 24 giờ**: lần thứ hai của cùng user trên cùng video trong ngày trả `counted: false` và `viewCount` không đổi. `counted: false` **không phải lỗi** — đừng hiện thông báo gì cho user.
-- Vì đã khử trùng lặp phía server, retry khi mất mạng là **an toàn**.
-- **Xem ẩn danh không được tính.** Không token → `401`, không phải "tính vào lượt xem chung". Không có danh tính thì không có gì để khử trùng lặp, và một trình duyệt sẽ thổi phồng được số vô hạn.
+- **Đếm theo từng lần phát.** Cùng một user xem lại video 3 lần = 3 view, giống cách TikTok đếm. Điều kiện duy nhất: mỗi lần phát là một `playId` mới.
+- Gửi lại **cùng `playId`** trả `counted: false` và `viewCount` không đổi. Đó là để retry mạng an toàn, không phải lỗi — đừng hiện thông báo gì cho user. Nhớ giữ nguyên `playId` khi retry; sinh mới lúc retry sẽ đếm đôi.
+- Giới hạn **60 lần phát / giờ** cho mỗi cặp (người xem, video). Vượt → `VIEW_RATE_LIMITED` (429). Người xem thật không bao giờ chạm ngưỡng này.
+- **Xem ẩn danh không được tính.** Không token → `401`, không phải "tính vào lượt xem chung". Không có danh tính thì không có giới hạn nào áp được, và một trình duyệt sẽ thổi phồng được số vô hạn.
 
-Khác `POST /watch` (mục 3.9) như thế nào: `/view` là **con số hiển thị**, bắn một lần lúc bắt đầu và bị chặn một lần mỗi ngày; `/watch` là **dữ liệu huấn luyện gợi ý**, bắn lúc kết thúc và tính mọi lần xem lại. Cần gọi cả hai, ở hai thời điểm khác nhau.
+Khác `POST /watch` (mục 3.9) như thế nào: `/view` là **con số hiển thị**, bắn lúc bắt đầu phát; `/watch` là **dữ liệu huấn luyện gợi ý**, bắn lúc kết thúc phiên và kèm thời lượng đã phát. Cả hai đều tính mọi lần xem lại. Cần gọi cả hai, ở hai thời điểm khác nhau.
 
-Lỗi: `INTERACTION_CONFLICT` (409), `401`.
+Lỗi: `VIEW_RATE_LIMITED` (429), `401`.
 
 ### 3.9 `POST /videos/{videoId}/watch` — báo cáo phiên xem
 **Bắt buộc token.** Trả `200 OK`.
@@ -267,7 +277,7 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 
 Ngoài ra `401 Unauthorized` (không có `code` riêng của interaction-service, đến từ `security-lib`/gateway) xảy ra ở mọi `POST`/`DELETE` khi thiếu/hết hạn/token bị thu hồi — xử lý giống auth-service doc (thử `/refresh` **một lần** rồi mới logout local).
 
-> **`INTERACTION_CONFLICT` (409) không phải lỗi của request.** Nó nghĩa là "server không biết chắc thao tác đã xong hay chưa" — hạ tầng lưu trữ trả về timeout ở một thao tác mà đoán bừa sẽ làm sai counter. **Retry được, và retry là an toàn**: like/unlike/view đều idempotent (mục 3.1, 3.8). Hiện thông báo dạng "thử lại" chứ đừng hiện lỗi kỹ thuật, và đừng đảo ngược optimistic update ngay lập tức — retry một lần trước đã.
+> **`INTERACTION_CONFLICT` (409) không phải lỗi của request.** Nó nghĩa là "server không biết chắc thao tác đã xong hay chưa" — hạ tầng lưu trữ trả về timeout ở một thao tác mà đoán bừa sẽ làm sai counter. **Retry được, và retry là an toàn**: like/unlike idempotent, và `/view` idempotent theo `playId` (mục 3.1, 3.8). Hiện thông báo dạng "thử lại" chứ đừng hiện lỗi kỹ thuật, và đừng đảo ngược optimistic update ngay lập tức — retry một lần trước đã.
 
 **Không có `VIDEO_NOT_FOUND`** ở service này, kể cả với `videoId` bịa hoàn toàn (xem đầu mục 3).
 
@@ -279,7 +289,7 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của interaction-service
 
 ## 7. Những điều KHÔNG nên làm phía Flutter
 
-- Không retry tự động `POST /comments`, `POST /share`, `POST /watch` — ba endpoint này **không** khử trùng lặp, retry sẽ tạo comment đôi / đếm share đôi / bẩn dữ liệu huấn luyện. (Retry `/like`, `/like-status`, `/view` thì an toàn.)
+- Không retry tự động `POST /comments`, `POST /share`, `POST /watch` — ba endpoint này **không** khử trùng lặp, retry sẽ tạo comment đôi / đếm share đôi / bẩn dữ liệu huấn luyện. (Retry `/like`, `/like-status` an toàn; retry `/view` an toàn **nếu giữ nguyên `playId`**.)
 - Không gọi `/view` theo tick thời gian, và không gọi `/watch` theo tiến độ phát — `/view` một lần lúc bắt đầu, `/watch` một lần lúc kết thúc.
 - Không coi `counted: false` ở mục 3.8 là lỗi — đó là "hôm nay bạn đã được tính rồi".
 - Không dừng phân trang comment khi gặp trang rỗng — lặp theo `hasMore`, vì comment đã xoá được lọc sau khi cắt trang (mục 3.5).

@@ -231,9 +231,9 @@ Phía Flutter: **cập nhật lạc quan (optimistic) trên UI** ngay khi bấm,
 
 Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọi **`POST /api/v1/interactions/videos/{videoId}/view`** (interaction-service, **bắt buộc token**). Không gọi thì số này đứng yên mãi mãi.
 
-- Gọi **một lần mỗi lần bắt đầu xem**, không gọi theo tick thời gian. Gọi thừa cũng không sai: interaction-service khử trùng lặp theo từng người xem trong **24 giờ**, lần thứ hai của cùng user trả `counted: false` và không đổi số.
-- Response: `{ "videoId": ..., "counted": true, "viewCount": 12 }`. `counted: false` nghĩa là "hôm nay bạn đã được tính cho video này rồi", không phải lỗi.
-- Xem ẩn danh **không được tính** — không có token thì không có danh tính để khử trùng lặp.
+- Gọi **một lần mỗi lần bắt đầu xem**, không gọi theo tick thời gian. Body là `{ "playId": "<UUID client sinh khi bắt đầu phát>" }` — mỗi lần phát một `playId` mới, nên **xem lại vẫn được tính**, giống TikTok.
+- Response: `{ "videoId": ..., "counted": true, "viewCount": 12 }`. `counted: false` nghĩa là "`playId` này đã được tính rồi" (tức là một lần retry), không phải lỗi.
+- Xem ẩn danh **không được tính** — không có token thì không có danh tính để áp giới hạn 60 lần phát/giờ.
 - Số `viewCount` trong response trên là của interaction-service. Số trong `VideoResponse` của video-service đến sau qua Kafka nên trễ hơn một chút.
 
 ## 6. Bảng mã lỗi (`code`) đầy đủ

@@ -1,33 +1,32 @@
 package com.tiktok.interactionservice.service;
 
-import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
+import com.tiktok.interactionservice.dto.request.ViewRequest;
 import com.tiktok.interactionservice.dto.request.WatchRequest;
 import com.tiktok.interactionservice.dto.response.ViewResponse;
 import com.tiktok.interactionservice.dto.response.WatchResponse;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
-import com.tiktok.interactionservice.exception.InteractionConflictException;
+import com.tiktok.interactionservice.exception.ViewRateLimitedException;
 import com.tiktok.interactionservice.exception.WatchRateLimitedException;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
-import com.tiktok.interactionservice.repository.ViewByVideoRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.time.Instant;
+import java.util.function.Supplier;
 
 @Service
 @RequiredArgsConstructor
 public class ViewServiceImpl implements ViewService {
 
-    private static final int MAX_LWT_RETRIES = 2;
-
     /**
-     * How long one viewer's view stands before the same viewer can count again. A day rather
-     * than a per-session window: the number this feeds is a lifetime view count on a profile
-     * grid, so a viewer who leaves a video looping should move it once, not once a minute.
+     * How long one playId is remembered. Not a dedup window in the "one view per viewer per day"
+     * sense — replaying the video produces a new playId and counts again, which is what makes the
+     * number behave the way a viewer expects. This only has to outlive the retries of a single
+     * request, so it is measured against the longest video the platform will play, not against
+     * how often somebody may watch.
      */
-    private static final int DEDUP_WINDOW_SECONDS = (int) Duration.ofDays(1).toSeconds();
+    private static final Duration PLAY_TTL = Duration.ofMinutes(15);
 
     /**
      * What counts as watching to the end. Not 1.0: players stop reporting a frame or two early,
@@ -45,30 +44,34 @@ public class ViewServiceImpl implements ViewService {
     private static final long MAX_DURATION_MS = Duration.ofMinutes(10).toMillis();
 
     /**
-     * How many sessions one viewer may report for one video per window. High enough that a real
-     * viewer replaying a video all evening is never refused, low enough that a script cannot
-     * write thousands of labelled rows about a video it wants promoted.
+     * How many plays and how many sessions one viewer may report for one video per window. This
+     * is what stands in for the dedup window now that replays count: without it a script that
+     * mints a fresh playId per request would move the counter as fast as it can send. High enough
+     * that a real viewer replaying a video all evening is never refused.
      */
-    private static final long MAX_SESSIONS_PER_WINDOW = 60;
+    private static final long MAX_PER_WINDOW = 60;
 
-    private static final Duration SESSION_LIMIT_WINDOW = Duration.ofHours(1);
+    private static final Duration RATE_LIMIT_WINDOW = Duration.ofHours(1);
 
-    private final ViewByVideoRepository viewByVideoRepository;
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
     private final InteractionEventPublisher eventPublisher;
     private final StringRedisTemplate redisTemplate;
 
     @Override
-    public ViewResponse recordView(Long videoId, Long currentUserId) {
+    public ViewResponse recordView(Long videoId, Long currentUserId, ViewRequest request) {
         // Read before the write, and add the delta here rather than reading again afterwards. A
         // Cassandra counter read is not guaranteed to see the increment that just happened, and
         // the read after an invalidate is the one that repopulates the cache — so a stale value
         // would not merely be returned once, it would be pinned there for the cache's whole TTL.
         long viewCount = counterCacheService.getCounts(videoId).viewCount();
 
-        boolean counted = executeLwtWithRetry(() -> viewByVideoRepository.insertIfNotExists(
-                videoId, currentUserId, Instant.now(), DEDUP_WINDOW_SECONDS));
+        // Before the claim, not after: a request refused past the claim would have burned its
+        // playId on the way out, so the client's retry would be told the view was already counted
+        // when nothing counted it.
+        requireWithinLimit("view-rate", videoId, currentUserId, ViewRateLimitedException::new);
+
+        boolean counted = claimPlay(videoId, currentUserId, request.playId());
 
         if (counted) {
             videoCountersRepository.incrementViewCount(videoId, 1);
@@ -90,50 +93,50 @@ public class ViewServiceImpl implements ViewService {
         long watchedMs = Math.min(request.watchedMs(), durationMs);
         boolean completed = watchedMs >= durationMs * COMPLETION_RATIO;
 
-        requireWithinSessionLimit(videoId, currentUserId);
+        requireWithinLimit("watch-rate", videoId, currentUserId, WatchRateLimitedException::new);
         eventPublisher.publishWatch(videoId, currentUserId, watchedMs, durationMs, completed);
 
         return new WatchResponse(videoId, watchedMs, completed);
     }
 
     /**
-     * Clamping bounds one row; this bounds how many rows exist. A watch event is an unauthenticated
-     * vote on where a video ranks, replayable as fast as HTTP allows, and the ranker weights volume.
-     * Refusing with 429 rather than dropping the event silently keeps an honest client — one that
-     * genuinely replayed a video sixty times in an hour — able to tell that it was refused.
+     * Claims one playback, so the counter moves once per play no matter how many times the client
+     * sends the request. The viewer is part of the key as well as the playId: the playId is
+     * untrusted, and one client reusing another's value must not be able to swallow their view.
+     *
+     * <p>Fails open — a Redis outage counts every delivery rather than refusing every view. The
+     * failure mode of the other choice is a video that visibly stops accumulating views; this one
+     * over-counts retries for the duration of the outage and then corrects itself.
+     */
+    private boolean claimPlay(Long videoId, Long currentUserId, String playId) {
+        String key = "interaction:play:%d:%d:%s".formatted(currentUserId, videoId, playId);
+        return !Boolean.FALSE.equals(redisTemplate.opsForValue().setIfAbsent(key, "1", PLAY_TTL));
+    }
+
+    /**
+     * A shared per-(viewer, video, hour) counter, used by both endpoints under separate keys so
+     * neither eats the other's budget. Deliberately loud rather than a silent no-op: a client
+     * being throttled has a bug or is being replayed, and both are worth surfacing to whoever
+     * wrote it, at the cost of telling a viewer who genuinely replayed sixty times that they were
+     * refused.
      *
      * <p>ponytail: a fixed counter per (viewer, video, hour), so a burst at the boundary can cross
      * two windows. A sliding window is the upgrade if that ever matters; it does not here, where
      * the point is the order of magnitude and not the exact number.
      */
-    private void requireWithinSessionLimit(Long videoId, Long currentUserId) {
-        String key = "interaction:watch-rate:%d:%d".formatted(currentUserId, videoId);
-        Long sessions = redisTemplate.opsForValue().increment(key);
+    private void requireWithinLimit(String bucket, Long videoId, Long currentUserId,
+                                    Supplier<RuntimeException> onExceeded) {
+        String key = "interaction:%s:%d:%d".formatted(bucket, currentUserId, videoId);
+        Long hits = redisTemplate.opsForValue().increment(key);
 
-        if (sessions == null) {
+        if (hits == null) {
             return;
         }
-        if (sessions == 1L) {
-            redisTemplate.expire(key, SESSION_LIMIT_WINDOW);
+        if (hits == 1L) {
+            redisTemplate.expire(key, RATE_LIMIT_WINDOW);
         }
-        if (sessions > MAX_SESSIONS_PER_WINDOW) {
-            throw new WatchRateLimitedException();
+        if (hits > MAX_PER_WINDOW) {
+            throw onExceeded.get();
         }
-    }
-
-    /**
-     * Same reasoning as {@code LikeServiceImpl}: a WriteTimeoutException leaves an LWT's outcome
-     * unknown, and re-running an IF NOT EXISTS is harmless, whereas re-running the counter
-     * increment that follows it would not be.
-     */
-    private boolean executeLwtWithRetry(java.util.function.BooleanSupplier lwtOperation) {
-        for (int attempt = 0; attempt <= MAX_LWT_RETRIES; attempt++) {
-            try {
-                return lwtOperation.getAsBoolean();
-            } catch (WriteTimeoutException ignored) {
-                // Retried below; the last failure surfaces as the conflict thrown after the loop.
-            }
-        }
-        throw new InteractionConflictException("View could not be confirmed after retries, please try again");
     }
 }

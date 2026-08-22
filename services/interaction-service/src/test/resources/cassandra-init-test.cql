@@ -41,23 +41,6 @@ CREATE TABLE IF NOT EXISTS shares_by_video (
     PRIMARY KEY ((video_id), share_id)
 ) WITH CLUSTERING ORDER BY (share_id DESC);
 
--- One row per (video, viewer) inside the dedup window; the row's TTL is the window, so
--- expiry is what lets the same viewer count again tomorrow. No counter lives here (counters
--- need their own table) — this table exists purely so an LWT insert can answer "was this
--- view already counted?" as part of the write, instead of a read followed by a write.
---
--- (video_id, user_id) is the whole partition key, not video_id alone: every read and write is
--- for one exact pair, nothing lists a video's viewers. Partitioning by video_id alone would put
--- every viewer of a video in one partition -- millions of rows for a viral video, each one
--- expiring on its own TTL, so the partition churns tombstones forever. The LWT is unaffected:
--- IF NOT EXISTS is per-partition either way.
-CREATE TABLE IF NOT EXISTS views_by_video (
-    video_id  bigint,
-    user_id   bigint,
-    viewed_at timestamp,
-    PRIMARY KEY ((video_id, user_id))
-);
-
 -- Counter columns must live in their own table (Cassandra restriction)
 CREATE TABLE IF NOT EXISTS video_counters (
     video_id      bigint PRIMARY KEY,
