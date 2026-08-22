@@ -6,9 +6,11 @@ import com.tiktok.interactionservice.dto.response.ViewResponse;
 import com.tiktok.interactionservice.dto.response.WatchResponse;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.InteractionConflictException;
+import com.tiktok.interactionservice.exception.WatchRateLimitedException;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import com.tiktok.interactionservice.repository.ViewByVideoRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -34,13 +36,37 @@ public class ViewServiceImpl implements ViewService {
      */
     private static final double COMPLETION_RATIO = 0.9;
 
+    /**
+     * The longest video this platform will play. durationMs is the client's number too, so
+     * clamping watchedMs against it alone leaves the ratio entirely in the client's hands: send
+     * the two equal and every session is a completion. This ceiling is what makes the pair mean
+     * something — past it the report describes a video that cannot exist here.
+     */
+    private static final long MAX_DURATION_MS = Duration.ofMinutes(10).toMillis();
+
+    /**
+     * How many sessions one viewer may report for one video per window. High enough that a real
+     * viewer replaying a video all evening is never refused, low enough that a script cannot
+     * write thousands of labelled rows about a video it wants promoted.
+     */
+    private static final long MAX_SESSIONS_PER_WINDOW = 60;
+
+    private static final Duration SESSION_LIMIT_WINDOW = Duration.ofHours(1);
+
     private final ViewByVideoRepository viewByVideoRepository;
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
     private final InteractionEventPublisher eventPublisher;
+    private final StringRedisTemplate redisTemplate;
 
     @Override
     public ViewResponse recordView(Long videoId, Long currentUserId) {
+        // Read before the write, and add the delta here rather than reading again afterwards. A
+        // Cassandra counter read is not guaranteed to see the increment that just happened, and
+        // the read after an invalidate is the one that repopulates the cache — so a stale value
+        // would not merely be returned once, it would be pinned there for the cache's whole TTL.
+        long viewCount = counterCacheService.getCounts(videoId).viewCount();
+
         boolean counted = executeLwtWithRetry(() -> viewByVideoRepository.insertIfNotExists(
                 videoId, currentUserId, Instant.now(), DEDUP_WINDOW_SECONDS));
 
@@ -48,23 +74,51 @@ public class ViewServiceImpl implements ViewService {
             videoCountersRepository.incrementViewCount(videoId, 1);
             counterCacheService.invalidate(videoId);
             eventPublisher.publishView(videoId, currentUserId);
+            viewCount++;
         }
 
-        return new ViewResponse(videoId, counted, counterCacheService.getCounts(videoId).viewCount());
+        return new ViewResponse(videoId, counted, viewCount);
     }
 
     @Override
     public WatchResponse recordWatch(Long videoId, Long currentUserId, WatchRequest request) {
-        // Clamped because watchedMs comes from the client and nothing stops it claiming an hour on
-        // a fifteen-second video. Left unclamped that is not merely a wrong row, it is the most
-        // attractive row in the training set — the label is a ratio, and the highest ratios are
-        // what a ranker learns hardest from.
-        long watchedMs = Math.min(request.watchedMs(), request.durationMs());
-        boolean completed = watchedMs >= request.durationMs() * COMPLETION_RATIO;
+        // Clamped because both numbers come from the client and nothing stops them claiming an
+        // hour on a fifteen-second video. Left unclamped that is not merely a wrong row, it is the
+        // most attractive row in the training set — the label is a ratio, and the highest ratios
+        // are what a ranker learns hardest from.
+        long durationMs = Math.min(request.durationMs(), MAX_DURATION_MS);
+        long watchedMs = Math.min(request.watchedMs(), durationMs);
+        boolean completed = watchedMs >= durationMs * COMPLETION_RATIO;
 
-        eventPublisher.publishWatch(videoId, currentUserId, watchedMs, request.durationMs(), completed);
+        requireWithinSessionLimit(videoId, currentUserId);
+        eventPublisher.publishWatch(videoId, currentUserId, watchedMs, durationMs, completed);
 
         return new WatchResponse(videoId, watchedMs, completed);
+    }
+
+    /**
+     * Clamping bounds one row; this bounds how many rows exist. A watch event is an unauthenticated
+     * vote on where a video ranks, replayable as fast as HTTP allows, and the ranker weights volume.
+     * Refusing with 429 rather than dropping the event silently keeps an honest client — one that
+     * genuinely replayed a video sixty times in an hour — able to tell that it was refused.
+     *
+     * <p>ponytail: a fixed counter per (viewer, video, hour), so a burst at the boundary can cross
+     * two windows. A sliding window is the upgrade if that ever matters; it does not here, where
+     * the point is the order of magnitude and not the exact number.
+     */
+    private void requireWithinSessionLimit(Long videoId, Long currentUserId) {
+        String key = "interaction:watch-rate:%d:%d".formatted(currentUserId, videoId);
+        Long sessions = redisTemplate.opsForValue().increment(key);
+
+        if (sessions == null) {
+            return;
+        }
+        if (sessions == 1L) {
+            redisTemplate.expire(key, SESSION_LIMIT_WINDOW);
+        }
+        if (sessions > MAX_SESSIONS_PER_WINDOW) {
+            throw new WatchRateLimitedException();
+        }
     }
 
     /**

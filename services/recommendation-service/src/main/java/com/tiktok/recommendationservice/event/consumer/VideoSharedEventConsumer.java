@@ -22,10 +22,7 @@ public class VideoSharedEventConsumer {
     public void onMessage(String payload) {
         VideoSharedEvent event = objectMapper.readValue(payload, VideoSharedEvent.class);
 
-        if (!inboxService.markIfNew(event.eventId())) {
-            return;
-        }
-
-        recommendationService.recordShare(String.valueOf(event.videoId()));
+        inboxService.runOnce(event.eventId(), () ->
+                recommendationService.recordShare(String.valueOf(event.videoId())));
     }
 }

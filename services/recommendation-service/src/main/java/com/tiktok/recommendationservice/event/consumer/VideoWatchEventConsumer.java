@@ -27,15 +27,11 @@ public class VideoWatchEventConsumer {
     public void onMessage(String payload) {
         VideoWatchEvent event = objectMapper.readValue(payload, VideoWatchEvent.class);
 
-        if (!inboxService.markIfNew(event.eventId())) {
-            return;
-        }
-
-        recommendationService.recordWatch(
+        inboxService.runOnce(event.eventId(), () -> recommendationService.recordWatch(
                 String.valueOf(event.videoId()),
                 event.userId(),
                 event.watchedMs(),
                 event.durationMs(),
-                event.completed());
+                event.completed()));
     }
 }

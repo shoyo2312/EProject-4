@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
-from features import FEATURE_NAMES, affinity_delta, completion_rate, log_watches
+from features import FEATURE_NAMES, TOP_TAGS, affinity_delta, completion_rate, log_watches
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("train")
@@ -74,8 +74,19 @@ def user_tag_affinity(watches: pd.DataFrame, tags: pd.DataFrame) -> pd.DataFrame
         for watched, duration in zip(watches["watched_ms"], watches["duration_ms"])
     ]
     joined = watches.merge(tags[["video_id", "tag"]], on="video_id", how="inner")
-    return joined.groupby(["user_id", "tag"], as_index=False)["delta"].sum().rename(
+    summed = joined.groupby(["user_id", "tag"], as_index=False)["delta"].sum().rename(
         columns={"delta": "affinity"})
+
+    # Cut to the tags the feed would actually steer by, which is what FeedServiceImpl.topTags
+    # reads: ZREVRANGE 0..TOP_TAGS-1 over the profile, non-positive scores discarded. A viewer
+    # with forty tags contributes five of them to tag_affinity at serving time; summing all
+    # forty here would put a systematically larger number in the same column, and the model
+    # would fit a feature it is never shown.
+    positive = summed[summed["affinity"] > 0]
+    return (positive
+            .sort_values("affinity", ascending=False)
+            .groupby("user_id", as_index=False)
+            .head(TOP_TAGS))
 
 
 def build_dataset(client, cutoff: datetime) -> pd.DataFrame:
@@ -147,7 +158,9 @@ def build_dataset(client, cutoff: datetime) -> pd.DataFrame:
         affinity = affinity[affinity["user_id"].isin(data["user_id"].unique())]
         tags = tags[tags["video_id"].isin(data["video_id"].unique())]
 
-        positive = affinity[affinity["affinity"] > 0]
+        # One tag set feeds both columns, because serving derives both from the same five tags:
+        # affinityByVideo and tagOverlap in FeedServiceImpl are filled in the same loop over
+        # topTags. Filtering one of them differently here is what made them disagree.
         per_pair = (
             tags[["video_id", "tag"]]
             .merge(affinity, on="tag", how="inner")
@@ -156,7 +169,7 @@ def build_dataset(client, cutoff: datetime) -> pd.DataFrame:
         )
         overlap = (
             tags[["video_id", "tag"]]
-            .merge(positive, on="tag", how="inner")
+            .merge(affinity, on="tag", how="inner")
             .groupby(["user_id", "video_id"], as_index=False)["tag"]
             .count()
             .rename(columns={"tag": "tag_overlap"})

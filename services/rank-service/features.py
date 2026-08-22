@@ -32,6 +32,13 @@ NEUTRAL_QUALITY = 0.5
 SKIP_RATIO = 0.2
 SKIP_PENALTY = -0.5
 
+# How many of a viewer's tags steer the feed. Must match TOP_TAGS in FeedServiceImpl: serving
+# reads the viewer's tag profile with ZREVRANGE 0..TOP_TAGS-1 and keeps only the positive ones,
+# so tag_affinity and tag_overlap there are sums over at most this many tags. Training that
+# reconstructs them over every tag a viewer ever touched computes a different number under the
+# same column name — the model then learns from a feature it is never served.
+TOP_TAGS = 5
+
 
 def completion_rate(watches: float, completions: float) -> float:
     """One viewer finishing the only watch a video ever had is not a 100% completion rate."""

@@ -22,10 +22,7 @@ public class VideoLikeEventConsumer {
     public void onMessage(String payload) {
         VideoLikeEvent event = objectMapper.readValue(payload, VideoLikeEvent.class);
 
-        if (!inboxService.markIfNew(event.eventId())) {
-            return;
-        }
-
-        recommendationService.recordLike(String.valueOf(event.videoId()), event.liked());
+        inboxService.runOnce(event.eventId(), () ->
+                recommendationService.recordLike(String.valueOf(event.videoId()), event.liked()));
     }
 }

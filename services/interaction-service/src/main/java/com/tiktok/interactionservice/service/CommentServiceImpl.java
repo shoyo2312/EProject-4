@@ -25,6 +25,9 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CommentServiceImpl implements CommentService {
 
+    /** How many all-deleted pages to skip past before handing the client a cursor and giving up. */
+    private static final int MAX_PAGES_SCANNED = 5;
+
     private final CommentByVideoRepository commentByVideoRepository;
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
@@ -50,21 +53,41 @@ public class CommentServiceImpl implements CommentService {
         return commentMapper.toResponse(comment);
     }
 
+    /**
+     * Deleted comments are filtered after Cassandra has already cut the page, so a page whose rows
+     * were all deleted comes back empty while hasMore says otherwise — a client that stops on an
+     * empty page stops early, and one that does not has to loop itself. Skipping such pages here
+     * keeps that loop in one place.
+     *
+     * <p>ponytail: bounded to a few pages, so a video with thousands of consecutive deleted
+     * comments can still return an empty page rather than scan forever. Filtering in the query is
+     * the real fix, and Cassandra cannot do it without a secondary index nobody wants.
+     */
     @Override
     public CommentPageResponse listComments(Long videoId, String cursor, int size) {
         CassandraPageRequest pageRequest = decodeCursor(cursor, size);
 
-        Slice<CommentByVideo> slice = commentByVideoRepository.findByVideoId(videoId, pageRequest);
+        List<CommentResponse> items = List.of();
+        Slice<CommentByVideo> slice;
 
-        List<CommentResponse> items = slice.getContent().stream()
-                .filter(comment -> !comment.isDeleted())
-                .map(commentMapper::toResponse)
-                .toList();
+        for (int page = 0; page < MAX_PAGES_SCANNED; page++) {
+            slice = commentByVideoRepository.findByVideoId(videoId, pageRequest);
 
-        boolean hasMore = slice.hasNext();
-        String nextCursor = hasMore ? encodeCursor((CassandraPageRequest) slice.nextPageable()) : null;
+            items = slice.getContent().stream()
+                    .filter(comment -> !comment.isDeleted())
+                    .map(commentMapper::toResponse)
+                    .toList();
 
-        return new CommentPageResponse(items, nextCursor, hasMore);
+            boolean hasMore = slice.hasNext();
+            String nextCursor = hasMore ? encodeCursor((CassandraPageRequest) slice.nextPageable()) : null;
+
+            if (!items.isEmpty() || !hasMore) {
+                return new CommentPageResponse(items, nextCursor, hasMore);
+            }
+            pageRequest = (CassandraPageRequest) slice.nextPageable();
+        }
+
+        return new CommentPageResponse(items, encodeCursor(pageRequest), true);
     }
 
     @Override
@@ -78,14 +101,14 @@ public class CommentServiceImpl implements CommentService {
             throw new NotCommentOwnerException(commentId);
         }
 
-        CommentByVideo deleted = CommentByVideo.builder()
-                .key(comment.getKey())
-                .userId(comment.getUserId())
-                .content(comment.getContent())
-                .createdAt(comment.getCreatedAt())
-                .deletedAt(Instant.now())
-                .build();
-        commentByVideoRepository.save(deleted);
+        // The read above answers "may this caller delete it"; it cannot answer "is it still there",
+        // because another delete can land between the read and the write. The condition does, and
+        // only the caller it applies for is allowed to move the counter — a save() would let both
+        // racing deletes decrement, and a counter table has no way back from that.
+        boolean deleted = commentByVideoRepository.markDeletedIfNotDeleted(videoId, commentId, Instant.now());
+        if (!deleted) {
+            throw new CommentNotFoundException(commentId);
+        }
 
         videoCountersRepository.incrementCommentCount(videoId, -1);
         counterCacheService.invalidate(videoId);

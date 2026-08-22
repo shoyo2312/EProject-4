@@ -65,32 +65,27 @@ public class VideoEventPublisher {
      * recommendation feed for as long as those stores exist, and its transcoded output sits in
      * MinIO with nothing left that refers to it.
      *
-     * <p>Only videos whose publication actually went out are announced: {@link #publishPending}
-     * skips soft-deleted rows, so a video deleted within five seconds of upload was never
-     * announced to anyone, and telling consumers to delete it would ask each of them to remove
-     * something they never received.
+     * <p>Videos deleted before their publication ever went out are announced too. That looks like
+     * telling consumers to remove something they never received, and for the two that keep an
+     * index it is exactly that — a no-op ZREM and a no-op Elasticsearch delete. But media-worker
+     * is not an index: the raw upload is already in MinIO by then, and this event is the only
+     * thing that ever refers to it again. Skipping it leaks the object for good, since nothing
+     * else knows the key.
      */
     @Scheduled(fixedDelay = 5000)
     public void publishPendingDeletions() {
         List<Video> deleted = videoRepository
                 .findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc();
 
-        List<Video> announced = deleted.stream().filter(video -> video.getEventPublishedAt() != null).toList();
-        // Videos deleted before they were ever announced: nothing to tell anyone, but the flag
-        // still has to be set or the poll returns them on every run for the life of the collection.
-        deleted.stream()
-                .filter(video -> video.getEventPublishedAt() == null)
-                .forEach(this::markDeletePublished);
-
-        if (announced.isEmpty()) {
+        if (deleted.isEmpty()) {
             return;
         }
 
-        int published = outboxDispatcher.dispatch(announced, this::toDeletedRecord, this::markDeletePublished);
+        int published = outboxDispatcher.dispatch(deleted, this::toDeletedRecord, this::markDeletePublished);
 
-        if (published < announced.size()) {
+        if (published < deleted.size()) {
             log.warn("Published {}/{} video deletion events, the rest stay pending for the next poll",
-                    published, announced.size());
+                    published, deleted.size());
         }
     }
 

@@ -19,7 +19,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -38,8 +44,12 @@ class VideoEventConsumerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
+    private static final int ATTEMPTS = 3;
+
+    /** No backoff in tests: the pause is real time and proves nothing the attempt count doesn't. */
     private VideoEventConsumer consumer() {
-        return new VideoEventConsumer(transcodeService, mediaCleanupService, eventProducer, objectMapper);
+        return new VideoEventConsumer(
+                transcodeService, mediaCleanupService, eventProducer, objectMapper, ATTEMPTS, 0L);
     }
 
     private byte[] header(String eventType) {
@@ -66,7 +76,7 @@ class VideoEventConsumerTest {
     }
 
     @Test
-    void onMessage_transcodeThrows_publishesFailureEvent() throws Exception {
+    void onMessage_transcodeKeepsThrowing_publishesFailureEvent() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid2", 1L, "Broken video", "s3://raw/vid2.mp4", List.of());
 
         when(transcodeService.transcode(anyString(), anyString())).thenThrow(new RuntimeException("MinIO unreachable"));
@@ -80,6 +90,48 @@ class VideoEventConsumerTest {
         assertThat(result.videoId()).isEqualTo("vid2");
         assertThat(result.success()).isFalse();
         assertThat(result.failureReason()).isEqualTo("MinIO unreachable");
+        verify(transcodeService, times(ATTEMPTS)).transcode(anyString(), anyString());
+    }
+
+    /**
+     * FAILED is terminal and nothing offers a retry, so a storage blip must not produce it. The
+     * distinction cannot come from the exception — a brief outage and an unreadable file raise the
+     * same one — so it comes from trying again.
+     */
+    @Test
+    void onMessage_transcodeRecoversOnASecondAttempt_publishesSuccess() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid5", 1L, "Flaky", "s3://raw/vid5.mp4", List.of());
+
+        when(transcodeService.transcode("vid5", "s3://raw/vid5.mp4"))
+                .thenThrow(new RuntimeException("MinIO unreachable"))
+                .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/master.m3u8", 30));
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        ArgumentCaptor<VideoTranscodedEvent> captor = ArgumentCaptor.forClass(VideoTranscodedEvent.class);
+        verify(eventProducer).publish(captor.capture());
+        assertThat(captor.getValue().success()).isTrue();
+    }
+
+    /**
+     * A broker that will not take the result is not a video that failed to transcode. Reporting it
+     * as one wrote FAILED onto a video whose media was already in the bucket, finished and
+     * correct; throwing instead redelivers the message and the transcode runs again over the same
+     * keys.
+     */
+    @Test
+    void onMessage_publishFails_doesNotReportTheVideoAsFailed() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid6", 1L, "Fine", "s3://raw/vid6.mp4", List.of());
+
+        when(transcodeService.transcode("vid6", "s3://raw/vid6.mp4"))
+                .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/master.m3u8", 30));
+        doThrow(new IllegalStateException("broker refused")).when(eventProducer).publish(any());
+
+        String payload = objectMapper.writeValueAsString(published);
+        assertThatThrownBy(() -> consumer().onMessage(payload, header("VideoPublishedEvent")))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(eventProducer, never()).publish(argThat(event -> !event.success()));
     }
 
     /**

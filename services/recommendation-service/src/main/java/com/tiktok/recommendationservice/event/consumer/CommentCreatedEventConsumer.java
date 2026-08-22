@@ -22,10 +22,7 @@ public class CommentCreatedEventConsumer {
     public void onMessage(String payload) {
         CommentCreatedEvent event = objectMapper.readValue(payload, CommentCreatedEvent.class);
 
-        if (!inboxService.markIfNew(event.eventId())) {
-            return;
-        }
-
-        recommendationService.recordComment(String.valueOf(event.videoId()));
+        inboxService.runOnce(event.eventId(), () ->
+                recommendationService.recordComment(String.valueOf(event.videoId())));
     }
 }

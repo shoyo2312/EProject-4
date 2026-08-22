@@ -224,19 +224,23 @@ class VideoEventPublisherTest {
 
     /**
      * publishPending skips soft-deleted rows, so a video deleted within five seconds of upload was
-     * never announced to anyone. Announcing its removal would ask every consumer to delete
-     * something it never received.
+     * never announced to anyone — and its removal is announced anyway. The indexing consumers get
+     * a no-op, but the raw upload is already in MinIO and this event carries the only key anything
+     * still holds for it; staying quiet leaks the object with nothing left that could find it.
      */
     @Test
-    void publishPendingDeletions_neverAnnouncedVideo_isMarkedWithoutSendingAnything() {
+    void publishPendingDeletions_neverAnnouncedVideo_isStillAnnouncedSoTheUploadIsReclaimed() {
         Video video = deletedVideo(false);
         when(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
                 .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
 
         publisher.publishPendingDeletions();
 
-        verifyNoInteractions(kafkaOperations);
-        // Still marked, or the poll returns this row on every run for the life of the collection.
+        ProducerRecord<String, String> record = captureRecord();
+        assertThat(eventTypeOf(record)).isEqualTo("VideoDeletedEvent");
+        assertThat(record.value()).contains(video.getRawFileUrl());
         assertThat(video.getDeleteEventPublishedAt()).isNotNull();
         verify(videoRepository).updateDeleteEventPublished(video);
     }
