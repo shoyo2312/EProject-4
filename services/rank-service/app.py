@@ -26,26 +26,35 @@ logger = logging.getLogger("rank-service")
 
 MODEL_PATH = Path(os.getenv("MODEL_PATH", "model/model.txt"))
 
-_model: lgb.Booster | None = None
-_model_version = "none"
+# Model and its version as one tuple, rebound in a single statement. /reload runs while /rank is
+# being served, and two globals cannot be swapped together: a request landing between the two
+# assignments would score with one model and report the other version, and — worse — the old code
+# published the booster before checking its feature names, so a model it was about to refuse was
+# already answering requests. Rebinding one name is atomic under the GIL, so readers see either
+# the whole old pair or the whole new one and no lock is needed.
+_state: tuple[lgb.Booster | None, str] = (None, "none")
 
 
 def _load_model() -> None:
-    global _model, _model_version
+    global _state
     if not MODEL_PATH.exists():
         logger.warning("No model at %s — /rank will return no scores until train.py runs", MODEL_PATH)
-        _model, _model_version = None, "none"
+        _state = (None, "none")
         return
-    _model = lgb.Booster(model_file=str(MODEL_PATH))
-    # mtime rather than a hash: the caller only logs this, and it has to change when the file does.
-    _model_version = f"{MODEL_PATH.name}@{int(MODEL_PATH.stat().st_mtime)}"
-    logger.info("Loaded %s with %d trees", _model_version, _model.num_trees())
 
-    trained_on = list(_model.feature_name())
+    model = lgb.Booster(model_file=str(MODEL_PATH))
+
+    trained_on = list(model.feature_name())
     if trained_on != FEATURE_NAMES:
         # Refuse rather than serve: a column order mismatch produces plausible scores from the
-        # wrong inputs, which is the one failure nothing downstream can detect.
+        # wrong inputs, which is the one failure nothing downstream can detect. Checked before
+        # publishing, so a refused model never answers a single request.
         raise RuntimeError(f"Model was trained on {trained_on}, this build serves {FEATURE_NAMES}")
+
+    # mtime rather than a hash: the caller only logs this, and it has to change when the file does.
+    version = f"{MODEL_PATH.name}@{int(MODEL_PATH.stat().st_mtime)}"
+    logger.info("Loaded %s with %d trees", version, model.num_trees())
+    _state = (model, version)
 
 
 @asynccontextmanager
@@ -78,25 +87,28 @@ class RankResponse(BaseModel):
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "model_version": _model_version, "features": FEATURE_NAMES}
+    return {"status": "ok", "model_version": _state[1], "features": FEATURE_NAMES}
 
 
 @app.post("/rank", response_model=RankResponse)
 def rank(request: RankRequest) -> RankResponse:
-    if _model is None or not request.candidates:
-        return RankResponse(scores={}, model_version=_model_version)
+    # One read of the pair, so a /reload landing mid-request cannot change the model out from
+    # under the scores that are already being computed.
+    model, version = _state
+    if model is None or not request.candidates:
+        return RankResponse(scores={}, model_version=version)
 
     rows = [to_row(candidate.model_dump()) for candidate in request.candidates]
-    predictions = _model.predict(rows)
+    predictions = model.predict(rows)
     scores = {
         candidate.video_id: float(prediction)
         for candidate, prediction in zip(request.candidates, predictions)
     }
-    return RankResponse(scores=scores, model_version=_model_version)
+    return RankResponse(scores=scores, model_version=version)
 
 
 @app.post("/reload")
 def reload_model() -> dict:
     """Picks up a newly trained model without a restart. Internal, same as everything else."""
     _load_model()
-    return {"model_version": _model_version}
+    return {"model_version": _state[1]}
