@@ -24,6 +24,15 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class CommentController {
 
+    /**
+     * The most comments one request may ask Cassandra for. Clamped here rather than trusted,
+     * because {@code size} goes straight into the driver's fetch size: zero and negatives are
+     * rejected by the driver as an illegal argument — a 500 on a query string — and a large one
+     * is a page nobody asked for, read in full. Same ceiling video-service applies to its own
+     * listings.
+     */
+    private static final int MAX_PAGE_SIZE = 50;
+
     private final CommentService commentService;
 
     @PostMapping("/videos/{videoId}/comments")
@@ -40,7 +49,8 @@ public class CommentController {
             @PathVariable Long videoId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.success(commentService.listComments(videoId, cursor, size));
+        return ApiResponse.success(
+                commentService.listComments(videoId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
     }
 
     @DeleteMapping("/videos/{videoId}/comments/{commentId}")

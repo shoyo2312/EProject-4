@@ -26,4 +26,16 @@ public interface CommentByVideoRepository extends CassandraRepository<CommentByV
     boolean markDeletedIfNotDeleted(@Param("videoId") Long videoId,
                                     @Param("commentId") Long commentId,
                                     @Param("deletedAt") Instant deletedAt);
+
+    /**
+     * Undoes one {@link #markDeletedIfNotDeleted} whose counter decrement never landed. Conditioned
+     * on the timestamp that call wrote, so it only ever reverses <em>that</em> deletion: another
+     * request deleting the same comment in between leaves a different value there, and this update
+     * then matches nothing rather than resurrecting a comment somebody meant to remove.
+     */
+    @Query("UPDATE comments_by_video SET deleted_at = null "
+            + "WHERE video_id = :videoId AND comment_id = :commentId IF deleted_at = :deletedAt")
+    boolean restoreIfDeletedAt(@Param("videoId") Long videoId,
+                               @Param("commentId") Long commentId,
+                               @Param("deletedAt") Instant deletedAt);
 }

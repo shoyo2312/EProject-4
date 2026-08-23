@@ -4,6 +4,7 @@ import com.tiktok.interactionservice.AbstractInteractionServiceIT;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
+import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
@@ -128,6 +129,17 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
                 .get()
                 .extracting(counters -> counters.getCommentCount())
                 .isEqualTo(0L);
+    }
+
+    /**
+     * A cursor the client made up is a 400, not a 500: the decoder throws IllegalArgumentException
+     * on anything that is not base64, and the handler of last resort would report that as
+     * INTERNAL_ERROR — a query-string typo triaged as an outage.
+     */
+    @Test
+    void listComments_unusableCursor_isRejectedAsBadRequest() {
+        assertThatThrownBy(() -> commentService.listComments(28L, "not a cursor!!", 20))
+                .isInstanceOf(InvalidCommentCursorException.class);
     }
 
     @Test
