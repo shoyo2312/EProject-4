@@ -127,19 +127,23 @@ public class AvatarMirrorService {
         // otherwise an open redirect on a trusted host reaches everywhere.
         requireAllowed(response.uri());
 
-        if (response.statusCode() != 200) {
-            throw new IllegalStateException(
-                    "Provider answered %d for the avatar at %s".formatted(response.statusCode(), uri));
-        }
-
-        String contentType = response.headers().firstValue("content-type")
-                .orElse("").toLowerCase(Locale.ROOT);
-        if (!contentType.startsWith("image/")) {
-            throw new IllegalStateException("Avatar at %s is %s, not an image"
-                    .formatted(uri, contentType.isEmpty() ? "untyped" : contentType));
-        }
-
+        // Every rejection below happens inside the try, so the body stream is closed and its
+        // connection returned to the pool on the way out. Throwing before opening it leaks one
+        // connection per refusal, and a provider that has started answering 4xx refuses every
+        // avatar until this worker runs out.
         try (InputStream body = response.body()) {
+            if (response.statusCode() != 200) {
+                throw new IllegalStateException(
+                        "Provider answered %d for the avatar at %s".formatted(response.statusCode(), uri));
+            }
+
+            String contentType = response.headers().firstValue("content-type")
+                    .orElse("").toLowerCase(Locale.ROOT);
+            if (!contentType.startsWith("image/")) {
+                throw new IllegalStateException("Avatar at %s is %s, not an image"
+                        .formatted(uri, contentType.isEmpty() ? "untyped" : contentType));
+            }
+
             // One byte past the budget on purpose: it is what tells a file of exactly maxBytes
             // apart from one that was truncated at the limit.
             byte[] bytes = body.readNBytes((int) Math.min(maxBytes + 1, Integer.MAX_VALUE));
