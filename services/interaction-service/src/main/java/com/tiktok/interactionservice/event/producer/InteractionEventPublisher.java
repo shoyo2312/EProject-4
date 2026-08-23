@@ -15,17 +15,36 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Publishes inline right after the corresponding Cassandra write succeeds — there is no
- * outbox here (Cassandra has no cross-table transaction to pair one with), so a Kafka send
- * failure after a successful Cassandra write silently drops the event. Accepted for v1
- * since nothing currently consumes these events; revisit before any consumer depends on
- * them for correctness-critical behavior.
+ * Publishes inline right after the corresponding Cassandra write succeeds. There is no outbox
+ * here — Cassandra has no cross-table transaction to pair one with — so the broker's ack is what
+ * stands in for it: {@code send()} hands back a future and throws synchronously only on a
+ * serialization error or a full buffer, which means a broker that refuses the record would
+ * otherwise be an event dropped in silence that nothing ever retries.
+ *
+ * <p>These events are no longer nobody's business, which is what the note here used to assume:
+ * video-service maintains likeCount, commentCount and viewCount from them, and
+ * recommendation-service builds trending and every viewer's tag profile out of them. A dropped one
+ * is a counter permanently off by one, because neither side ever recomputes.
+ *
+ * <p>So the send is confirmed and a failure reaches the caller, whose Cassandra write is then
+ * compensated and whose client gets an error worth retrying — see LikeServiceImpl.like for the
+ * shape. That trades a Kafka blip for a failed request instead of a silent, permanent divergence
+ * between three services' idea of the same number.
  */
 @Component
 @RequiredArgsConstructor
 public class InteractionEventPublisher {
+
+    /**
+     * Long enough to ride out a leader election, short enough that a person waiting on a like is
+     * not left holding the request. Deliberately far below media-worker's 30s: that publisher runs
+     * on a Kafka listener with nobody waiting, this one runs inside an HTTP request.
+     */
+    private static final Duration ACK_TIMEOUT = Duration.ofSeconds(5);
 
     private static final String LIKE_TOPIC = "interaction.like-events";
     private static final String COMMENT_TOPIC = "interaction.comment-events";
@@ -40,7 +59,8 @@ public class InteractionEventPublisher {
     @SneakyThrows
     public void publishLike(Long videoId, Long userId, boolean liked) {
         VideoLikeEvent event = VideoLikeEvent.of(videoId, userId, liked);
-        kafkaTemplate.send(LIKE_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event));
+        confirm(new ProducerRecord<>(
+                LIKE_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event)));
     }
 
     /**
@@ -51,13 +71,13 @@ public class InteractionEventPublisher {
     @SneakyThrows
     public void publishCommentCreated(Long commentId, Long videoId, Long userId, String content) {
         CommentCreatedEvent event = CommentCreatedEvent.of(commentId, videoId, userId, content);
-        kafkaTemplate.send(commentRecord(videoId, "CommentCreatedEvent", objectMapper.writeValueAsString(event)));
+        confirm(commentRecord(videoId, "CommentCreatedEvent", objectMapper.writeValueAsString(event)));
     }
 
     @SneakyThrows
     public void publishCommentDeleted(Long commentId, Long videoId, Long userId) {
         CommentDeletedEvent event = CommentDeletedEvent.of(commentId, videoId, userId);
-        kafkaTemplate.send(commentRecord(videoId, "CommentDeletedEvent", objectMapper.writeValueAsString(event)));
+        confirm(commentRecord(videoId, "CommentDeletedEvent", objectMapper.writeValueAsString(event)));
     }
 
     private ProducerRecord<String, String> commentRecord(Long videoId, String eventType, String payload) {
@@ -70,13 +90,19 @@ public class InteractionEventPublisher {
     @SneakyThrows
     public void publishView(Long videoId, Long userId) {
         VideoViewedEvent event = VideoViewedEvent.of(videoId, userId);
-        kafkaTemplate.send(VIEW_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event));
+        confirm(new ProducerRecord<>(
+                VIEW_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event)));
     }
 
     /**
      * Every session, unlike {@link #publishView} — see ViewService.recordWatch for why the label
      * stream and the counter stream cannot be the same one. Keyed by video so one video's
      * sessions stay ordered within a partition, matching the other four topics.
+     *
+     * <p>The one send that is not confirmed. No counter is derived from this topic — it is
+     * training rows and tag affinity, where one lost session out of hundreds a day changes
+     * nothing, while blocking the request that reports it would put the densest stream this
+     * service produces on the critical path of every scroll.
      */
     @SneakyThrows
     public void publishWatch(Long videoId, Long userId, long watchedMs, long durationMs, boolean completed) {
@@ -87,6 +113,21 @@ public class InteractionEventPublisher {
     @SneakyThrows
     public void publishShare(Long shareId, Long videoId, Long userId) {
         VideoSharedEvent event = VideoSharedEvent.of(shareId, videoId, userId);
-        kafkaTemplate.send(SHARE_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event));
+        confirm(new ProducerRecord<>(
+                SHARE_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event)));
+    }
+
+    /**
+     * Sends and waits for the broker to say it has the record. Everything that moves a counter goes
+     * through here; {@link #publishWatch} deliberately does not.
+     */
+    @SneakyThrows
+    private void confirm(ProducerRecord<String, String> record) {
+        try {
+            kafkaTemplate.send(record).get(ACK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted publishing to " + record.topic(), e);
+        }
     }
 }

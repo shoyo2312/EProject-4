@@ -1,5 +1,7 @@
 package com.tiktok.interactionservice;
 
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
@@ -11,6 +13,11 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+
+import java.util.concurrent.CompletableFuture;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 /**
  * Shared Cassandra + Redis Testcontainers fixture. Subclasses share the same static
@@ -41,4 +48,15 @@ public abstract class AbstractInteractionServiceIT {
 
     @MockBean
     protected KafkaTemplate<String, String> kafkaTemplate;
+
+    /**
+     * A mock send answers null by default, and the publisher now waits on the future it gets back
+     * — so without this every counter-moving path would fail on a NullPointerException that says
+     * nothing about the code under test. An already-completed future is the broker acking at once.
+     */
+    @BeforeEach
+    void ackEveryPublish() {
+        when(kafkaTemplate.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+    }
 }
