@@ -34,7 +34,8 @@ class UserRegisteredEventConsumerTest {
     @Test
     void onMessage_firstDelivery_claimsAndCreatesProfile() throws Exception {
         UserRegisteredEventConsumer consumer = newConsumer();
-        UserRegisteredEvent event = UserRegisteredEvent.of(1L, "alice", "alice@example.com");
+        UserRegisteredEvent event = UserRegisteredEvent.of(
+                1L, "alice", "alice@example.com", "https://lh3.googleusercontent.com/a/alice");
         String payload = objectMapper.writeValueAsString(event);
 
         org.mockito.Mockito.when(inboxEventRepository.tryClaim(
@@ -47,7 +48,7 @@ class UserRegisteredEventConsumerTest {
         consumer.onMessage(payload);
 
         verify(userProfileService, times(1))
-                .createFromRegisteredEvent(event.userId(), event.username());
+                .createFromRegisteredEvent(event.userId(), event.username(), event.avatarUrl());
     }
 
     @Test
@@ -66,7 +67,7 @@ class UserRegisteredEventConsumerTest {
         consumer.onMessage(payload);
 
         verify(userProfileService, never()).createFromRegisteredEvent(
-                ArgumentMatchers.anyLong(), ArgumentMatchers.anyString());
+                ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(), ArgumentMatchers.any());
     }
 
     @Test
@@ -80,6 +81,6 @@ class UserRegisteredEventConsumerTest {
                 ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(),
                 ArgumentMatchers.anyString(), ArgumentMatchers.any(Instant.class));
         verify(userProfileService, never()).createFromRegisteredEvent(
-                ArgumentMatchers.anyLong(), ArgumentMatchers.anyString());
+                ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(), ArgumentMatchers.any());
     }
 }

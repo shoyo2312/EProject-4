@@ -9,6 +9,7 @@ import com.tiktok.userservice.mapper.UserProfileMapper;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,9 +20,13 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserProfileServiceImpl implements UserProfileService {
+
+    /** Matches avatar_url in V1__create_user_profiles_table.sql. */
+    private static final int MAX_AVATAR_URL_LENGTH = 500;
 
     private final UserProfileRepository userProfileRepository;
     private final UserBlockRepository userBlockRepository;
@@ -79,7 +84,7 @@ public class UserProfileServiceImpl implements UserProfileService {
 
     @Override
     @Transactional
-    public void createFromRegisteredEvent(Long userId, String username) {
+    public void createFromRegisteredEvent(Long userId, String username, String avatarUrl) {
         if (userProfileRepository.existsByUserIdAndDeletedAtIsNull(userId)) {
             return;
         }
@@ -87,8 +92,41 @@ public class UserProfileServiceImpl implements UserProfileService {
         UserProfile profile = UserProfile.builder()
                 .userId(userId)
                 .displayName(username)
+                .avatarUrl(providerAvatar(avatarUrl))
                 .build();
 
         userProfileRepository.save(profile);
+    }
+
+    @Override
+    @Transactional
+    public void applyMirroredAvatar(Long userId, String sourceUrl, String avatarUrl) {
+        int updated = userProfileRepository.replaceProviderAvatar(userId, sourceUrl, avatarUrl);
+
+        if (updated == 0) {
+            // Not an error, and the common case once an account has been around: the user picked
+            // their own picture, or the profile does not exist yet because this raced the
+            // registration that creates it. The next sign-in announces the same avatar again.
+            log.debug("Left the avatar of user {} alone; it is not the provider's to replace", userId);
+        }
+    }
+
+    /**
+     * The identity provider's picture, or null when it is not something we are willing to hand to
+     * a browser.
+     *
+     * <p>Deliberately not {@code @ValidMediaUrl}: that allowlist is our own CDN and buckets, which
+     * a Google or Facebook URL is not and never will be. What still has to hold is that the value
+     * is an https URL — an event is no less a trust boundary than a request, and a
+     * {@code javascript:} string reaching an {@code <img src>} is the whole reason the
+     * client-facing field is validated at all — and that it fits avatar_url, VARCHAR(500).
+     */
+    private static String providerAvatar(String avatarUrl) {
+        if (avatarUrl == null
+                || !avatarUrl.startsWith("https://")
+                || avatarUrl.length() > MAX_AVATAR_URL_LENGTH) {
+            return null;
+        }
+        return avatarUrl;
     }
 }

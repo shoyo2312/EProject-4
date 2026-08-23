@@ -37,6 +37,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test")
 class UserProfileServiceImplTest {
 
+    /** A picture the user uploaded themselves, which nothing downstream may replace. */
+    private static final String OWN_AVATAR = "https://cdn.tiktok-clone.local/avatars/own.png";
+
     @Container
     @ServiceConnection
     static PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
@@ -73,7 +76,7 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void createFromRegisteredEvent_createsProfileWithUsernameAsDisplayName() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
 
         UserProfileResponse profile = userProfileService.getByUserId(1L, 1L);
 
@@ -85,9 +88,59 @@ class UserProfileServiceImplTest {
 
     @Test
     @Transactional
+    void createFromRegisteredEvent_socialSignup_keepsProviderAvatar() {
+        userProfileService.createFromRegisteredEvent(
+                1L, "johndoe", "https://lh3.googleusercontent.com/a/johndoe");
+
+        assertThat(userProfileService.getByUserId(1L, 1L).avatarUrl())
+                .isEqualTo("https://lh3.googleusercontent.com/a/johndoe");
+    }
+
+    /**
+     * An event is a trust boundary like any other: a scheme that would execute inside an img tag,
+     * or a URL too long for the column, leaves the profile on the default avatar instead.
+     */
+    @Test
+    @Transactional
+    void createFromRegisteredEvent_unusableAvatar_fallsBackToDefault() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", "javascript:alert(1)");
+        userProfileService.createFromRegisteredEvent(2L, "janedoe", "https://x/" + "a".repeat(500));
+
+        assertThat(userProfileService.getByUserId(1L, 1L).avatarUrl()).isNull();
+        assertThat(userProfileService.getByUserId(2L, 2L).avatarUrl()).isNull();
+    }
+
+    /**
+     * The three states the mirrored copy meets, asserted together because the WHERE clause that
+     * separates them is one expression: a profile still on the provider URL moves to our copy, one
+     * that never had an avatar takes it (that is the backfill for accounts older than the feature),
+     * and one whose owner uploaded a picture keeps it.
+     */
+    @Test
+    @Transactional
+    void applyMirroredAvatar_replacesTheProviderUrlAndFillsGaps_butNeverTheUsersOwn() {
+        String source = "https://lh3.googleusercontent.com/a/x";
+        String mirrored = "http://localhost:9000/video-media/avatars/1.jpg";
+
+        userProfileService.createFromRegisteredEvent(1L, "seeded", source);
+        userProfileService.createFromRegisteredEvent(2L, "empty", null);
+        userProfileService.createFromRegisteredEvent(3L, "chose", null);
+        userProfileService.updateOwnProfile(3L, new UpdateProfileRequest(null, null, OWN_AVATAR));
+
+        userProfileService.applyMirroredAvatar(1L, source, mirrored);
+        userProfileService.applyMirroredAvatar(2L, source, mirrored);
+        userProfileService.applyMirroredAvatar(3L, source, mirrored);
+
+        assertThat(userProfileService.getByUserId(1L, 1L).avatarUrl()).isEqualTo(mirrored);
+        assertThat(userProfileService.getByUserId(2L, 2L).avatarUrl()).isEqualTo(mirrored);
+        assertThat(userProfileService.getByUserId(3L, 3L).avatarUrl()).isEqualTo(OWN_AVATAR);
+    }
+
+    @Test
+    @Transactional
     void createFromRegisteredEvent_replay_isNoOp() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe");
-        userProfileService.createFromRegisteredEvent(1L, "johndoe");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
 
         assertThat(userProfileRepository.findAll()).hasSize(1);
     }
@@ -101,9 +154,9 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void getByUserIds_dropsUnknownAndBlockedIdsInsteadOfFailingThePage() {
-        userProfileService.createFromRegisteredEvent(1L, "alice");
-        userProfileService.createFromRegisteredEvent(2L, "bob");
-        userProfileService.createFromRegisteredEvent(3L, "carol");
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
         blockService.block(3L, 1L);
 
         List<UserProfileResponse> profiles =
@@ -116,8 +169,8 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void getByUserIds_dropsBlockedIdInEitherDirection() {
-        userProfileService.createFromRegisteredEvent(1L, "alice");
-        userProfileService.createFromRegisteredEvent(2L, "bob");
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
         blockService.block(1L, 2L);
 
         assertThat(userProfileService.getByUserIds(1L, List.of(2L))).isEmpty();
@@ -127,9 +180,9 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void getByUserIds_answersInTheOrderAskedAndCollapsesDuplicates() {
-        userProfileService.createFromRegisteredEvent(1L, "alice");
-        userProfileService.createFromRegisteredEvent(2L, "bob");
-        userProfileService.createFromRegisteredEvent(3L, "carol");
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
 
         List<UserProfileResponse> profiles =
                 userProfileService.getByUserIds(1L, List.of(3L, 1L, 2L, 3L));
@@ -158,8 +211,8 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void getByUserId_viewerBlockedByTarget_throwsNotFound() {
-        userProfileService.createFromRegisteredEvent(1L, "alice");
-        userProfileService.createFromRegisteredEvent(2L, "bob");
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
         blockService.block(1L, 2L);
 
         // Same 404 in both directions: the block hides each side from the other, and neither
@@ -173,9 +226,9 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void getByUserId_unrelatedViewer_stillSeesProfile() {
-        userProfileService.createFromRegisteredEvent(1L, "alice");
-        userProfileService.createFromRegisteredEvent(2L, "bob");
-        userProfileService.createFromRegisteredEvent(3L, "carol");
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
         blockService.block(1L, 2L);
 
         assertThat(userProfileService.getByUserId(3L, 1L).displayName()).isEqualTo("alice");
@@ -185,7 +238,7 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void updateOwnProfile_updatesDisplayNameBioAndAvatar() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
 
         UserProfileResponse updated = userProfileService.updateOwnProfile(
                 1L, new UpdateProfileRequest("John Doe", "Hello world", "https://example.com/avatar.png"));
@@ -198,7 +251,7 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void updateOwnProfile_withOnlyDisplayName_keepsBioAndAvatar() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
         userProfileService.updateOwnProfile(
                 1L, new UpdateProfileRequest("John Doe", "Hello world", "https://example.com/avatar.png"));
 
@@ -213,7 +266,7 @@ class UserProfileServiceImplTest {
     @Test
     @Transactional
     void updateOwnProfile_withEmptyBio_clearsIt() {
-        userProfileService.createFromRegisteredEvent(1L, "johndoe");
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
         userProfileService.updateOwnProfile(1L, new UpdateProfileRequest(null, "Hello world", null));
 
         UserProfileResponse updated = userProfileService.updateOwnProfile(

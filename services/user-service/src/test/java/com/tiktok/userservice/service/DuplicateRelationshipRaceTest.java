@@ -84,8 +84,8 @@ class DuplicateRelationshipRaceTest {
         userMuteRepository.deleteAll();
         userProfileRepository.deleteAll();
 
-        userProfileService.createFromRegisteredEvent(1L, "alice");
-        userProfileService.createFromRegisteredEvent(2L, "bob");
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
     }
 
     @Test
