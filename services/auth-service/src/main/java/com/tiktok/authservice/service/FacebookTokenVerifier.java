@@ -65,8 +65,9 @@ public class FacebookTokenVerifier implements SocialTokenVerifier {
         }
 
         // The uid comes from /debug_token, which we have just authenticated with our app secret;
-        // /me is asked only for the address, and only because /debug_token does not carry it.
-        String email = me(accessToken).email();
+        // /me is asked only for the address and the picture, neither of which /debug_token carries.
+        MeResponse me = me(accessToken);
+        String email = me.email();
 
         // Facebook never states whether it has verified the address, so we must assume it has not.
         // That means a Facebook login never auto-links to an existing account by email — it can
@@ -75,7 +76,8 @@ public class FacebookTokenVerifier implements SocialTokenVerifier {
                 AuthProvider.FACEBOOK,
                 data.userId(),
                 email == null ? null : email.toLowerCase(),
-                false);
+                false,
+                me.pictureUrl());
     }
 
     private static boolean isJwt(String token) {
@@ -95,7 +97,7 @@ public class FacebookTokenVerifier implements SocialTokenVerifier {
 
     private MeResponse me(String accessToken) {
         MeResponse response = call(uri -> uri.path("/me")
-                .queryParam("fields", "id,email")
+                .queryParam("fields", "id,email,picture.type(large)")
                 .queryParam("access_token", accessToken)
                 .build(), MeResponse.class);
         if (response == null) {
@@ -128,6 +130,26 @@ public class FacebookTokenVerifier implements SocialTokenVerifier {
 
     /** {@code email} is absent whenever the permission was declined or the account has none. */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record MeResponse(String id, String email) {
+    private record MeResponse(String id, String email, Picture picture) {
+
+        /**
+         * Null unless Facebook has a real picture: the field is always present, but for an account
+         * that never uploaded one it points at the grey silhouette, and storing that would be worse
+         * than our own default avatar rather than better.
+         */
+        String pictureUrl() {
+            if (picture == null || picture.data() == null || picture.data().isSilhouette()) {
+                return null;
+            }
+            return picture.data().url();
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record Picture(PictureData data) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record PictureData(String url, @JsonProperty("is_silhouette") boolean isSilhouette) {
     }
 }

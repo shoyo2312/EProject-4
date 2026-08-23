@@ -37,6 +37,18 @@ public interface UserProfileService {
      * <p>Takes no email on purpose: nothing in a profile is addressed by email, and a copy kept
      * here would be a second place for it to be wrong once the account changes it. auth-service
      * owns that field.
+     *
+     * <p>{@code avatarUrl} is the picture the identity provider already held for a social signup,
+     * null for a password one. It only ever seeds the profile — any avatar after that is the
+     * user's own, set through {@link #updateOwnProfile} and never overwritten from here.
      */
-    void createFromRegisteredEvent(Long userId, String username);
+    void createFromRegisteredEvent(Long userId, String username, String avatarUrl);
+
+    /**
+     * Moves a profile off the provider's URL and onto our own copy of the same picture.
+     *
+     * <p>Also how an account that predates provider avatars gets one at all: a profile with no
+     * avatar takes the copy too. A profile whose owner has since chosen a picture keeps it.
+     */
+    void applyMirroredAvatar(Long userId, String sourceUrl, String avatarUrl);
 }

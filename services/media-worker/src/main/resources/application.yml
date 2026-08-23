@@ -21,3 +21,11 @@ minio:
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin123}
   bucket: ${MINIO_BUCKET:video-media}
+
+media:
+  avatar:
+    # The only hosts this worker will fetch an avatar from. Google serves pictures from lh3,
+    # Facebook from platform-lookaside and the fbcdn host its redirects land on. Anything else an
+    # event names is refused rather than fetched — see AvatarMirrorService.
+    allowed-hosts: ${AVATAR_ALLOWED_HOSTS:lh3.googleusercontent.com,platform-lookaside.fbsbx.com,graph.facebook.com,scontent.xx.fbcdn.net}
+    max-bytes: ${AVATAR_MAX_BYTES:5242880}

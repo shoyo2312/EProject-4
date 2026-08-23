@@ -54,7 +54,10 @@ public class GoogleTokenVerifier implements SocialTokenVerifier {
                 info.sub(),
                 info.email() == null ? null : info.email().toLowerCase(),
                 // Google reports this as the string "true", not a JSON boolean.
-                "true".equalsIgnoreCase(info.emailVerified()));
+                "true".equalsIgnoreCase(info.emailVerified()),
+                // Present only when the token was minted with the `profile` scope. Null otherwise,
+                // which just leaves a new account on the default avatar.
+                info.picture());
     }
 
     private TokenInfo fetch(String idToken) {
@@ -75,7 +78,8 @@ public class GoogleTokenVerifier implements SocialTokenVerifier {
             String aud,
             String sub,
             String email,
-            @JsonProperty("email_verified") String emailVerified
+            @JsonProperty("email_verified") String emailVerified,
+            String picture
     ) {
     }
 }

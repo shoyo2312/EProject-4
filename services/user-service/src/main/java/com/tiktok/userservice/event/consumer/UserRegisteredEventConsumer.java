@@ -43,6 +43,7 @@ public class UserRegisteredEventConsumer {
             return;
         }
 
-        userProfileService.createFromRegisteredEvent(event.userId(), event.username());
+        userProfileService.createFromRegisteredEvent(
+                event.userId(), event.username(), event.avatarUrl());
     }
 }

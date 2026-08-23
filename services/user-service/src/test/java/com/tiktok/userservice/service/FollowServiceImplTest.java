@@ -62,8 +62,8 @@ class FollowServiceImplTest {
         userBlockRepository.deleteAll();
         userProfileRepository.deleteAll();
 
-        userProfileService.createFromRegisteredEvent(1L, "alice");
-        userProfileService.createFromRegisteredEvent(2L, "bob");
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
     }
 
     @Test
@@ -149,7 +149,7 @@ class FollowServiceImplTest {
     @Test
     @Transactional
     void listFollowers_viewerBlockedByOwner_throwsNotFound() {
-        userProfileService.createFromRegisteredEvent(3L, "carol");
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
         followService.follow(3L, 1L);
         blockService.block(1L, 2L);
 
@@ -164,7 +164,7 @@ class FollowServiceImplTest {
     @Test
     @Transactional
     void listFollowers_unrelatedViewer_stillSeesList() {
-        userProfileService.createFromRegisteredEvent(3L, "carol");
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
         followService.follow(3L, 1L);
         blockService.block(1L, 2L);
 

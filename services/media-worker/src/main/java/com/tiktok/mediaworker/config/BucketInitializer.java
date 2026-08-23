@@ -28,6 +28,10 @@ public class BucketInitializer implements ApplicationRunner {
      * the objects behind them have to be readable without credentials, or every player gets a
      * 403 on a video the API happily says is PUBLISHED.
      *
+     * <p>{@code avatars/} joins them for the same reason: a profile picture is loaded by every
+     * viewer of every comment, and it is a copy of something the provider was already serving to
+     * anyone with the URL.
+     *
      * <p>{@code raw/} is deliberately excluded and must stay excluded. Those are the users' own
      * uploads, the key names the uploader, and they are reached through a presigned PUT that
      * expires in minutes — publishing them would hand out every original ever uploaded.
@@ -44,7 +48,11 @@ public class BucketInitializer implements ApplicationRunner {
                 "Effect": "Allow",
                 "Principal": {"AWS": ["*"]},
                 "Action": ["s3:GetObject"],
-                "Resource": ["arn:aws:s3:::%1$s/hls/*", "arn:aws:s3:::%1$s/thumbnails/*"]
+                "Resource": [
+                  "arn:aws:s3:::%1$s/hls/*",
+                  "arn:aws:s3:::%1$s/thumbnails/*",
+                  "arn:aws:s3:::%1$s/avatars/*"
+                ]
               }]
             }""";
 
