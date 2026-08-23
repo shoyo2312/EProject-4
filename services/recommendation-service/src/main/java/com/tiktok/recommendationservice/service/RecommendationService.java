@@ -23,7 +23,11 @@ public interface RecommendationService {
 
     void recordShare(String videoId);
 
-    void recordComment(String videoId);
+    /**
+     * @param created true for a new comment, false when one was removed — the engagement a
+     *                comment earned is taken back when it stops existing, same as an unlike.
+     */
+    void recordComment(String videoId, boolean created);
 
     /**
      * Folds one watch session in: it is engagement, it is a quality datapoint for the video, it

@@ -109,8 +109,8 @@ public class RecommendationServiceImpl implements RecommendationService {
     }
 
     @Override
-    public void recordComment(String videoId) {
-        addEngagement(videoId, COMMENT_SCORE);
+    public void recordComment(String videoId, boolean created) {
+        addEngagement(videoId, created ? COMMENT_SCORE : -COMMENT_SCORE);
     }
 
     @Override
