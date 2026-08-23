@@ -6,6 +6,7 @@ import com.tiktok.recommendationservice.dto.response.FeedItemResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.DefaultTypedTuple;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -19,6 +20,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Candidate generation stays rule-based; only the ordering is learned.
@@ -83,8 +85,15 @@ public class FeedServiceImpl implements FeedService {
                 reasons.computeIfAbsent(videoId, id -> new ArrayList<>()).add("trending"));
 
         // Tag matches first, so that when the pool is capped it is the trending tail that gets
-        // cut rather than the videos this viewer is actually interested in.
-        Set<String> pool = new LinkedHashSet<>(affinityByVideo.keySet());
+        // cut rather than the videos this viewer is actually interested in — and the tag matches
+        // themselves strongest first, because affinityByVideo is a HashMap and its iteration order
+        // is the hash layout. Taking them as they come makes which five hundred survive the cap an
+        // accident, and drops a viewer's best matches ahead of their weakest ones.
+        Set<String> pool = affinityByVideo.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        // Trending comes out of trendingCandidates in rank order, which this set preserves.
         pool.addAll(trending.keySet());
 
         Set<String> excluded = alreadyDelivered(userId);
@@ -229,9 +238,14 @@ public class FeedServiceImpl implements FeedService {
         }
         String key = RecoKeys.userServed(userId);
         double now = Instant.now().getEpochSecond();
-        for (FeedItemResponse item : feed) {
-            redisTemplate.opsForZSet().add(key, item.videoId(), now);
-        }
+        // One ZADD for the page rather than one per item, same reasoning as the two ZMSCOREs in
+        // counters(): this runs on every feed request, and fifty round trips to write fifty ids is
+        // latency spent on bookkeeping the viewer is waiting through.
+        Set<ZSetOperations.TypedTuple<String>> served = feed.stream()
+                .map(item -> (ZSetOperations.TypedTuple<String>)
+                        new DefaultTypedTuple<>(item.videoId(), now))
+                .collect(Collectors.toSet());
+        redisTemplate.opsForZSet().add(key, served);
         redisTemplate.opsForZSet().removeRange(key, 0, -RecoKeys.TRIM_TO - 1);
         // Refreshed on every request on purpose: the window is meant to cover a scrolling
         // session, and a session that is still going should not have its head expire under it.
