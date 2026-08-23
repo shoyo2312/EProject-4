@@ -9,12 +9,13 @@ import com.tiktok.interactionservice.exception.ViewRateLimitedException;
 import com.tiktok.interactionservice.exception.WatchRateLimitedException;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.util.function.Supplier;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ViewServiceImpl implements ViewService {
@@ -43,19 +44,10 @@ public class ViewServiceImpl implements ViewService {
      */
     private static final long MAX_DURATION_MS = Duration.ofMinutes(10).toMillis();
 
-    /**
-     * How many plays and how many sessions one viewer may report for one video per window. This
-     * is what stands in for the dedup window now that replays count: without it a script that
-     * mints a fresh playId per request would move the counter as fast as it can send. High enough
-     * that a real viewer replaying a video all evening is never refused.
-     */
-    private static final long MAX_PER_WINDOW = 60;
-
-    private static final Duration RATE_LIMIT_WINDOW = Duration.ofHours(1);
-
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
     private final InteractionEventPublisher eventPublisher;
+    private final InteractionRateLimiter rateLimiter;
     private final StringRedisTemplate redisTemplate;
 
     @Override
@@ -69,7 +61,7 @@ public class ViewServiceImpl implements ViewService {
         // Before the claim, not after: a request refused past the claim would have burned its
         // playId on the way out, so the client's retry would be told the view was already counted
         // when nothing counted it.
-        requireWithinLimit("view-rate", videoId, currentUserId, ViewRateLimitedException::new);
+        rateLimiter.require("view-rate", videoId, currentUserId, ViewRateLimitedException::new);
 
         String playKey = playKey(videoId, currentUserId, request.playId());
         boolean counted = claimPlay(playKey);
@@ -84,7 +76,7 @@ public class ViewServiceImpl implements ViewService {
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishView(videoId, currentUserId);
             } catch (RuntimeException ex) {
-                redisTemplate.delete(playKey);
+                releasePlay(playKey);
                 throw ex;
             }
             viewCount++;
@@ -103,7 +95,7 @@ public class ViewServiceImpl implements ViewService {
         long watchedMs = Math.min(request.watchedMs(), durationMs);
         boolean completed = watchedMs >= durationMs * COMPLETION_RATIO;
 
-        requireWithinLimit("watch-rate", videoId, currentUserId, WatchRateLimitedException::new);
+        rateLimiter.require("watch-rate", videoId, currentUserId, WatchRateLimitedException::new);
         eventPublisher.publishWatch(videoId, currentUserId, watchedMs, durationMs, completed);
 
         return new WatchResponse(videoId, watchedMs, completed);
@@ -116,40 +108,35 @@ public class ViewServiceImpl implements ViewService {
      *
      * <p>Fails open — a Redis outage counts every delivery rather than refusing every view. The
      * failure mode of the other choice is a video that visibly stops accumulating views; this one
-     * over-counts retries for the duration of the outage and then corrects itself.
+     * over-counts retries for the duration of the outage and then corrects itself. That takes the
+     * catch: an unreachable Redis throws out of the template rather than answering null, so
+     * without it the outage would be a 500 on every play instead.
      */
     private boolean claimPlay(String playKey) {
-        return !Boolean.FALSE.equals(redisTemplate.opsForValue().setIfAbsent(playKey, "1", PLAY_TTL));
+        try {
+            return !Boolean.FALSE.equals(redisTemplate.opsForValue().setIfAbsent(playKey, "1", PLAY_TTL));
+        } catch (RuntimeException e) {
+            log.warn("Could not claim {}, counting the view anyway: {}", playKey, e.getMessage());
+            return true;
+        }
+    }
+
+    /**
+     * Best effort, and swallowed on purpose: this runs while an exception is already on its way
+     * out, and the caller needs to see <em>that</em> failure. A release that fails leaves the play
+     * claimed for its TTL, which costs one uncounted retry — the same outcome as before this
+     * compensation existed, and a far smaller one than replacing the real cause with a Redis error.
+     */
+    private void releasePlay(String playKey) {
+        try {
+            redisTemplate.delete(playKey);
+        } catch (RuntimeException e) {
+            log.warn("Could not release the claim on {}: {}", playKey, e.getMessage());
+        }
     }
 
     private String playKey(Long videoId, Long currentUserId, String playId) {
         return "interaction:play:%d:%d:%s".formatted(currentUserId, videoId, playId);
     }
 
-    /**
-     * A shared per-(viewer, video, hour) counter, used by both endpoints under separate keys so
-     * neither eats the other's budget. Deliberately loud rather than a silent no-op: a client
-     * being throttled has a bug or is being replayed, and both are worth surfacing to whoever
-     * wrote it, at the cost of telling a viewer who genuinely replayed sixty times that they were
-     * refused.
-     *
-     * <p>ponytail: a fixed counter per (viewer, video, hour), so a burst at the boundary can cross
-     * two windows. A sliding window is the upgrade if that ever matters; it does not here, where
-     * the point is the order of magnitude and not the exact number.
-     */
-    private void requireWithinLimit(String bucket, Long videoId, Long currentUserId,
-                                    Supplier<RuntimeException> onExceeded) {
-        String key = "interaction:%s:%d:%d".formatted(bucket, currentUserId, videoId);
-        Long hits = redisTemplate.opsForValue().increment(key);
-
-        if (hits == null) {
-            return;
-        }
-        if (hits == 1L) {
-            redisTemplate.expire(key, RATE_LIMIT_WINDOW);
-        }
-        if (hits > MAX_PER_WINDOW) {
-            throw onExceeded.get();
-        }
-    }
 }
