@@ -88,6 +88,18 @@ Request (mọi field đều optional, `UpdateProfileRequest`):
 
 Response `data` → `UserProfileResponse` (giống mục 3.1, đã áp dụng thay đổi).
 
+#### Avatar của tài khoản Google/Facebook
+
+Đăng ký/đăng nhập bằng Google hoặc Facebook thì profile tự có ảnh của provider, client không phải làm gì:
+
+1. auth-service gửi kèm ảnh provider trong `UserRegisteredEvent` → profile mới có `avatarUrl` ngay (URL của Google/Facebook).
+2. Mỗi lần đăng nhập social, auth-service phát `SocialAvatarDiscoveredEvent` (topic `auth.social-avatar-events`). media-worker tải ảnh về MinIO (`avatars/{userId}.jpg`) rồi phát `AvatarMirroredEvent` (topic `media.avatar-events`).
+3. user-service đổi `avatarUrl` sang bản trong MinIO — ví dụ `http://localhost:9000/video-media/avatars/123.jpg`. Cần bước này vì URL ảnh Facebook hết hạn sau vài ngày.
+
+Bước 3 **chỉ** ghi đè khi `avatarUrl` đang trống hoặc vẫn đúng URL provider vừa được sao chép. Ảnh user tự đặt qua `PATCH /me` không bao giờ bị thay. Tài khoản social tạo trước tính năng này (`avatarUrl` null) được điền ảnh ở lần đăng nhập kế tiếp.
+
+Client hiển thị đúng URL server trả về, không suy đoán host. Next.js phải khai báo host trong `images.remotePatterns` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, và origin MinIO) mới render được qua `next/image`.
+
 Lỗi: `VALIDATION_ERROR` (400).
 
 ### 3.3 `GET /{userId}`

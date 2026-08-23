@@ -9,6 +9,7 @@ import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserIdentity;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
+import com.tiktok.authservice.event.producer.SocialAvatarEventProducer;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.SocialLinkVerificationRequiredException;
@@ -42,6 +43,7 @@ class OAuthServiceImplTest {
     private final SocialAccountRegistrar registrar = mock(SocialAccountRegistrar.class);
     private final SocialLinkChallenge linkChallenge = mock(SocialLinkChallenge.class);
     private final TokenIssuer tokenIssuer = mock(TokenIssuer.class);
+    private final SocialAvatarEventProducer avatarEventProducer = mock(SocialAvatarEventProducer.class);
 
     private OAuthServiceImpl service;
 
@@ -53,7 +55,7 @@ class OAuthServiceImplTest {
         when(tokenIssuer.issue(any())).thenReturn(new TokenResponse("access", "refresh", 900_000L));
 
         service = new OAuthServiceImpl(List.of(verifier), identityRepository, userRepository,
-                registrar, linkChallenge, tokenIssuer);
+                registrar, linkChallenge, tokenIssuer, avatarEventProducer);
     }
 
     /** A returning user is resolved by provider uid alone — no second account, no email involved. */
@@ -77,6 +79,31 @@ class OAuthServiceImplTest {
         service.login(AuthProvider.GOOGLE, REQUEST);
 
         verify(registrar).register(any());
+    }
+
+    /**
+     * Announced on every sign-in, not only the first: the provider URL expires, and an account
+     * that predates this feature is only ever reachable while its owner is signing in.
+     */
+    @Test
+    void everySignInAnnouncesTheProviderAvatar() {
+        when(verifier.verify(REQUEST.token())).thenReturn(new SocialProfile(
+                AuthProvider.GOOGLE, UID, "a@example.com", true, "https://lh3.googleusercontent.com/a/x"));
+        User user = activeUser("a@example.com");
+        linkedTo(user);
+
+        service.login(AuthProvider.GOOGLE, REQUEST);
+
+        verify(avatarEventProducer).publish(user.getId(), "https://lh3.googleusercontent.com/a/x");
+    }
+
+    @Test
+    void signInWithoutAProviderPictureAnnouncesNothing() {
+        linkedTo(activeUser("a@example.com"));
+
+        service.login(AuthProvider.GOOGLE, REQUEST);
+
+        verify(avatarEventProducer, never()).publish(any(), any());
     }
 
     /** An account with no address is a normal outcome for Facebook; the client is told to ask. */

@@ -8,6 +8,7 @@ import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
+import com.tiktok.authservice.event.producer.SocialAvatarEventProducer;
 import com.tiktok.authservice.exception.SocialLinkVerificationRequiredException;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
@@ -30,19 +31,22 @@ public class OAuthServiceImpl implements OAuthService {
     private final SocialAccountRegistrar registrar;
     private final SocialLinkChallenge linkChallenge;
     private final TokenIssuer tokenIssuer;
+    private final SocialAvatarEventProducer avatarEventProducer;
 
     public OAuthServiceImpl(List<SocialTokenVerifier> verifiers,
                             UserIdentityRepository userIdentityRepository,
                             UserRepository userRepository,
                             SocialAccountRegistrar registrar,
                             SocialLinkChallenge linkChallenge,
-                            TokenIssuer tokenIssuer) {
+                            TokenIssuer tokenIssuer,
+                            SocialAvatarEventProducer avatarEventProducer) {
         verifiers.forEach(verifier -> this.verifiers.put(verifier.provider(), verifier));
         this.userIdentityRepository = userIdentityRepository;
         this.userRepository = userRepository;
         this.registrar = registrar;
         this.linkChallenge = linkChallenge;
         this.tokenIssuer = tokenIssuer;
+        this.avatarEventProducer = avatarEventProducer;
     }
 
     /**
@@ -61,6 +65,8 @@ public class OAuthServiceImpl implements OAuthService {
         if (user.getStatus() != UserStatus.ACTIVE) {
             throw new InvalidCredentialsException();
         }
+
+        announceAvatar(user, profile);
 
         // Not checked: emailVerified. The provider has already proven the user controls the
         // account, and an account with no address at all could never satisfy it.
@@ -94,7 +100,30 @@ public class OAuthServiceImpl implements OAuthService {
             throw new InvalidCredentialsException();
         }
 
+        announceAvatar(user, profile);
+
         return new SocialLoginResponse(tokenIssuer.issue(user), user.getEmail() == null);
+    }
+
+    /**
+     * Tells media-worker where this account's provider picture currently is, on every sign-in
+     * rather than only the first.
+     *
+     * <p>Repeating it is the point. A Facebook URL expires within days, so the copy has to be
+     * refreshed from a URL that still resolves, and an account created before any of this shipped
+     * has no other moment where a provider picture is in reach — the token that could fetch one
+     * only exists while the user is signing in.
+     *
+     * <p>Sent for a brand-new account too, whose registration already carried the same URL. The two
+     * are not redundant: the registration seeds the profile so the picture shows immediately, this
+     * one starts the copy into our own storage. Both are idempotent about it, and if this one wins
+     * the race against the profile being created it simply finds nothing to update and the next
+     * sign-in repeats it.
+     */
+    private void announceAvatar(User user, SocialProfile profile) {
+        if (profile.avatarUrl() != null) {
+            avatarEventProducer.publish(user.getId(), profile.avatarUrl());
+        }
     }
 
     private User confirmOrJoinWinner(SocialProfile profile, String otp) {

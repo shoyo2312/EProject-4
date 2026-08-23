@@ -16,11 +16,20 @@ import com.tiktok.authservice.entity.AuthProvider;
  *                      anyone who can register {@code victim@example.com} at a provider takes over
  *                      the account we already hold under that address. Facebook asserts nothing,
  *                      so this is always false for it.
+ * @param avatarUrl     the profile picture the provider publishes for the account, null when it
+ *                      gave none. Only ever used to seed a brand new profile: an avatar the user
+ *                      has picked since is theirs, and no later login overwrites it.
  */
 public record SocialProfile(
         AuthProvider provider,
         String uid,
         String email,
-        boolean emailVerified
+        boolean emailVerified,
+        String avatarUrl
 ) {
+
+    /** For the callers — mostly tests — that have no picture to state. */
+    public SocialProfile(AuthProvider provider, String uid, String email, boolean emailVerified) {
+        this(provider, uid, email, emailVerified, null);
+    }
 }

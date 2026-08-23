@@ -81,8 +81,11 @@ public class SocialAccountRegistrar {
 
         // Same event the password signup publishes: without it user-service never creates a
         // profile, and the account exists only as a login.
-        userEventProducer.publishUserRegistered(
-                UserRegisteredEvent.of(user.getId(), user.getUsername(), user.getEmail()));
+        // Carries the provider's picture along, so the account starts on the face the user already
+        // has there instead of the default avatar. Only on this path: an account reached through
+        // the link branch above already has a profile, and its avatar is the user's to set.
+        userEventProducer.publishUserRegistered(UserRegisteredEvent.of(
+                user.getId(), user.getUsername(), user.getEmail(), profile.avatarUrl()));
 
         return user;
     }
