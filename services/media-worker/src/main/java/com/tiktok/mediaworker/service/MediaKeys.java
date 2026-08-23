@@ -14,6 +14,17 @@ public final class MediaKeys {
     private MediaKeys() {
     }
 
+    /**
+     * One key per user, overwritten rather than versioned: the profile stores this URL, so a fresh
+     * key per copy would leave the profile pointing at the old object with nothing to update it.
+     *
+     * <p>The extension is a label, not a promise — whatever the provider served is stored, with its
+     * own content type on the object, and browsers go by that rather than by the name.
+     */
+    public static String avatar(Long userId) {
+        return "avatars/%d.jpg".formatted(userId);
+    }
+
     public static String thumbnail(String videoId) {
         return "thumbnails/%s.jpg".formatted(videoId);
     }
