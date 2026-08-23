@@ -116,4 +116,26 @@ class ViewServiceImplTest extends AbstractInteractionServiceIT {
 
         assertThat(viewService.recordView(23L, 2L, play()).viewCount()).isEqualTo(2L);
     }
+
+    @Test
+    void recordView_samePlayIdConcurrently_doesNotThrow() throws Exception {
+        ViewRequest samePlay = play();
+        var pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        var ready = new java.util.concurrent.CountDownLatch(2);
+        var go = new java.util.concurrent.CountDownLatch(1);
+        java.util.List<java.util.concurrent.Future<ViewResponse>> futures = new java.util.ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            futures.add(pool.submit(() -> {
+                ready.countDown();
+                go.await();
+                return viewService.recordView(28L, 1L, samePlay);
+            }));
+        }
+        ready.await();
+        go.countDown();
+        for (var f : futures) {
+            f.get();
+        }
+        pool.shutdown();
+    }
 }
