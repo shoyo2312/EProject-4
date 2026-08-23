@@ -9,21 +9,20 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
 
 import com.tiktok.interactionservice.exception.WatchRateLimitedException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doThrow;
 
 /**
  * Plain Mockito, no Cassandra: recording a watch writes nothing — it exists to put a row on a
@@ -42,21 +41,21 @@ class ViewServiceImplWatchTest {
     private InteractionEventPublisher eventPublisher;
 
     @Mock
-    private StringRedisTemplate redisTemplate;
+    private InteractionRateLimiter rateLimiter;
 
     @Mock
-    private ValueOperations<String, String> valueOperations;
-
-    /** Sessions reported so far in the current window, as the rate-limit counter would return it. */
-    private ViewService viewServiceAtSession(long session) {
-        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        when(valueOperations.increment(anyString())).thenReturn(session);
-        return new ViewServiceImpl(videoCountersRepository, counterCacheService,
-                eventPublisher, redisTemplate);
-    }
+    private StringRedisTemplate redisTemplate;
 
     private ViewService viewService() {
-        return viewServiceAtSession(1L);
+        return new ViewServiceImpl(videoCountersRepository, counterCacheService,
+                eventPublisher, rateLimiter, redisTemplate);
+    }
+
+    /** How the limiter behaves once this viewer is past their budget for this video. */
+    private ViewService viewServiceAtLimit() {
+        doThrow(new WatchRateLimitedException()).when(rateLimiter)
+                .require(eq("watch-rate"), anyLong(), anyLong(), any());
+        return viewService();
     }
 
     @Test
@@ -128,7 +127,7 @@ class ViewServiceImplWatchTest {
      */
     @Test
     void recordWatch_pastTheSessionLimit_isRefusedAndNotPublished() {
-        ViewService viewService = viewServiceAtSession(61L);
+        ViewService viewService = viewServiceAtLimit();
 
         assertThatThrownBy(() -> viewService.recordWatch(7L, 1L, new WatchRequest(9_000L, 10_000L)))
                 .isInstanceOf(WatchRateLimitedException.class);

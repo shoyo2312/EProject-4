@@ -7,11 +7,13 @@ import com.tiktok.interactionservice.entity.CommentByVideo;
 import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
+import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.mapper.CommentMapper;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.cassandra.CassandraInvalidQueryException;
 import org.springframework.data.cassandra.core.query.CassandraPageRequest;
 import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
@@ -37,18 +39,28 @@ public class CommentServiceImpl implements CommentService {
     @Override
     public CommentResponse addComment(Long videoId, Long currentUserId, String content) {
         Long commentId = SnowflakeIdGenerator.nextId();
+        CommentByVideoKey key = CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build();
 
         CommentByVideo comment = CommentByVideo.builder()
-                .key(CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build())
+                .key(key)
                 .userId(currentUserId)
                 .content(content)
                 .createdAt(Instant.now())
                 .build();
         commentByVideoRepository.save(comment);
 
-        videoCountersRepository.incrementCommentCount(videoId, 1);
-        counterCacheService.invalidate(videoId);
-        eventPublisher.publishCommentCreated(commentId, videoId, currentUserId, content);
+        // A stored comment whose counter never moved leaves the video showing fewer comments than
+        // it lists, permanently: a counter table has no recount, and nothing downstream reconciles
+        // the two. Removed rather than soft-deleted — this row was never visible to anyone, so a
+        // tombstone would only be a deleted comment for the listing to page past.
+        try {
+            videoCountersRepository.incrementCommentCount(videoId, 1);
+            counterCacheService.invalidate(videoId);
+            eventPublisher.publishCommentCreated(commentId, videoId, currentUserId, content);
+        } catch (RuntimeException ex) {
+            commentByVideoRepository.deleteById(key);
+            throw ex;
+        }
 
         return commentMapper.toResponse(comment);
     }
@@ -71,7 +83,17 @@ public class CommentServiceImpl implements CommentService {
         Slice<CommentByVideo> slice;
 
         for (int page = 0; page < MAX_PAGES_SCANNED; page++) {
-            slice = commentByVideoRepository.findByVideoId(videoId, pageRequest);
+            // Base64 that decodes into bytes Cassandra will not accept as paging state is only
+            // refused here, by the coordinator, not by the decoder — and only the first page can
+            // be carrying the client's value, every page after it uses one this method issued.
+            try {
+                slice = commentByVideoRepository.findByVideoId(videoId, pageRequest);
+            } catch (CassandraInvalidQueryException e) {
+                if (page == 0 && cursor != null && !cursor.isBlank()) {
+                    throw new InvalidCommentCursorException();
+                }
+                throw e;
+            }
 
             items = slice.getContent().stream()
                     .filter(comment -> !comment.isDeleted())
@@ -105,14 +127,24 @@ public class CommentServiceImpl implements CommentService {
         // because another delete can land between the read and the write. The condition does, and
         // only the caller it applies for is allowed to move the counter — a save() would let both
         // racing deletes decrement, and a counter table has no way back from that.
-        boolean deleted = commentByVideoRepository.markDeletedIfNotDeleted(videoId, commentId, Instant.now());
+        Instant deletedAt = Instant.now();
+        boolean deleted = commentByVideoRepository.markDeletedIfNotDeleted(videoId, commentId, deletedAt);
         if (!deleted) {
             throw new CommentNotFoundException(commentId);
         }
 
-        videoCountersRepository.incrementCommentCount(videoId, -1);
-        counterCacheService.invalidate(videoId);
-        eventPublisher.publishCommentDeleted(commentId, videoId, currentUserId);
+        // Undone if the counter never moved, for the reason addComment restores its row: this
+        // caller is the only one allowed to decrement for this comment, so a failure here is the
+        // one and only chance to apply it. Conditioned on the deletion still being ours, so a
+        // restore cannot resurrect a comment somebody deleted in the meantime.
+        try {
+            videoCountersRepository.incrementCommentCount(videoId, -1);
+            counterCacheService.invalidate(videoId);
+            eventPublisher.publishCommentDeleted(commentId, videoId, currentUserId);
+        } catch (RuntimeException ex) {
+            commentByVideoRepository.restoreIfDeletedAt(videoId, commentId, deletedAt);
+            throw ex;
+        }
     }
 
     private CassandraPageRequest decodeCursor(String cursor, int size) {
@@ -120,8 +152,15 @@ public class CommentServiceImpl implements CommentService {
         if (cursor == null || cursor.isBlank()) {
             return firstPage;
         }
-        ByteBuffer pagingState = ByteBuffer.wrap(Base64.getUrlDecoder().decode(cursor));
-        return CassandraPageRequest.of(firstPage, pagingState);
+        try {
+            ByteBuffer pagingState = ByteBuffer.wrap(Base64.getUrlDecoder().decode(cursor));
+            return CassandraPageRequest.of(firstPage, pagingState);
+        } catch (IllegalArgumentException e) {
+            // Not base64, or not paging state this driver recognises. Either way the client sent
+            // something we never issued, and that is a 400 — not the 500 the catch-all would
+            // otherwise report for what is a query-string typo.
+            throw new InvalidCommentCursorException();
+        }
     }
 
     private String encodeCursor(CassandraPageRequest pageRequest) {

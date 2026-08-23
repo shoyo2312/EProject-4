@@ -22,9 +22,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -235,9 +233,15 @@ class FeedServiceImplTest {
 
         feedService.getFeed(VIEWER, 2);
 
-        verify(zSetOperations).add(eq("reco:user:served:7"), eq("vid1"), anyDouble());
-        verify(zSetOperations).add(eq("reco:user:served:7"), eq("vid2"), anyDouble());
-        verify(zSetOperations, never()).add(eq("reco:user:served:7"), eq("vid3"), anyDouble());
+        // One ZADD carrying the whole page rather than one per id — see markServed.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Set<ZSetOperations.TypedTuple<String>>> served =
+                ArgumentCaptor.forClass(Set.class);
+        verify(zSetOperations).add(eq("reco:user:served:7"), served.capture());
+
+        assertThat(served.getValue())
+                .extracting(ZSetOperations.TypedTuple::getValue)
+                .containsExactlyInAnyOrder("vid1", "vid2");
     }
 
     /**

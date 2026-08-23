@@ -43,6 +43,8 @@ Năm feature, tên trên dây và tên cột ClickHouse **cố ý giống hệt 
 
 Luật `completion_rate` (ngưỡng 5 lượt) và luật skip (`< 20%` → `-0.5`) cũng nằm trong `features.py`, đúng bằng hằng số trong `FeedServiceImpl` và `RecommendationServiceImpl`. Sửa một bên mà quên bên kia thì cột `tag_affinity` mang hai nghĩa khác nhau ở hai phía.
 
+**Một lệch còn tồn tại, biết và chấp nhận, ở `log_watches` + `completion_rate`.** Phía phục vụ đọc hai ZSET `reco:video:watches` / `reco:video:completions`; `rebuildTrending` cắt hai set này còn `QUALITY_TRIM_TO` (100k) phần tử cao nhất mỗi phút, và `recordVideoDeleted` xoá hẳn phần tử của video bị xoá. Phía huấn luyện `count()` toàn bộ `watch_events` trước mốc cắt, không cắt gì. Với video nằm trong 100k được giữ lại thì hai con số bằng nhau — và đó đúng là tập video feed có thể đưa ra. Video rơi khỏi ngưỡng chỉ tồn tại ở phía huấn luyện, mà nó rơi ra chính vì gần như không ai xem. Nếu catalogue vượt xa 100k hoặc `QUALITY_TRIM_TO` bị hạ, cột này bắt đầu mang hai nghĩa: sửa bằng cách giới hạn phía huấn luyện theo cùng top-N, **không** phải nới ZSET.
+
 ## 3. Mô hình học cái gì — và không học cái gì
 
 Nhãn là `completed`: **cho rằng người ta đã bấm vào xem, họ có xem hết không.**
