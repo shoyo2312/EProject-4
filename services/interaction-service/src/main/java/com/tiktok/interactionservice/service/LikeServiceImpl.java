@@ -11,11 +11,13 @@ import com.tiktok.interactionservice.repository.LikeByUserRepository;
 import com.tiktok.interactionservice.repository.LikeByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.function.BooleanSupplier;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class LikeServiceImpl implements LikeService {
@@ -40,13 +42,24 @@ public class LikeServiceImpl implements LikeService {
                 () -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, Instant.now()));
 
         if (newlyLiked) {
-            videoCountersRepository.incrementLikeCount(videoId, 1);
-            likeByUserRepository.save(LikeByUser.builder()
-                    .key(LikeByUserKey.builder().userId(currentUserId).videoId(videoId).build())
-                    .createdAt(Instant.now())
-                    .build());
-            counterCacheService.invalidate(videoId);
-            eventPublisher.publishLike(videoId, currentUserId, true);
+            // The LWT is what grants the right to move the counter, and it grants it exactly once:
+            // this caller's retry finds the row already there, is told newlyLiked=false, and never
+            // increments. A failure past this point therefore has to give the claim back, or the
+            // like stays stored against a counter that is short by one for good — the same
+            // compensation ViewServiceImpl does around its play claim.
+            try {
+                videoCountersRepository.incrementLikeCount(videoId, 1);
+                likeByUserRepository.save(LikeByUser.builder()
+                        .key(LikeByUserKey.builder().userId(currentUserId).videoId(videoId).build())
+                        .createdAt(Instant.now())
+                        .build());
+                counterCacheService.invalidate(videoId);
+                eventPublisher.publishLike(videoId, currentUserId, true);
+            } catch (RuntimeException ex) {
+                undo(() -> likeByVideoRepository.deleteIfExists(videoId, currentUserId),
+                        "like of video %d by user %d".formatted(videoId, currentUserId), ex);
+                throw ex;
+            }
             likeCount++;
         }
 
@@ -61,10 +74,20 @@ public class LikeServiceImpl implements LikeService {
                 () -> likeByVideoRepository.deleteIfExists(videoId, currentUserId));
 
         if (wasLiked) {
-            videoCountersRepository.incrementLikeCount(videoId, -1);
-            likeByUserRepository.deleteById(LikeByUserKey.builder().userId(currentUserId).videoId(videoId).build());
-            counterCacheService.invalidate(videoId);
-            eventPublisher.publishLike(videoId, currentUserId, false);
+            // Symmetric with like(): the LWT delete is the one call allowed to decrement, so a
+            // failure after it puts the like row back rather than leaving the video counted as
+            // liked by someone whose like is gone.
+            try {
+                videoCountersRepository.incrementLikeCount(videoId, -1);
+                likeByUserRepository.deleteById(
+                        LikeByUserKey.builder().userId(currentUserId).videoId(videoId).build());
+                counterCacheService.invalidate(videoId);
+                eventPublisher.publishLike(videoId, currentUserId, false);
+            } catch (RuntimeException ex) {
+                undo(() -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, Instant.now()),
+                        "unlike of video %d by user %d".formatted(videoId, currentUserId), ex);
+                throw ex;
+            }
             likeCount--;
         }
 
@@ -77,6 +100,21 @@ public class LikeServiceImpl implements LikeService {
                 && likeByVideoRepository.existsById(LikeByVideoKey.builder().videoId(videoId).userId(currentUserId).build());
         long likeCount = counterCacheService.getCounts(videoId).likeCount();
         return new LikeStatusResponse(videoId, liked, likeCount);
+    }
+
+    /**
+     * Puts a claim back after the work behind it failed. Swallowed and logged rather than thrown:
+     * an exception is already on its way to the caller and it is the one worth seeing, and a
+     * compensation that fails leaves exactly the inconsistency that existed before this method —
+     * loud in the log, and no worse than not trying.
+     */
+    private void undo(BooleanSupplier compensation, String what, RuntimeException cause) {
+        try {
+            compensation.getAsBoolean();
+        } catch (RuntimeException ex) {
+            log.error("Could not undo the {} after {}; its counter is now off by one",
+                    what, cause.getMessage(), ex);
+        }
     }
 
     /**
