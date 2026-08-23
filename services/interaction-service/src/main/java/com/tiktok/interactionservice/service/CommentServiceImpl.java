@@ -7,6 +7,7 @@ import com.tiktok.interactionservice.entity.CommentByVideo;
 import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
+import com.tiktok.interactionservice.exception.CommentRateLimitedException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.mapper.CommentMapper;
@@ -37,9 +38,16 @@ public class CommentServiceImpl implements CommentService {
     private final CounterCacheService counterCacheService;
     private final CommentMapper commentMapper;
     private final InteractionEventPublisher eventPublisher;
+    private final InteractionRateLimiter rateLimiter;
 
     @Override
     public CommentResponse addComment(Long videoId, Long currentUserId, String content) {
+        // Same reasoning as ShareServiceImpl: nothing about a comment is idempotent, so the row,
+        // the counter and the +2 it puts into trending all repeat for as long as a client keeps
+        // calling. A like is protected by its LWT and a view by its playId; this endpoint has
+        // neither, and posting then deleting in a loop moves the ranking either way.
+        rateLimiter.require("comment-rate", videoId, currentUserId, CommentRateLimitedException::new);
+
         Long commentId = SnowflakeIdGenerator.nextId();
         CommentByVideoKey key = CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build();
 
