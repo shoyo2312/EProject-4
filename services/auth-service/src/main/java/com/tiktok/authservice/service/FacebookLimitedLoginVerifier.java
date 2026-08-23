@@ -84,12 +84,15 @@ class FacebookLimitedLoginVerifier {
         }
         // `email` is present only when the permission was granted, exactly as on the Graph path.
         String email = claims.get("email", String.class);
+        // Same on this path as on the Graph one: absent for an account with no picture of its own.
+        String picture = claims.get("picture", String.class);
         return new SocialProfile(
                 AuthProvider.FACEBOOK,
                 uid,
                 email == null || email.isBlank() ? null : email.toLowerCase(),
                 // Facebook still asserts nothing about the address, so it may not auto-link.
-                false);
+                false,
+                picture == null || picture.isBlank() ? null : picture);
     }
 
     private PublicKey keyFor(String kid) {
