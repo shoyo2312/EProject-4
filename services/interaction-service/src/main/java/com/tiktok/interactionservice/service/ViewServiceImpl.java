@@ -71,12 +71,22 @@ public class ViewServiceImpl implements ViewService {
         // when nothing counted it.
         requireWithinLimit("view-rate", videoId, currentUserId, ViewRateLimitedException::new);
 
-        boolean counted = claimPlay(videoId, currentUserId, request.playId());
+        String playKey = playKey(videoId, currentUserId, request.playId());
+        boolean counted = claimPlay(playKey);
 
         if (counted) {
-            videoCountersRepository.incrementViewCount(videoId, 1);
-            counterCacheService.invalidate(videoId);
-            eventPublisher.publishView(videoId, currentUserId);
+            // A claimed play that fails past this point must not stay claimed: the counter never
+            // moved, so the client's retry (or a fresh replay reusing the same playId within the
+            // TTL) needs the key gone to have another chance, rather than being told `counted:
+            // false` for a view that was never actually counted.
+            try {
+                videoCountersRepository.incrementViewCount(videoId, 1);
+                counterCacheService.invalidate(videoId);
+                eventPublisher.publishView(videoId, currentUserId);
+            } catch (RuntimeException ex) {
+                redisTemplate.delete(playKey);
+                throw ex;
+            }
             viewCount++;
         }
 
@@ -108,9 +118,12 @@ public class ViewServiceImpl implements ViewService {
      * failure mode of the other choice is a video that visibly stops accumulating views; this one
      * over-counts retries for the duration of the outage and then corrects itself.
      */
-    private boolean claimPlay(Long videoId, Long currentUserId, String playId) {
-        String key = "interaction:play:%d:%d:%s".formatted(currentUserId, videoId, playId);
-        return !Boolean.FALSE.equals(redisTemplate.opsForValue().setIfAbsent(key, "1", PLAY_TTL));
+    private boolean claimPlay(String playKey) {
+        return !Boolean.FALSE.equals(redisTemplate.opsForValue().setIfAbsent(playKey, "1", PLAY_TTL));
+    }
+
+    private String playKey(Long videoId, Long currentUserId, String playId) {
+        return "interaction:play:%d:%d:%s".formatted(currentUserId, videoId, playId);
     }
 
     /**
