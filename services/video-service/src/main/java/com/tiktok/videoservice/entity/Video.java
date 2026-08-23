@@ -53,9 +53,10 @@ import java.util.List;
         @CompoundIndex(name = "outbox_idx",
                 def = "{'eventPublishedAt': 1, 'eventFailedAt': 1, 'deletedAt': 1, 'createdAt': 1}"),
         // The deletion poll, same reasoning as outbox_idx: equality fields lead, then the sort
-        // field. eventPublishedAt is left out and filtered in memory instead — it would have to
-        // sit between the two as a range, which stops the index from supplying the sort, and the
-        // rows reaching this poll are already narrowed to deleted-but-unannounced.
+        // field. eventPublishedAt is not part of it because the poll does not filter on it at
+        // all — a video deleted before its publication ever went out still has to announce the
+        // deletion, since media-worker's copy of the raw upload has nothing else pointing at it.
+        // See VideoEventPublisher.publishPendingDeletions.
         @CompoundIndex(name = "delete_outbox_idx",
                 def = "{'deleteEventPublishedAt': 1, 'deletedAt': 1}"),
         // One upload is one video. Enforced here rather than by checking before the insert,
