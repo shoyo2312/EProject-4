@@ -127,6 +127,19 @@ def build_dataset(client, cutoff: datetime) -> pd.DataFrame:
         {"cutoff": cutoff},
     )
 
+    # Rewatches are dropped, because the feed never offers them: FeedServiceImpl subtracts
+    # reco:user:seen from every candidate pool, so a pair the viewer had already watched by the
+    # cutoff is one the model is never asked to score. Keeping them trains on a population that
+    # does not exist at serving time — and they are the easiest positives in the frame, since
+    # somebody who came back to a video usually finishes it, so the model learns to trust
+    # completion history it will never be shown.
+    seen = past_watches[["user_id", "video_id"]].drop_duplicates()
+    if not seen.empty:
+        labels = labels.merge(seen, on=["user_id", "video_id"], how="left", indicator=True)
+        labels = labels[labels["_merge"] == "left_only"].drop(columns="_merge")
+        if labels.empty:
+            return labels
+
     tags = _query(client, "SELECT video_id, tag, published_at FROM video_tags FINAL", {})
 
     affinity = user_tag_affinity(past_watches, tags)

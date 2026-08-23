@@ -7,12 +7,14 @@ import com.tiktok.interactionservice.entity.CommentByVideo;
 import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
+import com.tiktok.interactionservice.exception.CommentRateLimitedException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.mapper.CommentMapper;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.cassandra.CassandraInvalidQueryException;
 import org.springframework.data.cassandra.core.query.CassandraPageRequest;
 import org.springframework.data.domain.Slice;
@@ -23,6 +25,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class CommentServiceImpl implements CommentService {
@@ -35,9 +38,16 @@ public class CommentServiceImpl implements CommentService {
     private final CounterCacheService counterCacheService;
     private final CommentMapper commentMapper;
     private final InteractionEventPublisher eventPublisher;
+    private final InteractionRateLimiter rateLimiter;
 
     @Override
     public CommentResponse addComment(Long videoId, Long currentUserId, String content) {
+        // Same reasoning as ShareServiceImpl: nothing about a comment is idempotent, so the row,
+        // the counter and the +2 it puts into trending all repeat for as long as a client keeps
+        // calling. A like is protected by its LWT and a view by its playId; this endpoint has
+        // neither, and posting then deleting in a loop moves the ranking either way.
+        rateLimiter.require("comment-rate", videoId, currentUserId, CommentRateLimitedException::new);
+
         Long commentId = SnowflakeIdGenerator.nextId();
         CommentByVideoKey key = CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build();
 
@@ -53,11 +63,20 @@ public class CommentServiceImpl implements CommentService {
         // it lists, permanently: a counter table has no recount, and nothing downstream reconciles
         // the two. Removed rather than soft-deleted — this row was never visible to anyone, so a
         // tombstone would only be a deleted comment for the listing to page past.
+        boolean countered = false;
         try {
             videoCountersRepository.incrementCommentCount(videoId, 1);
+            countered = true;
             counterCacheService.invalidate(videoId);
             eventPublisher.publishCommentCreated(commentId, videoId, currentUserId, content);
         } catch (RuntimeException ex) {
+            // The counter is taken back as well as the row. Removing the row while the increment
+            // stands leaves the video showing more comments than it lists — the mirror image of
+            // the divergence this compensation exists to prevent — and the client's retry adds
+            // another one on top.
+            if (countered) {
+                undoCounter(videoId, -1);
+            }
             commentByVideoRepository.deleteById(key);
             throw ex;
         }
@@ -137,13 +156,32 @@ public class CommentServiceImpl implements CommentService {
         // caller is the only one allowed to decrement for this comment, so a failure here is the
         // one and only chance to apply it. Conditioned on the deletion still being ours, so a
         // restore cannot resurrect a comment somebody deleted in the meantime.
+        boolean countered = false;
         try {
             videoCountersRepository.incrementCommentCount(videoId, -1);
+            countered = true;
             counterCacheService.invalidate(videoId);
             eventPublisher.publishCommentDeleted(commentId, videoId, currentUserId);
         } catch (RuntimeException ex) {
+            if (countered) {
+                undoCounter(videoId, 1);
+            }
             commentByVideoRepository.restoreIfDeletedAt(videoId, commentId, deletedAt);
             throw ex;
+        }
+    }
+
+    /**
+     * Takes back an increment whose request did not finish. Swallowed on purpose: an exception is
+     * already on its way to the caller and it is the one worth seeing, and a compensation that
+     * fails leaves exactly the inconsistency that existed without it — logged, and no worse.
+     */
+    private void undoCounter(Long videoId, long delta) {
+        try {
+            videoCountersRepository.incrementCommentCount(videoId, delta);
+        } catch (RuntimeException e) {
+            log.error("Could not take back the comment count change on video {}; it is now off by one",
+                    videoId, e);
         }
     }
 

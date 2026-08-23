@@ -71,11 +71,19 @@ public class ViewServiceImpl implements ViewService {
             // moved, so the client's retry (or a fresh replay reusing the same playId within the
             // TTL) needs the key gone to have another chance, rather than being told `counted:
             // false` for a view that was never actually counted.
+            boolean countered = false;
             try {
                 videoCountersRepository.incrementViewCount(videoId, 1);
+                countered = true;
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishView(videoId, currentUserId);
             } catch (RuntimeException ex) {
+                // The counter goes back before the claim does. Releasing the claim while the
+                // increment stands is what turned a failed publish into a permanent over-count:
+                // the retry claimed a fresh playId slot and added a second view for one play.
+                if (countered) {
+                    undoView(videoId);
+                }
                 releasePlay(playKey);
                 throw ex;
             }
@@ -118,6 +126,20 @@ public class ViewServiceImpl implements ViewService {
         } catch (RuntimeException e) {
             log.warn("Could not claim {}, counting the view anyway: {}", playKey, e.getMessage());
             return true;
+        }
+    }
+
+    /**
+     * Takes back an increment whose request did not finish. Swallowed like {@link #releasePlay}:
+     * the failure already on its way out is the one worth seeing, and a compensation that fails
+     * leaves the same inconsistency as not trying — but logged.
+     */
+    private void undoView(Long videoId) {
+        try {
+            videoCountersRepository.incrementViewCount(videoId, -1);
+        } catch (RuntimeException e) {
+            log.error("Could not take back the view counted for video {}; it is now over by one",
+                    videoId, e);
         }
     }
 
