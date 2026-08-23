@@ -9,10 +9,12 @@ import com.tiktok.interactionservice.exception.ShareRateLimitedException;
 import com.tiktok.interactionservice.repository.ShareByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ShareServiceImpl implements ShareService {
@@ -51,15 +53,37 @@ public class ShareServiceImpl implements ShareService {
         // event recomputes this number, and the rows themselves are not what any read path totals.
         // Removing the row again makes the client's retry a clean first attempt rather than a
         // second row against a counter that is still short by one.
+        boolean countered = false;
         try {
             videoCountersRepository.incrementShareCount(videoId, 1);
+            countered = true;
             counterCacheService.invalidate(videoId);
             eventPublisher.publishShare(shareId, videoId, currentUserId);
         } catch (RuntimeException ex) {
+            // The counter is taken back too, not only the row. Removing the row while the
+            // increment stands leaves the count ahead of the shares that exist, and the client's
+            // retry — which this compensation exists to make clean — adds a second one.
+            if (countered) {
+                undoCounter(videoId);
+            }
             shareByVideoRepository.deleteById(key);
             throw ex;
         }
 
         return new ShareResponse(shareId, videoId, shareCount + 1);
+    }
+
+    /**
+     * Swallowed on purpose: an exception is already on its way to the caller and it is the one
+     * worth seeing. A compensation that fails leaves the inconsistency it was meant to remove,
+     * which is no worse than not trying, and the log is what says so.
+     */
+    private void undoCounter(Long videoId) {
+        try {
+            videoCountersRepository.incrementShareCount(videoId, -1);
+        } catch (RuntimeException e) {
+            log.error("Could not take back the share counted for video {}; it is now over by one",
+                    videoId, e);
+        }
     }
 }

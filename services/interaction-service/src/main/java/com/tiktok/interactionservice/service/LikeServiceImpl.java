@@ -47,8 +47,10 @@ public class LikeServiceImpl implements LikeService {
             // increments. A failure past this point therefore has to give the claim back, or the
             // like stays stored against a counter that is short by one for good — the same
             // compensation ViewServiceImpl does around its play claim.
+            boolean countered = false;
             try {
                 videoCountersRepository.incrementLikeCount(videoId, 1);
+                countered = true;
                 likeByUserRepository.save(LikeByUser.builder()
                         .key(LikeByUserKey.builder().userId(currentUserId).videoId(videoId).build())
                         .createdAt(Instant.now())
@@ -56,8 +58,15 @@ public class LikeServiceImpl implements LikeService {
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishLike(videoId, currentUserId, true);
             } catch (RuntimeException ex) {
-                undo(() -> likeByVideoRepository.deleteIfExists(videoId, currentUserId),
-                        "like of video %d by user %d".formatted(videoId, currentUserId), ex);
+                String what = "like of video %d by user %d".formatted(videoId, currentUserId);
+                // The counter first, then the claim, and only if the counter actually moved.
+                // Giving the claim back alone is what made a failed publish permanent: the
+                // increment had already landed, so the client's retry took a fresh claim and
+                // added a second one for the same like.
+                if (countered) {
+                    undo(() -> videoCountersRepository.incrementLikeCount(videoId, -1), what, ex);
+                }
+                undo(() -> likeByVideoRepository.deleteIfExists(videoId, currentUserId), what, ex);
                 throw ex;
             }
             likeCount++;
@@ -77,15 +86,21 @@ public class LikeServiceImpl implements LikeService {
             // Symmetric with like(): the LWT delete is the one call allowed to decrement, so a
             // failure after it puts the like row back rather than leaving the video counted as
             // liked by someone whose like is gone.
+            boolean countered = false;
             try {
                 videoCountersRepository.incrementLikeCount(videoId, -1);
+                countered = true;
                 likeByUserRepository.deleteById(
                         LikeByUserKey.builder().userId(currentUserId).videoId(videoId).build());
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishLike(videoId, currentUserId, false);
             } catch (RuntimeException ex) {
+                String what = "unlike of video %d by user %d".formatted(videoId, currentUserId);
+                if (countered) {
+                    undo(() -> videoCountersRepository.incrementLikeCount(videoId, 1), what, ex);
+                }
                 undo(() -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, Instant.now()),
-                        "unlike of video %d by user %d".formatted(videoId, currentUserId), ex);
+                        what, ex);
                 throw ex;
             }
             likeCount--;
@@ -103,14 +118,14 @@ public class LikeServiceImpl implements LikeService {
     }
 
     /**
-     * Puts a claim back after the work behind it failed. Swallowed and logged rather than thrown:
-     * an exception is already on its way to the caller and it is the one worth seeing, and a
-     * compensation that fails leaves exactly the inconsistency that existed before this method —
-     * loud in the log, and no worse than not trying.
+     * Puts a claim or a counter back after the work behind it failed. Swallowed and logged rather
+     * than thrown: an exception is already on its way to the caller and it is the one worth
+     * seeing, and a compensation that fails leaves exactly the inconsistency that existed before
+     * this method — loud in the log, and no worse than not trying.
      */
-    private void undo(BooleanSupplier compensation, String what, RuntimeException cause) {
+    private void undo(Runnable compensation, String what, RuntimeException cause) {
         try {
-            compensation.getAsBoolean();
+            compensation.run();
         } catch (RuntimeException ex) {
             log.error("Could not undo the {} after {}; its counter is now off by one",
                     what, cause.getMessage(), ex);
