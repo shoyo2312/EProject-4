@@ -12,6 +12,7 @@ import com.tiktok.userservice.exception.AlreadyFollowingException;
 import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.NotFollowingException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
+import com.tiktok.userservice.service.AvatarUploadService;
 import com.tiktok.userservice.service.FollowService;
 import com.tiktok.userservice.service.UserProfileService;
 import org.junit.jupiter.api.BeforeEach;
@@ -72,6 +73,11 @@ class UserProfileControllerTest {
 
     @MockBean
     private FollowService followService;
+
+    // The controller takes it even though nothing here posts an avatar: without it the slice
+    // context fails to start and every test in this class errors out.
+    @MockBean
+    private AvatarUploadService avatarUploadService;
 
     private JwtProvider jwtProvider;
 
