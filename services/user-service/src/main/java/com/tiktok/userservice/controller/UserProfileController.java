@@ -3,13 +3,16 @@ package com.tiktok.userservice.controller;
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
+import com.tiktok.userservice.service.AvatarUploadService;
 import com.tiktok.userservice.service.UserProfileService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -19,6 +22,7 @@ import java.util.List;
 public class UserProfileController {
 
     private final UserProfileService userProfileService;
+    private final AvatarUploadService avatarUploadService;
 
     @GetMapping("/me")
     public ApiResponse<UserProfileResponse> getOwnProfile(@AuthenticationPrincipal Long currentUserId) {
@@ -30,6 +34,21 @@ public class UserProfileController {
             @AuthenticationPrincipal Long currentUserId,
             @Valid @RequestBody UpdateProfileRequest request) {
         return ApiResponse.success(userProfileService.updateOwnProfile(currentUserId, request));
+    }
+
+    /**
+     * The only way a client can set an avatar. It uploads the file itself rather than a URL,
+     * because {@code PATCH /me} accepts nothing a client could have invented — see
+     * {@link AvatarUploadService}.
+     *
+     * <p>Answers the whole profile, not just the URL, so the caller refreshes from one response
+     * exactly as it does after a {@code PATCH}.
+     */
+    @PostMapping(value = "/me/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<UserProfileResponse> uploadOwnAvatar(
+            @AuthenticationPrincipal Long currentUserId,
+            @RequestPart("file") MultipartFile file) {
+        return ApiResponse.success(avatarUploadService.replaceOwnAvatar(currentUserId, file));
     }
 
     /**

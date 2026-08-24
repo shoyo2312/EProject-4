@@ -117,6 +117,25 @@ public class UserProfileServiceImpl implements UserProfileService {
 
     @Override
     @Transactional
+    public UserProfileResponse replaceOwnAvatarUrl(Long userId, String avatarUrl) {
+        UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .orElseThrow(() -> new UserProfileNotFoundException(userId));
+
+        // Long enough to fail the column is a bug in how the URL is built, not a bad upload: the
+        // key is a user id and the rest is configuration, so this is a deployment whose endpoint
+        // does not fit. Failing loudly beats a silently truncated URL that resolves to nothing.
+        if (avatarUrl.length() > MAX_AVATAR_URL_LENGTH) {
+            throw new IllegalStateException(
+                    "Built an avatar URL of %d characters, over the %d the column holds"
+                            .formatted(avatarUrl.length(), MAX_AVATAR_URL_LENGTH));
+        }
+
+        profile.updateProfile(null, null, avatarUrl);
+        return userProfileMapper.toResponse(profile);
+    }
+
+    @Override
+    @Transactional
     public void createFromRegisteredEvent(Long userId, String username, String avatarUrl) {
         if (userProfileRepository.existsByUserIdAndDeletedAtIsNull(userId)) {
             return;

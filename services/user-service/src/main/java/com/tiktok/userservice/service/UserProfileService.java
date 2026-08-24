@@ -48,6 +48,17 @@ public interface UserProfileService {
     UserProfileResponse updateOwnProfile(Long userId, UpdateProfileRequest request);
 
     /**
+     * Points the profile at an avatar {@link AvatarUploadService} has already stored.
+     *
+     * <p>Not {@code updateOwnProfile} with an {@code avatarUrl}: that field is
+     * {@code @ValidMediaUrl} because it comes from a client, and this URL was built by the server
+     * from its own configuration. Running it through the client-facing validator would either pass
+     * trivially or, in a deployment whose MinIO endpoint is not on the allow-list, reject the
+     * service's own upload.
+     */
+    UserProfileResponse replaceOwnAvatarUrl(Long userId, String avatarUrl);
+
+    /**
      * Creates the profile a newly registered account gets by default.
      *
      * <p>Takes no email on purpose: nothing in a profile is addressed by email, and a copy kept

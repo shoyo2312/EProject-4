@@ -84,7 +84,7 @@ Request (mọi field đều optional, `UpdateProfileRequest`):
 
 → Vì vậy, khi build request body ở Flutter: **chỉ đưa key nào user thực sự chỉnh sửa vào JSON** (dùng `Map<String, dynamic>` build tay hoặc `@JsonKey(includeIfNull: false)` + loại bỏ field không đổi), tuyệt đối không serialize nguyên object rồi gửi full — nếu form có field trống mặc định (`""`), gửi nguyên request sẽ vô tình xoá `bio`/`avatarUrl` hiện có của user.
 
-`avatarUrl` phải là URL **https** với host nằm trong allow-list phía server (CDN nội bộ) — client không tự nghĩ ra URL avatar, mà lấy URL trả về từ luồng upload ảnh (ngoài phạm vi user-service, xem mục 8). Gửi URL sai domain/scheme → `VALIDATION_ERROR` (400).
+`avatarUrl` phải là URL **https** với host nằm trong allow-list phía server (CDN nội bộ) — client không tự nghĩ ra URL avatar. Gửi URL sai domain/scheme → `VALIDATION_ERROR` (400). Muốn đổi ảnh đại diện thì **không dùng field này**, mà upload file qua `POST /me/avatar` (mục 3.2b) — server tự lưu và tự set `avatarUrl`.
 
 Response `data` → `UserProfileResponse` (giống mục 3.1, đã áp dụng thay đổi).
 
@@ -101,6 +101,20 @@ Bước 3 **chỉ** ghi đè khi `avatarUrl` đang trống hoặc vẫn đúng U
 Client hiển thị đúng URL server trả về, không suy đoán host. Next.js phải khai báo host trong `images.remotePatterns` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, và origin MinIO) mới render được qua `next/image`.
 
 Lỗi: `VALIDATION_ERROR` (400).
+
+### 3.2b `POST /me/avatar`
+
+Upload ảnh đại diện. `multipart/form-data`, đúng một part tên `file`.
+
+- Content type nhận: `image/jpeg`, `image/png`, `image/webp`. SVG bị từ chối (trình duyệt chạy script trong SVG).
+- Tối đa 5 MB (`AVATAR_MAX_BYTES`). Quá cỡ → `INVALID_AVATAR` (400 nếu qua được servlet, 413 nếu bị chặn ở giới hạn multipart).
+- Sai định dạng / part rỗng → `INVALID_AVATAR` (400).
+
+Server ghi file vào MinIO tại `avatars/{userId}.jpg` (đúng key media-worker dùng khi mirror ảnh social, nên một user chỉ có một object ảnh), rồi tự set `avatarUrl` và trả về **cả profile** — `UserProfileResponse` như mục 3.1. Client refresh từ response này giống hệt sau `PATCH /me`.
+
+URL trả về có đuôi `?v={epochSeconds}`, ví dụ `http://localhost:9000/video-media/avatars/123.jpg?v=1756000000`. Key cố định nên nếu thiếu query này, lần upload thứ hai trả đúng URL cũ và trình duyệt/CDN vẫn phục vụ ảnh cũ. **Client phải lưu nguyên URL kèm query**, không cắt bỏ.
+
+Luồng đúng ở client: chọn ảnh → chỉ preview local (object URL / file path), **chưa gọi API** → khi user bấm Save mới `POST /me/avatar`; upload lỗi thì huỷ luôn cả lần save đó, đừng để đổi được tên mà ảnh thì không.
 
 ### 3.3 `GET /{userId}`
 Xem profile người khác. Trả `200 OK`.
@@ -193,6 +207,7 @@ Không có enum nào ở user-service (không có trạng thái "visibility", "f
 
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
+| `INVALID_AVATAR` | 400 / 413 | File upload ở `POST /me/avatar` sai định dạng, rỗng, hoặc quá 5 MB |
 | `VALIDATION_ERROR` | 400 | Body không đúng ràng buộc (`displayName`/`bio`/`avatarUrl` sai định dạng/độ dài) |
 | `TOO_MANY_PROFILE_IDS` | 400 | Gửi quá 100 id cho `GET /?ids=` (mục 3.3b). Chia nhỏ theo trang, đừng gộp cả feed vào 1 lần gọi |
 | `CANNOT_FOLLOW_SELF` | 400 | Gọi `follow` lên chính `userId` của mình |
@@ -221,7 +236,7 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của user-service, đế
 - Không serialize nguyên object `UpdateProfileRequest` (kèm field rỗng mặc định của form) khi gọi `PATCH /me` — sẽ vô tình xoá `bio`/`avatarUrl` hiện có do luật "chuỗi rỗng = xoá field" (xem mục 3.2). Chỉ gửi field user thực sự đã sửa.
 - Không tự suy luận "user này đã chặn tôi" từ mã lỗi `404 USER_PROFILE_NOT_FOUND` — server cố tình không phân biệt "không tồn tại" và "bị chặn", UI chỉ nên hiển thị chung "không thể xem".
 - Không giả định `block` tự động `mute` hoặc ngược lại — 2 trạng thái độc lập, phải gọi API riêng và hiển thị 2 toggle riêng trên UI.
-- Không tự build URL avatar phía client rồi gửi thẳng lên `PATCH /me` — chỉ dùng URL trả về từ luồng upload ảnh thật (ngoài phạm vi user-service), vì server chặn theo allow-list host + bắt buộc `https`.
+- Không tự build URL avatar phía client rồi gửi thẳng lên `PATCH /me` — server chặn theo allow-list host + bắt buộc `https`. Đổi ảnh thì upload file qua `POST /me/avatar` (mục 3.2b) và dùng `avatarUrl` trong response.
 - Không coi `404` ở `GET /me` ngay sau khi vừa đăng ký/login lần đầu là lỗi cứng — profile được tạo bất đồng bộ qua Kafka, nên retry nhẹ trước khi báo lỗi cho user (xem mục 3.1).
 - Không dừng infinite scroll khi `content` ngắn hơn `size` — dùng `number + 1 >= totalPages`, vì server có thể bỏ qua vài id không còn profile trong trang (xem mục 2).
 - Không coi mọi `409` như nhau: `CONCURRENT_MODIFICATION` nên retry 1 lần, còn `ALREADY_FOLLOWING`/`ALREADY_BLOCKED`/`ALREADY_MUTED` thì phải đồng bộ lại UI chứ retry không giải quyết gì.
