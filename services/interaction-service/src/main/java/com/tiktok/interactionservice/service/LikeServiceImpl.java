@@ -2,16 +2,21 @@ package com.tiktok.interactionservice.service;
 
 import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
 import com.tiktok.interactionservice.dto.response.LikeStatusResponse;
+import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
 import com.tiktok.interactionservice.entity.LikeByUser;
 import com.tiktok.interactionservice.entity.LikeByUserKey;
 import com.tiktok.interactionservice.entity.LikeByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.InteractionConflictException;
+import com.tiktok.interactionservice.exception.InvalidCursorException;
 import com.tiktok.interactionservice.repository.LikeByUserRepository;
 import com.tiktok.interactionservice.repository.LikeByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.cassandra.CassandraInvalidQueryException;
+import org.springframework.data.cassandra.core.query.CassandraPageRequest;
+import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -115,6 +120,21 @@ public class LikeServiceImpl implements LikeService {
                 && likeByVideoRepository.existsById(LikeByVideoKey.builder().videoId(videoId).userId(currentUserId).build());
         long likeCount = counterCacheService.getCounts(videoId).likeCount();
         return new LikeStatusResponse(videoId, liked, likeCount);
+    }
+
+    @Override
+    public VideoIdPageResponse listLikedVideos(Long currentUserId, String cursor, int size) {
+        CassandraPageRequest pageRequest = CassandraCursors.decode(cursor, size, InvalidCursorException::new);
+        try {
+            // likes_by_user, not likes_by_video: the reverse index exists precisely so this read
+            // is one partition rather than a scan of every video's likers.
+            Slice<LikeByUser> slice = likeByUserRepository.findByUserId(currentUserId, pageRequest);
+            return VideoIdPageResponse.from(slice, like -> like.getKey().getVideoId());
+        } catch (CassandraInvalidQueryException e) {
+            // Base64 that decodes into bytes Cassandra will not accept as paging state gets past
+            // the decoder and is only refused here, by the coordinator.
+            throw new InvalidCursorException();
+        }
     }
 
     /**

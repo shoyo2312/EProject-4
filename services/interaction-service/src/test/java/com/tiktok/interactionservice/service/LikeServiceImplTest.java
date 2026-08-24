@@ -2,6 +2,7 @@ package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
 import com.tiktok.interactionservice.dto.response.LikeStatusResponse;
+import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
 import com.tiktok.interactionservice.repository.LikeByUserRepository;
 import com.tiktok.interactionservice.repository.LikeByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
@@ -114,5 +115,29 @@ class LikeServiceImplTest extends AbstractInteractionServiceIT {
         LikeStatusResponse response = likeService.getStatus(15L, 1L);
 
         assertThat(response.likeCount()).isEqualTo(2L);
+    }
+
+    @Test
+    void listLikedVideos_returnsOnlyTheCallersLikesAndPages() {
+        likeService.like(40L, 1L);
+        likeService.like(41L, 1L);
+        likeService.like(42L, 2L);
+
+        VideoIdPageResponse first = likeService.listLikedVideos(1L, null, 1);
+        assertThat(first.videoIds()).hasSize(1);
+        assertThat(first.hasMore()).isTrue();
+
+        VideoIdPageResponse second = likeService.listLikedVideos(1L, first.nextCursor(), 1);
+        assertThat(first.videoIds()).doesNotContainAnyElementsOf(second.videoIds());
+        assertThat(second.videoIds()).hasSize(1);
+        assertThat(first.videoIds().get(0) + second.videoIds().get(0)).isEqualTo(81L);
+    }
+
+    @Test
+    void listLikedVideos_afterUnlike_dropsTheVideo() {
+        likeService.like(43L, 1L);
+        likeService.unlike(43L, 1L);
+
+        assertThat(likeService.listLikedVideos(1L, null, 20).videoIds()).isEmpty();
     }
 }
