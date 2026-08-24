@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
@@ -61,6 +62,9 @@ class UserProfileServiceImplTest {
 
     @Autowired
     private BlockService blockService;
+
+    @Autowired
+    private FollowService followService;
 
     @Autowired
     private InboxEventRepository inboxEventRepository;
@@ -274,5 +278,65 @@ class UserProfileServiceImplTest {
 
         assertThat(updated.bio()).isNull();
         assertThat(updated.displayName()).isEqualTo("johndoe");
+    }
+
+    @Test
+    void search_matchesTheHandleAndTheDisplayName() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        userProfileService.createFromRegisteredEvent(2L, "janedoe", null);
+        userProfileService.createFromRegisteredEvent(3L, "someoneelse", null);
+        userProfileService.updateOwnProfile(3L, new UpdateProfileRequest("John Smith", null, null));
+
+        // "john" is in one handle and in one display name, and both accounts come back.
+        assertThat(userProfileService.search(99L, "john", PageRequest.of(0, 20)).getContent())
+                .extracting(UserProfileResponse::userId)
+                .containsExactlyInAnyOrder(1L, 3L);
+
+        assertThat(userProfileService.search(99L, "doe", PageRequest.of(0, 20)).getContent())
+                .extracting(UserProfileResponse::userId)
+                .containsExactlyInAnyOrder(1L, 2L);
+    }
+
+    @Test
+    void search_isCaseInsensitive() {
+        userProfileService.createFromRegisteredEvent(1L, "JohnDoe", null);
+
+        assertThat(userProfileService.search(99L, "JOHNDOE", PageRequest.of(0, 20)).getContent())
+                .extracting(UserProfileResponse::userId)
+                .containsExactly(1L);
+    }
+
+    @Test
+    void search_ordersByFollowerCount() {
+        userProfileService.createFromRegisteredEvent(1L, "doe1", null);
+        userProfileService.createFromRegisteredEvent(2L, "doe2", null);
+        userProfileService.createFromRegisteredEvent(3L, "fan", null);
+        followService.follow(3L, 2L);
+
+        assertThat(userProfileService.search(99L, "doe", PageRequest.of(0, 20)).getContent())
+                .extracting(UserProfileResponse::userId)
+                .containsExactly(2L, 1L);
+    }
+
+    @Test
+    void search_dropsBlockedProfiles() {
+        userProfileService.createFromRegisteredEvent(1L, "doe1", null);
+        userProfileService.createFromRegisteredEvent(2L, "doe2", null);
+        blockService.block(1L, 2L);
+
+        var page = userProfileService.search(1L, "doe", PageRequest.of(0, 20));
+
+        assertThat(page.getContent())
+                .extracting(UserProfileResponse::userId)
+                .containsExactly(1L);
+    }
+
+    /** "Show me everyone" is not a search, and paging through every profile is what it would cost. */
+    @Test
+    void search_withABlankQuery_isEmpty() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+
+        assertThat(userProfileService.search(99L, "   ", PageRequest.of(0, 20))).isEmpty();
+        assertThat(userProfileService.search(99L, null, PageRequest.of(0, 20))).isEmpty();
     }
 }

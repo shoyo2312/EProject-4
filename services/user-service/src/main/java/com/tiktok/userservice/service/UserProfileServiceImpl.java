@@ -10,6 +10,10 @@ import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -72,6 +76,35 @@ public class UserProfileServiceImpl implements UserProfileService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Page<UserProfileResponse> search(Long viewerId, String query, Pageable pageable) {
+        if (query == null || query.isBlank()) {
+            return Page.empty(pageable);
+        }
+
+        // The sort is part of the query — a Pageable carrying its own would be appended to it and
+        // fight the follower-count ordering the search is built around.
+        Pageable unsorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
+        Page<UserProfile> page = userProfileRepository.search(query.strip(), unsorted);
+
+        List<Long> ids = page.getContent().stream().map(UserProfile::getUserId).toList();
+        Set<Long> hidden = ids.isEmpty()
+                ? Set.of()
+                : Set.copyOf(userBlockRepository.findBlockedIdsAmong(viewerId, ids));
+
+        List<UserProfileResponse> visible = page.getContent().stream()
+                .filter(profile -> !hidden.contains(profile.getUserId()))
+                .map(userProfileMapper::toResponse)
+                .toList();
+
+        // The count handed in is the one before the block filter — the number of rows the query
+        // matched, which is what the next page is positioned against. PageImpl trims it down to
+        // what it can see on a last page; that is its own behaviour and harmless here, since a
+        // page shorter than asked for is already the contract above.
+        return new PageImpl<>(visible, unsorted, page.getTotalElements());
+    }
+
+    @Override
     @Transactional
     public UserProfileResponse updateOwnProfile(Long userId, UpdateProfileRequest request) {
         UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
@@ -91,6 +124,7 @@ public class UserProfileServiceImpl implements UserProfileService {
 
         UserProfile profile = UserProfile.builder()
                 .userId(userId)
+                .username(username)
                 .displayName(username)
                 .avatarUrl(providerAvatar(avatarUrl))
                 .build();

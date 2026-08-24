@@ -6,6 +6,8 @@ import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.service.UserProfileService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -39,6 +41,18 @@ public class UserProfileController {
      * response can be shorter than {@code ids}, and duplicates collapse. Callers key it by
      * {@code userId} rather than counting on a row per id.
      */
+    /**
+     * Handle or display-name search. Separate path from the batch {@code GET /users?ids=} above
+     * because it is a different question — that one hydrates ids a caller already has.
+     */
+    @GetMapping("/search")
+    public ApiResponse<Page<UserProfileResponse>> search(
+            @AuthenticationPrincipal Long currentUserId,
+            @RequestParam(required = false) String q,
+            Pageable pageable) {
+        return ApiResponse.success(userProfileService.search(currentUserId, q, pageable));
+    }
+
     @GetMapping
     public ApiResponse<List<UserProfileResponse>> getProfiles(
             @AuthenticationPrincipal Long currentUserId,

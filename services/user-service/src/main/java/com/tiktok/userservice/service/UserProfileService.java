@@ -2,6 +2,8 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 
@@ -28,6 +30,20 @@ public interface UserProfileService {
      * {@link com.tiktok.userservice.exception.TooManyProfileIdsException}.
      */
     List<UserProfileResponse> getByUserIds(Long viewerId, List<Long> userIds);
+
+    /**
+     * Profile search by handle or display name, newest-irrelevant and ordered by follower count.
+     *
+     * <p>A blank query is an empty page, not the whole table: there is no useful answer to "show
+     * me everyone", and paging through every profile is the one request that would make this
+     * endpoint expensive.
+     *
+     * <p>Blocked profiles are dropped from the page the same way {@link #getByUserIds} drops
+     * them, which can leave a page shorter than the size asked for. Filtering before paging would
+     * mean the block check joining the search query, and a block is the rarer thing by orders of
+     * magnitude.
+     */
+    Page<UserProfileResponse> search(Long viewerId, String query, Pageable pageable);
 
     UserProfileResponse updateOwnProfile(Long userId, UpdateProfileRequest request);
 

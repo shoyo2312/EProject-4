@@ -122,7 +122,7 @@ class BlockMuteControllerTest {
 
     @Test
     void listBlocked_withValidToken_returnsPagedProfiles() throws Exception {
-        UserProfileResponse blocked = new UserProfileResponse(9L, "Eve", null, null, 0, 0);
+        UserProfileResponse blocked = new UserProfileResponse(9L, "eve", "Eve", null, null, 0, 0);
         Page<UserProfileResponse> page = new PageImpl<>(List.of(blocked), PageRequest.of(0, 10), 1);
         when(blockService.listBlocked(eq(1L), any())).thenReturn(page);
 
@@ -176,7 +176,7 @@ class BlockMuteControllerTest {
 
     @Test
     void listMuted_withValidToken_returnsPagedProfiles() throws Exception {
-        UserProfileResponse muted = new UserProfileResponse(11L, "Frank", null, null, 0, 0);
+        UserProfileResponse muted = new UserProfileResponse(11L, "frank", "Frank", null, null, 0, 0);
         Page<UserProfileResponse> page = new PageImpl<>(List.of(muted), PageRequest.of(0, 10), 1);
         when(muteService.listMuted(eq(1L), any())).thenReturn(page);
 
