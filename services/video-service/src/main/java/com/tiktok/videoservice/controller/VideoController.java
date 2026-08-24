@@ -5,6 +5,7 @@ import com.tiktok.videoservice.dto.request.CreateVideoRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
+import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.service.VideoService;
 import jakarta.validation.Valid;
@@ -83,6 +84,17 @@ public class VideoController {
             @PathVariable Long userId,
             Pageable pageable) {
         return ApiResponse.success(videoService.listByUser(currentUserId, userId, pageable));
+    }
+
+    /**
+     * The profile header's totals. No token needed — the numbers a visitor sees are public;
+     * sending one only widens the count to the owner's own hidden videos.
+     */
+    @GetMapping("/users/{userId}/stats")
+    public ApiResponse<UserVideoStatsResponse> getUserStats(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long userId) {
+        return ApiResponse.success(videoService.getUserStats(currentUserId, userId));
     }
 
     @DeleteMapping("/{videoId}")

@@ -5,6 +5,7 @@ import com.tiktok.videoservice.dto.request.CreateVideoRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
+import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -16,6 +17,7 @@ import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
+import com.tiktok.videoservice.repository.UserVideoStats;
 import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
@@ -309,6 +311,17 @@ public class VideoServiceImpl implements VideoService {
                         userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
 
         return videos.map(videoMapper::toResponse);
+    }
+
+    /**
+     * The profile header's counters. Same owner/stranger split as {@link #listByUser}, so the
+     * total sits over the grid it was summed from.
+     */
+    @Override
+    public UserVideoStatsResponse getUserStats(Long requesterId, Long userId) {
+        UserVideoStats stats = videoRepository.sumUserVideoStats(userId, isSelf(requesterId, userId));
+        return new UserVideoStatsResponse(
+                userId, stats.videoCount(), stats.totalLikes(), stats.totalViews());
     }
 
     @Override

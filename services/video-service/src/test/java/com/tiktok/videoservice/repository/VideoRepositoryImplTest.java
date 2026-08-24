@@ -255,6 +255,71 @@ class VideoRepositoryImplTest {
                 .isInstanceOf(DuplicateKeyException.class);
     }
 
+    @Test
+    void sumUserVideoStats_strangerView_countsOnlyPublishedPublicVideos() {
+        saveWithCounters(2L, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 10, 100);
+        saveWithCounters(2L, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 5, 50);
+        saveWithCounters(2L, VideoStatus.PUBLISHED, VideoVisibility.PRIVATE, 999, 999);
+        saveWithCounters(2L, VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 999, 999);
+        saveWithCounters(3L, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 777, 777);
+
+        UserVideoStats stats = videoRepository.sumUserVideoStats(2L, false);
+
+        assertThat(stats.videoCount()).isEqualTo(2);
+        assertThat(stats.totalLikes()).isEqualTo(15);
+        assertThat(stats.totalViews()).isEqualTo(150);
+    }
+
+    @Test
+    void sumUserVideoStats_ownerView_alsoCountsHiddenVideos() {
+        saveWithCounters(2L, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 10, 100);
+        saveWithCounters(2L, VideoStatus.PUBLISHED, VideoVisibility.PRIVATE, 1, 2);
+        saveWithCounters(2L, VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 3, 4);
+
+        UserVideoStats stats = videoRepository.sumUserVideoStats(2L, true);
+
+        assertThat(stats.videoCount()).isEqualTo(3);
+        assertThat(stats.totalLikes()).isEqualTo(14);
+        assertThat(stats.totalViews()).isEqualTo(106);
+    }
+
+    @Test
+    void sumUserVideoStats_excludesDeletedVideos() {
+        Video deleted = saveWithCounters(2L, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 9, 9);
+        deleted.markDeleted();
+        videoRepository.updateSoftDeleted(deleted);
+
+        assertThat(videoRepository.sumUserVideoStats(2L, true)).isEqualTo(UserVideoStats.EMPTY);
+    }
+
+    /** No videos means no group row at all, which must read as zeros rather than as null. */
+    @Test
+    void sumUserVideoStats_userWithNothing_isZeros() {
+        assertThat(videoRepository.sumUserVideoStats(404L, false)).isEqualTo(UserVideoStats.EMPTY);
+    }
+
+    private Video saveWithCounters(Long userId, VideoStatus status, VideoVisibility visibility,
+                                   long likes, long views) {
+        Video video = videoRepository.save(Video.builder()
+                .id(Video.newId())
+                .userId(userId)
+                .title("t")
+                .rawFileUrl("s3://video-media/raw/%d/%s.mp4".formatted(userId, Video.newId()))
+                .visibility(visibility)
+                .status(status)
+                .build());
+
+        // $inc rather than the builder: likeCount and viewCount are only ever moved that way in
+        // production, and a value written by save() would not prove the aggregation reads what
+        // the consumers actually write.
+        mongoTemplate.updateFirst(
+                Query.query(where("_id").is(video.getId())),
+                new Update().inc("likeCount", likes).inc("viewCount", views),
+                Video.class);
+
+        return reload(video);
+    }
+
     private Video save(VideoStatus status) {
         return save(status, "s3://video-media/raw/1/%s.mp4".formatted(Video.newId()));
     }
