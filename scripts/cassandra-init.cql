@@ -21,6 +21,16 @@ CREATE TABLE IF NOT EXISTS likes_by_user (
     PRIMARY KEY ((user_id), video_id)
 ) WITH CLUSTERING ORDER BY (video_id DESC);
 
+-- Videos a user saved ("favorites"). One table, not the like pair: nothing needs the
+-- "who saved video X" direction, and (user_id, video_id) already answers both "is it saved"
+-- and "list my saves". Save/unsave stay idempotent via LWT on this table.
+CREATE TABLE IF NOT EXISTS saves_by_user (
+    user_id    bigint,
+    video_id   bigint,
+    created_at timestamp,
+    PRIMARY KEY ((user_id), video_id)
+) WITH CLUSTERING ORDER BY (video_id DESC);
+
 -- Comments, partitioned by video, clustered by Snowflake id (time-ordered) descending
 CREATE TABLE IF NOT EXISTS comments_by_video (
     video_id   bigint,
