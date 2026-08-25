@@ -1,9 +1,12 @@
 package com.tiktok.interactionservice.service;
 
+import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
 import org.springframework.data.cassandra.core.query.CassandraPageRequest;
+import org.springframework.data.domain.Slice;
 
 import java.nio.ByteBuffer;
 import java.util.Base64;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -30,6 +33,19 @@ public final class CassandraCursors {
             // otherwise report for what is a query-string typo.
             throw onUnusable.get();
         }
+    }
+
+    /**
+     * Wraps one Cassandra slice of interaction rows as a page of video ids. No dead-row filtering
+     * and so no page-scanning loop like the comment listing needs: likes and saves are deleted
+     * outright, never tombstoned into a page the reader has to skip past.
+     */
+    public static <T> VideoIdPageResponse page(Slice<T> slice, Function<T, Long> videoIdOf) {
+        boolean hasMore = slice.hasNext();
+        return new VideoIdPageResponse(
+                slice.getContent().stream().map(videoIdOf).toList(),
+                hasMore ? encode((CassandraPageRequest) slice.nextPageable()) : null,
+                hasMore);
     }
 
     public static String encode(CassandraPageRequest pageRequest) {

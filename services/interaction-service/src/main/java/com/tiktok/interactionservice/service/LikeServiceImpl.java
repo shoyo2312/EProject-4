@@ -129,7 +129,7 @@ public class LikeServiceImpl implements LikeService {
             // likes_by_user, not likes_by_video: the reverse index exists precisely so this read
             // is one partition rather than a scan of every video's likers.
             Slice<LikeByUser> slice = likeByUserRepository.findByUserId(currentUserId, pageRequest);
-            return VideoIdPageResponse.from(slice, like -> like.getKey().getVideoId());
+            return CassandraCursors.page(slice, like -> like.getKey().getVideoId());
         } catch (CassandraInvalidQueryException e) {
             // Base64 that decodes into bytes Cassandra will not accept as paging state gets past
             // the decoder and is only refused here, by the coordinator.
