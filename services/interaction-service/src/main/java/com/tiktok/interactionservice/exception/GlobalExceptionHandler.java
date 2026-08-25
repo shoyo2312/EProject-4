@@ -2,12 +2,14 @@ package com.tiktok.interactionservice.exception;
 
 import com.tiktok.common.exception.DomainException;
 import com.tiktok.common.response.ApiResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -27,8 +29,14 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error("VALIDATION_ERROR", message));
     }
 
+    /**
+     * The response says nothing on purpose — an unexpected failure is not the client's to read —
+     * so the log is the only place the cause survives. Without it this handler is a silent
+     * swallow: a 500 with no stack trace anywhere to say what threw.
+     */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpectedException(Exception ex) {
+        log.error("Unhandled exception in interaction-service", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.error("INTERNAL_ERROR", "An unexpected error occurred"));
     }
