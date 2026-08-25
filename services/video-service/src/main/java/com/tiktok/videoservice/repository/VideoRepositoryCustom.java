@@ -98,6 +98,22 @@ public interface VideoRepositoryCustom {
      */
     void updateEventFailed(Video video);
 
+    /**
+     * The profile header's totals: how many videos, and the likes and views summed over them.
+     *
+     * <p>Aggregated on read rather than denormalised onto the user, because likeCount already
+     * moves on every like through a Kafka consumer — a second running total would be a second
+     * thing to keep in step with it, and the two would drift the first time one of the two
+     * writes failed.
+     *
+     * <p>The match is the same pair {@code listByUser} draws, so the number under the avatar and
+     * the grid below it are describing the same set of videos: the owner's own hidden videos
+     * count for the owner, and for nobody else.
+     *
+     * @param includeHidden true for the owner's own view — count PROCESSING and PRIVATE videos too
+     */
+    UserVideoStats sumUserVideoStats(Long userId, boolean includeHidden);
+
     /** Soft delete. */
     void updateSoftDeleted(Video video);
 }

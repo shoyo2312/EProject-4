@@ -28,6 +28,14 @@ spring:
         default-page-size: 20
         max-page-size: 50
 
+  servlet:
+    multipart:
+      # Avatars only — this service takes no other upload. Kept a touch above app.avatar.max-bytes
+      # so an oversized file is refused by the endpoint, with its own message, rather than by the
+      # container with a generic one.
+      max-file-size: ${AVATAR_MAX_FILE_SIZE:6MB}
+      max-request-size: ${AVATAR_MAX_REQUEST_SIZE:7MB}
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -59,6 +67,18 @@ app:
     # Override MEDIA_ALLOWED_HOSTS (comma-separated) with the real CDN/MinIO public host(s) in prod.
     # No allowed-buckets here: this service accepts no s3:// URLs.
     allowed-hosts: ${MEDIA_ALLOWED_HOSTS:cdn.tiktok-clone.local}
+  avatar:
+    # The size POST /users/me/avatar accepts. Mirrored by the client's own check, and by the
+    # multipart limits above, which have to stay larger than it.
+    max-bytes: ${AVATAR_MAX_BYTES:5242880}
+
+# Where uploaded avatars are written. Same bucket media-worker mirrors social pictures into, on
+# purpose: both paths write avatars/{userId}.jpg, so a profile has one avatar object, not two.
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  access-key: ${MINIO_ACCESS_KEY:minioadmin}
+  secret-key: ${MINIO_SECRET_KEY:minioadmin123}
+  bucket: ${MINIO_BUCKET:video-media}
 
 springdoc:
   api-docs:

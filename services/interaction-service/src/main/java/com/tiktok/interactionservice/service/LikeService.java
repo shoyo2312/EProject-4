@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.dto.response.LikeStatusResponse;
+import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
 
 public interface LikeService {
 
@@ -9,4 +10,6 @@ public interface LikeService {
     LikeStatusResponse unlike(Long videoId, Long currentUserId);
 
     LikeStatusResponse getStatus(Long videoId, Long currentUserId);
+
+    VideoIdPageResponse listLikedVideos(Long currentUserId, String cursor, int size);
 }

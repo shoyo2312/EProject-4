@@ -2,6 +2,8 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 
@@ -29,7 +31,32 @@ public interface UserProfileService {
      */
     List<UserProfileResponse> getByUserIds(Long viewerId, List<Long> userIds);
 
+    /**
+     * Profile search by handle or display name, newest-irrelevant and ordered by follower count.
+     *
+     * <p>A blank query is an empty page, not the whole table: there is no useful answer to "show
+     * me everyone", and paging through every profile is the one request that would make this
+     * endpoint expensive.
+     *
+     * <p>Blocked profiles are dropped from the page the same way {@link #getByUserIds} drops
+     * them, which can leave a page shorter than the size asked for. Filtering before paging would
+     * mean the block check joining the search query, and a block is the rarer thing by orders of
+     * magnitude.
+     */
+    Page<UserProfileResponse> search(Long viewerId, String query, Pageable pageable);
+
     UserProfileResponse updateOwnProfile(Long userId, UpdateProfileRequest request);
+
+    /**
+     * Points the profile at an avatar {@link AvatarUploadService} has already stored.
+     *
+     * <p>Not {@code updateOwnProfile} with an {@code avatarUrl}: that field is
+     * {@code @ValidMediaUrl} because it comes from a client, and this URL was built by the server
+     * from its own configuration. Running it through the client-facing validator would either pass
+     * trivially or, in a deployment whose MinIO endpoint is not on the allow-list, reject the
+     * service's own upload.
+     */
+    UserProfileResponse replaceOwnAvatarUrl(Long userId, String avatarUrl);
 
     /**
      * Creates the profile a newly registered account gets by default.

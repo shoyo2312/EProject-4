@@ -12,6 +12,7 @@ import com.tiktok.userservice.exception.AlreadyFollowingException;
 import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.NotFollowingException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
+import com.tiktok.userservice.service.AvatarUploadService;
 import com.tiktok.userservice.service.FollowService;
 import com.tiktok.userservice.service.UserProfileService;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,6 +74,11 @@ class UserProfileControllerTest {
     @MockBean
     private FollowService followService;
 
+    // The controller takes it even though nothing here posts an avatar: without it the slice
+    // context fails to start and every test in this class errors out.
+    @MockBean
+    private AvatarUploadService avatarUploadService;
+
     private JwtProvider jwtProvider;
 
     @BeforeEach
@@ -94,7 +100,7 @@ class UserProfileControllerTest {
     @Test
     void getProfiles_withValidToken_bindsIdsAndReturnsTheBatch() throws Exception {
         when(userProfileService.getByUserIds(eq(1L), eq(List.of(2L, 3L))))
-                .thenReturn(List.of(new UserProfileResponse(2L, "Bob", null, null, 0, 0)));
+                .thenReturn(List.of(new UserProfileResponse(2L, "bob", "Bob", null, null, 0, 0)));
 
         mockMvc.perform(get("/api/v1/users").param("ids", "2,3")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
@@ -119,7 +125,7 @@ class UserProfileControllerTest {
 
     @Test
     void getOwnProfile_withValidToken_bindsCurrentUserIdFromTokenSubject() throws Exception {
-        UserProfileResponse response = new UserProfileResponse(42L, "Alice", "bio", null, 3, 5);
+        UserProfileResponse response = new UserProfileResponse(42L, "alice", "Alice", "bio", null, 3, 5);
         when(userProfileService.getByUserId(42L, 42L)).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/users/me")
@@ -179,7 +185,7 @@ class UserProfileControllerTest {
     @Test
     void updateOwnProfile_withValidHttpsAvatarUrl_succeeds() throws Exception {
         UpdateProfileRequest validRequest = new UpdateProfileRequest("Alice", "bio", "https://cdn.example.com/avatar.png");
-        UserProfileResponse response = new UserProfileResponse(1L, "Alice", "bio", "https://cdn.example.com/avatar.png", 0, 0);
+        UserProfileResponse response = new UserProfileResponse(1L, "alice", "Alice", "bio", "https://cdn.example.com/avatar.png", 0, 0);
         when(userProfileService.updateOwnProfile(eq(1L), any())).thenReturn(response);
 
         mockMvc.perform(patch("/api/v1/users/me")
@@ -193,7 +199,7 @@ class UserProfileControllerTest {
     @Test
     void updateOwnProfile_withBlankAvatarUrl_succeeds() throws Exception {
         UpdateProfileRequest validRequest = new UpdateProfileRequest("Alice", "bio", null);
-        UserProfileResponse response = new UserProfileResponse(1L, "Alice", "bio", null, 0, 0);
+        UserProfileResponse response = new UserProfileResponse(1L, "alice", "Alice", "bio", null, 0, 0);
         when(userProfileService.updateOwnProfile(eq(1L), any())).thenReturn(response);
 
         mockMvc.perform(patch("/api/v1/users/me")
@@ -205,7 +211,7 @@ class UserProfileControllerTest {
 
     @Test
     void getProfileByUserId_withValidToken_returnsRequestedProfile() throws Exception {
-        UserProfileResponse response = new UserProfileResponse(99L, "Bob", null, null, 0, 0);
+        UserProfileResponse response = new UserProfileResponse(99L, "bob", "Bob", null, null, 0, 0);
         when(userProfileService.getByUserId(1L, 99L)).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/users/99")
@@ -237,7 +243,7 @@ class UserProfileControllerTest {
     @Test
     void updateOwnProfile_withoutDisplayName_isAccepted() throws Exception {
         // PATCH: an omitted field means "unchanged", so a bio-only edit must not be a 400.
-        UserProfileResponse response = new UserProfileResponse(1L, "Alice", "new bio", null, 0, 0);
+        UserProfileResponse response = new UserProfileResponse(1L, "alice", "Alice", "new bio", null, 0, 0);
         when(userProfileService.updateOwnProfile(eq(1L), any())).thenReturn(response);
 
         mockMvc.perform(patch("/api/v1/users/me")
@@ -299,7 +305,7 @@ class UserProfileControllerTest {
 
     @Test
     void listFollowers_withValidToken_returnsPagedProfiles() throws Exception {
-        UserProfileResponse follower = new UserProfileResponse(7L, "Carol", null, null, 1, 2);
+        UserProfileResponse follower = new UserProfileResponse(7L, "carol", "Carol", null, null, 1, 2);
         Page<UserProfileResponse> page = new PageImpl<>(List.of(follower), PageRequest.of(0, 10), 1);
         when(followService.listFollowers(eq(1L), eq(2L), any())).thenReturn(page);
 

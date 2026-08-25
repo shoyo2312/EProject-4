@@ -4,6 +4,7 @@ import com.tiktok.videoservice.dto.request.CreateVideoRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
+import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -38,6 +39,8 @@ public interface VideoService {
     CursorPage<VideoResponse> getFeed(String cursor, Integer size);
 
     Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable);
+
+    UserVideoStatsResponse getUserStats(Long requesterId, Long userId);
 
     void delete(Long requesterId, String videoId);
 }

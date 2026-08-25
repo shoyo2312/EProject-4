@@ -20,9 +20,7 @@ import org.springframework.data.cassandra.core.query.CassandraPageRequest;
 import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
-import java.nio.ByteBuffer;
 import java.time.Instant;
-import java.util.Base64;
 import java.util.List;
 
 @Slf4j
@@ -96,7 +94,7 @@ public class CommentServiceImpl implements CommentService {
      */
     @Override
     public CommentPageResponse listComments(Long videoId, String cursor, int size) {
-        CassandraPageRequest pageRequest = decodeCursor(cursor, size);
+        CassandraPageRequest pageRequest = CassandraCursors.decode(cursor, size, InvalidCommentCursorException::new);
 
         List<CommentResponse> items = List.of();
         Slice<CommentByVideo> slice;
@@ -120,7 +118,7 @@ public class CommentServiceImpl implements CommentService {
                     .toList();
 
             boolean hasMore = slice.hasNext();
-            String nextCursor = hasMore ? encodeCursor((CassandraPageRequest) slice.nextPageable()) : null;
+            String nextCursor = hasMore ? CassandraCursors.encode((CassandraPageRequest) slice.nextPageable()) : null;
 
             if (!items.isEmpty() || !hasMore) {
                 return new CommentPageResponse(items, nextCursor, hasMore);
@@ -128,7 +126,7 @@ public class CommentServiceImpl implements CommentService {
             pageRequest = (CassandraPageRequest) slice.nextPageable();
         }
 
-        return new CommentPageResponse(items, encodeCursor(pageRequest), true);
+        return new CommentPageResponse(items, CassandraCursors.encode(pageRequest), true);
     }
 
     @Override
@@ -183,28 +181,5 @@ public class CommentServiceImpl implements CommentService {
             log.error("Could not take back the comment count change on video {}; it is now off by one",
                     videoId, e);
         }
-    }
-
-    private CassandraPageRequest decodeCursor(String cursor, int size) {
-        CassandraPageRequest firstPage = CassandraPageRequest.first(size);
-        if (cursor == null || cursor.isBlank()) {
-            return firstPage;
-        }
-        try {
-            ByteBuffer pagingState = ByteBuffer.wrap(Base64.getUrlDecoder().decode(cursor));
-            return CassandraPageRequest.of(firstPage, pagingState);
-        } catch (IllegalArgumentException e) {
-            // Not base64, or not paging state this driver recognises. Either way the client sent
-            // something we never issued, and that is a 400 — not the 500 the catch-all would
-            // otherwise report for what is a query-string typo.
-            throw new InvalidCommentCursorException();
-        }
-    }
-
-    private String encodeCursor(CassandraPageRequest pageRequest) {
-        ByteBuffer pagingState = pageRequest.getPagingState();
-        byte[] bytes = new byte[pagingState.remaining()];
-        pagingState.duplicate().get(bytes);
-        return Base64.getUrlEncoder().encodeToString(bytes);
     }
 }

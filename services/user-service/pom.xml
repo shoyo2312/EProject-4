@@ -57,6 +57,13 @@
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
         </dependency>
+        <!-- Avatar uploads go straight into the same MinIO bucket media-worker writes to;
+             version pinned here as it is in media-worker, the other module that talks to it. -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+            <version>8.5.12</version>
+        </dependency>
         <dependency>
             <groupId>com.tiktok</groupId>
             <artifactId>common-lib</artifactId>

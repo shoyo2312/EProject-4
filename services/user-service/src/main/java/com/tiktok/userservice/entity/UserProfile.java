@@ -21,6 +21,14 @@ public class UserProfile extends BaseEntity {
     @Column(name = "user_id", nullable = false, unique = true)
     private Long userId;
 
+    /**
+     * The account's handle, copied from the registration event. Null for profiles created before
+     * this field existed — see V8 for why those were not backfilled. Never updated: auth-service
+     * has no rename endpoint, so there is nothing here to keep in step with.
+     */
+    @Column(name = "username")
+    private String username;
+
     @Column(name = "display_name", nullable = false)
     private String displayName;
 

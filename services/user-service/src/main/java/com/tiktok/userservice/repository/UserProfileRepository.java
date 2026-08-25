@@ -1,6 +1,8 @@
 package com.tiktok.userservice.repository;
 
 import com.tiktok.userservice.entity.UserProfile;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -16,6 +18,24 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
     boolean existsByUserIdAndDeletedAtIsNull(Long userId);
 
     List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<Long> userIds);
+
+    /**
+     * Profile search, over the handle and the display name at once.
+     *
+     * <p>{@code lower(...) like lower('%q%')} rather than a derived
+     * {@code ContainingIgnoreCase}: the leading wildcard is what makes this a search rather than a
+     * prefix lookup, and the two GIN trigram indexes in V8 are built on exactly this expression.
+     * Written by hand so the query and the index cannot drift apart.
+     *
+     * <p>Ordered by follower count because the query is short and ambiguous by nature — several
+     * accounts match "an" — and the one people mean is almost always the biggest. The userId
+     * tiebreak keeps paging stable across two profiles with the same count.
+     */
+    @Query("select p from UserProfile p where p.deletedAt is null "
+            + "and (lower(p.displayName) like lower(concat('%', :query, '%')) "
+            + "or lower(p.username) like lower(concat('%', :query, '%'))) "
+            + "order by p.followerCount desc, p.userId asc")
+    Page<UserProfile> search(@Param("query") String query, Pageable pageable);
 
     /**
      * Points a profile at the copy media-worker made of its provider picture.

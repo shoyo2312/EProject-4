@@ -4,8 +4,11 @@ import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import lombok.RequiredArgsConstructor;
+import org.bson.Document;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -48,6 +51,43 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .limit(limit);
 
         return mongoTemplate.find(query, Video.class);
+    }
+
+    @Override
+    public UserVideoStats sumUserVideoStats(Long userId, boolean includeHidden) {
+        Criteria criteria = where("userId").is(userId).and("deletedAt").is(null);
+        if (!includeHidden) {
+            criteria = criteria.and("status").is(VideoStatus.PUBLISHED)
+                    .and("visibility").is(VideoVisibility.PUBLIC);
+        }
+
+        // Field order matches user_videos_idx, so the match is an index scan rather than a walk
+        // of every video this user ever uploaded.
+        Aggregation aggregation = Aggregation.newAggregation(
+                Aggregation.match(criteria),
+                Aggregation.group()
+                        .count().as("videoCount")
+                        .sum("likeCount").as("totalLikes")
+                        .sum("viewCount").as("totalViews"));
+
+        AggregationResults<Document> results =
+                mongoTemplate.aggregate(aggregation, Video.class, Document.class);
+        Document totals = results.getUniqueMappedResult();
+        // No documents matched, so the group stage emitted no row at all — not a row of zeros.
+        if (totals == null) return UserVideoStats.EMPTY;
+
+        return new UserVideoStats(
+                asLong(totals.get("videoCount")),
+                asLong(totals.get("totalLikes")),
+                asLong(totals.get("totalViews")));
+    }
+
+    /**
+     * $sum answers with whatever type its inputs were — Integer for counts and for sums that fit
+     * one, Long once they do not — so neither cast is safe on its own.
+     */
+    private static long asLong(Object value) {
+        return value instanceof Number number ? number.longValue() : 0L;
     }
 
     // statusBeforeTakedown is part of both transcode writes because that is where the outcome
