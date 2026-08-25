@@ -8,17 +8,17 @@ import org.springframework.data.cassandra.core.mapping.PrimaryKey;
 import org.springframework.data.cassandra.core.mapping.Table;
 
 /**
- * Reverse index of LikeByVideo: "videos liked by user X", newest like first, kept in sync with
- * likes_by_video on every like/unlike write. The like's timestamp is in the key — it is the
- * listing's ordering — so there is nothing left outside it.
+ * One user's favourites in the order they saved them. {@link SaveByUser} answers "is this video
+ * saved"; this one answers "list my saves", and only exists because a single table cannot be
+ * clustered on both video_id and created_at.
  */
 @Getter
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@Table("likes_by_user")
-public class LikeByUser {
+@Table("saves_by_user_time")
+public class SaveByUserTime {
 
     @PrimaryKey
-    private LikeByUserKey key;
+    private SaveByUserTimeKey key;
 }

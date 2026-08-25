@@ -5,6 +5,7 @@ import com.tiktok.interactionservice.dto.response.LikeStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
 import com.tiktok.interactionservice.entity.LikeByUser;
 import com.tiktok.interactionservice.entity.LikeByUserKey;
+import com.tiktok.interactionservice.entity.LikeByVideo;
 import com.tiktok.interactionservice.entity.LikeByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.InteractionConflictException;
@@ -43,8 +44,12 @@ public class LikeServiceImpl implements LikeService {
         // would not merely be returned once, it would be pinned there for the cache's whole TTL.
         long likeCount = counterCacheService.getCounts(videoId).likeCount();
 
+        // One timestamp for both tables, not Instant.now() twice: it is the reverse index's
+        // clustering key, so unlike addresses that row by the value stored on the claim. Two
+        // different instants and the unlike would delete nothing.
+        Instant likedAt = Instant.now();
         boolean newlyLiked = executeLwtWithRetry(
-                () -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, Instant.now()));
+                () -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, likedAt));
 
         if (newlyLiked) {
             // The LWT is what grants the right to move the counter, and it grants it exactly once:
@@ -57,8 +62,11 @@ public class LikeServiceImpl implements LikeService {
                 videoCountersRepository.incrementLikeCount(videoId, 1);
                 countered = true;
                 likeByUserRepository.save(LikeByUser.builder()
-                        .key(LikeByUserKey.builder().userId(currentUserId).videoId(videoId).build())
-                        .createdAt(Instant.now())
+                        .key(LikeByUserKey.builder()
+                                .userId(currentUserId)
+                                .createdAt(likedAt)
+                                .videoId(videoId)
+                                .build())
                         .build());
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishLike(videoId, currentUserId, true);
@@ -84,6 +92,17 @@ public class LikeServiceImpl implements LikeService {
     public LikeStatusResponse unlike(Long videoId, Long currentUserId) {
         long likeCount = counterCacheService.getCounts(videoId).likeCount();
 
+        // Read the claim for its timestamp before deleting it: that timestamp addresses the
+        // reverse-index row, and once the claim is gone nothing remembers it. A concurrent
+        // unlike that read the same value simply loses the LWT below and stops.
+        LikeByVideo claim = likeByVideoRepository
+                .findById(LikeByVideoKey.builder().videoId(videoId).userId(currentUserId).build())
+                .orElse(null);
+        if (claim == null) {
+            return new LikeStatusResponse(videoId, false, Math.max(likeCount, 0));
+        }
+        Instant likedAt = claim.getCreatedAt();
+
         boolean wasLiked = executeLwtWithRetry(
                 () -> likeByVideoRepository.deleteIfExists(videoId, currentUserId));
 
@@ -95,8 +114,11 @@ public class LikeServiceImpl implements LikeService {
             try {
                 videoCountersRepository.incrementLikeCount(videoId, -1);
                 countered = true;
-                likeByUserRepository.deleteById(
-                        LikeByUserKey.builder().userId(currentUserId).videoId(videoId).build());
+                likeByUserRepository.deleteById(LikeByUserKey.builder()
+                        .userId(currentUserId)
+                        .createdAt(likedAt)
+                        .videoId(videoId)
+                        .build());
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishLike(videoId, currentUserId, false);
             } catch (RuntimeException ex) {
@@ -104,7 +126,9 @@ public class LikeServiceImpl implements LikeService {
                 if (countered) {
                     undo(() -> videoCountersRepository.incrementLikeCount(videoId, 1), what, ex);
                 }
-                undo(() -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, Instant.now()),
+                // The original timestamp, not a fresh one: the restored claim has to keep
+                // addressing the reverse-index row that is still there.
+                undo(() -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, likedAt),
                         what, ex);
                 throw ex;
             }
@@ -129,7 +153,7 @@ public class LikeServiceImpl implements LikeService {
             // likes_by_user, not likes_by_video: the reverse index exists precisely so this read
             // is one partition rather than a scan of every video's likers.
             Slice<LikeByUser> slice = likeByUserRepository.findByUserId(currentUserId, pageRequest);
-            return VideoIdPageResponse.from(slice, like -> like.getKey().getVideoId());
+            return CassandraCursors.page(slice, like -> like.getKey().getVideoId());
         } catch (CassandraInvalidQueryException e) {
             // Base64 that decodes into bytes Cassandra will not accept as paging state gets past
             // the decoder and is only refused here, by the coordinator.

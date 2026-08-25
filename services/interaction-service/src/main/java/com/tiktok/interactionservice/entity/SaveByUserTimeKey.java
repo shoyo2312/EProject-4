@@ -18,21 +18,20 @@ import java.time.Instant;
 @NoArgsConstructor
 @AllArgsConstructor
 @PrimaryKeyClass
-public class LikeByUserKey implements Serializable {
+public class SaveByUserTimeKey implements Serializable {
 
     @PrimaryKeyColumn(name = "user_id", type = PrimaryKeyType.PARTITIONED)
     private Long userId;
 
     /**
-     * Part of the key, not a plain column: it is what "videos I liked" is ordered by, and what
-     * unlike needs in order to address the row it must delete. video_id is a Snowflake, so
-     * clustering on it would order the listing by when each video was made instead.
+     * Part of the key, not a plain column: it is what the favourites listing is ordered by, and
+     * what {@code unsave} needs in order to address the row it must delete.
      */
     @PrimaryKeyColumn(name = "created_at", ordinal = 0, type = PrimaryKeyType.CLUSTERED, ordering = Ordering.DESCENDING)
     @CassandraType(type = CassandraType.Name.TIMESTAMP)
     private Instant createdAt;
 
-    /** Tie-breaker only, so two likes in the same millisecond stay two rows. */
+    /** Tie-breaker only, so two saves in the same millisecond stay two rows. */
     @PrimaryKeyColumn(name = "video_id", ordinal = 1, type = PrimaryKeyType.CLUSTERED, ordering = Ordering.ASCENDING)
     private Long videoId;
 }

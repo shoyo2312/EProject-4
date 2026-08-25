@@ -5,6 +5,7 @@ import com.tiktok.interactionservice.dto.response.SaveStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
 import com.tiktok.interactionservice.repository.SaveByUserRepository;
+import com.tiktok.interactionservice.repository.SaveByUserTimeRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,9 +21,13 @@ class SaveServiceImplTest extends AbstractInteractionServiceIT {
     @Autowired
     private SaveByUserRepository saveByUserRepository;
 
+    @Autowired
+    private SaveByUserTimeRepository saveByUserTimeRepository;
+
     @BeforeEach
     void cleanUp() {
         saveByUserRepository.deleteAll();
+        saveByUserTimeRepository.deleteAll();
     }
 
     @Test
@@ -73,6 +78,33 @@ class SaveServiceImplTest extends AbstractInteractionServiceIT {
         saveService.save(31L, 2L);
 
         assertThat(saveService.listSavedVideos(1L, null, 20).videoIds()).containsExactly(30L);
+    }
+
+    @Test
+    void listSavedVideos_ordersByWhenItWasSavedNotByVideoId() {
+        // 50 is the newer video, saved first; 40 is the older one, saved second. Clustering on
+        // video_id would put 50 on top — the listing has to put 40 there.
+        saveService.save(50L, 1L);
+        saveService.save(40L, 1L);
+
+        assertThat(saveService.listSavedVideos(1L, null, 20).videoIds()).containsExactly(40L, 50L);
+
+        // The same two videos saved the other way round, so neither ordering of video_id can
+        // produce both expectations and the assertion is actually about the save time.
+        saveService.save(40L, 2L);
+        saveService.save(50L, 2L);
+
+        assertThat(saveService.listSavedVideos(2L, null, 20).videoIds()).containsExactly(50L, 40L);
+    }
+
+    @Test
+    void unsave_thenSaveAgain_movesItBackToTheTop() {
+        saveService.save(60L, 1L);
+        saveService.save(61L, 1L);
+        saveService.unsave(60L, 1L);
+        saveService.save(60L, 1L);
+
+        assertThat(saveService.listSavedVideos(1L, null, 20).videoIds()).containsExactly(60L, 61L);
     }
 
     @Test

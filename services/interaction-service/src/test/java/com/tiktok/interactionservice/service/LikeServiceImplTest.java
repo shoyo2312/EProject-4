@@ -134,6 +134,23 @@ class LikeServiceImplTest extends AbstractInteractionServiceIT {
     }
 
     @Test
+    void listLikedVideos_ordersByWhenItWasLikedNotByVideoId() {
+        // 50 is the newer video, liked first; 44 is the older one, liked second. Clustering on
+        // video_id would put 50 on top — the listing has to put 44 there.
+        likeService.like(50L, 1L);
+        likeService.like(44L, 1L);
+
+        assertThat(likeService.listLikedVideos(1L, null, 20).videoIds()).containsExactly(44L, 50L);
+
+        // The same two videos liked the other way round, so neither ordering of video_id can
+        // produce both expectations and the assertion is actually about the like time.
+        likeService.like(44L, 2L);
+        likeService.like(50L, 2L);
+
+        assertThat(likeService.listLikedVideos(2L, null, 20).videoIds()).containsExactly(50L, 44L);
+    }
+
+    @Test
     void listLikedVideos_afterUnlike_dropsTheVideo() {
         likeService.like(43L, 1L);
         likeService.unlike(43L, 1L);
