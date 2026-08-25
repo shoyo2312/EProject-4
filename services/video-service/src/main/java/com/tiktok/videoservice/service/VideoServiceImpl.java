@@ -36,7 +36,9 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Slf4j
 @Service
@@ -49,6 +51,20 @@ public class VideoServiceImpl implements VideoService {
      * bucket's lifecycle rule expires abandoned uploads by matching this prefix.
      */
     private static final String UPLOAD_PREFIX = "raw";
+
+    /**
+     * Hashtags as they are written in a caption. Letters and digits are matched by Unicode class
+     * rather than {@code \\w}, because captions are routinely Vietnamese and "#viral" is no more
+     * a tag than "#chảnh" is.
+     */
+    private static final Pattern HASHTAG = Pattern.compile("#([\\p{L}\\p{N}_]+)");
+
+    /**
+     * Same cap as {@code @Size(max = 10)} on the request. Repeated here because that annotation
+     * only guards the tags a client sends, and tags now also arrive from the description, which is
+     * validated for length but says nothing about how many hashtags fit inside it.
+     */
+    private static final int MAX_TAGS = 10;
 
     /**
      * Upload types accepted, and the extension each is stored under. Deliberately short: every
@@ -121,7 +137,7 @@ public class VideoServiceImpl implements VideoService {
                 .description(request.description())
                 .rawFileUrl(request.rawFileUrl())
                 .visibility(request.visibility())
-                .tags(normalizeTags(request.tags()))
+                .tags(normalizeTags(request.tags(), request.description()))
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)
                 .likeCount(0)
@@ -155,17 +171,26 @@ public class VideoServiceImpl implements VideoService {
      * splits the signal exactly where it is thinnest. Lowercased, trimmed, {@code #} stripped,
      * blanks dropped, duplicates collapsed — and order kept, since it is the uploader's own
      * ranking of what the video is about.
+     *
+     * <p>The description is read as a second source because that is where uploaders actually put
+     * hashtags: a caption reading "video demo của tôi #capcut #viral" was storing an empty tag
+     * list, which leaves recommendation-service with no content feature at all and makes the
+     * video unfindable by tag. The explicit list comes first so a client that does send tags
+     * keeps its own ordering, and the two are merged rather than either winning, since a caption
+     * hashtag and a typed tag mean the same thing.
      */
-    private List<String> normalizeTags(List<String> tags) {
-        if (tags == null) {
-            return List.of();
-        }
+    private List<String> normalizeTags(List<String> tags, String description) {
+        Stream<String> typed = tags == null ? Stream.of() : tags.stream();
+        Stream<String> captioned = description == null
+                ? Stream.of()
+                : HASHTAG.matcher(description).results().map(match -> match.group(1));
 
-        return tags.stream()
+        return Stream.concat(typed, captioned)
                 .map(tag -> tag.strip().toLowerCase(Locale.ROOT))
                 .map(tag -> tag.startsWith("#") ? tag.substring(1).strip() : tag)
                 .filter(tag -> !tag.isEmpty())
                 .distinct()
+                .limit(MAX_TAGS)
                 .toList();
     }
 
