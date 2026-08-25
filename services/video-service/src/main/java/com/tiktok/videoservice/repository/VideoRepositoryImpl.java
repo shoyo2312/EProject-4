@@ -14,6 +14,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -29,10 +30,21 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     private final MongoTemplate mongoTemplate;
 
     @Override
-    public List<Video> findFeedPage(Instant beforeCreatedAt, String beforeId, int limit) {
+    public List<Video> findFeedPage(
+            Collection<Long> userIds, Instant beforeCreatedAt, String beforeId, int limit) {
         Criteria criteria = where("status").is(VideoStatus.PUBLISHED)
                 .and("visibility").is(VideoVisibility.PUBLIC)
                 .and("deletedAt").is(null);
+
+        // The Following feed. userId leads user_videos_idx, so the $in is bounded per author
+        // rather than scanning the whole collection; the sort is not taken from that index though,
+        // because _id is not in it and the keyset sorts on (createdAt, _id). The set being sorted
+        // is only what the followed authors published, so it stays far under Mongo's 32MB
+        // in-memory sort limit at this size. Add '_id': -1 to the tail of user_videos_idx (drop
+        // and recreate — auto-index-creation will not redefine an existing name) if that changes.
+        if (userIds != null) {
+            criteria = criteria.and("userId").in(userIds);
+        }
 
         if (beforeCreatedAt != null) {
             // The OR is the keyset: everything strictly older, plus the rows sharing the cursor's

@@ -19,7 +19,7 @@ Khác `user-service` (bắt buộc token ở mọi endpoint): ở đây **mọi 
 Giống hệt `auth-service`/`user-service` — mọi response bọc trong `ApiResponse<T>` (`success`/`data`/`code`/`message`/`timestamp`). Nhưng **hai endpoint danh sách phân trang theo hai kiểu khác nhau**, nên phía Dart cần hai wrapper riêng:
 
 - `/users/{userId}` — phân trang theo `page`, đúng format của user-service (`PageResponse<T>`, mô tả ngay dưới);
-- `/feed` — phân trang theo **cursor**, không có `page`/`totalElements`/`totalPages`. Xem mục 3.3.
+- `/feed` và `/feed/following` — phân trang theo **cursor**, không có `page`/`totalElements`/`totalPages`. Xem mục 3.3 và 3.3b.
 
 `PageResponse<T>` — chỉ áp dụng cho `/users/{userId}`:
 
@@ -157,6 +157,21 @@ Chỉ trả video **`PUBLISHED` + `PUBLIC`** và chưa bị xoá. Video của ch
 
 Lỗi: `INVALID_FEED_CURSOR` (400 — cursor không phải do server này cấp, thường do client tự sửa hoặc lưu nhầm). Xử lý: bỏ cursor đang giữ và tải lại từ đầu.
 
+### 3.3b `GET /feed/following`
+Tab **Following**: đúng feed ở mục 3.3, nhưng chỉ lấy video của những tài khoản người xem đang follow. Cùng dạng `CursorPage<VideoResponse>`, cùng giao thức cursor, cùng `size` mặc định 20 / tối đa 50.
+
+Query param: `?followedUserIds=1,2,3&cursor=<nextCursor>&size=20`.
+
+**Danh sách tác giả do client truyền vào, service này không tự đọc đồ thị follow.** Follow graph nằm ở user-service; client gọi `GET /api/v1/users/{userId}/following` (phân trang) trước, gom `userId` lại rồi truyền xuống đây — cùng cách `story-service` nhận feed của nó. Đổi lại video-service không phải gọi đồng bộ sang service khác trên đường đọc nóng nhất của nó.
+
+- `followedUserIds` rỗng hoặc không gửi → trả **trang rỗng**, *không* phải feed công khai. Follow chưa ai thì tab Following trống.
+- Tối đa **500** id một request; quá thì `TOO_MANY_FOLLOWED_USERS` (400) chứ không cắt bớt im lặng — một feed thiếu hẳn vài creator là feed sai mà không ai nhìn ra được.
+- Id trùng nhau được khử ở server, client không cần lọc trước.
+
+Bộ lọc hiển thị **y hệt mục 3.3**: chỉ `PUBLISHED` + `PUBLIC` và chưa xoá. Follow một người không cho bạn thấy video `PRIVATE`, video đang `PROCESSING`, hay video bị `TAKEN_DOWN` của họ. Vì thế endpoint không cần token và việc khai một `userId` mình không thực sự follow cũng không lộ thêm gì so với `GET /users/{userId}` ở mục 3.5.
+
+Lỗi: `INVALID_FEED_CURSOR` (400) như mục 3.3, và `TOO_MANY_FOLLOWED_USERS` (400).
+
 ### 3.4 `GET /{videoId}`
 Không bắt buộc token, **nhưng nên gửi nếu đã đăng nhập**. Trả `200 OK`, `data` → `VideoResponse`.
 
@@ -245,6 +260,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `FOREIGN_UPLOAD` | 400 | `rawFileUrl` trỏ vào file của tài khoản khác, hoặc vào key không do mục 3.1 cấp. Chỉ publish được đúng `fileUrl` mà chính token này vừa nhận |
 | `RAW_FILE_ALREADY_PUBLISHED` | 400 | `rawFileUrl` này đã có video rồi. Thường là retry sau timeout — lần trước đã thành công |
 | `INVALID_FEED_CURSOR` | 400 | `cursor` ở mục 3.3 không phải do server cấp. Bỏ cursor đang giữ, tải lại feed từ đầu |
+| `TOO_MANY_FOLLOWED_USERS` | 400 | `followedUserIds` ở mục 3.3b quá 500 id. Cắt danh sách following theo trang thay vì gửi hết một lần |
 | `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
