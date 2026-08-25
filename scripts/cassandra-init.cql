@@ -16,10 +16,10 @@ CREATE TABLE IF NOT EXISTS likes_by_video (
 -- Reverse index: videos a user liked
 CREATE TABLE IF NOT EXISTS likes_by_user (
     user_id    bigint,
-    video_id   bigint,
     created_at timestamp,
-    PRIMARY KEY ((user_id), video_id)
-) WITH CLUSTERING ORDER BY (video_id DESC);
+    video_id   bigint,
+    PRIMARY KEY ((user_id), created_at, video_id)
+) WITH CLUSTERING ORDER BY (created_at DESC, video_id ASC);
 
 -- The claim on a save: one row per (user, video), which is what "is this video saved" reads
 -- and what the LWT in SaveServiceImpl takes before writing the listing row. Not the like pair:
