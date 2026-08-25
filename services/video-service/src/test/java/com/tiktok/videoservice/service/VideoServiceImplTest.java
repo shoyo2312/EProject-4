@@ -193,6 +193,50 @@ class VideoServiceImplTest {
                 .containsExactly("dance", "food");
     }
 
+    /**
+     * The case that was silently broken: uploaders type hashtags into the caption, not into a
+     * separate tag field, so a video captioned "#capcut #viral" was reaching Mongo with an empty
+     * tag list — no content feature for recommendation-service, and unfindable by tag.
+     */
+    @Test
+    void publish_extractsHashtagsFromTheDescription() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
+                "video_1", "video demo của tôi\n#capcut #viral",
+                "s3://video-media/raw/1/captioned.mp4", VideoVisibility.PUBLIC, null));
+
+        assertThat(response.tags()).containsExactly("capcut", "viral");
+        assertThat(videoRepository.findById(response.id()).orElseThrow().getTags())
+                .containsExactly("capcut", "viral");
+    }
+
+    /**
+     * A caption hashtag and a typed tag mean the same thing, so the two sources merge instead of
+     * one winning — and "#Dance" typed alongside "#dance" captioned is one tag, not two.
+     */
+    @Test
+    void publish_mergesTypedTagsWithCaptionHashtags() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
+                "Both", "món ngon #food #dance", "s3://video-media/raw/1/both.mp4",
+                VideoVisibility.PUBLIC, List.of("#Dance")));
+
+        assertThat(response.tags()).containsExactly("dance", "food");
+    }
+
+    /**
+     * @Size(max = 10) on the request only ever guarded the tags a client sends; a caption can
+     * carry any number of hashtags within its 2000 characters, and the list rides on every
+     * VideoPublishedEvent.
+     */
+    @Test
+    void publish_capsHashtagsExtractedFromTheDescription() {
+        String caption = "#a #b #c #d #e #f #g #h #i #j #k #l";
+
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
+                "Many", caption, "s3://video-media/raw/1/many.mp4", VideoVisibility.PUBLIC, null));
+
+        assertThat(response.tags()).containsExactly("a", "b", "c", "d", "e", "f", "g", "h", "i", "j");
+    }
+
     @Test
     void publish_withoutTags_storesAnEmptyListNotNull() {
         VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
