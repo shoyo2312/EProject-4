@@ -3,6 +3,7 @@ package com.tiktok.videoservice.event.consumer;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.repository.VideoRepository;
+import com.tiktok.videoservice.service.VideoCache;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -38,6 +39,7 @@ public class VideoStateUpdater {
     private static final int MAX_ATTEMPTS = 3;
 
     private final VideoRepository videoRepository;
+    private final VideoCache videoCache;
 
     /**
      * Soft-deleted videos are skipped rather than updated. An owner can delete between a
@@ -65,6 +67,13 @@ public class VideoStateUpdater {
             change.accept(video);
 
             if (write.test(video, statusWhenRead)) {
+                // Every path through here changes status, and status is what decides whether a
+                // video is on a read path at all — a finished transcode puts one on the feed with
+                // an hlsUrl it did not have, a takedown takes one off. Letting a cached entry
+                // outlive that by up to its TTL means serving a taken-down video, so this is
+                // evicted rather than left to expire. Counter increments deliberately are not:
+                // see VideoCacheProperties.ttl.
+                videoCache.evict(videoId);
                 return;
             }
 

@@ -38,7 +38,8 @@ class VideoServiceImplUploadUrlFailureTest {
                 new SpringDataWebProperties(),
                 minioClient,
                 new MinioProperties("http://localhost:9000", "key", "secret",
-                        "video-media", "us-east-1", Duration.ofMinutes(15)));
+                        "video-media", "us-east-1", Duration.ofMinutes(15)),
+                mock(VideoCache.class));
 
         assertThatThrownBy(() -> videoService.createUploadUrl(1L, new UploadUrlRequest("video/mp4")))
                 .isInstanceOf(UploadUrlUnavailableException.class)

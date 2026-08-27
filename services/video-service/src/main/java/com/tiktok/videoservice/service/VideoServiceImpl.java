@@ -31,13 +31,13 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -81,6 +81,7 @@ public class VideoServiceImpl implements VideoService {
     private final SpringDataWebProperties pageableProperties;
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
+    private final VideoCache videoCache;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -230,16 +231,25 @@ public class VideoServiceImpl implements VideoService {
         throw new ForeignUploadException();
     }
 
+    /**
+     * Cache-aside. The visibility check runs on whatever came back, cached or not, and never on
+     * the way in: one cached entry serves every viewer, and a video the requester may not see is
+     * a 404 built from that shared entry rather than a reason to keep it out of the cache.
+     */
     @Override
     public VideoResponse getById(Long requesterId, String videoId) {
+        VideoResponse cached = videoCache.get(videoId).orElse(null);
+        if (cached != null) {
+            return requireVisible(requesterId, cached, videoId);
+        }
+
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
                 .orElseThrow(() -> new VideoNotFoundException(videoId));
 
-        if (!isOwner(requesterId, video) && !isPubliclyVisible(video)) {
-            throw new VideoNotFoundException(videoId);
-        }
+        VideoResponse response = videoMapper.toResponse(video);
+        videoCache.put(response);
 
-        return videoMapper.toResponse(video);
+        return requireVisible(requesterId, response, videoId);
     }
 
     /**
@@ -266,14 +276,30 @@ public class VideoServiceImpl implements VideoService {
             return List.of();
         }
 
-        Map<String, Video> found = videoRepository.findByIdInAndDeletedAtIsNull(wanted).stream()
-                .filter(video -> isOwner(requesterId, video) || isPubliclyVisible(video))
-                .collect(Collectors.toMap(Video::getId, video -> video));
+        // Cache first, then Mongo for the remainder only. A ranking handed to a hundred viewers
+        // in the same minute is the same ids every time, so on a warm cache the miss list is
+        // usually empty and the query below never runs at all.
+        Map<String, VideoResponse> found = new HashMap<>(videoCache.getAll(wanted));
 
+        List<String> missing = wanted.stream()
+                .filter(id -> !found.containsKey(id))
+                .toList();
+
+        if (!missing.isEmpty()) {
+            List<VideoResponse> loaded = videoRepository.findByIdInAndDeletedAtIsNull(missing).stream()
+                    .map(videoMapper::toResponse)
+                    .toList();
+
+            videoCache.putAll(loaded);
+            loaded.forEach(video -> found.put(video.id(), video));
+        }
+
+        // Filtered after the lookup, not during it, so the cache holds one entry per video
+        // rather than one per (video, viewer) — see getById.
         return wanted.stream()
                 .map(found::get)
                 .filter(Objects::nonNull)
-                .map(videoMapper::toResponse)
+                .filter(video -> isVisibleTo(requesterId, video))
                 .toList();
     }
 
@@ -360,6 +386,25 @@ public class VideoServiceImpl implements VideoService {
 
         video.markDeleted();
         videoRepository.updateSoftDeleted(video);
+        videoCache.evict(videoId);
+    }
+
+    private VideoResponse requireVisible(Long requesterId, VideoResponse video, String videoId) {
+        if (!isVisibleTo(requesterId, video)) {
+            throw new VideoNotFoundException(videoId);
+        }
+        return video;
+    }
+
+    /**
+     * Decided from the response rather than the entity, because by this point the value may have
+     * come from Redis and there is no entity. The three fields it reads — userId, status,
+     * visibility — are on both, and a video the requester does not own is only theirs to see once
+     * it is both PUBLISHED and PUBLIC.
+     */
+    private boolean isVisibleTo(Long requesterId, VideoResponse video) {
+        return isSelf(requesterId, video.userId())
+                || (video.visibility() == VideoVisibility.PUBLIC && video.status() == VideoStatus.PUBLISHED);
     }
 
     private boolean isOwner(Long requesterId, Video video) {
@@ -368,9 +413,5 @@ public class VideoServiceImpl implements VideoService {
 
     private boolean isSelf(Long requesterId, Long userId) {
         return requesterId != null && requesterId.equals(userId);
-    }
-
-    private boolean isPubliclyVisible(Video video) {
-        return video.getVisibility() == VideoVisibility.PUBLIC && video.getStatus() == VideoStatus.PUBLISHED;
     }
 }
