@@ -6,6 +6,6 @@ import org.springframework.scheduling.annotation.EnableAsync;
 
 @Configuration
 @EnableAsync
-@EnableConfigurationProperties({OtpProperties.class, MailProperties.class, RetentionProperties.class})
+@EnableConfigurationProperties({OtpProperties.class, MailProperties.class, RetentionProperties.class, TurnstileProperties.class})
 public class AsyncConfig {
 }
