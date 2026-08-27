@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.common.id.SnowflakeIdGenerator;
+import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.entity.CommentByVideo;
@@ -37,6 +38,7 @@ public class CommentServiceImpl implements CommentService {
     private final CommentMapper commentMapper;
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
+    private final VideoOwnershipClient videoOwnershipClient;
 
     @Override
     public CommentResponse addComment(Long videoId, Long currentUserId, String content) {
@@ -136,7 +138,12 @@ public class CommentServiceImpl implements CommentService {
                 .filter(c -> !c.isDeleted())
                 .orElseThrow(() -> new CommentNotFoundException(commentId));
 
-        if (!comment.getUserId().equals(currentUserId)) {
+        // Deleting your own comment never needs the extra lookup — only a caller reaching for
+        // somebody else's comment falls through to asking video-service whether they own the video
+        // it is on.
+        boolean allowed = comment.getUserId().equals(currentUserId)
+                || videoOwnershipClient.isOwnedBy(videoId, currentUserId);
+        if (!allowed) {
             throw new NotCommentOwnerException(commentId);
         }
 
