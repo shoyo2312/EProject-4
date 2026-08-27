@@ -68,10 +68,13 @@ public class AuthServiceImpl implements AuthService {
     private final OtpRateLimiter otpRateLimiter;
     private final SessionRevoker sessionRevoker;
     private final TokenIssuer tokenIssuer;
+    private final TurnstileService turnstileService;
 
     @Override
     @Transactional
     public UserResponse register(RegisterRequest request) {
+        turnstileService.verify(request.turnstileToken());
+
         // Stored lowercase so every later lookup is an exact match; the username keeps the
         // casing the user chose, and only its uniqueness check is case-insensitive.
         String email = request.email().toLowerCase(Locale.ROOT);
@@ -333,6 +336,8 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void addEmail(Long userId, AddEmailRequest request) {
+        turnstileService.verify(request.turnstileToken());
+
         String email = request.email().toLowerCase(Locale.ROOT);
 
         User user = userRepository.findById(userId)
@@ -376,6 +381,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void resendVerification(ResendVerificationRequest request) {
+        turnstileService.verify(request.turnstileToken());
         otpRateLimiter.checkAllowed(PURPOSE_EMAIL_VERIFICATION, request.email());
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
@@ -388,6 +394,7 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void forgotPassword(ForgotPasswordRequest request) {
+        turnstileService.verify(request.turnstileToken());
         otpRateLimiter.checkAllowed(PURPOSE_PASSWORD_RESET, request.email());
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
