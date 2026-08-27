@@ -88,6 +88,9 @@ class AuthServiceImplTest {
     @MockBean
     private MailService mailService;
 
+    @MockBean
+    private TurnstileService turnstileService;
+
     @Autowired
     private AuthService authService;
 
@@ -125,7 +128,7 @@ class AuthServiceImplTest {
     }
 
     private RegisterRequest validRegisterRequest() {
-        return new RegisterRequest("johndoe", "john@example.com", "password123");
+        return new RegisterRequest("johndoe", "john@example.com", "password123", "test-turnstile-token");
     }
 
     /**
@@ -167,7 +170,7 @@ class AuthServiceImplTest {
     void register_duplicateUsername_throwsConflict() {
         authService.register(validRegisterRequest());
 
-        RegisterRequest duplicate = new RegisterRequest("johndoe", "other@example.com", "password123");
+        RegisterRequest duplicate = new RegisterRequest("johndoe", "other@example.com", "password123", "test-turnstile-token");
 
         assertThatThrownBy(() -> authService.register(duplicate))
                 .isInstanceOf(UsernameAlreadyExistsException.class);
@@ -178,7 +181,7 @@ class AuthServiceImplTest {
     void register_duplicateEmail_throwsConflict() {
         authService.register(validRegisterRequest());
 
-        RegisterRequest duplicate = new RegisterRequest("janedoe", "john@example.com", "password123");
+        RegisterRequest duplicate = new RegisterRequest("janedoe", "john@example.com", "password123", "test-turnstile-token");
 
         assertThatThrownBy(() -> authService.register(duplicate))
                 .isInstanceOf(EmailAlreadyExistsException.class);
@@ -347,7 +350,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse victim = authService.login(new LoginRequest("johndoe", "password123"));
 
-        markVerified(authService.register(new RegisterRequest("janedoe", "jane@example.com", "password123")));
+        markVerified(authService.register(new RegisterRequest("janedoe", "jane@example.com", "password123", "test-turnstile-token")));
         TokenResponse caller = authService.login(new LoginRequest("janedoe", "password123"));
 
         authService.logout(new RefreshTokenRequest(victim.refreshToken()), caller.accessToken());
@@ -453,7 +456,7 @@ class AuthServiceImplTest {
     void login_usernameShapedLikeAnotherAccountsKey_doesNotShareItsBudget() {
         UserResponse victim = registerVerified();
         markVerified(authService.register(
-                new RegisterRequest("user:" + victim.id(), "impostor@example.com", "password123")));
+                new RegisterRequest("user:" + victim.id(), "impostor@example.com", "password123", "test-turnstile-token")));
 
         for (int i = 0; i < 5; i++) {
             assertThatThrownBy(() -> authService.login(new LoginRequest("user:" + victim.id(), "wrongpass")))
@@ -488,7 +491,7 @@ class AuthServiceImplTest {
     @Transactional
     void register_lowercasesEmail() {
         UserResponse response = authService.register(
-                new RegisterRequest("johndoe", "John@Example.COM", "password123"));
+                new RegisterRequest("johndoe", "John@Example.COM", "password123", "test-turnstile-token"));
 
         assertThat(response.email()).isEqualTo("john@example.com");
     }
@@ -498,7 +501,7 @@ class AuthServiceImplTest {
     void register_emailDifferingOnlyInCase_throwsConflict() {
         authService.register(validRegisterRequest());
 
-        RegisterRequest duplicate = new RegisterRequest("janedoe", "JOHN@EXAMPLE.COM", "password123");
+        RegisterRequest duplicate = new RegisterRequest("janedoe", "JOHN@EXAMPLE.COM", "password123", "test-turnstile-token");
 
         assertThatThrownBy(() -> authService.register(duplicate))
                 .isInstanceOf(EmailAlreadyExistsException.class);
@@ -507,7 +510,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void login_withDifferentEmailCase_returnsTokens() {
-        markVerified(authService.register(new RegisterRequest("johndoe", "John@Example.com", "password123")));
+        markVerified(authService.register(new RegisterRequest("johndoe", "John@Example.com", "password123", "test-turnstile-token")));
 
         TokenResponse tokens = authService.login(new LoginRequest("john@example.com", "password123"));
 
@@ -725,7 +728,7 @@ class AuthServiceImplTest {
 
     @Test
     void forgotPassword_withUnknownEmail_doesNotThrow() {
-        authService.forgotPassword(new ForgotPasswordRequest("ghost@example.com"));
+        authService.forgotPassword(new ForgotPasswordRequest("ghost@example.com", "test-turnstile-token"));
     }
 
     @Test
@@ -733,7 +736,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
 
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
@@ -882,7 +885,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse attacker = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
 
