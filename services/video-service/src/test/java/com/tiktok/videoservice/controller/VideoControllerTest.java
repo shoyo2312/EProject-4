@@ -25,6 +25,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
@@ -73,6 +74,16 @@ class VideoControllerTest {
 
     @MockBean
     private VideoService videoService;
+
+    /**
+     * Not used by any test here, and not optional either: video-service now has Redis on its
+     * classpath, which switches security-lib's RevokedTokenChecker from the no-op to the Redis
+     * one, and that bean is a dependency of the JWT filter this slice loads. @WebMvcTest does not
+     * autoconfigure Redis, so without this the context fails to start before a single request is
+     * made.
+     */
+    @MockBean
+    private StringRedisTemplate revocationRedisTemplate;
 
     private JwtProvider jwtProvider;
 
