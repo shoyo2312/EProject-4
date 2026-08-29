@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -85,6 +86,17 @@ class LikeServiceImplTest extends AbstractInteractionServiceIT {
 
         assertThat(likeService.getStatus(14L, 1L).liked()).isTrue();
         assertThat(likeService.getStatus(14L, 2L).liked()).isFalse();
+    }
+
+    @Test
+    void getStatuses_returnsOneEntryPerIdInTheGivenOrder() {
+        likeService.like(60L, 1L);
+        likeService.like(61L, 2L);
+
+        List<LikeStatusResponse> statuses = likeService.getStatuses(List.of(61L, 60L, 62L), 1L);
+
+        assertThat(statuses).extracting(LikeStatusResponse::videoId).containsExactly(61L, 60L, 62L);
+        assertThat(statuses).extracting(LikeStatusResponse::liked).containsExactly(false, true, false);
     }
 
     /**
