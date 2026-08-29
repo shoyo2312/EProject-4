@@ -5,6 +5,7 @@ import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
+import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import org.springframework.data.domain.Page;
@@ -42,6 +43,12 @@ public interface VideoService {
     Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable);
 
     UserVideoStatsResponse getUserStats(Long requesterId, Long userId);
+
+    /**
+     * Owner and comment setting, with no visibility filtering — see {@link VideoPolicyResponse}
+     * for why this is not a projection of {@link #getById}.
+     */
+    VideoPolicyResponse getPolicy(String videoId);
 
     void delete(Long requesterId, String videoId);
 

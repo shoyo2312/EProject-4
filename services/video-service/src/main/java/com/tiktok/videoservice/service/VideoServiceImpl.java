@@ -7,6 +7,7 @@ import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
+import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -240,9 +241,28 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public VideoResponse getById(Long requesterId, String videoId) {
+        return requireVisible(requesterId, load(videoId), videoId);
+    }
+
+    /**
+     * Owner and comment setting, and nothing the caller has to be allowed to see — so no
+     * visibility check runs here. {@link VideoPolicyResponse} has the reason.
+     */
+    @Override
+    public VideoPolicyResponse getPolicy(String videoId) {
+        VideoResponse video = load(videoId);
+        return new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled());
+    }
+
+    /**
+     * The cached-or-Mongo read shared by {@link #getById} and {@link #getPolicy}. Deliberately
+     * without a visibility check: one cached entry serves every caller, and who may see it is
+     * decided by whoever asked, after the read.
+     */
+    private VideoResponse load(String videoId) {
         VideoResponse cached = videoCache.get(videoId).orElse(null);
         if (cached != null) {
-            return requireVisible(requesterId, cached, videoId);
+            return cached;
         }
 
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
@@ -250,8 +270,7 @@ public class VideoServiceImpl implements VideoService {
 
         VideoResponse response = videoMapper.toResponse(video);
         videoCache.put(response);
-
-        return requireVisible(requesterId, response, videoId);
+        return response;
     }
 
     /**
@@ -423,7 +442,7 @@ public class VideoServiceImpl implements VideoService {
 
     /**
      * Same owner gate and cache handling as {@link #updateVisibility}. video-service only stores
-     * the flag; interaction-service reads it back off {@code GET /videos/{id}} and is what
+     * the flag; interaction-service reads it back off {@code GET /videos/{id}/policy} and is what
      * actually refuses a comment.
      */
     @Override
