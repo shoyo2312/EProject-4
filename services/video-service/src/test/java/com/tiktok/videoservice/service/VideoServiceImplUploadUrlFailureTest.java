@@ -39,7 +39,8 @@ class VideoServiceImplUploadUrlFailureTest {
                 minioClient,
                 new MinioProperties("http://localhost:9000", "key", "secret",
                         "video-media", "us-east-1", Duration.ofMinutes(15)),
-                mock(VideoCache.class));
+                mock(VideoCache.class),
+                mock(com.tiktok.videoservice.client.FriendshipClient.class));
 
         assertThatThrownBy(() -> videoService.createUploadUrl(1L, new UploadUrlRequest("video/mp4")))
                 .isInstanceOf(UploadUrlUnavailableException.class)

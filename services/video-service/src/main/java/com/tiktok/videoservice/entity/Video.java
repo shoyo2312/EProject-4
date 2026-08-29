@@ -101,6 +101,13 @@ public class Video {
     private VideoVisibility visibility;
 
     /**
+     * Owner switch that stops new comments. Read by interaction-service (which owns comment data)
+     * before it accepts a comment; never enforced here. Absent on documents written before this
+     * field existed, which Mongo maps to {@code false} — comments on by default.
+     */
+    private boolean commentsDisabled;
+
+    /**
      * Normalised at publish time and indexed because tag affinity is the only content signal
      * recommendation has: every other thing it knows about a video is engagement, which is the
      * thing it is trying to predict. Multikey — Mongo indexes each element — so a lookup by one
@@ -159,6 +166,16 @@ public class Video {
 
     public void markDeleted() {
         this.deletedAt = Instant.now();
+    }
+
+    /** Owner setting their own video to PUBLIC, FRIENDS or PRIVATE from the detail page. */
+    public void changeVisibility(VideoVisibility visibility) {
+        this.visibility = visibility;
+    }
+
+    /** Owner turning new comments on or off for their own video. */
+    public void changeCommentsDisabled(boolean commentsDisabled) {
+        this.commentsDisabled = commentsDisabled;
     }
 
     public void markPublished(String thumbnailUrl, String hlsUrl, Integer durationSeconds) {
