@@ -150,9 +150,22 @@ public class VideoCache {
     }
 
     /**
-     * For the changes a TTL must not be allowed to outlast: a soft delete, and the status moves
-     * (transcode finished, taken down, restored) that decide whether a video is on a read path at
-     * all. Counter increments deliberately do not evict — see {@link VideoCacheProperties#ttl()}.
+     * For the changes a TTL must not be allowed to outlast: a soft delete, a visibility switch, and
+     * the status moves (transcode finished, taken down, restored) that decide whether a video is on
+     * a read path at all. Counter increments deliberately do not evict — see
+     * {@link VideoCacheProperties#ttl()}.
+     *
+     * <p><strong>An evict does not fully close the window, and cannot.</strong> A reader that
+     * missed and is on its way back from Mongo with the old document can land its
+     * {@link #putAll(java.util.List)} after this delete, and that entry then lives for the whole
+     * TTL — so a takedown or a switch to PRIVATE may be up to {@link VideoCacheProperties#ttl()}
+     * late for readers of the cache. That is the ceiling the short TTL buys and the reason it is
+     * short: closing it properly needs the read and the write to agree on a version, which means a
+     * lock or a compare-and-set on every read, on a path whose entire point is not to do that.
+     * The visibility filter in {@code VideoServiceImpl} runs on these fields, so a stale entry is a
+     * filter deciding from an old {@code visibility} and {@code status} — the ceiling on how long a
+     * video stays visible after being hidden is this TTL, not zero. Raise the TTL and that window
+     * grows with it.
      */
     public void evict(String videoId) {
         if (!properties.enabled()) {
