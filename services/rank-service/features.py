@@ -32,6 +32,12 @@ NEUTRAL_QUALITY = 0.5
 SKIP_RATIO = 0.2
 SKIP_PENALTY = -0.5
 
+# Age given to a video whose publish time is not available: it has aged out of the trimmed
+# VIDEO_PUBLISHED sorted set at serving time, or it is untagged and so has no row in video_tags at
+# training time. Must match UNKNOWN_AGE_HOURS in FeedServiceImpl — the two sides fill the same gap
+# and a different filler makes age_hours mean two different things under one column name.
+UNKNOWN_AGE_HOURS = 24.0
+
 # How many of a viewer's tags steer the feed. Must match TOP_TAGS in FeedServiceImpl: serving
 # reads the viewer's tag profile with ZREVRANGE 0..TOP_TAGS-1 and keeps only the positive ones,
 # so tag_affinity and tag_overlap there are sums over at most this many tags. Training that
