@@ -22,7 +22,7 @@ public class VideoOwnershipClient {
     private final RestClient videoServiceRestClient;
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record VideoOwnerView(Long userId) {
+    private record VideoOwnerView(Long userId, boolean commentsDisabled) {
     }
 
     /**
@@ -32,19 +32,31 @@ public class VideoOwnershipClient {
      * ever adds permission, never removes it.
      */
     public boolean isOwnedBy(Long videoId, Long userId) {
+        VideoOwnerView view = fetch(videoId);
+        return view != null && userId.equals(view.userId());
+    }
+
+    /**
+     * Whether the owner has switched comments off for this video. Fails open — a missing video or
+     * an unreachable video-service answers false, so a dependency outage never blocks commenting.
+     */
+    public boolean areCommentsDisabled(Long videoId) {
+        VideoOwnerView view = fetch(videoId);
+        return view != null && view.commentsDisabled();
+    }
+
+    private VideoOwnerView fetch(Long videoId) {
         try {
             ApiResponse<VideoOwnerView> response = videoServiceRestClient.get()
                     .uri("/api/v1/videos/{videoId}", videoId)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {
                     });
-            return response != null
-                    && response.data() != null
-                    && userId.equals(response.data().userId());
+            return response != null ? response.data() : null;
         } catch (RestClientException e) {
-            log.warn("Could not confirm ownership of video {} against video-service; denying the extra permission",
+            log.warn("Could not reach video-service for video {}; treating the lookup as inconclusive",
                     videoId, e);
-            return false;
+            return null;
         }
     }
 }

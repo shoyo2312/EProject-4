@@ -1,6 +1,7 @@
 package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.response.FollowResponse;
+import com.tiktok.userservice.dto.response.FriendshipResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.entity.UserFollow;
 import com.tiktok.userservice.exception.AlreadyFollowingException;
@@ -88,6 +89,20 @@ public class FollowServiceImpl implements FollowService {
         follow.markDeleted();
         userProfileRepository.decrementFollowingCount(followerId);
         userProfileRepository.decrementFollowerCount(followingId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public FriendshipResponse friendship(Long viewerId, Long otherUserId) {
+        // Read-only and edge-only: a non-existent user simply has no follow rows, so it answers
+        // false rather than 404 — the caller (video-service's FRIENDS visibility check) only ever
+        // needs the boolean, and self is never a friend.
+        boolean friends = !viewerId.equals(otherUserId)
+                && userFollowRepository
+                        .findByFollowerIdAndFollowingIdAndDeletedAtIsNull(viewerId, otherUserId).isPresent()
+                && userFollowRepository
+                        .findByFollowerIdAndFollowingIdAndDeletedAtIsNull(otherUserId, viewerId).isPresent();
+        return new FriendshipResponse(otherUserId, friends);
     }
 
     @Override

@@ -75,6 +75,11 @@ minio:
   # leaked from a client log is not a lasting write grant on the bucket.
   url-expiry: ${MINIO_URL_EXPIRY:15m}
 
+downstream:
+  # user-service, for the FRIENDS visibility check (mutual-follow lookup). The viewer's own JWT
+  # is forwarded on the call, so no service credential here.
+  user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
+
 springdoc:
   api-docs:
     path: /v3/api-docs

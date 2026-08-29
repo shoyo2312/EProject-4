@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.videoservice.client.FriendshipClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
@@ -82,6 +83,7 @@ public class VideoServiceImpl implements VideoService {
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
     private final VideoCache videoCache;
+    private final FriendshipClient friendshipClient;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -356,10 +358,19 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable) {
-        Page<Video> videos = isSelf(requesterId, userId)
-                ? videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
-                : videoRepository.findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
-                        userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
+        Page<Video> videos;
+        if (isSelf(requesterId, userId)) {
+            videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable);
+        } else if (friendshipClient.areFriends(userId, requesterId)) {
+            // One friendship check per page load, not per video: the answer is the same for every
+            // video on this owner's grid.
+            videos = videoRepository.findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByCreatedAtDesc(
+                    userId, VideoStatus.PUBLISHED,
+                    List.of(VideoVisibility.PUBLIC, VideoVisibility.FRIENDS), pageable);
+        } else {
+            videos = videoRepository.findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
+                    userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
+        }
 
         return videos.map(videoMapper::toResponse);
     }
@@ -389,6 +400,48 @@ public class VideoServiceImpl implements VideoService {
         videoCache.evict(videoId);
     }
 
+    /**
+     * Same owner gate as {@link #delete}. The write is unconditional and the cache entry is
+     * evicted rather than rewritten — a stale PUBLIC entry outliving a switch to PRIVATE is the
+     * one outcome to avoid, and the next read repopulates it.
+     */
+    @Override
+    public VideoResponse updateVisibility(Long requesterId, String videoId, VideoVisibility visibility) {
+        Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+
+        if (!isOwner(requesterId, video)) {
+            throw new NotVideoOwnerException(videoId);
+        }
+
+        video.changeVisibility(visibility);
+        videoRepository.updateVisibility(video);
+        videoCache.evict(videoId);
+
+        return videoMapper.toResponse(video);
+    }
+
+    /**
+     * Same owner gate and cache handling as {@link #updateVisibility}. video-service only stores
+     * the flag; interaction-service reads it back off {@code GET /videos/{id}} and is what
+     * actually refuses a comment.
+     */
+    @Override
+    public VideoResponse updateCommentsDisabled(Long requesterId, String videoId, boolean disabled) {
+        Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+
+        if (!isOwner(requesterId, video)) {
+            throw new NotVideoOwnerException(videoId);
+        }
+
+        video.changeCommentsDisabled(disabled);
+        videoRepository.updateCommentsDisabled(video);
+        videoCache.evict(videoId);
+
+        return videoMapper.toResponse(video);
+    }
+
     private VideoResponse requireVisible(Long requesterId, VideoResponse video, String videoId) {
         if (!isVisibleTo(requesterId, video)) {
             throw new VideoNotFoundException(videoId);
@@ -403,8 +456,20 @@ public class VideoServiceImpl implements VideoService {
      * it is both PUBLISHED and PUBLIC.
      */
     private boolean isVisibleTo(Long requesterId, VideoResponse video) {
-        return isSelf(requesterId, video.userId())
-                || (video.visibility() == VideoVisibility.PUBLIC && video.status() == VideoStatus.PUBLISHED);
+        if (isSelf(requesterId, video.userId())) {
+            return true;
+        }
+        if (video.status() != VideoStatus.PUBLISHED) {
+            return false;
+        }
+        return switch (video.visibility()) {
+            case PUBLIC -> true;
+            // ponytail: one user-service call per FRIENDS video the requester does not own. PUBLIC
+            // videos short-circuit above, so a normal feed/batch makes none; a list that is mostly
+            // FRIENDS videos (rare) would. Add a batch friendship endpoint if that ever shows up.
+            case FRIENDS -> friendshipClient.areFriends(video.userId(), requesterId);
+            case PRIVATE -> false;
+        };
     }
 
     private boolean isOwner(Long requesterId, Video video) {

@@ -86,6 +86,21 @@ class FollowServiceImplTest {
 
     @Test
     @Transactional
+    void friendship_isTrueOnlyWhenBothFollowEachOther() {
+        assertThat(followService.friendship(1L, 2L).friends()).isFalse();
+
+        followService.follow(1L, 2L);
+        assertThat(followService.friendship(1L, 2L).friends()).isFalse();
+
+        followService.follow(2L, 1L);
+        assertThat(followService.friendship(1L, 2L).friends()).isTrue();
+        assertThat(followService.friendship(2L, 1L).friends()).isTrue();
+
+        assertThat(followService.friendship(1L, 1L).friends()).isFalse();
+    }
+
+    @Test
+    @Transactional
     void follow_self_throwsCannotFollowSelf() {
         assertThatThrownBy(() -> followService.follow(1L, 1L))
                 .isInstanceOf(CannotFollowSelfException.class);

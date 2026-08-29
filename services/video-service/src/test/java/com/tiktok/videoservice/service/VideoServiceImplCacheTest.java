@@ -5,6 +5,8 @@ import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
@@ -18,6 +20,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -43,6 +46,8 @@ class VideoServiceImplCacheTest {
     private final VideoRepository videoRepository = mock(VideoRepository.class);
     private final VideoMapper videoMapper = mock(VideoMapper.class);
     private final VideoCache videoCache = mock(VideoCache.class);
+    private final com.tiktok.videoservice.client.FriendshipClient friendshipClient =
+            mock(com.tiktok.videoservice.client.FriendshipClient.class);
 
     private final VideoService videoService = new VideoServiceImpl(
             videoRepository,
@@ -51,7 +56,8 @@ class VideoServiceImplCacheTest {
             mock(MinioClient.class),
             new MinioProperties("http://localhost:9000", "key", "secret",
                     "video-media", "us-east-1", Duration.ofMinutes(15)),
-            videoCache);
+            videoCache,
+            friendshipClient);
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
@@ -135,12 +141,48 @@ class VideoServiceImplCacheTest {
     void getByIds_filtersAPrivateCachedVideoOutForAStranger() {
         VideoResponse privateVideo = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, 10, VideoStatus.PUBLISHED,
-                VideoVisibility.PRIVATE, 0, 0, 0, List.of(), Instant.now());
+                VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now());
 
         when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", privateVideo));
 
         assertThat(videoService.getByIds(999L, List.of("A"))).isEmpty();
         assertThat(videoService.getByIds(OWNER, List.of("A"))).containsExactly(privateVideo);
+    }
+
+    /**
+     * FRIENDS runs the check against the cached value like PRIVATE does, but the answer comes from
+     * user-service rather than being a flat no: a confirmed friend sees it, anyone else gets the
+     * same 404 a stranger gets for a PRIVATE video.
+     */
+    @Test
+    void friendsVideo_isVisibleOnlyToAConfirmedFriend() {
+        VideoResponse friendsVideo = new VideoResponse(
+                "A", OWNER, "t", "d", null, null, 10, VideoStatus.PUBLISHED,
+                VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now());
+        when(videoCache.get("A")).thenReturn(Optional.of(friendsVideo));
+
+        when(friendshipClient.areFriends(OWNER, 7L)).thenReturn(true);
+        assertThat(videoService.getById(7L, "A")).isEqualTo(friendsVideo);
+
+        when(friendshipClient.areFriends(OWNER, 8L)).thenReturn(false);
+        assertThatThrownBy(() -> videoService.getById(8L, "A"))
+                .isInstanceOf(VideoNotFoundException.class);
+    }
+
+    @Test
+    void updateCommentsDisabled_ownerOnly_flipsTheFlagWritesAndEvicts() {
+        Video entity = Video.builder().id(VIDEO_ID).userId(OWNER).build();
+        when(videoRepository.findByIdAndDeletedAtIsNull(VIDEO_ID)).thenReturn(Optional.of(entity));
+        when(videoMapper.toResponse(entity)).thenReturn(publicVideo(VIDEO_ID));
+
+        videoService.updateCommentsDisabled(OWNER, VIDEO_ID, true);
+
+        assertThat(entity.isCommentsDisabled()).isTrue();
+        verify(videoRepository).updateCommentsDisabled(entity);
+        verify(videoCache).evict(VIDEO_ID);
+
+        assertThatThrownBy(() -> videoService.updateCommentsDisabled(999L, VIDEO_ID, true))
+                .isInstanceOf(NotVideoOwnerException.class);
     }
 
     @Test
@@ -176,6 +218,6 @@ class VideoServiceImplCacheTest {
     private static VideoResponse publicVideo(String id) {
         return new VideoResponse(
                 id, OWNER, "title", "description", "https://cdn/t.jpg", "https://cdn/v.m3u8",
-                10, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0, List.of(), Instant.now());
+                10, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now());
     }
 }

@@ -2,6 +2,7 @@ package com.tiktok.userservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.userservice.dto.response.FollowResponse;
+import com.tiktok.userservice.dto.response.FriendshipResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.service.FollowService;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,13 @@ public class FollowController {
             @PathVariable Long userId) {
         followService.unfollow(currentUserId, userId);
         return ApiResponse.success(null);
+    }
+
+    @GetMapping("/friendship")
+    public ApiResponse<FriendshipResponse> friendship(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long userId) {
+        return ApiResponse.success(followService.friendship(currentUserId, userId));
     }
 
     @GetMapping("/followers")

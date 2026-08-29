@@ -130,6 +130,16 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         update(video.getId(), new Update().set("deletedAt", video.getDeletedAt()));
     }
 
+    @Override
+    public void updateVisibility(Video video) {
+        update(video.getId(), new Update().set("visibility", video.getVisibility()));
+    }
+
+    @Override
+    public void updateCommentsDisabled(Video video) {
+        update(video.getId(), new Update().set("commentsDisabled", video.isCommentsDisabled()));
+    }
+
     /**
      * The status the caller read is part of the filter, so a write only lands if nothing else
      * moved the video in between. Both callers are Kafka consumers on different topics, running
