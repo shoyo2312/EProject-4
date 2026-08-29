@@ -2,6 +2,7 @@ package com.tiktok.interactionservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.interactionservice.dto.request.AddCommentRequest;
+import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.service.CommentService;
@@ -41,16 +42,18 @@ public class CommentController {
             @AuthenticationPrincipal Long currentUserId,
             @PathVariable Long videoId,
             @Valid @RequestBody AddCommentRequest request) {
-        return ApiResponse.success(commentService.addComment(videoId, currentUserId, request.content()));
+        return ApiResponse.success(
+                commentService.addComment(videoId, currentUserId, request.content(), request.parentId()));
     }
 
     @GetMapping("/videos/{videoId}/comments")
     public ApiResponse<CommentPageResponse> listComments(
+            @AuthenticationPrincipal Long currentUserId,
             @PathVariable Long videoId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.success(
-                commentService.listComments(videoId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
+        return ApiResponse.success(commentService.listComments(
+                videoId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE), currentUserId));
     }
 
     @DeleteMapping("/videos/{videoId}/comments/{commentId}")
@@ -60,5 +63,21 @@ public class CommentController {
             @PathVariable Long commentId) {
         commentService.deleteComment(videoId, commentId, currentUserId);
         return ApiResponse.success(null);
+    }
+
+    @PostMapping("/videos/{videoId}/comments/{commentId}/like")
+    public ApiResponse<CommentLikeResponse> likeComment(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long videoId,
+            @PathVariable Long commentId) {
+        return ApiResponse.success(commentService.likeComment(videoId, commentId, currentUserId));
+    }
+
+    @DeleteMapping("/videos/{videoId}/comments/{commentId}/like")
+    public ApiResponse<CommentLikeResponse> unlikeComment(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long videoId,
+            @PathVariable Long commentId) {
+        return ApiResponse.success(commentService.unlikeComment(videoId, commentId, currentUserId));
     }
 }

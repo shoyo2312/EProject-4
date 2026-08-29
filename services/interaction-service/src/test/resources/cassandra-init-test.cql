@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS saves_by_user_time (
     PRIMARY KEY ((user_id), created_at, video_id)
 ) WITH CLUSTERING ORDER BY (created_at DESC, video_id ASC);
 
--- Comments, partitioned by video, clustered by Snowflake id (time-ordered) descending
+-- Comments, partitioned by video, clustered by Snowflake id (time-ordered) descending.
+-- parent_id: null for a top-level comment, the top-level comment_id for a reply.
 CREATE TABLE IF NOT EXISTS comments_by_video (
     video_id   bigint,
     comment_id bigint,
@@ -50,8 +51,18 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
     content    text,
     created_at timestamp,
     deleted_at timestamp,
+    parent_id  bigint,
+    likes      int,
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
+
+-- "Did user X like comment Y" membership; per-comment count denormalised onto comments_by_video.likes.
+CREATE TABLE IF NOT EXISTS comment_likes (
+    comment_id bigint,
+    user_id    bigint,
+    created_at timestamp,
+    PRIMARY KEY ((comment_id), user_id)
+);
 
 -- Shares, same shape as comments minus content
 CREATE TABLE IF NOT EXISTS shares_by_video (

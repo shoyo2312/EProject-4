@@ -92,28 +92,32 @@ Endpoint này chỉ cho **một** video. Không có API hỏi trạng thái like
 Request (`AddCommentRequest`):
 ```json
 {
-  "content": "Video hay quá"    // bắt buộc, tối đa 1000 ký tự, không được toàn khoảng trắng
+  "content": "Video hay quá",   // bắt buộc, tối đa 1000 ký tự, không được toàn khoảng trắng
+  "parentId": 7312458901234999  // tuỳ chọn — có mặt nghĩa là trả lời (reply) comment gốc này
 }
 ```
 
 Response `data` → `CommentResponse`:
 ```json
 {
-  "commentId": 7312458901234999,
+  "commentId": 7312458901235111,
   "videoId": 7312458901234567,
   "userId": 123456789012345,
-  "content": "Video hay quá",
-  "createdAt": "2026-08-20T10:00:00Z"
+  "content": "Đồng ý luôn",
+  "createdAt": "2026-08-20T10:00:00Z",
+  "parentId": 7312458901234999,  // null nếu là comment gốc; id comment gốc nếu là reply
+  "likeCount": 0,                // số like của comment này
+  "likedByMe": false            // user gọi đã like chưa — luôn false khi list không kèm token
 }
 ```
 
 Response **không kèm thông tin user** (tên, avatar) — service này chỉ giữ `userId`. Client tự ghép từ user-service hoặc từ dữ liệu người dùng hiện tại đang có sẵn.
 
-Chưa có bình luận trả lời (reply/threading) và chưa có sửa bình luận. Mỗi comment là một dòng phẳng thuộc về một video.
+**Reply chỉ một cấp** (giống TikTok). Gửi `parentId` là id một comment gốc để trả lời nó. Nếu `parentId` trỏ vào một reply thì server tự dời lên comment gốc của reply đó — cây bình luận luôn phẳng một tầng. `parentId` trỏ vào comment không tồn tại (hoặc đã xoá, hoặc không thuộc `videoId` này) → `COMMENT_NOT_FOUND` (404). Chưa có sửa bình luận. Reply cũng tính vào `commentCount` như một comment thường.
 
 **Không có khử trùng lặp.** Bấm gửi hai lần tạo hai comment khác nhau — khác hẳn like ở mục 3.1. Phía Flutter phải khoá nút gửi cho tới khi có response, và **không** retry tự động khi timeout (nếu request đã tới server thì retry sẽ ra comment đôi).
 
-Lỗi: `VALIDATION_ERROR` (400), `401`.
+Lỗi: `VALIDATION_ERROR` (400), `COMMENT_NOT_FOUND` (404 — `parentId` không hợp lệ), `401`.
 
 ### 3.5 `GET /videos/{videoId}/comments` — danh sách bình luận
 Không cần token. **Phân trang bằng cursor.** Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CommentPageResponse`:
@@ -139,6 +143,8 @@ Cách dùng:
 
 Thứ tự trả về là thứ tự phân mảnh của Cassandra theo `commentId` trong cùng video, **không cấu hình được** và không nhận tham số `sort`.
 
+**Reply nằm chung danh sách phẳng này**, không có endpoint riêng: mỗi item có `parentId` — `null` là comment gốc, khác `null` là reply thuộc comment gốc đó. Client tự gom `parentId` để dựng cây một tầng. Vì phân trang cắt theo `commentId`, một reply và comment gốc của nó có thể rơi vào hai trang khác nhau; client giữ lại reply nào chưa thấy cha rồi gắn khi trang sau nạp về.
+
 ### 3.6 `DELETE /videos/{videoId}/comments/{commentId}` — xoá bình luận của mình
 **Bắt buộc token.** Trả `200 OK`, `data` null. Xoá mềm: comment biến mất khỏi mục 3.5 ngay và `commentCount` giảm 1.
 
@@ -147,6 +153,22 @@ Chỉ xoá được comment của **chính mình**. Chủ video **không** xoá 
 Lỗi: `COMMENT_NOT_FOUND` (404 — id không tồn tại, hoặc đã xoá, hoặc `videoId` không khớp với comment), `NOT_COMMENT_OWNER` (403 — comment tồn tại nhưng của người khác), `401`.
 
 Lưu ý: `videoId` trên URL là **một phần khoá** của comment, không phải trang trí. Truyền sai `videoId` cho một `commentId` có thật vẫn ra `COMMENT_NOT_FOUND` (404) chứ không phải 400.
+
+### 3.6b `POST` / `DELETE /videos/{videoId}/comments/{commentId}/like` — like / bỏ like bình luận
+**Bắt buộc token.** Trả `200 OK`, `data` → `CommentLikeResponse`:
+```json
+{
+  "commentId": 7312458901235111,
+  "liked": true,      // trạng thái sau lời gọi: POST -> true, DELETE -> false
+  "likeCount": 4      // số like mới của comment (đã kẹp >= 0)
+}
+```
+
+Idempotent: `POST` hai lần chỉ tính một like (giống `/like` của video ở mục 3.1), `DELETE` khi chưa like là no-op. `likeCount` này cũng là `CommentResponse.likeCount` ở mục 3.4/3.5; `likedByMe` ở đó cho biết token hiện tại đã like comment nào.
+
+`videoId` là một phần khoá của comment. `commentId` không tồn tại / đã xoá / không thuộc `videoId` → `COMMENT_NOT_FOUND` (404). Lỗi khác: `401`.
+
+> Đếm like comment lưu **denormalized** trên chính comment, cập nhật không qua LWT — hai người like đúng cùng khoảnh khắc có thể hụt 1. Chấp nhận được, không có gì phụ thuộc con số chính xác tuyệt đối.
 
 ### 3.7 `POST /videos/{videoId}/share` — chia sẻ
 **Bắt buộc token.** Trả `200 OK`.
