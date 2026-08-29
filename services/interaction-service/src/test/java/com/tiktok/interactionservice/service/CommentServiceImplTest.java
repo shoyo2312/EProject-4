@@ -1,9 +1,11 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
+import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
+import com.tiktok.interactionservice.exception.CommentsDisabledException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
@@ -11,10 +13,12 @@ import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.when;
 
 class CommentServiceImplTest extends AbstractInteractionServiceIT {
 
@@ -30,6 +34,12 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     @Autowired
     private StringRedisTemplate redisTemplate;
 
+    // Real bean talks to video-service over HTTP; in the IT there is none, so it is mocked. The
+    // default answer (false) matches what the unreachable real client returns, so the other tests
+    // are unaffected.
+    @MockBean
+    private VideoOwnershipClient videoOwnershipClient;
+
     @BeforeEach
     void cleanUp() {
         commentByVideoRepository.deleteAll();
@@ -44,6 +54,16 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(response.content()).isEqualTo("hello");
         assertThat(response.userId()).isEqualTo(1L);
         assertThat(response.videoId()).isEqualTo(20L);
+    }
+
+    @Test
+    void addComment_whenOwnerTurnedCommentsOff_isRejected() {
+        when(videoOwnershipClient.areCommentsDisabled(28L)).thenReturn(true);
+
+        assertThatThrownBy(() -> commentService.addComment(28L, 1L, "nope"))
+                .isInstanceOf(CommentsDisabledException.class);
+
+        assertThat(commentService.listComments(28L, null, 20).items()).isEmpty();
     }
 
     @Test

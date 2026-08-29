@@ -8,6 +8,7 @@ import com.tiktok.interactionservice.entity.CommentByVideo;
 import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
+import com.tiktok.interactionservice.exception.CommentsDisabledException;
 import com.tiktok.interactionservice.exception.CommentRateLimitedException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
@@ -47,6 +48,13 @@ public class CommentServiceImpl implements CommentService {
         // calling. A like is protected by its LWT and a view by its playId; this endpoint has
         // neither, and posting then deleting in a loop moves the ranking either way.
         rateLimiter.require("comment-rate", videoId, currentUserId, CommentRateLimitedException::new);
+
+        // The owner's comments-off switch lives on the Video in video-service; this is the only
+        // place that enforces it. Fails open (see areCommentsDisabled) — an unreachable
+        // video-service lets the comment through rather than blocking every comment site-wide.
+        if (videoOwnershipClient.areCommentsDisabled(videoId)) {
+            throw new CommentsDisabledException(videoId);
+        }
 
         Long commentId = SnowflakeIdGenerator.nextId();
         CommentByVideoKey key = CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build();
@@ -96,6 +104,13 @@ public class CommentServiceImpl implements CommentService {
      */
     @Override
     public CommentPageResponse listComments(Long videoId, String cursor, int size) {
+        // Comments off => the owner hid the thread, not just new replies: no rows, no cursor.
+        // ponytail: one video-service call per comment-list load. The client already has the
+        // flag on the Video and skips this call; a raw API caller is the only one that pays it.
+        if (videoOwnershipClient.areCommentsDisabled(videoId)) {
+            return new CommentPageResponse(List.of(), null, false);
+        }
+
         CassandraPageRequest pageRequest = CassandraCursors.decode(cursor, size, InvalidCommentCursorException::new);
 
         List<CommentResponse> items = List.of();
