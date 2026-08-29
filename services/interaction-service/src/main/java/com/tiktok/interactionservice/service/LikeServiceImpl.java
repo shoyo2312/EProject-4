@@ -21,6 +21,7 @@ import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 @Slf4j
@@ -144,6 +145,13 @@ public class LikeServiceImpl implements LikeService {
                 && likeByVideoRepository.existsById(LikeByVideoKey.builder().videoId(videoId).userId(currentUserId).build());
         long likeCount = counterCacheService.getCounts(videoId).likeCount();
         return new LikeStatusResponse(videoId, liked, likeCount);
+    }
+
+    @Override
+    public List<LikeStatusResponse> getStatuses(List<Long> videoIds, Long currentUserId) {
+        // One point read per id against Cassandra/Redis rather than a fan-out of HTTP requests
+        // through the gateway — the batch endpoint exists to collapse the latter, not the former.
+        return videoIds.stream().map(videoId -> getStatus(videoId, currentUserId)).toList();
     }
 
     @Override
