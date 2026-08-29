@@ -8,6 +8,7 @@ import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.event.interaction.VideoViewedEvent;
 import com.tiktok.event.interaction.VideoWatchEvent;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import lombok.SneakyThrows;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -35,6 +36,7 @@ import java.util.concurrent.TimeUnit;
  * shape. That trades a Kafka blip for a failed request instead of a silent, permanent divergence
  * between three services' idea of the same number.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class InteractionEventPublisher {
@@ -103,11 +105,23 @@ public class InteractionEventPublisher {
      * training rows and tag affinity, where one lost session out of hundreds a day changes
      * nothing, while blocking the request that reports it would put the densest stream this
      * service produces on the critical path of every scroll.
+     *
+     * <p>Not confirmed is not the same as unwatched: the failure is logged from the callback, so a
+     * broker that has stopped taking this topic shows up in the log rather than as a training set
+     * that quietly stops growing. Nothing waits on that callback — the request has already
+     * returned by the time it runs.
      */
     @SneakyThrows
     public void publishWatch(Long videoId, Long userId, long watchedMs, long durationMs, boolean completed) {
         VideoWatchEvent event = VideoWatchEvent.of(videoId, userId, watchedMs, durationMs, completed);
-        kafkaTemplate.send(WATCH_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event));
+        kafkaTemplate.send(WATCH_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event))
+                .whenComplete((result, failure) -> {
+                    if (failure != null) {
+                        log.warn("Watch session of video {} by user {} was not accepted by the broker "
+                                + "and is lost; tag affinity and training rows are missing it: {}",
+                                videoId, userId, failure.getMessage());
+                    }
+                });
     }
 
     @SneakyThrows
