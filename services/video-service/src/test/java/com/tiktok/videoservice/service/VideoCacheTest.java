@@ -159,6 +159,6 @@ class VideoCacheTest {
         return new VideoResponse(
                 id, 42L, "title", "description", "https://cdn/t.jpg", "https://cdn/v.m3u8",
                 10, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 1, 2, 3L, false,
-                List.of("tag"), Instant.parse("2026-08-27T10:00:00Z"));
+                List.of("tag"), Instant.parse("2026-08-27T10:00:00Z"), null);
     }
 }

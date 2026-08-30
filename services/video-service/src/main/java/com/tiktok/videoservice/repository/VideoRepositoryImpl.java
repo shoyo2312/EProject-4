@@ -123,6 +123,14 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
+    public boolean updateFailed(Video video, VideoStatus expectedStatus) {
+        return compareAndSet(video.getId(), expectedStatus, new Update()
+                .set("status", video.getStatus())
+                .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
+                .set("failureReason", video.getFailureReason()));
+    }
+
+    @Override
     public void updateEventPublished(Video video) {
         update(video.getId(), new Update().set("eventPublishedAt", video.getEventPublishedAt()));
     }

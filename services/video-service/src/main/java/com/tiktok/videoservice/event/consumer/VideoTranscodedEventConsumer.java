@@ -34,7 +34,10 @@ public class VideoTranscodedEventConsumer {
     private void apply(VideoTranscodedEvent event) {
         if (!event.success()) {
             log.warn("VideoTranscodedEvent failure for videoId={}: {}", event.videoId(), event.failureReason());
-            videoStateUpdater.apply(event.videoId(), Video::markFailed, videoRepository::updateStatus, EVENT);
+            videoStateUpdater.apply(event.videoId(),
+                    video -> video.markFailed(event.failureReason()),
+                    videoRepository::updateFailed,
+                    EVENT);
             return;
         }
 
