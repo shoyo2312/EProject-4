@@ -2,6 +2,7 @@ package com.tiktok.videoservice.service;
 
 import com.tiktok.videoservice.client.FriendshipClient;
 import com.tiktok.videoservice.config.MinioProperties;
+import com.tiktok.videoservice.config.UploadLimitProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
@@ -22,9 +23,8 @@ import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.UserVideoStats;
 import com.tiktok.videoservice.repository.VideoRepository;
-import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
-import io.minio.http.Method;
+import io.minio.PostPolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
@@ -34,6 +34,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
+import java.time.ZonedDateTime;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.HashMap;
@@ -41,7 +42,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -96,24 +96,25 @@ public class VideoServiceImpl implements VideoService {
     private final MinioProperties minioProperties;
     private final VideoCache videoCache;
     private final FriendshipClient friendshipClient;
+    private final UploadLimitProperties uploadLimits;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
      * once cannot land on the same object, and a key seen in storage says who put it there.
      *
-     * <p>The returned {@code fileUrl} is an {@code s3://} URI rather than the presigned URL: the
-     * presigned one carries a signature that expires in minutes, and it is the raw location that
-     * gets stored on the Video and read by media-worker, possibly hours later.
+     * <p>The returned {@code fileUrl} is an {@code s3://} URI rather than any signed URL: the
+     * policy signature expires in minutes, and it is the raw location that gets stored on the
+     * Video and read by media-worker, possibly hours later.
      *
-     * <p>ponytail: the presigned PUT pins neither content type nor size — S3 query-signing covers
-     * the key and expiry only, so a client can send anything to a key we handed out. media-worker
-     * is what actually reads the file and is where a real pipeline rejects it. Move to a POST
-     * policy (which can sign content-length-range and content-type) if uploads need refusing at
-     * the storage edge.
+     * <p>The POST policy pins the key and the content type and signs a
+     * {@code content-length-range} of {@code [1, maxBytes]}, so MinIO refuses an oversize or
+     * empty upload at the storage edge before any bytes land. media-worker still re-checks size
+     * and duration once it has the file — it is the only place duration can be checked at all.
      */
     @Override
     public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
-        String extension = UPLOAD_EXTENSIONS.get(mediaType(request.contentType()));
+        String contentType = mediaType(request.contentType());
+        String extension = UPLOAD_EXTENSIONS.get(contentType);
         if (extension == null) {
             throw new UnsupportedUploadTypeException(request.contentType(), UPLOAD_EXTENSIONS.keySet());
         }
@@ -121,24 +122,28 @@ public class VideoServiceImpl implements VideoService {
         String objectKey = "%s/%d/%s.%s".formatted(UPLOAD_PREFIX, userId, Video.newId(), extension);
         long expirySeconds = minioProperties.urlExpiry().toSeconds();
 
-        String uploadUrl;
+        PostPolicy policy = new PostPolicy(minioProperties.bucket(),
+                ZonedDateTime.now().plusSeconds(expirySeconds));
+        policy.addEqualsCondition("key", objectKey);
+        policy.addEqualsCondition("Content-Type", contentType);
+        policy.addContentLengthRangeCondition(1L, uploadLimits.maxBytes());
+
+        Map<String, String> formFields;
         try {
-            uploadUrl = minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
-                    .method(Method.PUT)
-                    .bucket(minioProperties.bucket())
-                    .object(objectKey)
-                    .expiry((int) expirySeconds, TimeUnit.SECONDS)
-                    .build());
+            formFields = new HashMap<>(minioClient.getPresignedPostFormData(policy));
         } catch (Exception e) {
             // minio-java declares half a dozen checked exceptions here and they all mean the same
             // thing to a caller: no URL. Logged with the bucket because the realistic cause is
             // configuration, and the message the client gets deliberately omits it.
-            log.error("Failed to presign an upload URL for bucket {}", minioProperties.bucket(), e);
+            log.error("Failed to presign an upload POST for bucket {}", minioProperties.bucket(), e);
             throw new UploadUrlUnavailableException(e);
         }
+        formFields.put("key", objectKey);
+        formFields.put("Content-Type", contentType);
 
-        return new UploadUrlResponse(
-                uploadUrl, "s3://%s/%s".formatted(minioProperties.bucket(), objectKey), expirySeconds);
+        String uploadUrl = "%s/%s".formatted(minioProperties.endpoint(), minioProperties.bucket());
+        String fileUrl = "s3://%s/%s".formatted(minioProperties.bucket(), objectKey);
+        return new UploadUrlResponse(uploadUrl, formFields, fileUrl, expirySeconds);
     }
 
     @Override

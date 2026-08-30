@@ -1,14 +1,18 @@
 package com.tiktok.videoservice.dto.response;
 
+import java.util.Map;
+
 /**
- * @param uploadUrl         presigned PUT URL — the client uploads the file straight to object
- *                          storage with it, the bytes never pass through this service
- * @param fileUrl           what to send back as {@code rawFileUrl} on POST /api/v1/videos once
- *                          the upload succeeds
- * @param expiresInSeconds  how long {@code uploadUrl} stays valid
+ * @param uploadUrl        the bucket URL to POST the multipart form to — the bytes never pass
+ *                         through this service
+ * @param formFields       every field the multipart POST must carry (policy, signature, key,
+ *                         Content-Type). The client appends these, then the file last.
+ * @param fileUrl          what to send back as {@code rawFileUrl} on POST /api/v1/videos
+ * @param expiresInSeconds how long the policy stays valid
  */
 public record UploadUrlResponse(
         String uploadUrl,
+        Map<String, String> formFields,
         String fileUrl,
         long expiresInSeconds
 ) {

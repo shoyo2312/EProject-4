@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.service;
 
 import com.tiktok.videoservice.config.MinioProperties;
+import com.tiktok.videoservice.config.UploadLimitProperties;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -57,7 +58,8 @@ class VideoServiceImplCacheTest {
             new MinioProperties("http://localhost:9000", "key", "secret",
                     "video-media", "us-east-1", Duration.ofMinutes(15)),
             videoCache,
-            friendshipClient);
+            friendshipClient,
+            new UploadLimitProperties(524_288_000L, 600));
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
