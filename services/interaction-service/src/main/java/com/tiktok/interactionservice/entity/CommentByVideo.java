@@ -36,6 +36,14 @@ public class CommentByVideo {
     @Column("parent_id")
     private Long parentId;
 
+    /**
+     * The author of the reply this one is replying to, when that target was itself a reply — so the
+     * flat list can show "A > B". Null for a top-level comment and for a direct reply to one (its
+     * target is the thread's own top-level author, shown right above).
+     */
+    @Column("reply_to_user_id")
+    private Long replyToUserId;
+
     /** Denormalised like tally; {@code null} until the first like. Read it through {@link #likeCount()}. */
     @Column("likes")
     private Integer likes;

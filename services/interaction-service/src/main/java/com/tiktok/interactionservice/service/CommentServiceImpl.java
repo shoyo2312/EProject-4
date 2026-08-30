@@ -66,12 +66,16 @@ public class CommentServiceImpl implements CommentService {
         // orphaned under a parent the client will not render. A parentId that names nothing on this
         // video is the client sending a stale or wrong id — refused rather than stored dangling.
         Long resolvedParentId = null;
+        Long replyToUserId = null;
         if (parentId != null) {
             CommentByVideo parent = commentByVideoRepository
                     .findById(CommentByVideoKey.builder().videoId(videoId).commentId(parentId).build())
                     .filter(c -> !c.isDeleted())
                     .orElseThrow(() -> new CommentNotFoundException(parentId));
             resolvedParentId = parent.getParentId() != null ? parent.getParentId() : parentId;
+            // Target was itself a reply => record its author so the flat list shows "A > B". A direct
+            // reply to a top-level comment leaves this null: its target is the thread owner above it.
+            replyToUserId = parent.getParentId() != null ? parent.getUserId() : null;
         }
 
         Long commentId = SnowflakeIdGenerator.nextId();
@@ -82,6 +86,7 @@ public class CommentServiceImpl implements CommentService {
                 .userId(currentUserId)
                 .content(content)
                 .parentId(resolvedParentId)
+                .replyToUserId(replyToUserId)
                 .createdAt(Instant.now())
                 .build();
         commentByVideoRepository.save(comment);

@@ -54,12 +54,16 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
     created_at timestamp,
     deleted_at timestamp,
     parent_id  bigint,
+    -- Set only when the reply targets another reply: the user_id of that reply's author, so the
+    -- flat list can render "A > B". Null for a top-level comment and for a direct reply to one.
+    reply_to_user_id bigint,
     likes      int,
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
 
 -- Adds columns to clusters whose comments_by_video predates reply / comment-like support.
 ALTER TABLE comments_by_video ADD IF NOT EXISTS parent_id bigint;
+ALTER TABLE comments_by_video ADD IF NOT EXISTS reply_to_user_id bigint;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS likes int;
 
 -- "Did user X like comment Y" membership + idempotent like/unlike via LWT (IF NOT EXISTS /

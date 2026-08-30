@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
     created_at timestamp,
     deleted_at timestamp,
     parent_id  bigint,
+    reply_to_user_id bigint,
     likes      int,
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);

@@ -63,6 +63,8 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
         CommentResponse reply = commentService.addComment(40L, 2L, "a reply", parent.commentId());
 
         assertThat(reply.parentId()).isEqualTo(parent.commentId());
+        // Direct reply to a top-level comment: no "A > B" label, the target is the thread owner.
+        assertThat(reply.replyToUserId()).isNull();
         assertThat(commentService.listComments(40L, null, 20).items())
                 .filteredOn(c -> c.commentId().equals(reply.commentId()))
                 .singleElement()
@@ -78,6 +80,13 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
         CommentResponse nested = commentService.addComment(41L, 3L, "reply to reply", first.commentId());
 
         assertThat(nested.parentId()).isEqualTo(top.commentId());
+        // Target was itself a reply: its author is recorded for the "A > B" label, and it survives the listing.
+        assertThat(nested.replyToUserId()).isEqualTo(2L);
+        assertThat(commentService.listComments(41L, null, 20).items())
+                .filteredOn(c -> c.commentId().equals(nested.commentId()))
+                .singleElement()
+                .extracting(CommentResponse::replyToUserId)
+                .isEqualTo(2L);
     }
 
     @Test

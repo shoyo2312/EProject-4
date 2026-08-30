@@ -93,7 +93,7 @@ Request (`AddCommentRequest`):
 ```json
 {
   "content": "Video hay quá",   // bắt buộc, tối đa 1000 ký tự, không được toàn khoảng trắng
-  "parentId": 7312458901234999  // tuỳ chọn — có mặt nghĩa là trả lời (reply) comment gốc này
+  "parentId": 7312458901234999  // tuỳ chọn — id comment đang trả lời (comment gốc HOẶC một reply)
 }
 ```
 
@@ -106,6 +106,7 @@ Response `data` → `CommentResponse`:
   "content": "Đồng ý luôn",
   "createdAt": "2026-08-20T10:00:00Z",
   "parentId": 7312458901234999,  // null nếu là comment gốc; id comment gốc nếu là reply
+  "replyToUserId": 123456789012300, // chỉ có khi reply nhắm vào một reply khác — userId tác giả reply đó, để hiện nhãn "A > B". null với comment gốc và reply thẳng vào comment gốc
   "likeCount": 0,                // số like của comment này
   "likedByMe": false            // user gọi đã like chưa — luôn false khi list không kèm token
 }
@@ -113,7 +114,7 @@ Response `data` → `CommentResponse`:
 
 Response **không kèm thông tin user** (tên, avatar) — service này chỉ giữ `userId`. Client tự ghép từ user-service hoặc từ dữ liệu người dùng hiện tại đang có sẵn.
 
-**Reply chỉ một cấp** (giống TikTok). Gửi `parentId` là id một comment gốc để trả lời nó. Nếu `parentId` trỏ vào một reply thì server tự dời lên comment gốc của reply đó — cây bình luận luôn phẳng một tầng. `parentId` trỏ vào comment không tồn tại (hoặc đã xoá, hoặc không thuộc `videoId` này) → `COMMENT_NOT_FOUND` (404). Chưa có sửa bình luận. Reply cũng tính vào `commentCount` như một comment thường.
+**Reply chỉ một cấp** (giống TikTok). Gửi `parentId` là id một comment gốc để trả lời nó. Nếu `parentId` trỏ vào một reply thì server tự dời lên comment gốc của reply đó — cây bình luận luôn phẳng một tầng — và ghi `replyToUserId` = tác giả reply bị nhắm, để client hiện "A > B". `parentId` trỏ vào comment không tồn tại (hoặc đã xoá, hoặc không thuộc `videoId` này) → `COMMENT_NOT_FOUND` (404). Chưa có sửa bình luận. Reply cũng tính vào `commentCount` như một comment thường.
 
 **Không có khử trùng lặp.** Bấm gửi hai lần tạo hai comment khác nhau — khác hẳn like ở mục 3.1. Phía Flutter phải khoá nút gửi cho tới khi có response, và **không** retry tự động khi timeout (nếu request đã tới server thì retry sẽ ra comment đôi).
 
