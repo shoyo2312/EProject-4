@@ -23,6 +23,11 @@ minio:
   bucket: ${MINIO_BUCKET:video-media}
 
 media:
+  video:
+    # Backstop for the storage-edge limit video-service signs into its POST policy.
+    # Same env vars as video-service's app.upload — keep them in step.
+    max-bytes: ${VIDEO_MAX_BYTES:524288000}          # 500 MB
+    max-duration-seconds: ${VIDEO_MAX_DURATION_SECONDS:600}  # 10 minutes
   avatar:
     # The only hosts this worker will fetch an avatar from. Google serves pictures from lh3,
     # Facebook from platform-lookaside and the fbcdn host its redirects land on. Anything else an
