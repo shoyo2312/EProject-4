@@ -15,6 +15,7 @@ import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.AlreadyPublishedException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
@@ -33,6 +34,8 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -53,6 +56,14 @@ public class VideoServiceImpl implements VideoService {
      * bucket's lifecycle rule expires abandoned uploads by matching this prefix.
      */
     private static final String UPLOAD_PREFIX = "raw";
+
+    /**
+     * How many authors one Following feed request may name. Well above what a real account follows
+     * on this deployment, and low enough that the {@code $in} behind it stays a bounded set of
+     * index ranges rather than a scan the client sizes. See {@link TooManyFollowedUsersException}
+     * for why going over is an error instead of a truncation.
+     */
+    private static final int MAX_FOLLOWED_USERS = 500;
 
     /**
      * Hashtags as they are written in a caption. Letters and digits are matched by Unicode class
@@ -335,12 +346,38 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public CursorPage<VideoResponse> getFeed(String cursor, Integer size) {
+        return feedPage(null, cursor, size);
+    }
+
+    @Override
+    public CursorPage<VideoResponse> getFollowingFeed(
+            List<Long> followedUserIds, String cursor, Integer size) {
+        // Following nobody is an empty tab, not the public feed. Returning early also keeps an
+        // empty $in — which matches nothing but still costs a query — off the wire.
+        if (followedUserIds == null || followedUserIds.isEmpty()) {
+            return new CursorPage<>(List.of(), null);
+        }
+        if (followedUserIds.size() > MAX_FOLLOWED_USERS) {
+            throw new TooManyFollowedUsersException(MAX_FOLLOWED_USERS);
+        }
+
+        // Deduplicated: the caller assembles this from a paged listing, and a repeat id widens the
+        // $in for nothing.
+        return feedPage(new LinkedHashSet<>(followedUserIds), cursor, size);
+    }
+
+    /**
+     * @param userIds the Following feed's authors, or null for the public feed — every author
+     */
+    private CursorPage<VideoResponse> feedPage(
+            Collection<Long> userIds, String cursor, Integer size) {
         FeedCursor after = FeedCursor.decode(cursor);
         int limit = clampSize(size);
 
         // One row past the page. Its presence is what says there is more to come — the same answer
         // a count query gives, for the cost of one extra document instead of a second scan.
         List<Video> rows = videoRepository.findFeedPage(
+                userIds,
                 after == null ? null : after.createdAt(),
                 after == null ? null : after.id(),
                 limit + 1);

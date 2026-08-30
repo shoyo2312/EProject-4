@@ -12,6 +12,7 @@ import com.tiktok.videoservice.exception.AlreadyPublishedException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.InvalidFeedCursorException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.repository.VideoRepository;
@@ -31,6 +32,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -378,6 +380,88 @@ class VideoServiceImplTest {
         }
 
         assertThat(videoService.getFeed(null, 1000).items()).hasSize(50);
+    }
+
+    @Test
+    void getFollowingFeed_onlyDrawsFromTheFollowedAuthors() {
+        VideoResponse followed = publishAs(1L, "Followed", VideoVisibility.PUBLIC);
+        markPublished(followed.id());
+        VideoResponse alsoFollowed = publishAs(2L, "Also followed", VideoVisibility.PUBLIC);
+        markPublished(alsoFollowed.id());
+        VideoResponse stranger = publishAs(3L, "Stranger", VideoVisibility.PUBLIC);
+        markPublished(stranger.id());
+
+        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(List.of(1L, 2L), null, 10);
+
+        // Newest first, so the seeding order reversed.
+        assertThat(feed.items()).extracting(VideoResponse::id)
+                .containsExactly(alsoFollowed.id(), followed.id());
+    }
+
+    /**
+     * The Following feed is the public feed narrowed by author, not a way around the filter it
+     * applies: following someone does not put their PRIVATE or still-PROCESSING uploads, or what
+     * moderation took down, on your feed.
+     */
+    @Test
+    void getFollowingFeed_appliesTheSameVisibilityRuleAsThePublicFeed() {
+        VideoResponse published = publishAs(1L, "Published", VideoVisibility.PUBLIC);
+        markPublished(published.id());
+        VideoResponse processing = publishAs(1L, "Processing", VideoVisibility.PUBLIC);
+        VideoResponse privatePublished = publishAs(1L, "Private", VideoVisibility.PRIVATE);
+        markPublished(privatePublished.id());
+        VideoResponse takenDown = publishAs(1L, "Taken down", VideoVisibility.PUBLIC);
+        markPublished(takenDown.id());
+        markTakenDown(takenDown.id());
+
+        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(List.of(1L), null, 10);
+
+        assertThat(feed.items()).extracting(VideoResponse::id).containsExactly(published.id());
+        assertThat(feed.items()).extracting(VideoResponse::id)
+                .doesNotContain(processing.id(), privatePublished.id(), takenDown.id());
+    }
+
+    /** Following nobody is an empty tab — never a silent fallback to the whole public feed. */
+    @Test
+    void getFollowingFeed_noFollowedAuthors_isEmptyRatherThanThePublicFeed() {
+        VideoResponse stranger = publishAs(3L, "Stranger", VideoVisibility.PUBLIC);
+        markPublished(stranger.id());
+
+        assertThat(videoService.getFollowingFeed(List.of(), null, 10).items()).isEmpty();
+        assertThat(videoService.getFollowingFeed(null, null, 10).items()).isEmpty();
+    }
+
+    /** Same keyset property {@link #getFeed_pagingByCursor_visitsEveryVideoExactlyOnce} asserts. */
+    @Test
+    void getFollowingFeed_pagingByCursor_visitsEveryVideoExactlyOnce() {
+        List<String> followedIds = new ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            // Alternating authors, so a page boundary routinely falls between two of them.
+            VideoResponse video = publishAs(i % 2 == 0 ? 1L : 2L, "video-" + i, VideoVisibility.PUBLIC);
+            markPublished(video.id());
+            followedIds.add(video.id());
+        }
+        VideoResponse stranger = publishAs(3L, "Stranger", VideoVisibility.PUBLIC);
+        markPublished(stranger.id());
+
+        List<String> walked = new ArrayList<>();
+        String cursor = null;
+        do {
+            CursorPage<VideoResponse> page = videoService.getFollowingFeed(List.of(1L, 2L), cursor, 7);
+            walked.addAll(page.items().stream().map(VideoResponse::id).toList());
+            cursor = page.nextCursor();
+        } while (cursor != null);
+
+        assertThat(walked).containsExactlyElementsOf(followedIds.reversed());
+        assertThat(walked).doesNotContain(stranger.id());
+    }
+
+    @Test
+    void getFollowingFeed_tooManyAuthors_isRefusedRatherThanTruncated() {
+        List<Long> tooMany = LongStream.rangeClosed(1, 501).boxed().toList();
+
+        assertThatThrownBy(() -> videoService.getFollowingFeed(tooMany, null, 10))
+                .isInstanceOf(TooManyFollowedUsersException.class);
     }
 
     @Test

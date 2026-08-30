@@ -4,6 +4,7 @@ import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -48,11 +49,17 @@ public interface VideoRepositoryCustom {
      * <p>Derived queries cannot express the {@code (createdAt < c) OR (createdAt = c AND _id < id)}
      * that the tiebreak needs, which is why this lives here and not on {@link VideoRepository}.
      *
+     * <p>One method rather than two, because the Following feed is this same page with an author
+     * filter in front of it: same status+visibility rule, same keyset, same tiebreak. A second copy
+     * would be a second place to keep those three in step.
+     *
+     * @param userIds         restrict to these authors — the Following feed — or null for the
+     *                        public feed, which is every author
      * @param beforeCreatedAt null for the first page, together with {@code beforeId}
      * @param limit           ask for one more than the page holds — a row beyond it is how the
      *                        caller learns there is a next page without counting anything
      */
-    List<Video> findFeedPage(Instant beforeCreatedAt, String beforeId, int limit);
+    List<Video> findFeedPage(Collection<Long> userIds, Instant beforeCreatedAt, String beforeId, int limit);
 
     /**
      * Transcode succeeded: the media fields it produced, plus where the outcome was recorded.

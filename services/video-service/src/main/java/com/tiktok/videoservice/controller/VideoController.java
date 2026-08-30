@@ -59,6 +59,23 @@ public class VideoController {
         return ApiResponse.success(videoService.getFeed(cursor, size));
     }
 
+    /**
+     * The Following tab. Same page shape and same cursor protocol as {@code /feed}, drawn only from
+     * the authors named in {@code followedUserIds} — the caller reads those from user-service's
+     * {@code /api/v1/users/{id}/following}, the way story-service's feed is called. Literal path,
+     * so it is matched ahead of {@code /{videoId}} below.
+     *
+     * <p>Naming an account the caller does not follow is not a way in: the filter below it is the
+     * public one, so this returns exactly what {@code /videos/users/{id}} would already hand out.
+     */
+    @GetMapping("/feed/following")
+    public ApiResponse<CursorPage<VideoResponse>> getFollowingFeed(
+            @RequestParam(required = false) List<Long> followedUserIds,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) Integer size) {
+        return ApiResponse.success(videoService.getFollowingFeed(followedUserIds, cursor, size));
+    }
+
     @GetMapping("/{videoId}")
     public ApiResponse<VideoResponse> getById(
             @AuthenticationPrincipal Long currentUserId,
