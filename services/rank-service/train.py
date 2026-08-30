@@ -31,7 +31,14 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
-from features import FEATURE_NAMES, TOP_TAGS, affinity_delta, completion_rate, log_watches
+from features import (
+    FEATURE_NAMES,
+    TOP_TAGS,
+    UNKNOWN_AGE_HOURS,
+    affinity_delta,
+    completion_rate,
+    log_watches,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("train")
@@ -159,7 +166,7 @@ def build_dataset(client, cutoff: datetime) -> pd.DataFrame:
     age = (cutoff - data["published_at"]).dt.total_seconds() / 3600.0
     # An untagged video has no row in video_tags and therefore no publish time here. It gets the
     # same stand-in FeedServiceImpl uses when the publish time has aged out of Redis.
-    data["age_hours"] = age.fillna(24.0).clip(lower=0.0)
+    data["age_hours"] = age.fillna(UNKNOWN_AGE_HOURS).clip(lower=0.0)
 
     if affinity.empty:
         data["tag_affinity"] = 0.0

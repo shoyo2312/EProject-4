@@ -10,9 +10,14 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 /**
- * Answers "does this account own that video", for the one caller who needs to know something
- * outside interaction-service's own data: a video's owner may delete any comment on it, not only
- * their own, and video-service is the only place that knows who a video belongs to.
+ * Answers "does this account own that video" and "are comments off", for the one caller who needs
+ * to know something outside interaction-service's own data: a video's owner may delete any comment
+ * on it, not only their own, and video-service is the only place that knows who a video belongs to.
+ *
+ * <p>Reads {@code /policy} rather than the video itself. {@code GET /videos/{id}} filters by
+ * visibility and this client sends no token, so it answered 404 for exactly the videos where these
+ * two questions matter: the owner of a PRIVATE or still-PROCESSING video could not delete comments
+ * on it, and comments they had switched off stayed on, because the lookup fails open.
  */
 @Slf4j
 @Component
@@ -22,7 +27,7 @@ public class VideoOwnershipClient {
     private final RestClient videoServiceRestClient;
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record VideoOwnerView(Long userId, boolean commentsDisabled) {
+    private record VideoPolicyView(Long userId, boolean commentsDisabled) {
     }
 
     /**
@@ -32,7 +37,7 @@ public class VideoOwnershipClient {
      * ever adds permission, never removes it.
      */
     public boolean isOwnedBy(Long videoId, Long userId) {
-        VideoOwnerView view = fetch(videoId);
+        VideoPolicyView view = fetch(videoId);
         return view != null && userId.equals(view.userId());
     }
 
@@ -41,14 +46,14 @@ public class VideoOwnershipClient {
      * an unreachable video-service answers false, so a dependency outage never blocks commenting.
      */
     public boolean areCommentsDisabled(Long videoId) {
-        VideoOwnerView view = fetch(videoId);
+        VideoPolicyView view = fetch(videoId);
         return view != null && view.commentsDisabled();
     }
 
-    private VideoOwnerView fetch(Long videoId) {
+    private VideoPolicyView fetch(Long videoId) {
         try {
-            ApiResponse<VideoOwnerView> response = videoServiceRestClient.get()
-                    .uri("/api/v1/videos/{videoId}", videoId)
+            ApiResponse<VideoPolicyView> response = videoServiceRestClient.get()
+                    .uri("/api/v1/videos/{videoId}/policy", videoId)
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {
                     });
