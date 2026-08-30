@@ -57,6 +57,86 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     }
 
     @Test
+    void addComment_asReply_persistsParentIdAndListsInline() {
+        CommentResponse parent = commentService.addComment(40L, 1L, "top-level");
+
+        CommentResponse reply = commentService.addComment(40L, 2L, "a reply", parent.commentId());
+
+        assertThat(reply.parentId()).isEqualTo(parent.commentId());
+        // Direct reply to a top-level comment: no "A > B" label, the target is the thread owner.
+        assertThat(reply.replyToUserId()).isNull();
+        assertThat(commentService.listComments(40L, null, 20).items())
+                .filteredOn(c -> c.commentId().equals(reply.commentId()))
+                .singleElement()
+                .extracting(CommentResponse::parentId)
+                .isEqualTo(parent.commentId());
+    }
+
+    @Test
+    void addComment_replyToAReply_flattensToTopLevelParent() {
+        CommentResponse top = commentService.addComment(41L, 1L, "top");
+        CommentResponse first = commentService.addComment(41L, 2L, "first reply", top.commentId());
+
+        CommentResponse nested = commentService.addComment(41L, 3L, "reply to reply", first.commentId());
+
+        assertThat(nested.parentId()).isEqualTo(top.commentId());
+        // Target was itself a reply: its author is recorded for the "A > B" label, and it survives the listing.
+        assertThat(nested.replyToUserId()).isEqualTo(2L);
+        assertThat(commentService.listComments(41L, null, 20).items())
+                .filteredOn(c -> c.commentId().equals(nested.commentId()))
+                .singleElement()
+                .extracting(CommentResponse::replyToUserId)
+                .isEqualTo(2L);
+    }
+
+    @Test
+    void addComment_replyToMissingParent_isRejected() {
+        assertThatThrownBy(() -> commentService.addComment(42L, 1L, "orphan", 999999L))
+                .isInstanceOf(CommentNotFoundException.class);
+    }
+
+    @Test
+    void likeComment_persistsCountAndShowsLikedByMeInListing() {
+        CommentResponse comment = commentService.addComment(50L, 1L, "like me");
+
+        assertThat(commentService.likeComment(50L, comment.commentId(), 2L).likeCount()).isEqualTo(1);
+
+        CommentResponse listed = commentService.listComments(50L, null, 20, 2L).items().get(0);
+        assertThat(listed.likeCount()).isEqualTo(1);
+        assertThat(listed.likedByMe()).isTrue();
+
+        // A different viewer sees the count but not their own like.
+        assertThat(commentService.listComments(50L, null, 20, 3L).items().get(0).likedByMe()).isFalse();
+        // Anonymous listing never reports likedByMe.
+        assertThat(commentService.listComments(50L, null, 20, null).items().get(0).likedByMe()).isFalse();
+    }
+
+    @Test
+    void likeComment_isIdempotent() {
+        CommentResponse comment = commentService.addComment(51L, 1L, "spam like");
+
+        commentService.likeComment(51L, comment.commentId(), 2L);
+        assertThat(commentService.likeComment(51L, comment.commentId(), 2L).likeCount()).isEqualTo(1);
+    }
+
+    @Test
+    void unlikeComment_dropsTheCountAndClearsLikedByMe() {
+        CommentResponse comment = commentService.addComment(52L, 1L, "toggle");
+        commentService.likeComment(52L, comment.commentId(), 2L);
+
+        assertThat(commentService.unlikeComment(52L, comment.commentId(), 2L).likeCount()).isZero();
+        assertThat(commentService.listComments(52L, null, 20, 2L).items().get(0).likedByMe()).isFalse();
+        // Unliking again is a no-op, not a negative count.
+        assertThat(commentService.unlikeComment(52L, comment.commentId(), 2L).likeCount()).isZero();
+    }
+
+    @Test
+    void likeComment_onMissingComment_isRejected() {
+        assertThatThrownBy(() -> commentService.likeComment(53L, 999999L, 1L))
+                .isInstanceOf(CommentNotFoundException.class);
+    }
+
+    @Test
     void addComment_whenOwnerTurnedCommentsOff_isRejected() {
         when(videoOwnershipClient.areCommentsDisabled(28L)).thenReturn(true);
 
