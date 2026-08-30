@@ -93,6 +93,24 @@ class VideoEventConsumerTest {
         verify(transcodeService, times(ATTEMPTS)).transcode(anyString(), anyString());
     }
 
+    @Test
+    void onMessage_transcodeRejectsTheFile_failsOnceWithNoRetry() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of(
+                "vid7", 1L, "Too long", "s3://raw/vid7.mp4", java.util.List.of());
+
+        when(transcodeService.transcode("vid7", "s3://raw/vid7.mp4"))
+                .thenThrow(new com.tiktok.mediaworker.service.MediaRejectedException(
+                        "Video is 12m30s; the maximum is 10m00s."));
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        ArgumentCaptor<VideoTranscodedEvent> captor = ArgumentCaptor.forClass(VideoTranscodedEvent.class);
+        verify(eventProducer).publish(captor.capture());
+        assertThat(captor.getValue().success()).isFalse();
+        assertThat(captor.getValue().failureReason()).isEqualTo("Video is 12m30s; the maximum is 10m00s.");
+        verify(transcodeService, times(1)).transcode(anyString(), anyString());
+    }
+
     /**
      * FAILED is terminal and nothing offers a retry, so a storage blip must not produce it. The
      * distinction cannot come from the exception — a brief outage and an unreadable file raise the
