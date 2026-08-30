@@ -32,7 +32,7 @@ class TranscodeServiceImplTest {
         assertThat(result.hlsUrl()).isEqualTo("http://localhost:9000/video-media/hls/vid123/source.mp4");
         // Both need the file decoded, which this pipeline does not do — the client falls back.
         assertThat(result.thumbnailUrl()).isNull();
-        assertThat(result.durationSeconds()).isZero();
+        assertThat(result.durationSeconds()).isNull();
 
         ArgumentCaptor<CopyObjectArgs> captor = ArgumentCaptor.forClass(CopyObjectArgs.class);
         verify(minioClient).copyObject(captor.capture());

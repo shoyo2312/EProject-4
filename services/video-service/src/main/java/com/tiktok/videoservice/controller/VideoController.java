@@ -8,6 +8,7 @@ import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
+import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.service.VideoService;
 import jakarta.validation.Valid;
@@ -78,6 +79,16 @@ public class VideoController {
             @AuthenticationPrincipal Long currentUserId,
             @RequestParam List<String> ids) {
         return ApiResponse.success(videoService.getByIds(currentUserId, ids));
+    }
+
+    /**
+     * Service-to-service: who owns this video and whether comments are off. Unfiltered by
+     * visibility, unlike {@link #getById} — see {@link VideoPolicyResponse}. Literal suffix, so it
+     * cannot collide with {@code /{videoId}}.
+     */
+    @GetMapping("/{videoId}/policy")
+    public ApiResponse<VideoPolicyResponse> getPolicy(@PathVariable String videoId) {
+        return ApiResponse.success(videoService.getPolicy(videoId));
     }
 
     @GetMapping("/users/{userId}")

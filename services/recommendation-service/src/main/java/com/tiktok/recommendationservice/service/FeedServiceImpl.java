@@ -61,7 +61,11 @@ public class FeedServiceImpl implements FeedService {
     private static final long MIN_WATCHES_FOR_QUALITY = 5;
     private static final double NEUTRAL_QUALITY = 0.5;
 
-    /** Stands in for a video whose publish time has aged out of the trimmed sorted set. */
+    /**
+     * Stands in for a video whose publish time has aged out of the trimmed sorted set. Must match
+     * UNKNOWN_AGE_HOURS in rank-service's features.py, which training fills the same gap with —
+     * two different fillers make age_hours mean one thing in training and another when served.
+     */
     private static final double UNKNOWN_AGE_HOURS = 24.0;
 
     private final StringRedisTemplate redisTemplate;

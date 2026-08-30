@@ -10,6 +10,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.net.http.HttpClient;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,6 +57,18 @@ class AvatarMirrorServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
 
         verifyNoInteractions(minioClient);
+    }
+
+    /**
+     * The client must not follow redirects on its own. If it does, the request to the next host
+     * has already gone out by the time the allow-list sees it, and an open redirect on a trusted
+     * provider becomes a fetch this worker performs against the cluster's own network — checking
+     * the final URI afterwards only refuses to read a page it has already loaded. download()
+     * walks the chain by hand so every hop is checked before it is requested.
+     */
+    @Test
+    void httpClient_doesNotFollowRedirectsItself() {
+        assertThat(service().httpClient.followRedirects()).isEqualTo(HttpClient.Redirect.NEVER);
     }
 
     /**
