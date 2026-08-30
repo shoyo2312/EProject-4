@@ -123,4 +123,17 @@ public interface VideoRepositoryCustom {
 
     /** Soft delete. */
     void updateSoftDeleted(Video video);
+
+    /**
+     * The owner toggling PUBLIC/PRIVATE from the detail page. Unconditional like
+     * {@link #updateSoftDeleted}: visibility is owner-driven and not contended by the Kafka
+     * consumers the {@code compareAndSet} writes guard against.
+     */
+    void updateVisibility(Video video);
+
+    /**
+     * The owner turning comments on/off from the detail page. Unconditional, same reasoning as
+     * {@link #updateVisibility}: owner-driven and not contended by the Kafka consumers.
+     */
+    void updateCommentsDisabled(Video video);
 }

@@ -16,6 +16,17 @@ public interface CommentByVideoRepository extends CassandraRepository<CommentByV
     Slice<CommentByVideo> findByVideoId(@Param("videoId") Long videoId, Pageable pageable);
 
     /**
+     * Writes the denormalised per-comment like tally. Plain UPDATE, not an LWT: the right to move
+     * the count is already gated by the {@code comment_likes} membership LWT in the service, and
+     * two different users liking the same comment at the same instant losing one increment is an
+     * acceptable undercount here — nothing reconciles it, but nothing depends on it being exact.
+     */
+    @Query("UPDATE comments_by_video SET likes = :likes WHERE video_id = :videoId AND comment_id = :commentId")
+    void updateLikes(@Param("videoId") Long videoId,
+                     @Param("commentId") Long commentId,
+                     @Param("likes") int likes);
+
+    /**
      * Lightweight-transaction soft delete. Returns whether this call is the one that deleted the
      * comment, which is the only thing that may drive the comment counter down: two concurrent
      * deletes of the same comment both pass the ownership read, and without the condition both

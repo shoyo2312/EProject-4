@@ -53,6 +53,9 @@ class OtpReissueCollisionTest {
     private MailService mailService;
 
     @MockBean
+    private TurnstileService turnstileService;
+
+    @MockBean
     private OtpGenerator otpGenerator;
 
     @Autowired
@@ -72,9 +75,9 @@ class OtpReissueCollisionTest {
 
     @Test
     void resendVerification_drawingTheSameOtp_replacesItInsteadOfFailing() {
-        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123"));
+        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123", "test-turnstile-token"));
 
-        assertThatCode(() -> authService.resendVerification(new ResendVerificationRequest("john@example.com")))
+        assertThatCode(() -> authService.resendVerification(new ResendVerificationRequest("john@example.com", "test-turnstile-token")))
                 .as("re-issuing the same digits must replace the old token, not violate its unique index")
                 .doesNotThrowAnyException();
 

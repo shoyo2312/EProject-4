@@ -1,11 +1,13 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.videoservice.client.FriendshipClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
+import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -34,13 +36,13 @@ import org.springframework.stereotype.Service;
 import java.net.URI;
 import java.util.Collection;
 import java.util.LinkedHashSet;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -92,6 +94,8 @@ public class VideoServiceImpl implements VideoService {
     private final SpringDataWebProperties pageableProperties;
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
+    private final VideoCache videoCache;
+    private final FriendshipClient friendshipClient;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -241,16 +245,43 @@ public class VideoServiceImpl implements VideoService {
         throw new ForeignUploadException();
     }
 
+    /**
+     * Cache-aside. The visibility check runs on whatever came back, cached or not, and never on
+     * the way in: one cached entry serves every viewer, and a video the requester may not see is
+     * a 404 built from that shared entry rather than a reason to keep it out of the cache.
+     */
     @Override
     public VideoResponse getById(Long requesterId, String videoId) {
+        return requireVisible(requesterId, load(videoId), videoId);
+    }
+
+    /**
+     * Owner and comment setting, and nothing the caller has to be allowed to see — so no
+     * visibility check runs here. {@link VideoPolicyResponse} has the reason.
+     */
+    @Override
+    public VideoPolicyResponse getPolicy(String videoId) {
+        VideoResponse video = load(videoId);
+        return new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled());
+    }
+
+    /**
+     * The cached-or-Mongo read shared by {@link #getById} and {@link #getPolicy}. Deliberately
+     * without a visibility check: one cached entry serves every caller, and who may see it is
+     * decided by whoever asked, after the read.
+     */
+    private VideoResponse load(String videoId) {
+        VideoResponse cached = videoCache.get(videoId).orElse(null);
+        if (cached != null) {
+            return cached;
+        }
+
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
                 .orElseThrow(() -> new VideoNotFoundException(videoId));
 
-        if (!isOwner(requesterId, video) && !isPubliclyVisible(video)) {
-            throw new VideoNotFoundException(videoId);
-        }
-
-        return videoMapper.toResponse(video);
+        VideoResponse response = videoMapper.toResponse(video);
+        videoCache.put(response);
+        return response;
     }
 
     /**
@@ -277,14 +308,30 @@ public class VideoServiceImpl implements VideoService {
             return List.of();
         }
 
-        Map<String, Video> found = videoRepository.findByIdInAndDeletedAtIsNull(wanted).stream()
-                .filter(video -> isOwner(requesterId, video) || isPubliclyVisible(video))
-                .collect(Collectors.toMap(Video::getId, video -> video));
+        // Cache first, then Mongo for the remainder only. A ranking handed to a hundred viewers
+        // in the same minute is the same ids every time, so on a warm cache the miss list is
+        // usually empty and the query below never runs at all.
+        Map<String, VideoResponse> found = new HashMap<>(videoCache.getAll(wanted));
 
+        List<String> missing = wanted.stream()
+                .filter(id -> !found.containsKey(id))
+                .toList();
+
+        if (!missing.isEmpty()) {
+            List<VideoResponse> loaded = videoRepository.findByIdInAndDeletedAtIsNull(missing).stream()
+                    .map(videoMapper::toResponse)
+                    .toList();
+
+            videoCache.putAll(loaded);
+            loaded.forEach(video -> found.put(video.id(), video));
+        }
+
+        // Filtered after the lookup, not during it, so the cache holds one entry per video
+        // rather than one per (video, viewer) — see getById.
         return wanted.stream()
                 .map(found::get)
                 .filter(Objects::nonNull)
-                .map(videoMapper::toResponse)
+                .filter(video -> isVisibleTo(requesterId, video))
                 .toList();
     }
 
@@ -367,10 +414,19 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable) {
-        Page<Video> videos = isSelf(requesterId, userId)
-                ? videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
-                : videoRepository.findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
-                        userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
+        Page<Video> videos;
+        if (isSelf(requesterId, userId)) {
+            videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable);
+        } else if (friendshipClient.areFriends(userId, requesterId)) {
+            // One friendship check per page load, not per video: the answer is the same for every
+            // video on this owner's grid.
+            videos = videoRepository.findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByCreatedAtDesc(
+                    userId, VideoStatus.PUBLISHED,
+                    List.of(VideoVisibility.PUBLIC, VideoVisibility.FRIENDS), pageable);
+        } else {
+            videos = videoRepository.findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
+                    userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
+        }
 
         return videos.map(videoMapper::toResponse);
     }
@@ -397,6 +453,79 @@ public class VideoServiceImpl implements VideoService {
 
         video.markDeleted();
         videoRepository.updateSoftDeleted(video);
+        videoCache.evict(videoId);
+    }
+
+    /**
+     * Same owner gate as {@link #delete}. The write is unconditional and the cache entry is
+     * evicted rather than rewritten — a stale PUBLIC entry outliving a switch to PRIVATE is the
+     * one outcome to avoid, and the next read repopulates it.
+     */
+    @Override
+    public VideoResponse updateVisibility(Long requesterId, String videoId, VideoVisibility visibility) {
+        Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+
+        if (!isOwner(requesterId, video)) {
+            throw new NotVideoOwnerException(videoId);
+        }
+
+        video.changeVisibility(visibility);
+        videoRepository.updateVisibility(video);
+        videoCache.evict(videoId);
+
+        return videoMapper.toResponse(video);
+    }
+
+    /**
+     * Same owner gate and cache handling as {@link #updateVisibility}. video-service only stores
+     * the flag; interaction-service reads it back off {@code GET /videos/{id}/policy} and is what
+     * actually refuses a comment.
+     */
+    @Override
+    public VideoResponse updateCommentsDisabled(Long requesterId, String videoId, boolean disabled) {
+        Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+
+        if (!isOwner(requesterId, video)) {
+            throw new NotVideoOwnerException(videoId);
+        }
+
+        video.changeCommentsDisabled(disabled);
+        videoRepository.updateCommentsDisabled(video);
+        videoCache.evict(videoId);
+
+        return videoMapper.toResponse(video);
+    }
+
+    private VideoResponse requireVisible(Long requesterId, VideoResponse video, String videoId) {
+        if (!isVisibleTo(requesterId, video)) {
+            throw new VideoNotFoundException(videoId);
+        }
+        return video;
+    }
+
+    /**
+     * Decided from the response rather than the entity, because by this point the value may have
+     * come from Redis and there is no entity. The three fields it reads — userId, status,
+     * visibility — are on both, and a video the requester does not own is only theirs to see once
+     * it is both PUBLISHED and PUBLIC.
+     */
+    private boolean isVisibleTo(Long requesterId, VideoResponse video) {
+        if (isSelf(requesterId, video.userId())) {
+            return true;
+        }
+        if (video.status() != VideoStatus.PUBLISHED) {
+            return false;
+        }
+        return switch (video.visibility()) {
+            case PUBLIC -> true;
+            // ponytail: one user-service call per FRIENDS video the requester does not own. PUBLIC
+            // videos short-circuit above, so a normal feed/batch makes none; a list that is mostly
+            // FRIENDS videos (rare) would. Add a batch friendship endpoint if that ever shows up.
+            case FRIENDS -> friendshipClient.areFriends(video.userId(), requesterId);
+            case PRIVATE -> false;
+        };
     }
 
     private boolean isOwner(Long requesterId, Video video) {
@@ -405,9 +534,5 @@ public class VideoServiceImpl implements VideoService {
 
     private boolean isSelf(Long requesterId, Long userId) {
         return requesterId != null && requesterId.equals(userId);
-    }
-
-    private boolean isPubliclyVisible(Video video) {
-        return video.getVisibility() == VideoVisibility.PUBLIC && video.getStatus() == VideoStatus.PUBLISHED;
     }
 }

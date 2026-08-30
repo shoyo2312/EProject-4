@@ -29,11 +29,11 @@ import java.util.Locale;
  * is looking at what.
  *
  * <p>The fetch is the one place in this codebase that requests a URL the app did not construct, so
- * it is fenced: https only, the host must be one this service was configured to trust, a redirect
- * has to land inside that same allow-list, the response must actually be an image, and the read
- * stops at a byte budget rather than trusting Content-Length. Without the host check a forged event
- * would make this worker fetch whatever an attacker named — including addresses reachable only from
- * inside the cluster.
+ * it is fenced: https only, the host must be one this service was configured to trust, every hop of
+ * a redirect chain is checked <em>before</em> it is requested, the response must actually be an
+ * image, and the read stops at a byte budget rather than trusting Content-Length. Without the host
+ * check a forged event would make this worker fetch whatever an attacker named — including
+ * addresses reachable only from inside the cluster.
  */
 @Slf4j
 @Service
@@ -41,11 +41,15 @@ public class AvatarMirrorService {
 
     private static final Duration TIMEOUT = Duration.ofSeconds(10);
 
+    /** Facebook answers with one hop to its CDN. More than a few is a loop, not a provider. */
+    private static final int MAX_REDIRECTS = 3;
+
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
     private final List<String> allowedHosts;
     private final long maxBytes;
-    private final HttpClient httpClient;
+    /** Package-private so the test can assert this client still refuses to follow on its own. */
+    final HttpClient httpClient;
 
     public AvatarMirrorService(
             MinioClient minioClient,
@@ -58,10 +62,13 @@ public class AvatarMirrorService {
         this.maxBytes = maxBytes;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(TIMEOUT)
-                // Facebook answers with a redirect to its CDN, so following one is required — but
-                // only to a host that is allowed as well, which is why the final URI is checked
-                // again below.
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                // NEVER, and the chain is walked by hand in download() instead. Letting the client
+                // follow means the request to the next host is already sent by the time the
+                // response comes back, so checking the final URI afterwards refuses to *read* an
+                // internal address this worker has already *reached* — a blind SSRF an open
+                // redirect on a trusted provider is enough to reach. The allow-list has to be
+                // applied before each send, which is only possible from outside the client.
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
     }
 
@@ -116,17 +123,49 @@ public class AvatarMirrorService {
         }
     }
 
+    /**
+     * Walks the redirect chain itself, checking the allow-list before every request rather than
+     * after the last one. A {@code Location} may be relative, so each hop is resolved against the
+     * URI it came from before being checked.
+     */
     @SneakyThrows
     private Download download(URI uri) {
-        HttpResponse<InputStream> response = httpClient.send(
-                HttpRequest.newBuilder(uri).timeout(TIMEOUT).GET().build(),
-                HttpResponse.BodyHandlers.ofInputStream());
+        URI target = uri;
 
-        // A redirect chain ends somewhere, and NORMAL follows it before we see anything. The final
-        // URI is where the bytes actually came from, so that is the one that has to be allowed —
-        // otherwise an open redirect on a trusted host reaches everywhere.
-        requireAllowed(response.uri());
+        for (int hop = 0; ; hop++) {
+            URI current = requireAllowed(target);
 
+            HttpResponse<InputStream> response = httpClient.send(
+                    HttpRequest.newBuilder(current).timeout(TIMEOUT).GET().build(),
+                    HttpResponse.BodyHandlers.ofInputStream());
+
+            if (!isRedirect(response.statusCode())) {
+                return read(response, current);
+            }
+
+            // Closed before the next hop so the connection goes back to the pool; a redirect body
+            // is never anything we want.
+            response.body().close();
+
+            if (hop == MAX_REDIRECTS) {
+                throw new IllegalStateException(
+                        "Avatar at %s redirected more than %d times".formatted(uri, MAX_REDIRECTS));
+            }
+            String location = response.headers().firstValue("location").orElseThrow(
+                    () -> new IllegalStateException(
+                            "Provider answered %d for the avatar at %s with no Location"
+                                    .formatted(response.statusCode(), current)));
+            target = current.resolve(location);
+        }
+    }
+
+    private boolean isRedirect(int statusCode) {
+        return statusCode == 301 || statusCode == 302 || statusCode == 303
+                || statusCode == 307 || statusCode == 308;
+    }
+
+    @SneakyThrows
+    private Download read(HttpResponse<InputStream> response, URI uri) {
         // Every rejection below happens inside the try, so the body stream is closed and its
         // connection returned to the pool on the way out. Throwing before opening it leaks one
         // connection per refusal, and a provider that has started answering 4xx refuses every

@@ -37,6 +37,14 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
             Long userId, VideoStatus status, VideoVisibility visibility, Pageable pageable);
 
     /**
+     * Stranger listing for a viewer who is a confirmed friend of the owner: PUBLIC plus FRIENDS.
+     * Same index ({@code user_videos_idx}) as the single-visibility query above — an {@code $in}
+     * over two enum values still takes its bounds and its sort from the index.
+     */
+    Page<Video> findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByCreatedAtDesc(
+            Long userId, VideoStatus status, Collection<VideoVisibility> visibilities, Pageable pageable);
+
+    /**
      * Outbox poll. Excludes soft-deleted videos: the poll runs every five seconds, so a video
      * deleted inside that window would otherwise still be announced to the rest of the system
      * and transcoded after its owner removed it.

@@ -5,7 +5,9 @@ import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
+import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.entity.VideoVisibility;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -60,5 +62,23 @@ public interface VideoService {
 
     UserVideoStatsResponse getUserStats(Long requesterId, Long userId);
 
+    /**
+     * Owner and comment setting, with no visibility filtering — see {@link VideoPolicyResponse}
+     * for why this is not a projection of {@link #getById}.
+     */
+    VideoPolicyResponse getPolicy(String videoId);
+
     void delete(Long requesterId, String videoId);
+
+    /**
+     * The owner switching their own video between PUBLIC and PRIVATE from the detail page.
+     * Owner-only, same as {@link #delete}; returns the updated video.
+     */
+    VideoResponse updateVisibility(Long requesterId, String videoId, VideoVisibility visibility);
+
+    /**
+     * The owner turning new comments on or off for their own video. Owner-only, same as
+     * {@link #updateVisibility}; returns the updated video.
+     */
+    VideoResponse updateCommentsDisabled(Long requesterId, String videoId, boolean disabled);
 }

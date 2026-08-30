@@ -1,17 +1,21 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.common.id.SnowflakeIdGenerator;
+import com.tiktok.interactionservice.client.VideoOwnershipClient;
+import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.entity.CommentByVideo;
 import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
+import com.tiktok.interactionservice.exception.CommentsDisabledException;
 import com.tiktok.interactionservice.exception.CommentRateLimitedException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.mapper.CommentMapper;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
+import com.tiktok.interactionservice.repository.CommentLikeRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,7 +25,9 @@ import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -32,19 +38,45 @@ public class CommentServiceImpl implements CommentService {
     private static final int MAX_PAGES_SCANNED = 5;
 
     private final CommentByVideoRepository commentByVideoRepository;
+    private final CommentLikeRepository commentLikeRepository;
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
     private final CommentMapper commentMapper;
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
+    private final VideoOwnershipClient videoOwnershipClient;
 
     @Override
-    public CommentResponse addComment(Long videoId, Long currentUserId, String content) {
+    public CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId) {
         // Same reasoning as ShareServiceImpl: nothing about a comment is idempotent, so the row,
         // the counter and the +2 it puts into trending all repeat for as long as a client keeps
         // calling. A like is protected by its LWT and a view by its playId; this endpoint has
         // neither, and posting then deleting in a loop moves the ranking either way.
         rateLimiter.require("comment-rate", videoId, currentUserId, CommentRateLimitedException::new);
+
+        // The owner's comments-off switch lives on the Video in video-service; this is the only
+        // place that enforces it. Fails open (see areCommentsDisabled) — an unreachable
+        // video-service lets the comment through rather than blocking every comment site-wide.
+        if (videoOwnershipClient.areCommentsDisabled(videoId)) {
+            throw new CommentsDisabledException(videoId);
+        }
+
+        // A reply points at its top-level comment. Replying to a reply flattens onto that reply's
+        // own parent, so the thread is always one level deep (as on TikTok) and no reply is ever
+        // orphaned under a parent the client will not render. A parentId that names nothing on this
+        // video is the client sending a stale or wrong id — refused rather than stored dangling.
+        Long resolvedParentId = null;
+        Long replyToUserId = null;
+        if (parentId != null) {
+            CommentByVideo parent = commentByVideoRepository
+                    .findById(CommentByVideoKey.builder().videoId(videoId).commentId(parentId).build())
+                    .filter(c -> !c.isDeleted())
+                    .orElseThrow(() -> new CommentNotFoundException(parentId));
+            resolvedParentId = parent.getParentId() != null ? parent.getParentId() : parentId;
+            // Target was itself a reply => record its author so the flat list shows "A > B". A direct
+            // reply to a top-level comment leaves this null: its target is the thread owner above it.
+            replyToUserId = parent.getParentId() != null ? parent.getUserId() : null;
+        }
 
         Long commentId = SnowflakeIdGenerator.nextId();
         CommentByVideoKey key = CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build();
@@ -53,6 +85,8 @@ public class CommentServiceImpl implements CommentService {
                 .key(key)
                 .userId(currentUserId)
                 .content(content)
+                .parentId(resolvedParentId)
+                .replyToUserId(replyToUserId)
                 .createdAt(Instant.now())
                 .build();
         commentByVideoRepository.save(comment);
@@ -93,7 +127,14 @@ public class CommentServiceImpl implements CommentService {
      * the real fix, and Cassandra cannot do it without a secondary index nobody wants.
      */
     @Override
-    public CommentPageResponse listComments(Long videoId, String cursor, int size) {
+    public CommentPageResponse listComments(Long videoId, String cursor, int size, Long currentUserId) {
+        // Comments off => the owner hid the thread, not just new replies: no rows, no cursor.
+        // ponytail: one video-service call per comment-list load. The client already has the
+        // flag on the Video and skips this call; a raw API caller is the only one that pays it.
+        if (videoOwnershipClient.areCommentsDisabled(videoId)) {
+            return new CommentPageResponse(List.of(), null, false);
+        }
+
         CassandraPageRequest pageRequest = CassandraCursors.decode(cursor, size, InvalidCommentCursorException::new);
 
         List<CommentResponse> items = List.of();
@@ -112,10 +153,10 @@ public class CommentServiceImpl implements CommentService {
                 throw e;
             }
 
-            items = slice.getContent().stream()
+            List<CommentByVideo> live = slice.getContent().stream()
                     .filter(comment -> !comment.isDeleted())
-                    .map(commentMapper::toResponse)
                     .toList();
+            items = toResponses(live, currentUserId);
 
             boolean hasMore = slice.hasNext();
             String nextCursor = hasMore ? CassandraCursors.encode((CassandraPageRequest) slice.nextPageable()) : null;
@@ -136,7 +177,12 @@ public class CommentServiceImpl implements CommentService {
                 .filter(c -> !c.isDeleted())
                 .orElseThrow(() -> new CommentNotFoundException(commentId));
 
-        if (!comment.getUserId().equals(currentUserId)) {
+        // Deleting your own comment never needs the extra lookup — only a caller reaching for
+        // somebody else's comment falls through to asking video-service whether they own the video
+        // it is on.
+        boolean allowed = comment.getUserId().equals(currentUserId)
+                || videoOwnershipClient.isOwnedBy(videoId, currentUserId);
+        if (!allowed) {
             throw new NotCommentOwnerException(commentId);
         }
 
@@ -167,6 +213,59 @@ public class CommentServiceImpl implements CommentService {
             commentByVideoRepository.restoreIfDeletedAt(videoId, commentId, deletedAt);
             throw ex;
         }
+    }
+
+    @Override
+    public CommentLikeResponse likeComment(Long videoId, Long commentId, Long currentUserId) {
+        CommentByVideo comment = liveComment(videoId, commentId);
+
+        // The membership LWT is what grants the right to move the count, and it grants it once:
+        // a retried like finds the row already there, is told newlyLiked=false, and leaves the
+        // tally alone.
+        boolean newlyLiked = commentLikeRepository.insertIfNotExists(commentId, currentUserId, Instant.now());
+        int likeCount = comment.likeCount();
+        if (newlyLiked) {
+            likeCount += 1;
+            commentByVideoRepository.updateLikes(videoId, commentId, likeCount);
+        }
+        return new CommentLikeResponse(commentId, true, likeCount);
+    }
+
+    @Override
+    public CommentLikeResponse unlikeComment(Long videoId, Long commentId, Long currentUserId) {
+        CommentByVideo comment = liveComment(videoId, commentId);
+
+        boolean wasLiked = commentLikeRepository.deleteIfExists(commentId, currentUserId);
+        int likeCount = comment.likeCount();
+        if (wasLiked) {
+            likeCount = Math.max(0, likeCount - 1);
+            commentByVideoRepository.updateLikes(videoId, commentId, likeCount);
+        }
+        return new CommentLikeResponse(commentId, false, likeCount);
+    }
+
+    private CommentByVideo liveComment(Long videoId, Long commentId) {
+        return commentByVideoRepository
+                .findById(CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build())
+                .filter(c -> !c.isDeleted())
+                .orElseThrow(() -> new CommentNotFoundException(commentId));
+    }
+
+    /**
+     * Maps a page of live comments and, for a signed-in caller, marks the ones they have liked in
+     * a single {@code comment_likes} lookup. Anonymous callers skip the lookup and get
+     * {@code likedByMe} false throughout.
+     */
+    private List<CommentResponse> toResponses(List<CommentByVideo> live, Long currentUserId) {
+        List<CommentResponse> mapped = live.stream().map(commentMapper::toResponse).toList();
+        if (currentUserId == null || mapped.isEmpty()) {
+            return mapped;
+        }
+        List<Long> ids = mapped.stream().map(CommentResponse::commentId).toList();
+        Set<Long> liked = new HashSet<>(commentLikeRepository.findLikedCommentIds(ids, currentUserId));
+        return mapped.stream()
+                .map(response -> liked.contains(response.commentId()) ? response.withLikedByMe(true) : response)
+                .toList();
     }
 
     /**

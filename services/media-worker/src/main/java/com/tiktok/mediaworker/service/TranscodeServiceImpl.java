@@ -33,9 +33,6 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class TranscodeServiceImpl implements TranscodeService {
 
-    /** Unknown until the file is decoded; the client reads the real length off the element. */
-    private static final int UNKNOWN_DURATION_SECONDS = 0;
-
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
 
@@ -56,7 +53,10 @@ public class TranscodeServiceImpl implements TranscodeService {
                 .build());
 
         log.info("Video {} is playable at {}", videoId, playbackKey);
+        // Duration is null, not 0: nothing here decodes the file, and 0 is a length a video could
+        // plausibly have. Stored as 0 it reads as a real measurement — the entity, the event and the
+        // response all take Integer precisely so "not measured" has a value of its own.
         return new TranscodeResult(
-                null, "%s/%s/%s".formatted(minioProperties.endpoint(), bucket, playbackKey), UNKNOWN_DURATION_SECONDS);
+                null, "%s/%s/%s".formatted(minioProperties.endpoint(), bucket, playbackKey), null);
     }
 }

@@ -18,6 +18,10 @@ spring:
         default-page-size: 20
         max-page-size: 50
 
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -44,6 +48,13 @@ jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 
 app:
+  cache:
+    video:
+      # Metadata cache in front of GET /videos/{id} and GET /videos/batch. Off takes both
+      # straight to Mongo; see VideoCacheProperties for why the TTL is this short.
+      enabled: ${VIDEO_CACHE_ENABLED:true}
+      ttl: ${VIDEO_CACHE_TTL:60s}
+
   media:
     # Where CreateVideoRequest.rawFileUrl is allowed to point. Buckets must match media-worker's
     # MINIO_BUCKET; hosts are the public CDN/MinIO host(s) in front of it. Both empty means
@@ -63,6 +74,11 @@ minio:
   # Long enough for a phone on a slow connection to finish a clip, short enough that a URL
   # leaked from a client log is not a lasting write grant on the bucket.
   url-expiry: ${MINIO_URL_EXPIRY:15m}
+
+downstream:
+  # user-service, for the FRIENDS visibility check (mutual-follow lookup). The viewer's own JWT
+  # is forwarded on the call, so no service credential here.
+  user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
 
 springdoc:
   api-docs:

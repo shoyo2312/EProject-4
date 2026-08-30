@@ -4,3 +4,13 @@ spring:
       # Consumer tests invoke the listener methods directly, so the containers only add a
       # background reconnect loop against a broker that isn't running in tests.
       auto-startup: false
+
+app:
+  cache:
+    video:
+      # Off for the Spring-context tests, which run without a Redis. VideoCache fails open, so
+      # leaving it on would still pass — at the cost of a connection attempt and its timeout on
+      # every cached read. What the cache does is covered by VideoCacheTest and
+      # VideoServiceImplCacheTest, both plain Mockito.
+      enabled: false
+      ttl: 60s

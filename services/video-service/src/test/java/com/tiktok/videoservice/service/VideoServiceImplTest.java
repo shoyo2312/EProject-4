@@ -49,6 +49,11 @@ class VideoServiceImplTest {
     @MockBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
+    // Default answer is false, so every stranger view falls to the PUBLIC-only branch exactly as
+    // before FRIENDS existed. The dedicated FRIENDS assertions live in VideoServiceImplCacheTest.
+    @MockBean
+    private com.tiktok.videoservice.client.FriendshipClient friendshipClient;
+
     @Autowired
     private VideoService videoService;
 

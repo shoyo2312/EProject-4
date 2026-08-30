@@ -63,6 +63,10 @@ auth:
     published-outbox-grace: 7d
   mail:
     from: ${MAIL_FROM:no-reply@tiktok-clone.dev}
+  turnstile:
+    # Checked on every OTP-issuing call (register, addEmail, resendVerification,
+    # forgotPassword) before anything else runs.
+    secret-key: ${TURNSTILE_SECRET_KEY:}
   oauth:
     google:
       # Every client id we ship — web (Next.js), iOS and Android each have their own, and an ID

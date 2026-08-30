@@ -1,6 +1,7 @@
 package com.tiktok.videoservice;
 
 import com.tiktok.common.validation.MediaUrlProperties;
+import com.tiktok.videoservice.config.VideoCacheProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -17,7 +18,7 @@ import static org.springframework.data.web.config.EnableSpringDataWebSupport.Pag
  */
 @SpringBootApplication
 @EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)
-@EnableConfigurationProperties(MediaUrlProperties.class)
+@EnableConfigurationProperties({MediaUrlProperties.class, VideoCacheProperties.class})
 public class VideoServiceApplication {
     public static void main(String[] args) {
         SpringApplication.run(VideoServiceApplication.class, args);

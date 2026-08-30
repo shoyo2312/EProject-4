@@ -18,7 +18,9 @@ public record VideoResponse(
         VideoVisibility visibility,
         long viewCount,
         long likeCount,
-        long commentCount,
+        /** Null when {@code commentsDisabled} — a video with comments off exposes no comment total. */
+        Long commentCount,
+        boolean commentsDisabled,
         List<String> tags,
         Instant createdAt
 ) {

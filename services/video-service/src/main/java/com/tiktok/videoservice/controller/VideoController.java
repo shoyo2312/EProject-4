@@ -2,10 +2,13 @@ package com.tiktok.videoservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.UpdateCommentSettingRequest;
+import com.tiktok.videoservice.dto.request.UpdateVideoVisibilityRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
+import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.service.VideoService;
 import jakarta.validation.Valid;
@@ -95,6 +98,16 @@ public class VideoController {
         return ApiResponse.success(videoService.getByIds(currentUserId, ids));
     }
 
+    /**
+     * Service-to-service: who owns this video and whether comments are off. Unfiltered by
+     * visibility, unlike {@link #getById} — see {@link VideoPolicyResponse}. Literal suffix, so it
+     * cannot collide with {@code /{videoId}}.
+     */
+    @GetMapping("/{videoId}/policy")
+    public ApiResponse<VideoPolicyResponse> getPolicy(@PathVariable String videoId) {
+        return ApiResponse.success(videoService.getPolicy(videoId));
+    }
+
     @GetMapping("/users/{userId}")
     public ApiResponse<Page<VideoResponse>> listByUser(
             @AuthenticationPrincipal Long currentUserId,
@@ -120,5 +133,28 @@ public class VideoController {
             @PathVariable String videoId) {
         videoService.delete(currentUserId, videoId);
         return ApiResponse.success(null);
+    }
+
+    /**
+     * The owner switching their own video between PUBLIC and PRIVATE from the detail page.
+     * Owner-only, like {@link #delete}; a non-owner gets {@code NOT_VIDEO_OWNER}.
+     */
+    @PatchMapping("/{videoId}/visibility")
+    public ApiResponse<VideoResponse> updateVisibility(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable String videoId,
+            @Valid @RequestBody UpdateVideoVisibilityRequest request) {
+        return ApiResponse.success(
+                videoService.updateVisibility(currentUserId, videoId, request.visibility()));
+    }
+
+    /** Owner-only, like {@link #updateVisibility}. Turns new comments on or off for the video. */
+    @PatchMapping("/{videoId}/comments-setting")
+    public ApiResponse<VideoResponse> updateCommentsSetting(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable String videoId,
+            @Valid @RequestBody UpdateCommentSettingRequest request) {
+        return ApiResponse.success(
+                videoService.updateCommentsDisabled(currentUserId, videoId, request.disabled()));
     }
 }

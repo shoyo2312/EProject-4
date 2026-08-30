@@ -28,6 +28,26 @@ public class CommentByVideo {
     @Column("content")
     private String content;
 
+    /**
+     * Null for a top-level comment; the top-level comment's id for a reply. TikTok nests exactly
+     * one level, so this never points at another reply — {@code CommentServiceImpl} flattens a
+     * reply-to-a-reply back to its top-level ancestor before saving.
+     */
+    @Column("parent_id")
+    private Long parentId;
+
+    /**
+     * The author of the reply this one is replying to, when that target was itself a reply — so the
+     * flat list can show "A > B". Null for a top-level comment and for a direct reply to one (its
+     * target is the thread's own top-level author, shown right above).
+     */
+    @Column("reply_to_user_id")
+    private Long replyToUserId;
+
+    /** Denormalised like tally; {@code null} until the first like. Read it through {@link #likeCount()}. */
+    @Column("likes")
+    private Integer likes;
+
     @Column("created_at")
     @CassandraType(type = CassandraType.Name.TIMESTAMP)
     private Instant createdAt;
@@ -42,5 +62,9 @@ public class CommentByVideo {
 
     public boolean isDeleted() {
         return deletedAt != null;
+    }
+
+    public int likeCount() {
+        return likes == null ? 0 : likes;
     }
 }

@@ -62,6 +62,9 @@ class DuplicateRegistrationRaceTest {
     @MockBean
     private MailService mailService;
 
+    @MockBean
+    private TurnstileService turnstileService;
+
     @Autowired
     private AuthService authService;
 
@@ -87,12 +90,12 @@ class DuplicateRegistrationRaceTest {
 
     @Test
     void register_losingAnEmailRace_reports409NotAServerError() {
-        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123"));
+        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123", "test-turnstile-token"));
 
         doReturn(false).when(userRepository).existsByEmailIgnoreCaseAndDeletedAtIsNull("john@example.com");
 
         assertThatThrownBy(() -> authService.register(
-                new RegisterRequest("someoneelse", "john@example.com", "password123")))
+                new RegisterRequest("someoneelse", "john@example.com", "password123", "test-turnstile-token")))
                 .isInstanceOf(EmailAlreadyExistsException.class);
     }
 
@@ -103,12 +106,12 @@ class DuplicateRegistrationRaceTest {
      */
     @Test
     void register_losingAUsernameRace_namesTheUsernameNotTheEmail() {
-        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123"));
+        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123", "test-turnstile-token"));
 
         doReturn(false).when(userRepository).existsByUsernameIgnoreCaseAndDeletedAtIsNull("johndoe");
 
         assertThatThrownBy(() -> authService.register(
-                new RegisterRequest("johndoe", "different@example.com", "password123")))
+                new RegisterRequest("johndoe", "different@example.com", "password123", "test-turnstile-token")))
                 .isInstanceOf(UsernameAlreadyExistsException.class);
     }
 
@@ -119,12 +122,12 @@ class DuplicateRegistrationRaceTest {
      */
     @Test
     void register_losingARace_leavesNoPartialAccountBehind() {
-        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123"));
+        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123", "test-turnstile-token"));
 
         doReturn(false).when(userRepository).existsByEmailIgnoreCaseAndDeletedAtIsNull("john@example.com");
 
         assertThatThrownBy(() -> authService.register(
-                new RegisterRequest("someoneelse", "john@example.com", "password123")))
+                new RegisterRequest("someoneelse", "john@example.com", "password123", "test-turnstile-token")))
                 .isInstanceOf(EmailAlreadyExistsException.class);
 
         assertThat(userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull("someoneelse")).isEmpty();
@@ -133,12 +136,12 @@ class DuplicateRegistrationRaceTest {
 
     @Test
     void register_sequentialDuplicate_stillReports409ThroughThePreCheck() {
-        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123"));
+        authService.register(new RegisterRequest("johndoe", "john@example.com", "password123", "test-turnstile-token"));
 
         // Unstubbed: the cheap read still short-circuits, so the index is the backstop and not
         // the normal path.
         assertThatThrownBy(() -> authService.register(
-                new RegisterRequest("someoneelse", "john@example.com", "password123")))
+                new RegisterRequest("someoneelse", "john@example.com", "password123", "test-turnstile-token")))
                 .isInstanceOf(EmailAlreadyExistsException.class);
     }
 }

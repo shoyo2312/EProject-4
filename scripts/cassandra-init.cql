@@ -42,7 +42,10 @@ CREATE TABLE IF NOT EXISTS saves_by_user_time (
     PRIMARY KEY ((user_id), created_at, video_id)
 ) WITH CLUSTERING ORDER BY (created_at DESC, video_id ASC);
 
--- Comments, partitioned by video, clustered by Snowflake id (time-ordered) descending
+-- Comments, partitioned by video, clustered by Snowflake id (time-ordered) descending.
+-- parent_id is null for a top-level comment and the top-level comment_id for a reply
+-- (TikTok nests exactly one level). Replies live in the same video partition, so the
+-- existing listing returns them inline and the client nests by parent_id.
 CREATE TABLE IF NOT EXISTS comments_by_video (
     video_id   bigint,
     comment_id bigint,
@@ -50,8 +53,28 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
     content    text,
     created_at timestamp,
     deleted_at timestamp,
+    parent_id  bigint,
+    -- Set only when the reply targets another reply: the user_id of that reply's author, so the
+    -- flat list can render "A > B". Null for a top-level comment and for a direct reply to one.
+    reply_to_user_id bigint,
+    likes      int,
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
+
+-- Adds columns to clusters whose comments_by_video predates reply / comment-like support.
+ALTER TABLE comments_by_video ADD IF NOT EXISTS parent_id bigint;
+ALTER TABLE comments_by_video ADD IF NOT EXISTS reply_to_user_id bigint;
+ALTER TABLE comments_by_video ADD IF NOT EXISTS likes int;
+
+-- "Did user X like comment Y" membership + idempotent like/unlike via LWT (IF NOT EXISTS /
+-- IF EXISTS), same pattern as likes_by_video. The per-comment count is denormalised onto
+-- comments_by_video.likes so the listing carries it without a second read.
+CREATE TABLE IF NOT EXISTS comment_likes (
+    comment_id bigint,
+    user_id    bigint,
+    created_at timestamp,
+    PRIMARY KEY ((comment_id), user_id)
+);
 
 -- Shares, same shape as comments minus content
 CREATE TABLE IF NOT EXISTS shares_by_video (
