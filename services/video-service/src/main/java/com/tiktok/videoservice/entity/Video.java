@@ -190,6 +190,7 @@ public class Video {
         this.thumbnailUrl = thumbnailUrl;
         this.hlsUrl = hlsUrl;
         this.durationSeconds = durationSeconds;
+        this.failureReason = null; // a redelivered publish must not leave a prior FAILED reason on the doc
         applyTranscodeOutcome(VideoStatus.PUBLISHED);
     }
 

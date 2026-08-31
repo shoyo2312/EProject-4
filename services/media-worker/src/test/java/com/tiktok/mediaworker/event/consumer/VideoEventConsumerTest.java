@@ -79,7 +79,8 @@ class VideoEventConsumerTest {
     void onMessage_transcodeKeepsThrowing_publishesFailureEvent() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid2", 1L, "Broken video", "s3://raw/vid2.mp4", List.of());
 
-        when(transcodeService.transcode(anyString(), anyString())).thenThrow(new RuntimeException("MinIO unreachable"));
+        when(transcodeService.transcode(anyString(), anyString()))
+                .thenThrow(new RuntimeException("http://minio:9000/video-media/raw/7/vid2.mp4 unreachable"));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
@@ -89,7 +90,11 @@ class VideoEventConsumerTest {
         VideoTranscodedEvent result = captor.getValue();
         assertThat(result.videoId()).isEqualTo("vid2");
         assertThat(result.success()).isFalse();
-        assertThat(result.failureReason()).isEqualTo("MinIO unreachable");
+        // The transient reason is shown to the uploader: it must be generic, never the internal
+        // exception string (endpoint, bucket, key).
+        assertThat(result.failureReason())
+                .isEqualTo("Transcoding failed after 3 attempts. Try uploading the file again.");
+        assertThat(result.failureReason()).doesNotContain("minio", "video-media");
         verify(transcodeService, times(ATTEMPTS)).transcode(anyString(), anyString());
     }
 
