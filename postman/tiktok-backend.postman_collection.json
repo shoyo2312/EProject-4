@@ -2591,8 +2591,15 @@
                       "pm.test('200', () => pm.response.to.have.status(200));",
                       "const data = pm.response.json().data;",
                       "pm.test('fileUrl is an s3 URI in the allowed bucket', () => pm.expect(data.fileUrl).to.match(/^s3:\\/\\/video-media\\/raw\\//));",
-                      "pm.test('uploadUrl is presigned', () => pm.expect(data.uploadUrl).to.include('X-Amz-Signature'));",
-                      "// fileUrl, never uploadUrl: the presigned signature expires in minutes and fails @ValidMediaUrl on Publish.",
+                      "pm.test('uploadUrl is the bucket URL (no signature in it anymore)', () => pm.expect(data.uploadUrl).to.match(/\\/video-media$/));",
+                      "pm.test('formFields carries the signed POST policy', () => {",
+                      "  pm.expect(data.formFields).to.be.an('object');",
+                      "  pm.expect(data.formFields.key).to.match(/^raw\\//);",
+                      "  pm.expect(data.formFields).to.have.property('policy');",
+                      "  pm.expect(data.formFields).to.have.property('x-amz-signature');",
+                      "});",
+                      "// Upload = multipart/form-data POST to uploadUrl: every formFields entry first, file part LAST.",
+                      "// fileUrl, never uploadUrl: uploadUrl is only the bucket address and fails @ValidMediaUrl on Publish.",
                       "pm.collectionVariables.set('rawFileUrl', data.fileUrl);",
                       "pm.collectionVariables.set('uploadUrl', data.uploadUrl);"
                     ]
@@ -2617,7 +2624,7 @@
                 },
                 "url": "{{videoBaseUrl}}/api/v1/videos/upload-url"
               },
-              "description": "Requires MinIO running (make infra-up). To finish the upload by hand: PUT the file to {{uploadUrl}} with header Content-Type: video/mp4 and NO Authorization header - the signature is already in the query string, and an extra Authorization header makes S3 reject it."
+              "description": "Requires MinIO running (make infra-up). Response is UploadUrlResponse { uploadUrl, formFields, fileUrl, expiresInSeconds }. The browser flow is a multipart/form-data POST to S3/MinIO at {{uploadUrl}}: append every formFields entry as a form field, then the file part LAST, with NO Authorization header and no manually set Content-Type. Postman's form-data body cannot iterate a dynamic map, so drive the upload from your client code; storage answers 204 on success and 400 EntityTooLarge for a file over 500 MB (the limit is signed into the policy)."
             }
           ]
         },

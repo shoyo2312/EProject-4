@@ -45,7 +45,7 @@ Giống hệt `auth-service`/`user-service` — mọi response bọc trong `ApiR
 Base path: `/api/v1/videos`.
 
 ### 3.1 `POST /upload-url` — xin URL upload file
-**Bắt buộc token.** Trả `200 OK`. Đây là bước 1 của việc đăng video: server ký sẵn một URL, client `PUT` file thẳng lên object storage bằng URL đó, **bytes không đi qua video-service**. Đăng video (mục 3.2) là bước 2.
+**Bắt buộc token.** Trả `200 OK`. Đây là bước 1 của việc đăng video: server ký sẵn một **POST policy**, client gửi file lên object storage bằng một request `multipart/form-data`, **bytes không đi qua video-service**. Đăng video (mục 3.2) là bước 2.
 
 Request (`UploadUrlRequest`):
 ```json
@@ -58,20 +58,35 @@ Request (`UploadUrlRequest`):
 Response `data` → `UploadUrlResponse`:
 ```json
 {
-  "uploadUrl": "http://localhost:9000/video-media/raw/123/7312458901234567.mp4?X-Amz-Signature=...",
+  "uploadUrl": "http://localhost:9000/video-media",
+  "formFields": {
+    "key": "raw/123/7312458901234567.mp4",
+    "Content-Type": "video/mp4",
+    "policy": "eyJleHBpcmF0aW9uIjoi...",
+    "x-amz-algorithm": "AWS4-HMAC-SHA256",
+    "x-amz-credential": "minioadmin/20260812/us-east-1/s3/aws4_request",
+    "x-amz-date": "20260812T100000Z",
+    "x-amz-signature": "3f2a9b..."
+  },
   "fileUrl": "s3://video-media/raw/123/7312458901234567.mp4",
   "expiresInSeconds": 900
 }
 ```
 
+- `uploadUrl` là URL của bucket để POST form multipart lên — **không còn chứa chữ ký** (chữ ký nằm trong `formFields`).
+- `formFields` là **hộp đen**: client không đọc, không sửa, không tự thêm field. Số lượng và tên field có thể đổi theo cấu hình storage; policy đã ký sẵn cả `key`, `Content-Type` và khoảng `content-length-range` `[1, 500 MB]`.
+- `fileUrl` không đổi: đây là giá trị đưa vào `rawFileUrl` ở mục 3.2.
+
 Luồng đầy đủ phía client:
-1. `POST /upload-url` → nhận `uploadUrl` + `fileUrl`.
-2. `PUT <uploadUrl>` với body là bytes của file, header `Content-Type` đúng loại đã khai. **Không** gửi kèm `Authorization` — chữ ký đã nằm trong query string, thêm header Authorization sẽ làm S3 từ chối.
+1. `POST /upload-url` → nhận `uploadUrl` + `formFields` + `fileUrl`.
+2. Dựng một request `multipart/form-data`: **thêm mọi entry trong `formFields` làm form field trước**, rồi thêm phần **`file`** (bytes của file) ở **CUỐI cùng** — S3/MinIO POST bắt buộc `file` là field cuối. `POST` form đó lên `uploadUrl`. **Không** gửi kèm `Authorization`, và **không** tự đặt header `Content-Type` cho request (HTTP client tự sinh boundary; content-type của object lấy từ field `Content-Type` trong form).
+   - Thành công: storage trả `204 No Content` (một số cấu hình trả `201`).
+   - File vượt **500 MB**: storage từ chối ngay với `400 Bad Request`, mã lỗi S3 `EntityTooLarge`, **không byte nào được lưu**. Giới hạn ký thẳng trong policy nên client không bypass được.
 3. `POST /` (mục 3.2) với `rawFileUrl` = **`fileUrl`**, không phải `uploadUrl`.
 
-> **Dùng `fileUrl`, không dùng `uploadUrl`, cho `rawFileUrl`.** `uploadUrl` chứa chữ ký hết hạn sau `expiresInSeconds` (mặc định 15 phút) và sẽ trượt allow-list ở mục 3.2. `fileUrl` là vị trí thật của file, media-worker đọc nó có thể hàng giờ sau.
+> **Dùng `fileUrl`, không dùng `uploadUrl`, cho `rawFileUrl`.** `uploadUrl` chỉ là địa chỉ bucket để upload và sẽ trượt allow-list ở mục 3.2. `fileUrl` là vị trí thật của file, media-worker đọc nó có thể hàng giờ sau.
 
-> **URL hết hạn thì xin lại, đừng cache.** Quá `expiresInSeconds` mà chưa `PUT` xong → S3 trả 403, gọi lại `/upload-url` để lấy URL mới (key mới, không ghi đè cái cũ).
+> **Policy hết hạn thì xin lại, đừng cache.** Quá `expiresInSeconds` (mặc định 15 phút) mà chưa POST xong → storage trả 403, gọi lại `/upload-url` để lấy policy mới (key mới, không ghi đè cái cũ).
 
 Không có bước "báo upload xong": nếu client bỏ ngang giữa chừng thì chỉ còn một object mồ côi trong bucket, không có bản ghi Video nào được tạo. Object mồ côi tự hết hạn sau 7 ngày — bucket có lifecycle rule trên prefix `raw/` (khai ở service `minio-init` trong `docker-compose.yml`). Nghĩa là **đã `PUT` xong thì gọi `POST /` (mục 3.2) trong vòng 7 ngày**, quá hạn file biến mất dù `fileUrl` vẫn còn trong tay client.
 
@@ -120,13 +135,16 @@ Response `data` → `VideoResponse`:
   "likeCount": 0,
   "commentCount": 0,
   "tags": ["dance", "food"],      // đã chuẩn hoá, có thể rỗng nhưng không bao giờ null
-  "createdAt": "2026-08-12T10:00:00Z"
+  "createdAt": "2026-08-12T10:00:00Z",
+  "failureReason": null           // chuỗi giải thích khi status = FAILED; null ở mọi trạng thái khác
 }
 ```
 
 > **`id` là `String`, không phải `int`.** Khai báo `String id` trong model Dart. Đây là Snowflake id 19 chữ số — parse thành số vẫn vừa `int` 64-bit của Dart native, nhưng **tràn trên Flutter Web** (JS number chỉ chính xác tới 2^53) và sẽ sai âm thầm. Riêng `userId` thì server trả về dạng số.
 
 > **`201` KHÔNG có nghĩa là video xem được.** Video vào trạng thái `PROCESSING`, chưa có `hlsUrl` để phát, và **chưa xuất hiện trên `/feed`**. Việc transcode chạy bất đồng bộ qua Kafka, mất từ vài giây tới vài phút. Client phải poll `GET /{videoId}` cho tới khi `status` là `PUBLISHED` (phát được) hoặc `FAILED` (hỏng, báo user đăng lại). Poll giãn dần (vd. 2s → 5s → 10s, dừng sau ~5 phút và hiện "đang xử lý, quay lại sau") thay vì poll dày — gateway giới hạn 20 request/giây theo IP.
+
+> **`FAILED` có `failureReason` — hiện thẳng cho user.** Khi `status = FAILED`, `failureReason` là chuỗi giải thích do media-worker sinh ra, ví dụ `"Video is 12m30s; the maximum is 10m00s."` (clip dài quá 10 phút) hoặc `"Video is 812 MB; the maximum is 500 MB."` (file lọt qua client nhưng media-worker vẫn từ chối vì vượt kích thước). Với mọi `status` khác, `failureReason` là `null`. Nếu `failureReason` là `null` mà vẫn `FAILED` (lỗi transcode không phân loại được), hiện thông điệp mặc định kiểu "Xử lý video thất bại, thử đăng lại".
 
 Lỗi: `VALIDATION_ERROR` (400), `401` (thiếu/hết hạn token).
 
@@ -228,7 +246,7 @@ File trên MinIO (bản gốc, thumbnail, và toàn bộ output HLS) do media-wo
 |---|---|
 | `PROCESSING` | Vừa đăng, đang transcode. Chưa có `hlsUrl`/`thumbnailUrl`, chưa lên feed. Hiện spinner/placeholder. |
 | `PUBLISHED` | Phát được, đã có `hlsUrl`. Trạng thái duy nhất xuất hiện trên `/feed`. |
-| `FAILED` | Transcode hỏng. Chỉ chủ video nhìn thấy; UI nên cho xoá và đăng lại. |
+| `FAILED` | Transcode hỏng, hoặc file bị từ chối vì vượt 500 MB / 10 phút. `failureReason` mang lý do (xem mục 3.2). Chỉ chủ video nhìn thấy; UI nên hiện `failureReason` và cho xoá + đăng lại. |
 | `TAKEN_DOWN` | Bị admin gỡ vì vi phạm. Chỉ chủ video nhìn thấy. Nếu được khôi phục, video quay lại **đúng trạng thái trước khi gỡ** (không mặc định thành `PUBLISHED`) — client đừng tự đoán trạng thái sau khôi phục, cứ đọc lại từ server. |
 
 `status` chỉ do server đổi (qua sự kiện transcode/moderation), **không có API cho client đổi**. Client cũng không đổi được `visibility` sau khi đăng — chưa có endpoint update.
