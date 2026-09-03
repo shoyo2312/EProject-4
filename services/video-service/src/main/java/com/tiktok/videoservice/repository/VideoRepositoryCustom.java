@@ -71,27 +71,38 @@ public interface VideoRepositoryCustom {
     boolean updateTranscodeResult(Video video, VideoStatus expectedStatus);
 
     /**
-     * The status pair alone, with no media fields to write: a failed transcode, and a moderation
-     * takedown or restore.
+     * The status pair alone, with no media fields to write: a moderation takedown or restore.
      *
-     * <p>One method for all three, not two identical ones. They write the same pair for the same
-     * reason — {@code statusBeforeTakedown} is where a transcode outcome goes while the video is
-     * down, and where a takedown parks the state a restore returns to — so the second copy was a
-     * second body to keep in step with {@link Video} for nothing. What each call means is already
-     * on the line above it at the call site: {@code markFailed()}, {@code markTakenDown()},
-     * {@code markRestored()}.
+     * <p>One method for both, not two identical ones. They write the same pair for the same
+     * reason — {@code statusBeforeTakedown} is where a takedown parks the state a restore returns
+     * to — so the second copy was a second body to keep in step with {@link Video} for nothing.
+     * What each call means is already on the line above it at the call site: {@code markTakenDown()},
+     * {@code markRestored()}. A failed transcode writes the same pair but owns {@code failureReason}
+     * on top of it — see {@link #updateFailed}.
      *
-     * <p>Conditioned on the status the caller read, because these three race each other across
-     * two Kafka topics and two listener threads. Transcoding takes minutes, so a moderator's
-     * takedown routinely lands while a transcode result is in flight; an unconditional write
-     * lets whichever arrives last win, which puts a taken-down video back on the feed with
-     * nothing left to say it was ever removed.
+     * <p>Conditioned on the status the caller read, because these race each other across two Kafka
+     * topics and two listener threads. Transcoding takes minutes, so a moderator's takedown
+     * routinely lands while a transcode result is in flight; an unconditional write lets whichever
+     * arrives last win, which puts a taken-down video back on the feed with nothing left to say it
+     * was ever removed.
      *
      * @param expectedStatus the status read before the change was applied
      * @return false when the status moved underneath — re-read and re-apply, do not retry the
      *         same write
      */
     boolean updateStatus(Video video, VideoStatus expectedStatus);
+
+    /**
+     * A failed transcode: the status pair plus the reason it failed. Separate from
+     * {@link #updateStatus} (takedown/restore) because only this path owns {@code failureReason} —
+     * keeping the write field-scoped to what the operation owns, like every other method here.
+     *
+     * <p>Conditioned on the status the caller read, same as {@link #updateStatus}: a takedown can
+     * land while the transcode is still running.
+     *
+     * @return false when the status moved underneath — re-read and re-apply
+     */
+    boolean updateFailed(Video video, VideoStatus expectedStatus);
 
     /** Outbox flag, set once the broker acknowledges the VideoPublishedEvent. */
     void updateEventPublished(Video video);

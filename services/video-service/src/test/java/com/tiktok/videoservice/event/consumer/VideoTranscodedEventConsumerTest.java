@@ -84,11 +84,14 @@ class VideoTranscodedEventConsumerTest {
                 .status(VideoStatus.PROCESSING)
                 .build());
 
-        VideoTranscodedEvent event = VideoTranscodedEvent.failure(video.getId(), "boom");
+        VideoTranscodedEvent event = VideoTranscodedEvent.failure(
+                video.getId(), "Video is 12m30s; the maximum is 10m00s.");
         consumer.onMessage(objectMapper.writeValueAsString(event));
 
         Video updated = videoRepository.findById(video.getId()).orElseThrow();
         assertThat(updated.getStatus()).isEqualTo(VideoStatus.FAILED);
+        assertThat(updated.getFailureReason())
+                .isEqualTo("Video is 12m30s; the maximum is 10m00s.");
     }
 
     @Test
@@ -162,6 +165,7 @@ class VideoTranscodedEventConsumerTest {
         Video after = videoRepository.findById(video.getId()).orElseThrow();
         assertThat(after.getStatus()).isEqualTo(VideoStatus.TAKEN_DOWN);
         assertThat(after.getStatusBeforeTakedown()).isEqualTo(VideoStatus.FAILED);
+        assertThat(after.getFailureReason()).isEqualTo("boom");
     }
 
     @Test

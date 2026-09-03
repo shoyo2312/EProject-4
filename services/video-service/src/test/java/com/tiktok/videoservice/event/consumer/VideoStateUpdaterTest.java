@@ -90,7 +90,7 @@ class VideoStateUpdaterTest {
         video.markDeleted();
         videoRepository.save(video);
 
-        videoStateUpdater.apply(video.getId(), Video::markFailed,
+        videoStateUpdater.apply(video.getId(), v -> v.markFailed("boom"),
                 videoRepository::updateStatus, "VideoTranscodedEvent");
 
         assertThat(videoRepository.findById(video.getId()).orElseThrow().getStatus())

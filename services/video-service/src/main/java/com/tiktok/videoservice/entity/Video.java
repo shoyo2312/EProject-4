@@ -98,6 +98,14 @@ public class Video {
      */
     private VideoStatus statusBeforeTakedown;
 
+    /**
+     * Why the last transcode attempt gave up — the message from media-worker's
+     * VideoTranscodedEvent.failureReason. Shown to the uploader instead of a generic
+     * "transcoding failed". Null for videos that never failed, and for ones that failed
+     * before this field existed.
+     */
+    private String failureReason;
+
     private VideoVisibility visibility;
 
     /**
@@ -182,10 +190,12 @@ public class Video {
         this.thumbnailUrl = thumbnailUrl;
         this.hlsUrl = hlsUrl;
         this.durationSeconds = durationSeconds;
+        this.failureReason = null; // a redelivered publish must not leave a prior FAILED reason on the doc
         applyTranscodeOutcome(VideoStatus.PUBLISHED);
     }
 
-    public void markFailed() {
+    public void markFailed(String reason) {
+        this.failureReason = reason;
         applyTranscodeOutcome(VideoStatus.FAILED);
     }
 
