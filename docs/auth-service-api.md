@@ -343,3 +343,20 @@ Khi gặp `429`, UI nên disable nút tương ứng tạm thời + hiển thị 
 - **Không gọi `/refresh` song song từ nhiều request** và không retry `/refresh` sau khi nó trả `401` — refresh token xoay mỗi lần dùng, trình lại token đã xoay bị coi là token bị đánh cắp và server giết phiên trên **mọi thiết bị** của user (xem mục 3.3).
 - Không giữ lại access token cũ sau khi `reset-password` thành công — token đó đã chết ngay trên server (mục 3.9), giữ lại chỉ tạo ra chuỗi 401 khó hiểu.
 - Không dùng refresh token làm `Authorization: Bearer` — 2 loại token ký cùng secret nhưng server phân biệt bằng claim `tokenType`, gửi nhầm sẽ luôn `401`.
+
+## 9. Sự kiện Kafka (Events)
+
+Phần này cho người tích hợp backend, không phải client mobile. `auth-service` **chỉ phát**, không tiêu thụ event nào. Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+
+| Topic | Event | Payload | Cơ chế phát | Consumer |
+|---|---|---|---|---|
+| `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` (`avatarUrl` null với đăng ký bằng mật khẩu) | **Outbox** (`outbox_events`, ghi cùng transaction tạo `User`). `OutboxPublisher` poll → `OutboxDispatcher` của `kafka-lib` chỉ `markPublished` **sau** khi broker ack | user-service (tạo profile) |
+| `auth.social-avatar-events` | `SocialAvatarDiscoveredEvent` | `eventId, occurredAt, userId, avatarUrl` | **Gửi thẳng broker, fire-and-forget** (chỉ log khi lỗi). Không qua outbox: đăng nhập social gặp tài khoản sẵn có thì không ghi DB nào để "atomic" cùng, và Kafka chết không được làm hỏng login vì một tấm ảnh | media-worker (sao ảnh về MinIO) |
+
+Phát `SocialAvatarDiscoveredEvent` **mỗi lần** đăng nhập social có mang ảnh, không chỉ lần đầu — URL của provider (nhất là Facebook) hết hạn sau vài ngày, nên phát lại là cách media-worker luôn có URL còn sống để sao, và cũng là cách backfill tài khoản social cũ chưa có ảnh.
+
+Hai topic tách nhau vì `auth.user-events` chỉ mang đúng một shape và các consumer parse thẳng không đọc header — đăng một shape thứ hai lên đó sẽ deserialize thành `UserRegisteredEvent` với mọi field null và tạo profile rác.
+
+`ExpiredRecordCleanup` (job retention) chỉ xoá row outbox đã `published_at IS NOT NULL` — row chưa publish là event chưa tồn tại ở đâu khác.
+
+Không có outbox migration nào cần làm ở auth (`auth-service` đã dùng `OutboxDispatcher`).

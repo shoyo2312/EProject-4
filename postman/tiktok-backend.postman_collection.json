@@ -1,6 +1,6 @@
 {
   "info": {
-    "name": "TikTok Backend - Auth, User & Video",
+    "name": "TikTok Backend - Auth, User, Video, Interaction, Recommendation, Search & Gateway",
     "description": "auth-service (8081) + user-service (8082) + video-service (8083) + interaction-service (8085).\n\nHOW TO RUN\n1. `make infra-up`, then start the services (`make run-auth`, `run-user`, `run-video`, and `run-interaction` for folder 4).\n2. Import both files, select environment 'TikTok Backend - Local'.\n3. Run folder '0. Setup' FIRST - it creates two verified accounts (User A and User B) and fills testUsername/userId/accessToken/accessTokenB/... Every later folder reads what Setup wrote, so folders 1/2/3 can then be run in any order.\n\nTHE ONE MANUAL STEP: OTP\nLogin now requires a verified email (403 EMAIL_NOT_VERIFIED otherwise), so Setup has to verify both accounts, and no API ever echoes an OTP back. Read it from the auth-service console log - it prints `[DEV ONLY - REMOVE BEFORE COMMIT] verification OTP for <email> = <123456>` - and paste it into env var `otp` (User A) / `otpB` (User B) before running the two 'Verify Email' requests. Same for the reset-password OTP later. That is why the collection is NOT fully unattended in Collection Runner; run Setup request-by-request, then the rest with the Runner.\n\nRATE-LIMIT REQUESTS\n'Login - Too Many Attempts' and 'Resend Verification - Too Many Requests' are single requests meant to be fired several times in a row (Runner iterations) to trip the limiter, not one-shot.\n\nWHY 403 AND NOT 401 FOR A MISSING TOKEN\nThis collection talks to the services DIRECTLY (8081/8082/8083), and none of them registers an AuthenticationEntryPoint, so Spring Security falls back to Http403ForbiddenEntryPoint: a missing, malformed, expired or blacklisted token all come back 403 with an empty body. 401 only appears where the controller/service throws it (INVALID_CREDENTIALS, INVALID_REFRESH_TOKEN).\n\nThe docs/*-api.md files say 401 for the same case and are NOT wrong - they describe the path real clients take, through api-gateway :8080, which does register a RestAuthenticationEntryPoint and answers 401 with a proper {code:'UNAUTHORIZED'} envelope. Same rejection, different status and body depending on which door you knock on. If you point this collection at the gateway, expect 401 wherever a test here asserts 403.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
@@ -43,6 +43,38 @@
     },
     {
       "key": "playId",
+      "value": ""
+    },
+    {
+      "key": "searchBaseUrl",
+      "value": "http://localhost:8095"
+    },
+    {
+      "key": "gatewayBaseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "searchQuery",
+      "value": "dance"
+    },
+    {
+      "key": "searchHashtag",
+      "value": "dance"
+    },
+    {
+      "key": "commentId",
+      "value": ""
+    },
+    {
+      "key": "likeCountAfter",
+      "value": ""
+    },
+    {
+      "key": "shareCountAfter",
+      "value": ""
+    },
+    {
+      "key": "tooManyIds",
       "value": ""
     }
   ],
@@ -3400,6 +3432,114 @@
               }
             }
           ]
+        },
+        {
+          "name": "Feed Following",
+          "item": [
+            {
+              "name": "Feed Following - Success (followedUserIds)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{videoBaseUrl}}/api/v1/videos/feed/following?followedUserIds={{userIdB}}&size=20"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('cursor page shape', () => pm.expect(pm.response.json().data).to.have.property('items'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Feed Following - Empty When Not Following (empty page, not public feed)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{videoBaseUrl}}/api/v1/videos/feed/following?followedUserIds=&size=20"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('items empty', () => pm.expect(pm.response.json().data.items).to.eql([]));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Feed Following - Too Many Ids (400 TOO_MANY_FOLLOWED_USERS)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{videoBaseUrl}}/api/v1/videos/feed/following?followedUserIds={{tooManyIds}}"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400', () => pm.response.to.have.status(400));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Batch",
+          "item": [
+            {
+              "name": "Get Videos Batch - Success (order preserved)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{videoBaseUrl}}/api/v1/videos/batch?ids={{videoId}},{{privateVideoId}}"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('data is array', () => pm.expect(pm.response.json().data).to.be.an('array'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Get Videos Batch - Skips Unviewable Ids (shorter than input, not error)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{videoBaseUrl}}/api/v1/videos/batch?ids={{videoId}},999999999999999999"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -3838,6 +3978,386 @@
               "description": "Anonymous playback produces no label: there is no viewer to attribute it to."
             }
           ]
+        },
+        {
+          "name": "Like",
+          "item": [
+            {
+              "name": "Like - Success (200, not 201)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/like"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "const b = pm.response.json();",
+                      "pm.test('liked true', () => pm.expect(b.data.liked).to.eql(true));",
+                      "pm.environment.set('likeCountAfter', String(b.data.likeCount));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Like - Idempotent (second call, count unchanged)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/like"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('count did not grow', () => pm.expect(String(pm.response.json().data.likeCount)).to.eql(pm.environment.get('likeCountAfter')));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Like Status - With Token (liked reflects caller)",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/like-status"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Like Status - Anonymous (liked always false, no error)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/like-status"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('liked false', () => pm.expect(pm.response.json().data.liked).to.eql(false));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Unlike - Success (liked false)",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/like"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('liked false', () => pm.expect(pm.response.json().data.liked).to.eql(false));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Comment",
+          "item": [
+            {
+              "name": "Add Comment - Success (201)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"content\": \"Great video\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('201', () => pm.response.to.have.status(201));",
+                      "pm.environment.set('commentId', String(pm.response.json().data.commentId));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Add Reply - parentId (flat one level)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"content\": \"Agreed\",\n  \"parentId\": {{commentId}}\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('201', () => pm.response.to.have.status(201));",
+                      "pm.test('parentId set', () => pm.expect(pm.response.json().data.parentId).to.exist);"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "List Comments - cursor page",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments?size=20"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('has hasMore flag', () => pm.expect(pm.response.json().data).to.have.property('hasMore'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Like Comment - Success",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments/{{commentId}}/like"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Unlike Comment",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments/{{commentId}}/like"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Delete Comment - Not Owner (403 NOT_COMMENT_OWNER)",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessTokenB}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments/{{commentId}}"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('403', () => pm.response.to.have.status(403));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Delete Comment - Success (own)",
+              "request": {
+                "method": "DELETE",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments/{{commentId}}"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Share",
+          "item": [
+            {
+              "name": "Share - Success (200)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/share"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "const b = pm.response.json();",
+                      "pm.test('shareId returned', () => pm.expect(b.data.shareId).to.exist);",
+                      "pm.environment.set('shareCountAfter', String(b.data.shareCount));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Share - Every Call Counts (no dedup)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/share"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('count grew', () => pm.expect(Number(pm.response.json().data.shareCount)).to.be.above(Number(pm.environment.get('shareCountAfter'))));"
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -4008,6 +4528,185 @@
             "url": "{{recommendationBaseUrl}}/api/v1/recommendations/feed?limit=100"
           },
           "description": "The single most visible way a feed can look broken: serving back the video someone just finished. Nothing but POST /watch marks a video as seen."
+        }
+      ]
+    },
+    {
+      "name": "6. Search Service",
+      "item": [
+        {
+          "name": "Search Videos - by keyword q",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{searchBaseUrl}}/api/v1/search/videos?q={{searchQuery}}&page=0&size=20"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('envelope Page', () => pm.expect(b.data.content).to.be.an('array'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search Videos - by hashtag (exact)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{searchBaseUrl}}/api/v1/search/videos?hashtag={{searchHashtag}}&page=0&size=20"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('every hit carries the tag', () => b.data.content.forEach(v => pm.expect(v.tags).to.include(pm.environment.get('searchHashtag').replace(/^#/,'').toLowerCase())));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search Videos - q + hashtag combined (AND)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{searchBaseUrl}}/api/v1/search/videos?q={{searchQuery}}&hashtag={{searchHashtag}}"
+          }
+        },
+        {
+          "name": "Search Videos - no match (empty Page, not 404)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{searchBaseUrl}}/api/v1/search/videos?q=zzz-no-such-term-zzz"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('content empty', () => pm.expect(b.data.content).to.eql([]));",
+                  "pm.test('totalElements 0', () => pm.expect(b.data.totalElements).to.eql(0));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Search Videos - hashtag normalisation (#Dance == dance)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{searchBaseUrl}}/api/v1/search/videos?hashtag=%23Dance"
+          }
+        },
+        {
+          "name": "Search Products - by keyword",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{searchBaseUrl}}/api/v1/search/products?q={{searchQuery}}&page=0&size=20"
+          }
+        },
+        {
+          "name": "Search Products - category + price range",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{searchBaseUrl}}/api/v1/search/products?category=fashion&minPrice=10&maxPrice=100000"
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. API Gateway",
+      "item": [
+        {
+          "name": "Get Me (aggregate account + profile) - Success",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{accessToken}}"
+              }
+            ],
+            "url": "{{gatewayBaseUrl}}/api/v1/me"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('has identity fields', () => pm.expect(b.data.username).to.exist);",
+                  "pm.test('profileReady is boolean', () => pm.expect(b.data.profileReady).to.be.a('boolean'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Me - No Token (401)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayBaseUrl}}/api/v1/me"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Routed public GET - videos feed via gateway",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayBaseUrl}}/api/v1/videos/feed"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Rate limit - burst (run via Runner 50x, expect some 429)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayBaseUrl}}/api/v1/recommendations/trending?limit=1"
+          }
         }
       ]
     }
