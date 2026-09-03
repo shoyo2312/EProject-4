@@ -310,7 +310,36 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của interaction-service
 - **Không có** giới hạn riêng theo tài khoản ở interaction-service: không giới hạn số comment mỗi phút, số like mỗi phút, hay số lần share.
 - Hạn mức theo IP là lý do **không** gọi `/like-status` cho cả 20 video của một trang feed cùng lúc (mục 3.3), và **không** gửi `/watch` theo tick (mục 3.9). Nhiều thiết bị sau cùng một NAT dùng chung hạn mức này.
 
-## 7. Những điều KHÔNG nên làm phía Flutter
+## 7. Sự kiện Kafka (Events)
+
+Phần này cho người tích hợp backend. `interaction-service` **chỉ phát**, không tiêu thụ event nào (không có `@KafkaListener`, không dùng `kafka-lib`). Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+
+### Phát (producer) — `InteractionEventPublisher`
+
+Không có outbox (Cassandra không có transaction đa bảng để ghép). Thay vào đó **publish inline ngay sau khi ghi Cassandra thành công, và chờ broker ack** (timeout 5s — thấp hơn media-worker vì đang nằm trong request HTTP có người chờ). Ack fail → ghi Cassandra được bù trừ (compensate) → client nhận lỗi đáng retry, thay vì để 3 service lệch counter vĩnh viễn. Mọi topic key = `videoId` (một video giữ thứ tự trong partition).
+
+| Topic | Event | Payload | Phát khi | Xác nhận ack? |
+|---|---|---|---|---|
+| `interaction.like-events` | `VideoLikeEvent` | `eventId, occurredAt, videoId, userId, liked` | `POST`/`DELETE /like` (chỉ khi hàng LWT thực sự đổi) | có |
+| `interaction.comment-events` | `CommentCreatedEvent` (header `eventType=CommentCreatedEvent`) | `eventId, occurredAt, commentId, videoId, userId, content` | `POST /comments` | có |
+| `interaction.comment-events` | `CommentDeletedEvent` (header `eventType=CommentDeletedEvent`) | `eventId, occurredAt, commentId, videoId, userId` | `DELETE /comments/{id}` | có |
+| `interaction.share-events` | `VideoSharedEvent` | `eventId, occurredAt, shareId, videoId, userId` | `POST /share` (mỗi lần một event) | có |
+| `interaction.view-events` | `VideoViewedEvent` | `eventId, occurredAt, videoId, userId` | `POST /view` — **chỉ** view sống sót qua dedupe theo `playId` | có |
+| `interaction.watch-events` | `VideoWatchEvent` | `eventId, occurredAt, videoId, userId, watchedMs, durationMs, completed` | `POST /watch` — **mọi** phiên, kể cả xem lại | **không** (fire-and-forget, chỉ log khi lỗi) |
+
+Vì sao `watch-events` không chờ ack: không counter nào phụ thuộc nó (chỉ là training row + tag affinity), một phiên mất trong hàng trăm phiên/ngày không ảnh hưởng, còn chặn request để chờ ack thì đặt stream dày nhất service này sinh ra lên critical path của mỗi lần cuộn.
+
+### Ai tiêu thụ event của interaction-service
+
+| Topic | Consumer | Dùng để |
+|---|---|---|
+| `interaction.like-events` | video-service, recommendation-service, search-service | `likeCount`; điểm trending; `likeCount` trong search index |
+| `interaction.comment-events` | video-service, recommendation-service, search-service | `commentCount`; điểm trending (giảm khi comment bị xoá); `commentCount` search |
+| `interaction.share-events` | recommendation-service, search-service | điểm trending; `shareCount` search |
+| `interaction.view-events` | video-service | `viewCount` |
+| `interaction.watch-events` | recommendation-service, analytics-service | tag affinity + quality score; sink training data cho `rank-service` |
+
+## 8. Những điều KHÔNG nên làm phía Flutter
 
 - Không retry tự động `POST /comments`, `POST /share`, `POST /watch` — ba endpoint này **không** khử trùng lặp, retry sẽ tạo comment đôi / đếm share đôi / bẩn dữ liệu huấn luyện. (Retry `/like`, `/like-status` an toàn; retry `/view` an toàn **nếu giữ nguyên `playId`**.)
 - Không gọi `/view` theo tick thời gian, và không gọi `/watch` theo tiến độ phát — `/view` một lần lúc bắt đầu, `/watch` một lần lúc kết thúc.

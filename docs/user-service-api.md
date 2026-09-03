@@ -242,3 +242,16 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của user-service, đế
 - Không coi mọi `409` như nhau: `CONCURRENT_MODIFICATION` nên retry 1 lần, còn `ALREADY_FOLLOWING`/`ALREADY_BLOCKED`/`ALREADY_MUTED` thì phải đồng bộ lại UI chứ retry không giải quyết gì.
 - Không cho user bấm liên tục nút follow/unfollow (debounce nút sau khi bấm) — 2 request song song sẽ tạo `CONCURRENT_MODIFICATION` và counter hiển thị nhấp nháy.
 - Không gọi thẳng `user-service:8082` từ production build — luôn qua gateway `:8080`.
+
+## 8. Sự kiện Kafka (Events)
+
+Phần này cho người tích hợp backend, không phải client mobile. `user-service` **chỉ tiêu thụ**, không phát event nào (follow/block/mute chỉ ghi Postgres, không announce ra Kafka). Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+
+| Topic | Event | Payload | Consumer & tác dụng |
+|---|---|---|---|
+| `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` | `UserRegisteredEventConsumer` → tạo `UserProfile` (`displayName = username`, `avatarUrl` = ảnh provider nếu có). **Claim `eventId` vào bảng `inbox_events` TRƯỚC khi tạo** (`tryClaim` = `INSERT ... ON CONFLICT DO NOTHING`) — hai redelivery đua nhau chỉ một cái INSERT thắng, không tạo profile đôi. Đây là độ trễ khiến `GET /me` trả `404` ngay sau register (mục 3.1) |
+| `media.avatar-events` | `AvatarMirroredEvent` | `eventId, occurredAt, userId, sourceUrl, avatarUrl` | `AvatarMirroredEventConsumer` → `applyMirroredAvatar`: đổi `avatarUrl` sang bản MinIO **chỉ khi** field đang trống hoặc đúng bằng `sourceUrl`. Ảnh user tự đặt qua `PATCH /me` / `POST /me/avatar` không bao giờ bị đè. Không cần inbox claim — công việc là một UPDATE có điều kiện về giá trị cố định, redelivery là no-op |
+
+`auth.user-events` chỉ mang đúng một loại event nên hai consumer parse thẳng payload vào `UserRegisteredEvent`, không đọc header. Đó là lý do `auth-service` phát `SocialAvatarDiscoveredEvent` trên topic **riêng** (`auth.social-avatar-events`, media-worker nghe) chứ không dùng chung topic này.
+
+`kafka-lib` error handler: `user-service` **có** dùng → consumer lỗi retry 3 lần → `<topic>.DLT`. Không có outbox (không phát event).

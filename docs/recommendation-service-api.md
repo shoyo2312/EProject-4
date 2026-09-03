@@ -116,3 +116,24 @@ Không có mã lỗi nghiệp vụ riêng: hai endpoint đều là đọc và đ
 - **Cache**: đừng cache response quá vài phút. Bảng xếp hạng được dựng lại mỗi phút. Và đừng retry `/feed` một cách mù quáng — mỗi lần gọi là một lần đốt video khỏi cửa sổ 30 phút.
 - **Đừng gọi `/feed` cho từng video**. Một lần gọi cho cả trang.
 - Hạn mức theo IP dùng chung với mọi endpoint khác qua gateway; nhiều thiết bị sau cùng một NAT chia nhau hạn mức này.
+
+## 8. Sự kiện Kafka (Events)
+
+Phần này cho người tích hợp backend. `recommendation-service` **chỉ tiêu thụ**, không phát event nào — toàn bộ state (trending ZSET, tag affinity, danh sách đã-trả-về 30 phút) nằm trong Redis và dựng từ các event dưới đây. Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+
+Mọi consumer idempotent qua `InboxService.runOnce(eventId, ...)`.
+
+| Topic | Event | eventType header | Tác dụng |
+|---|---|---|---|
+| `video.video-events` | `VideoPublishedEvent` | `VideoPublishedEvent` (vắng ⇒ coi là Published) | Thêm video vào candidate pool + map tag→video, ghi `publishedAt` cho feature `age_hours` |
+| `video.video-events` | `VideoDeletedEvent` | `VideoDeletedEvent` | Gỡ video khỏi trending + mọi tag index (ZREM) |
+| `interaction.like-events` | `VideoLikeEvent` | — | Cộng/trừ điểm engagement trending |
+| `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` | route theo header (vắng ⇒ Created) | Cộng khi tạo, **trừ** khi xoá — nếu đọc payload không xét header thì `CommentDeletedEvent` parse nhầm thành Created và xoá comment lại đẩy video lên trending |
+| `interaction.share-events` | `VideoSharedEvent` | — | Cộng điểm engagement trending |
+| `interaction.watch-events` | `VideoWatchEvent` | — | Cập nhật tag affinity của người xem (xem < 20% = skip → kéo affinity xuống `-0.5`), watches/completions cho feature chất lượng |
+
+Không nghe `interaction.view-events` (đó là counter, không phải tín hiệu xếp hạng — xem `docs/ranking-model.md` §3).
+
+`kafka-lib` error handler: `recommendation-service` **có** dùng → consumer lỗi retry 3 lần → `<topic>.DLT`. Chưa có outbox (không cần — không phát event).
+
+Về cách các feature này được `rank-service` dùng để xếp hạng: `docs/ranking-model.md`.

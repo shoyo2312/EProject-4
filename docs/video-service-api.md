@@ -294,7 +294,38 @@ Lưu ý khác biệt ở các `GET`: token hết hạn gửi kèm `GET` **không
 - **Không có** giới hạn riêng theo tài khoản ở video-service (không giới hạn số video đăng mỗi ngày).
 - Giới hạn theo IP là lý do phải poll giãn dần ở mục 3.2: nhiều thiết bị sau cùng một NAT dùng chung hạn mức này.
 
-## 8. Những điều KHÔNG nên làm phía Flutter
+## 8. Sự kiện Kafka (Events)
+
+Phần này cho người tích hợp backend, không phải client mobile. `video-service` vừa phát vừa tiêu thụ event. Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+
+### Phát (producer) — `VideoEventPublisher`
+
+Cả hai loại đi chung topic **`video.video-events`**, key = `videoId`, nên Kafka đảm bảo thứ tự publish→delete theo từng video. Dùng **outbox** (cờ per-document trên `Video`, không có collection riêng vì Mongo deployment này không có replica set → không có transaction đa document). Poll mỗi 5s, đánh dấu published **sau** khi broker ack (`OutboxDispatcher` của `kafka-lib`).
+
+| eventType header | Event | Payload | Khi nào |
+|---|---|---|---|
+| `VideoPublishedEvent` | `VideoPublishedEvent` | `eventId, occurredAt, videoId, userId, title, description, rawFileUrl, tags[]` | Sau `POST /` — `eventId` derive từ `videoId` (publish đúng 1 lần dù outbox retry) |
+| `VideoDeletedEvent` | `VideoDeletedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Sau `DELETE /{id}`. Phát cả khi video bị xoá trước lúc `VideoPublishedEvent` kịp đi (media-worker vẫn cần dọn file raw) |
+
+`description` và `tags` được mang trên `VideoPublishedEvent` vì `search-service`/`recommendation-service` không có đường đọc vào Mongo của video-service. `tags` không bao giờ null (list rỗng).
+
+Consumer của `video.video-events`: media-worker, search-service, recommendation-service. (analytics-service cũng nghe — ngoài phạm vi doc này.)
+
+### Tiêu thụ (consumer) — cập nhật counter & trạng thái
+
+Mọi consumer idempotent qua `IdempotentEventProcessor` (bảng `processed_events`, TTL index). Counter cập nhật bằng `$inc` nguyên tử (không load-modify-save) và **bỏ qua video `deletedAt != null` hoặc `status = TAKEN_DOWN`**; `unlike`/`comment deleted` còn thêm điều kiện `count > 0` (chống `$inc` âm vĩnh viễn).
+
+| Topic | Event | Tác dụng |
+|---|---|---|
+| `media.video-transcoded-events` | `VideoTranscodedEvent` | `success` → `status = PUBLISHED` + `hlsUrl`/`thumbnailUrl`/`durationSeconds`; ngược lại `status = FAILED` + `failureReason`. Qua `VideoStateUpdater` (re-read nếu có takedown chen giữa) |
+| `interaction.like-events` | `VideoLikeEvent` | `likeCount += liked ? 1 : -1` |
+| `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (route theo header; vắng ⇒ Created) | `commentCount ± 1` |
+| `interaction.view-events` | `VideoViewedEvent` | `viewCount += 1` (chỉ view đã qua dedupe của interaction-service) |
+| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` (route theo header; **bắt buộc** có header, thiếu → drop + warn) | `status = TAKEN_DOWN` / khôi phục về trạng thái trước takedown |
+
+`kafka-lib` error handler: retry 3 lần → `<topic>.DLT`.
+
+## 9. Những điều KHÔNG nên làm phía Flutter
 
 - Không parse `id` của video thành `int` — Snowflake 19 chữ số, sai âm thầm trên Flutter Web. Luôn dùng `String`.
 - Không coi `201` của `POST /` là "video đã đăng xong" — phải poll tới `PUBLISHED` mới có `hlsUrl` để phát (mục 3.2).
