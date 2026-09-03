@@ -18,7 +18,7 @@ import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.ExchangeFunction;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -200,7 +200,26 @@ class MeServiceImplTest {
                 accountStub(HttpStatus.OK, PROFILE_JSON));
 
         StepVerifier.create(service.getMe(AUTH_HEADER))
-                .expectError(WebClientResponseException.InternalServerError.class)
+                .expectError(ResponseStatusException.class)
+                .verify();
+    }
+
+    /**
+     * The status auth-service answered with is the status the client gets. Aggregating two calls is
+     * this endpoint's business, not the caller's: an expired token has to come back as the 401 that
+     * tells the client to refresh, not a 500 blaming the gateway.
+     */
+    @Test
+    void getMe_whenAuthServiceRejectsTheToken_answersWithThatStatus() {
+        MeServiceImpl service = new MeServiceImpl(
+                accountStub(HttpStatus.UNAUTHORIZED, "{}"),
+                accountStub(HttpStatus.OK, PROFILE_JSON));
+
+        StepVerifier.create(service.getMe(AUTH_HEADER))
+                .expectErrorSatisfies(error -> assertThat(error)
+                        .isInstanceOf(ResponseStatusException.class)
+                        .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.UNAUTHORIZED))
                 .verify();
     }
 

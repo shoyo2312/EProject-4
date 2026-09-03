@@ -9,6 +9,7 @@ import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Map;
@@ -21,6 +22,11 @@ import java.util.UUID;
  * <p>Its own class because social login ends here too. Written twice, the two copies would drift —
  * and the half that matters is not the JWT but the {@code refresh_tokens} row: a session whose row
  * was never written cannot be rotated, revoked on logout, or killed by a password reset.
+ *
+ * <p>Transactional here rather than only at the callers, because this is the one write on the login
+ * path and {@code login} deliberately no longer opens a transaction of its own — see
+ * {@link AuthServiceImpl#login}. Callers that already run in one, {@code refresh} and the social
+ * flows, simply join it: the row still commits with whatever else they did, exactly as before.
  */
 @Component
 @RequiredArgsConstructor
@@ -33,6 +39,7 @@ public class TokenIssuer {
     private final JwtProperties jwtProperties;
     private final RefreshTokenRepository refreshTokenRepository;
 
+    @Transactional
     public TokenResponse issue(User user) {
         String subject = String.valueOf(user.getId());
 

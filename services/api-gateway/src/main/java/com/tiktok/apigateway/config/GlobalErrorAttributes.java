@@ -21,13 +21,25 @@ public class GlobalErrorAttributes extends DefaultErrorAttributes {
     public Map<String, Object> getErrorAttributes(ServerRequest request, ErrorAttributeOptions options) {
         Map<String, Object> defaults = super.getErrorAttributes(request, options);
         int status = (int) defaults.getOrDefault("status", HttpStatus.INTERNAL_SERVER_ERROR.value());
-        String message = (String) defaults.getOrDefault("message", "Unexpected gateway error");
+        Object message = defaults.get("message");
 
         return Map.of(
                 "success", false,
-                "code", HttpStatus.valueOf(status).name(),
-                "message", message,
+                "code", codeFor(status),
+                "message", message instanceof String text && !text.isBlank() ? text : "Unexpected gateway error",
                 "timestamp", Instant.now().toString()
         );
+    }
+
+    /**
+     * {@code HttpStatus.valueOf} throws on a code the enum does not know, and this method is the one
+     * building the error body — so a downstream answering 520, or any other status outside the
+     * standard set, replaced its own error with an IllegalArgumentException raised inside the
+     * handler meant to report it. {@code resolve} answers null instead, and the number survives
+     * either way: an unnamed status is still worth telling the client about.
+     */
+    private static String codeFor(int status) {
+        HttpStatus resolved = HttpStatus.resolve(status);
+        return resolved != null ? resolved.name() : "HTTP_" + status;
     }
 }
