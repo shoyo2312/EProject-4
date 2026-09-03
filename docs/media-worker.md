@@ -6,26 +6,42 @@ Tài liệu cho người **vận hành**, không phải client. `media-worker` (
 
 | Việc | Nghe topic | Phát topic | Ghi vào MinIO |
 |---|---|---|---|
-| Transcode video | `video.video-events` (`VideoPublishedEvent`) | `media.video-transcoded-events` (`VideoTranscodedEvent`) | `hls/{videoId}/source.mp4` |
+| Transcode video | `video.video-events` (`VideoPublishedEvent`) | `media.video-transcoded-events` (`VideoTranscodedEvent`) | `hls/{videoId}/source.mp4` + `thumbnails/{videoId}.jpg` |
 | Dọn media khi xoá video | `video.video-events` (`VideoDeletedEvent`) | — | xoá `thumbnails/{id}.jpg`, mọi object dưới `hls/{id}/`, và file raw |
 | Sao ảnh đại diện social | `auth.social-avatar-events` (`SocialAvatarDiscoveredEvent`) | `media.avatar-events` (`AvatarMirroredEvent`) | `avatars/{userId}.jpg` |
 
 Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi đè cùng key với cùng nội dung (no-op an toàn khi redeliver). Việc idempotent thật nằm ở consumer phía sau (`video-service` / `user-service`), nơi có bảng inbox.
 
-## 2. Transcode — thực chất là copy, chưa phải HLS thật
+## 2. Transcode — faststart remux + thumbnail, chưa phải HLS thật
 
-`TranscodeServiceImpl` hiện **không chạy ffmpeg**. Nó:
+`TranscodeServiceImpl` chạy ffmpeg nhưng **không re-encode**. Nó:
 
 1. Đọc `rawFileUrl` từ `VideoPublishedEvent`, suy ra object key trong bucket (`MediaKeys.objectKey` — hỗ trợ cả `s3://bucket/key` và `https://cdn/.../bucket/key`).
-2. `statObject` lấy size → vượt `media.video.max-bytes` (500 MB) → `MediaRejectedException` (từ chối vĩnh viễn).
-3. Ký presigned GET URL (300s), `VideoProbe` (JAVE/ffprobe) đọc `durationSeconds` → vượt `media.video.max-duration-seconds` (600s) → `MediaRejectedException`.
-4. **Server-side copy** `raw/...` → `hls/{videoId}/source.mp4` (bytes không đi qua heap của worker; 2 GB tốn 1 API call).
-5. Trả `VideoTranscodedEvent.success(videoId, thumbnailUrl=null, hlsUrl="{endpoint}/{bucket}/hls/{id}/source.mp4", durationSeconds)`.
+2. `statObject` lấy size → vượt `media.video.max-bytes` (500 MB) → `MediaRejectedException` (từ chối vĩnh viễn). Check **trước** khi tải để file quá cỡ chỉ tốn một HEAD.
+3. `downloadObject` về thư mục tạm, `VideoProbe` (JAVE/ffprobe) đọc `durationSeconds` từ file local → vượt `media.video.max-duration-seconds` (600s) → `MediaRejectedException`.
+4. **Faststart remux**: `ffmpeg -i source -c copy -movflags +faststart -f mp4` — cùng stream, cùng bytes video, chỉ dời moov atom lên đầu file để player bắt đầu phát từ những byte đầu thay vì chờ tải hết. Upload lên `hls/{videoId}/source.mp4`.
+5. **Thumbnail**: `ffmpeg -ss {t} -i source -frames:v 1 -vf scale=-2:720 -q:v 3` với `t = min(1, duration/2)` giây. Upload lên `thumbnails/{videoId}.jpg`.
+6. Trả `VideoTranscodedEvent.success(videoId, thumbnailUrl, hlsUrl="{endpoint}/{bucket}/hls/{id}/source.mp4", durationSeconds)`.
+7. `finally`: xoá thư mục tạm — trên mọi đường ra, kể cả khi lỗi.
+
+Hai bước ffmpeg **suy giảm chứ không fail** (`Ffmpeg` trả `boolean`, không throw):
+- Remux thất bại (container/codec mp4 muxer không copy được, vd. VP8/WebM) → upload nguyên file gốc. Video vẫn phát được, chỉ mất tối ưu khởi động.
+- Không decode được frame → `thumbnailUrl` null, web client fallback poster của nó.
+
+Lý do: `FAILED` ở `video-service` là terminal. Biến một trong hai thành exception nghĩa là báo hỏng một video hoàn toàn xem được.
 
 Hệ quả:
-- **Không có thumbnail** (`thumbnailUrl` luôn null trong event) — cần decode frame, chưa làm. Web client fallback poster của nó.
-- `hlsUrl` là một file `.mp4` phẳng, phát qua `<video>` chứ không cần hls.js. Nó nằm dưới prefix `hls/{id}/` để cleanup (list đệ quy prefix đó) vẫn xoá được khi có HLS thật sau này.
-- Thay `TranscodeServiceImpl` bằng ffmpeg pipeline khi cần adaptive bitrate / thumbnail thật — không phần nào ngoài class đó biết artifact được sinh thế nào.
+- **Có thumbnail thật** (`thumbnails/{videoId}.jpg`), null chỉ khi frame không decode được.
+- `hlsUrl` vẫn là một file `.mp4` phẳng, phát qua `<video>` chứ không cần hls.js. Nó nằm dưới prefix `hls/{id}/` để cleanup (list đệ quy prefix đó) vẫn xoá được khi có HLS thật sau này.
+- **Chi phí mới**: file đi qua disk của worker (bản copy cũ không chuyển byte nào ra khỏi MinIO). Dời moov atom = viết lại container, không có thao tác server-side nào làm được. Dự trù **~2× kích thước upload** disk tạm cho mỗi transcode chạy song song.
+- CPU vẫn phẳng theo độ dài video (copy stream + 1 frame decode), không tỉ lệ thuận — đó là thứ giữ listener không biến thành hàng đợi.
+- Chưa làm: normalize format (HEVC/AV1 → H.264), auto-rotation, HLS segment, ABR ladder. Xem `Ffmpeg` khi cần thêm.
+
+### Binary ffmpeg
+
+Không có bước Dockerfile nào. `JaveFfmpeg` dùng chính binary mà JAVE2 (`jave-all-deps`) đã giải nén để probe, qua `DefaultFFMPEGLocator.getExecutablePath()` — dependency native duy nhất của worker vẫn là cái build đã ship sẵn cho mọi platform.
+
+Mỗi lần chạy có timeout **120 giây** rồi `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file tạm**, không phải pipe: pipe không ai đọc sẽ đầy buffer và ffmpeg block vĩnh viễn ở lệnh write — không timeout nào trên `waitFor` bắt được.
 
 ### Retry & báo lỗi
 
@@ -78,7 +94,7 @@ URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) →
 | Raw upload | `raw/{userId}/{videoId}.mp4` | client (presigned POST từ video-service) | cleanup, hoặc lifecycle 7 ngày |
 | Playback | `hls/{videoId}/source.mp4` | media-worker transcode | cleanup |
 | (HLS thật, tương lai) | `hls/{videoId}/master.m3u8` + segment | ffmpeg pipeline | cleanup (list prefix) |
-| Thumbnail | `thumbnails/{videoId}.jpg` | (chưa sinh) | cleanup |
+| Thumbnail | `thumbnails/{videoId}.jpg` | media-worker transcode | cleanup |
 | Avatar | `avatars/{userId}.jpg` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; ghi đè) |
 
 ## 7. kafka-lib
