@@ -101,7 +101,7 @@ class VideoEventConsumerTest {
     @Test
     void onMessage_transcodeRejectsTheFile_failsOnceWithNoRetry() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of(
-                "vid7", 1L, "Too long", "s3://raw/vid7.mp4", java.util.List.of());
+                "vid7", 1L, "Too long", null, "s3://raw/vid7.mp4", java.util.List.of());
 
         when(transcodeService.transcode("vid7", "s3://raw/vid7.mp4"))
                 .thenThrow(new com.tiktok.mediaworker.service.MediaRejectedException(
