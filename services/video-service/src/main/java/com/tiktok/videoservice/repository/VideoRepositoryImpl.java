@@ -112,7 +112,8 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("thumbnailUrl", video.getThumbnailUrl())
                 .set("hlsUrl", video.getHlsUrl())
-                .set("durationSeconds", video.getDurationSeconds()));
+                .set("durationSeconds", video.getDurationSeconds())
+                .set("failureReason", video.getFailureReason())); // null on the success path — clears a stale reason
     }
 
     @Override
@@ -120,6 +121,14 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         return compareAndSet(video.getId(), expectedStatus, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown()));
+    }
+
+    @Override
+    public boolean updateFailed(Video video, VideoStatus expectedStatus) {
+        return compareAndSet(video.getId(), expectedStatus, new Update()
+                .set("status", video.getStatus())
+                .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
+                .set("failureReason", video.getFailureReason()));
     }
 
     @Override

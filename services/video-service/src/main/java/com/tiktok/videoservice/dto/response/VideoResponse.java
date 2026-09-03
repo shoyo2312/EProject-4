@@ -22,6 +22,8 @@ public record VideoResponse(
         Long commentCount,
         boolean commentsDisabled,
         List<String> tags,
-        Instant createdAt
+        Instant createdAt,
+        /** Why the transcode failed; null unless {@code status == FAILED}. */
+        String failureReason
 ) {
 }

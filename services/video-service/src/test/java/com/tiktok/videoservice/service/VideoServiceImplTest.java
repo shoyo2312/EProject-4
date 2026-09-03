@@ -69,20 +69,22 @@ class VideoServiceImplTest {
      * The point of the assertion on fileUrl: it is fed straight back into publish() below, where
      * CreateVideoRequest.rawFileUrl is checked by @ValidMediaUrl against app.media.allowed-buckets.
      * A bucket or scheme change on either side silently makes every upload unpublishable, and this
-     * is the only place the two ends meet.
+     * is the only place the two ends meet. The POST form carries the object key as a field, not in
+     * the URL, and the client uploads by multipart POST to the bucket URL.
      */
     @Test
-    void createUploadUrl_returnsPresignedPutAndAStorageUrlPublishAccepts() {
+    void createUploadUrl_returnsAPostFormAndAStorageUrlPublishAccepts() {
         UploadUrlResponse response = videoService.createUploadUrl(42L, new UploadUrlRequest("video/mp4"));
 
         assertThat(response.fileUrl()).startsWith("s3://video-media/raw/42/").endsWith(".mp4");
-        assertThat(response.uploadUrl())
-                .contains("/video-media/raw/42/")
-                .contains("X-Amz-Signature");
+        assertThat(response.uploadUrl()).isEqualTo("http://localhost:9000/video-media");
         assertThat(response.expiresInSeconds()).isPositive();
 
         String key = response.fileUrl().substring("s3://video-media/".length());
-        assertThat(response.uploadUrl()).contains(key);
+        assertThat(response.formFields())
+                .containsEntry("key", key)
+                .containsEntry("Content-Type", "video/mp4")
+                .containsKey("policy");
 
         VideoResponse published = videoService.publish(42L,
                 new CreateVideoRequest("uploaded", null, response.fileUrl(), VideoVisibility.PUBLIC, List.of()));

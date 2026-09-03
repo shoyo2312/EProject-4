@@ -75,7 +75,7 @@ class VideoRepositoryImplTest {
     void updateStatus_keepsConcurrentLikes() {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PROCESSING, 3);
 
-        stale.markFailed();
+        stale.markFailed("boom");
         assertThat(videoRepository.updateStatus(stale, VideoStatus.PROCESSING)).isTrue();
 
         Video after = reload(stale);
@@ -171,7 +171,7 @@ class VideoRepositoryImplTest {
         Video video = save(VideoStatus.PROCESSING);
         var before = reload(video).getUpdatedAt();
 
-        video.markFailed();
+        video.markFailed("boom");
         videoRepository.updateStatus(video, VideoStatus.PROCESSING);
 
         // @LastModifiedDate auditing does not run for MongoTemplate updates, so the timestamp

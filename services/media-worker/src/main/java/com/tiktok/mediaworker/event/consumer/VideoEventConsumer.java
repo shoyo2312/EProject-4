@@ -6,6 +6,7 @@ import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoTranscodedEventProducer;
 import com.tiktok.mediaworker.service.MediaCleanupService;
+import com.tiktok.mediaworker.service.MediaRejectedException;
 import com.tiktok.mediaworker.service.TranscodeResult;
 import com.tiktok.mediaworker.service.TranscodeService;
 import lombok.SneakyThrows;
@@ -100,6 +101,10 @@ public class VideoEventConsumer {
                 TranscodeResult result = transcodeService.transcode(event.videoId(), event.rawFileUrl());
                 return VideoTranscodedEvent.success(
                         event.videoId(), result.thumbnailUrl(), result.hlsUrl(), result.durationSeconds());
+            } catch (MediaRejectedException e) {
+                // Permanently unacceptable — retrying re-probes the same file to the same answer.
+                log.warn("Rejecting video {}: {}", event.videoId(), e.getMessage());
+                return VideoTranscodedEvent.failure(event.videoId(), e.getMessage());
             } catch (Exception e) {
                 lastFailure = e;
                 log.warn("Transcode of video {} failed on attempt {}/{}: {}",
@@ -112,7 +117,11 @@ public class VideoEventConsumer {
 
         log.error("Transcode of video {} failed {} times, reporting it as failed",
                 event.videoId(), transcodeAttempts, lastFailure);
-        return VideoTranscodedEvent.failure(event.videoId(), lastFailure.getMessage());
+        // lastFailure.getMessage() is an internal storage/probe string (endpoint, bucket, key) and
+        // this reason is shown to the uploader. Only MediaRejectedException carries a message
+        // written for a human; the transient path gets a generic one.
+        return VideoTranscodedEvent.failure(event.videoId(),
+                "Transcoding failed after %d attempts. Try uploading the file again.".formatted(transcodeAttempts));
     }
 
     /**
