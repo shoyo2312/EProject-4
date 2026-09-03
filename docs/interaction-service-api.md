@@ -231,11 +231,13 @@ Request (`WatchRequest`):
 ```json
 {
   "watchedMs": 12500,    // bắt buộc, >= 0. Tổng thời gian ĐÃ PHÁT trong phiên, cộng dồn cả các lần lặp lại
-  "durationMs": 15000    // bắt buộc, > 0. Độ dài video theo đúng những gì player thấy
+  "durationMs": 15000    // bắt buộc, > 0. Độ dài video theo player — chỉ là tham khảo, xem bên dưới
 }
 ```
 
-`watchedMs` là **thời gian phát thật**, không phải vị trí con trỏ và không phải thời gian mở màn hình: tua tới không làm nó tăng, tạm dừng không làm nó tăng, xem lặp lại 3 vòng một video 15 giây thì gửi `45000`. `durationMs` gửi từ player chứ không lấy từ `VideoResponse.durationSeconds` — hai số có thể lệch nhau trong lúc video được transcode lại, và cái server cần là tỉ lệ trên phần thực sự phát được.
+`watchedMs` là **thời gian phát thật**, không phải vị trí con trỏ và không phải thời gian mở màn hình: tua tới không làm nó tăng, tạm dừng không làm nó tăng, xem lặp lại 3 vòng một video 15 giây thì gửi `45000`.
+
+`durationMs` client gửi lên **chỉ là phương án dự phòng**. Mẫu số của tỉ lệ xem lấy từ độ dài **server tự probe được lúc transcode** (`durationSeconds` của video-service); chỉ khi chưa có số đó — video còn đang transcode, hoặc video-service không gọi tới được — server mới dùng số của client, và khi đó kẹp vào khoảng **[3 giây, 10 phút]**. Nghĩa là gửi `{"watchedMs": 1, "durationMs": 1}` **không** còn tạo ra một phiên hoàn thành 100%: mẫu số bị nâng lên sàn 3 giây nên tỉ lệ gần như 0. Đừng cố khai số để đẩy video lên gợi ý — nó không có tác dụng.
 
 Response `data` → `WatchResponse`:
 ```json
@@ -246,7 +248,7 @@ Response `data` → `WatchResponse`:
 }
 ```
 
-- `watchedMs` trong response là số **server đã ghi**, tức số client gửi đã bị **kẹp xuống tối đa bằng `durationMs`**. Gửi `watchedMs: 999999` cho video 15 giây thì nhận lại `15000`. Kẹp ở server nên client không cần tự kẹp, nhưng cũng đừng dựa vào việc gửi số vống lên để "đẩy" video lên gợi ý — nó không có tác dụng.
+- `watchedMs` trong response là số **server đã ghi**, tức số client gửi đã bị **kẹp xuống tối đa bằng độ dài server dùng làm mẫu số** (probe được thì là số đó, không thì là `durationMs` đã kẹp). Gửi `watchedMs: 999999` cho video 15 giây thì nhận lại `15000`. Kẹp ở server nên client không cần tự kẹp, nhưng cũng đừng dựa vào việc gửi số vống lên để "đẩy" video lên gợi ý — nó không có tác dụng.
 - `completed` do **server** quyết định (hiện tại: xem >= 90% độ dài), không phải client gửi lên. Ngưỡng này có thể đổi mà không cần client phát hành bản mới, nên đừng hardcode 90% ở phía Flutter để đoán trước kết quả.
 
 **Không khử trùng lặp, không lưu lại thành bản ghi đọc được.** Mỗi lần gọi là một phiên; xem lại lần thứ ba vẫn gửi và vẫn được ghi nhận (xem lại là tín hiệu mạnh nhất cho hệ gợi ý). Hệ quả: **đừng retry tự động** khi timeout — một phiên bị đếm hai lần làm bẩn dữ liệu huấn luyện. Mất một phiên vì mạng hỏng thì bỏ qua, không sao.

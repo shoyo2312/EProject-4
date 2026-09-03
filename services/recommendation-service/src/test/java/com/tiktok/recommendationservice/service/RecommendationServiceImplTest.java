@@ -51,22 +51,47 @@ class RecommendationServiceImplTest {
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
     }
 
+    /**
+     * The publication event fires while the video is still PROCESSING, so nothing it triggers may
+     * make the video reachable from the feed. Only the tags are kept, for the readiness event to
+     * index later.
+     */
     @Test
-    void recordVideoPublished_scoresTheCurrentHourAndIndexesEachTag() {
-        recommendationService.recordVideoPublished("vid1", List.of("dance", "food"));
+    void recordVideoUploaded_stashesTheTagsWithoutIndexingAnything() {
+        // Explicit: a Mockito mock answers 0.0 for a Double, not null, and 0.0 would read as a
+        // video that is already ready.
+        when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(null);
 
-        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(1.0));
+        recommendationService.recordVideoUploaded("vid1", List.of("dance", "food"));
+
         verify(setOperations).add("reco:video:tags:vid1", "dance", "food");
-        verify(zSetOperations).add(eq("reco:tag:dance"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
-        verify(zSetOperations).add(eq("reco:tag:food"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations, never()).add(eq("reco:video:published"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations, never()).incrementScore(startsWith("reco:trend:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * The two events arrive on different topics, so a lagging publication can land after the
+     * transcode result. The tags still have to reach the indexes, or the video stays out of
+     * every tag index it belongs in for as long as it exists.
+     */
+    @Test
+    void recordVideoUploaded_whenTheVideoIsAlreadyReady_indexesTheTagsAtItsPublishTime() {
+        when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
+
+        recommendationService.recordVideoUploaded("vid1", List.of("dance"));
+
+        verify(zSetOperations).add("reco:tag:dance", "vid1", 1700.0);
     }
 
     @Test
-    void recordVideoPublished_withoutTags_writesNoTagIndex() {
-        recommendationService.recordVideoPublished("vid1", List.of());
+    void recordVideoReady_scoresTheCurrentHourAndIndexesEachStashedTag() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
 
-        verify(setOperations, never()).add(anyString(), anyString());
-        verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+        recommendationService.recordVideoReady("vid1");
+
+        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(1.0));
+        verify(zSetOperations).add(eq("reco:tag:dance"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
     }
 
     /**
@@ -75,10 +100,11 @@ class RecommendationServiceImplTest {
      * videos, and they would then have been ranked as if they were a day old.
      */
     @Test
-    void recordVideoPublished_withoutTags_stillRecordsWhenItWasPublished() {
-        recommendationService.recordVideoPublished("vid1", List.of());
+    void recordVideoReady_withoutTags_stillRecordsWhenItWasPublished() {
+        recommendationService.recordVideoReady("vid1");
 
         verify(zSetOperations).add(eq("reco:video:published"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
     }
 
     @Test

@@ -125,12 +125,15 @@ Mọi consumer idempotent qua `InboxService.runOnce(eventId, ...)`.
 
 | Topic | Event | eventType header | Tác dụng |
 |---|---|---|---|
-| `video.video-events` | `VideoPublishedEvent` | `VideoPublishedEvent` (vắng ⇒ coi là Published) | Thêm video vào candidate pool + map tag→video, ghi `publishedAt` cho feature `age_hours` |
+| `video.video-events` | `VideoPublishedEvent` | `VideoPublishedEvent` (vắng ⇒ coi là Published) | **Chỉ lưu tag của video**, chưa đưa vào candidate pool — lúc event này phát video vẫn đang `PROCESSING` (media-worker cần chính event đó để transcode) |
+| `media.video-transcoded-events` | `VideoTranscodedEvent` | — | `success=true`: đưa video vào candidate pool + tag index, ghi `publishedAt` cho feature `age_hours`. `success=false`: gỡ sạch như một lần xoá — transcode fail là vĩnh viễn, không có event nào tới sau nữa |
 | `video.video-events` | `VideoDeletedEvent` | `VideoDeletedEvent` | Gỡ video khỏi trending + mọi tag index (ZREM) |
 | `interaction.like-events` | `VideoLikeEvent` | — | Cộng/trừ điểm engagement trending |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` | route theo header (vắng ⇒ Created) | Cộng khi tạo, **trừ** khi xoá — nếu đọc payload không xét header thì `CommentDeletedEvent` parse nhầm thành Created và xoá comment lại đẩy video lên trending |
 | `interaction.share-events` | `VideoSharedEvent` | — | Cộng điểm engagement trending |
 | `interaction.watch-events` | `VideoWatchEvent` | — | Cập nhật tag affinity của người xem (xem < 20% = skip → kéo affinity xuống `-0.5`), watches/completions cho feature chất lượng |
+
+Vì sao việc index chờ event transcode: nếu index ngay lúc publish, feed trả về id của video chưa playable, `/videos/batch` lọc sạch chúng (người khác chỉ thấy `PUBLISHED`) nên trang feed ngắn hơn `limit` mà không có log nào, đồng thời `markServed` đã đánh dấu các id đó là "đã phục vụ" 30 phút — đúng khoảng thời gian video sắp phát được. Hai topic nên không có thứ tự đảm bảo giữa chúng: nếu event publish tới **sau** event transcode, tag vẫn được index ngay lúc đó.
 
 Không nghe `interaction.view-events` (đó là counter, không phải tín hiệu xếp hạng — xem `docs/ranking-model.md` §3).
 

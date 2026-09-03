@@ -267,7 +267,8 @@ public class VideoServiceImpl implements VideoService {
     @Override
     public VideoPolicyResponse getPolicy(String videoId) {
         VideoResponse video = load(videoId);
-        return new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled());
+        return new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled(),
+                video.durationSeconds());
     }
 
     /**

@@ -10,7 +10,21 @@ import java.util.List;
  */
 public interface RecommendationService {
 
-    void recordVideoPublished(String videoId, List<String> tags);
+    /**
+     * Remembers a video's tags without putting it anywhere the feed reads from. The publication
+     * event fires while the video is still PROCESSING — media-worker needs that very event to
+     * start transcoding — so indexing on it hands the feed ids that no viewer can play: the
+     * batch hydration drops them again, silently shortening the page, and the served-set marks
+     * them suppressed for the next half hour, which is exactly when they become playable.
+     */
+    void recordVideoUploaded(String videoId, List<String> tags);
+
+    /**
+     * Puts a video into everything candidate generation reads — trending, the per-tag indexes,
+     * the publish-time set — using the tags {@link #recordVideoUploaded} stashed. Driven by the
+     * transcode result, so nothing enters the feed before it can be played.
+     */
+    void recordVideoReady(String videoId);
 
     /**
      * Removes every trace of a video from the ranking side. Without it a deleted video keeps
