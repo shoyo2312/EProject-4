@@ -94,6 +94,11 @@ class ProductServiceImplTest {
         verify(productEventProducer).publishProductCreated(eventCaptor.capture());
         assertThat(eventCaptor.getValue().productId()).isEqualTo(1L);
         assertThat(eventCaptor.getValue().sellerId()).isEqualTo(100L);
+        // search-service indexes the product from this event alone, so a field it omits is a
+        // field no search can ever filter or match on.
+        assertThat(eventCaptor.getValue().description()).isEqualTo(saved.getDescription());
+        assertThat(eventCaptor.getValue().category()).isEqualTo(saved.getCategory());
+        assertThat(eventCaptor.getValue().imageUrl()).isEqualTo(saved.getImageUrl());
 
         assertThat(response).isEqualTo(expected);
     }

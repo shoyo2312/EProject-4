@@ -10,6 +10,7 @@ public record VideoSearchResponse(
         String description,
         String thumbnailUrl,
         String status,
+        Integer durationSeconds,
         List<String> tags,
         long viewCount,
         long likeCount,

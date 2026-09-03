@@ -181,10 +181,10 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 | `interaction.like-events` | interaction-service (chờ ack 5s) | — | `VideoLikeEvent` | video-service, recommendation-service, search-service |
 | `interaction.comment-events` | interaction-service (chờ ack 5s) | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | video-service, recommendation-service, search-service |
 | `interaction.share-events` | interaction-service (chờ ack 5s) | — | `VideoSharedEvent` | recommendation-service, search-service |
-| `interaction.view-events` | interaction-service (chờ ack 5s) | — | `VideoViewedEvent` | video-service |
+| `interaction.view-events` | interaction-service (chờ ack 5s) | — | `VideoViewedEvent` | video-service, search-service |
 | `interaction.watch-events` | interaction-service (fire-and-forget) | — | `VideoWatchEvent` | recommendation-service, analytics-service |
-| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / … | mixed (route theo header, bắt buộc) | video-service (chỉ nhận `VideoTakenDownEvent` + `VideoRestoredEvent`) |
-| `product.product-events` | product-service | — | `ProductCreatedEvent` | search-service |
+| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), search-service (thêm `ProductSuspendedEvent` + `ProductReactivatedEvent`) |
+| `product.product-events` | product-service (OutboxDispatcher) | — | `ProductCreatedEvent` | search-service, inventory-service |
 
 Ghi chú:
 - **Topic trộn nhiều shape** (`video.video-events`, `interaction.comment-events`, `admin.moderation-events`) route bằng Kafka header `eventType`, KHÔNG suy từ JSON. Thiếu route → Jackson vẫn parse sang class sai với field null, không exception. Xem `CLAUDE.md` §Kafka.

@@ -1,7 +1,7 @@
 # Migrate một `OutboxPublisher` sang `OutboxDispatcher`
 
-Việc còn tồn: `inventory-service`, `order-service`, `payment-service`, `product-service`.
-Đã xong: `auth-service`, `admin-service`, `video-service`.
+Việc còn tồn: `inventory-service`, `order-service`, `payment-service`.
+Đã xong: `auth-service`, `admin-service`, `video-service`, `product-service`.
 
 ## Vì sao phải làm
 
@@ -37,7 +37,7 @@ Với chúng, thêm `kafka-lib` đồng thời bật luôn `DefaultErrorHandler`
 (`KafkaConsumerAutoConfiguration`): consumer chuyển từ retry-vô-hạn sang retry 3 lần rồi đẩy sang
 `<topic>.DLT`. Đó là thay đổi hành vi runtime, **không phải** phần của migration outbox — hoặc
 nhận nó một cách có ý thức (nhớ tạo/giám sát topic `.DLT`), hoặc tách thành PR riêng.
-`product-service` không có consumer nên không dính.
+`product-service` không có consumer nên không dính (đã migrate).
 
 **3. Đổi field**: bỏ `KafkaTemplate<String, String>`, inject `OutboxDispatcher`.
 

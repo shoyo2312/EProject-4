@@ -41,7 +41,8 @@ public class ProductServiceImpl implements ProductService {
         product = productRepository.save(product);
 
         productEventProducer.publishProductCreated(
-                ProductCreatedEvent.of(product.getId(), sellerId, product.getName(), product.getPrice()));
+                ProductCreatedEvent.of(product.getId(), sellerId, product.getName(), product.getDescription(),
+                        product.getPrice(), product.getCategory(), product.getImageUrl()));
 
         return productMapper.toResponse(product);
     }

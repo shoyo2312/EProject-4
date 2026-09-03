@@ -50,7 +50,10 @@ public class SearchServiceImpl implements SearchService {
         if (StringUtils.hasText(query)) {
             // Tags are in the free-text arm too, so a caller who types "dance" without the hash
             // still finds videos whose only mention of it is a caption hashtag.
-            criteria = criteria.and(Criteria.where("title").matches(query)
+            // Title outranks a body mention of the same word: both are analysed text, so without
+            // the boost a caption that happens to say "dance" scores level with a video called
+            // "Dance tutorial".
+            criteria = criteria.and(Criteria.where("title").matches(query).boost(3f)
                     .or("description").matches(query)
                     .or("tags").is(normalizeHashtag(query)));
         }
@@ -62,6 +65,9 @@ public class SearchServiceImpl implements SearchService {
         }
 
         CriteriaQuery criteriaQuery = new CriteriaQuery(criteria, pageable);
+        // Elasticsearch stops counting at 10 000 by default and reports that as the total, so a
+        // page count built from it silently caps — Page is a paging contract, it has to be exact.
+        criteriaQuery.setTrackTotalHits(true);
         SearchHits<VideoDocument> hits = elasticsearchOperations.search(criteriaQuery, VideoDocument.class);
 
         List<VideoSearchResponse> content = hits.getSearchHits().stream()
@@ -91,6 +97,7 @@ public class SearchServiceImpl implements SearchService {
         }
 
         CriteriaQuery criteriaQuery = new CriteriaQuery(criteria, pageable);
+        criteriaQuery.setTrackTotalHits(true);
         SearchHits<ProductDocument> hits = elasticsearchOperations.search(criteriaQuery, ProductDocument.class);
 
         List<ProductSearchResponse> content = hits.getSearchHits().stream()

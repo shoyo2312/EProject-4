@@ -77,6 +77,7 @@ Response `data.content[]` → `VideoSearchResponse`:
   "description": "Mô tả",         // có thể null (event cũ chưa mang description)
   "thumbnailUrl": "http://localhost:9000/video-media/...",  // null cho tới khi transcode xong
   "status": "PUBLISHED",
+  "durationSeconds": 42,          // null cho tới khi transcode xong
   "tags": ["dance", "food"],      // đã chuẩn hoá, có thể rỗng, không bao giờ null
   "viewCount": 1043,
   "likeCount": 42,
@@ -86,7 +87,7 @@ Response `data.content[]` → `VideoSearchResponse`:
 }
 ```
 
-> **Các counter (`viewCount`/`likeCount`/…) trong kết quả tìm kiếm là bản sao trễ nhất trong hệ thống** — chúng đến từ Kafka event và search-service chưa có outbox nên có thể lệch vĩnh viễn nếu một event bị mất. Đừng hiển thị chúng như số chính xác; nguồn sự thật là `interaction-service` `GET /counts` (xem `docs/interaction-service-api.md` mục 4).
+> **Các counter (`viewCount`/`likeCount`/…) trong kết quả tìm kiếm là bản sao trễ nhất trong hệ thống** — chúng đến từ Kafka event và search-service không có outbox nên có thể lệch vĩnh viễn nếu một event bị mất. Đừng hiển thị chúng như số chính xác; nguồn sự thật là `interaction-service` `GET /counts` (xem `docs/interaction-service-api.md` mục 4).
 
 ### 3.2 `GET /products` — tìm sản phẩm
 
@@ -161,13 +162,19 @@ search-service **chỉ tiêu thụ**, không phát event nào. Toàn bộ index 
 |---|---|---|---|
 | `video.video-events` | `VideoPublishedEvent` (vắng ⇒ coi là Published) | `VideoPublishedEvent` | Tạo `VideoDocument`, `status = PROCESSING`, copy `title`/`description`/`tags` |
 | `video.video-events` | `VideoDeletedEvent` | `VideoDeletedEvent` | Xoá hẳn document (không đánh dấu cờ) |
-| `media.video-transcoded-events` | — | `VideoTranscodedEvent` | `success` → `status = PUBLISHED` + `thumbnailUrl`; ngược lại `status = FAILED` |
+| `media.video-transcoded-events` | — | `VideoTranscodedEvent` | `success` → `status = PUBLISHED` + `thumbnailUrl` + `durationSeconds`; ngược lại `status = FAILED`. Đến trước publication thì kết quả được giữ ở `pendingStatus` và publication nhận lại — document chưa có `status` nên chưa vào kết quả tìm kiếm |
 | `interaction.like-events` | — | `VideoLikeEvent` | `likeCount += liked ? 1 : -1` (kẹp ≥ 0) |
-| `interaction.comment-events` | `CommentCreatedEvent` (vắng ⇒ Created) | `CommentCreatedEvent` | `commentCount++`. **Không** xử lý `CommentDeletedEvent` (chưa giảm) |
+| `interaction.view-events` | — | `VideoViewedEvent` | `viewCount++` |
+| `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | `commentCount++` / `commentCount--` (kẹp ≥ 0) |
 | `interaction.share-events` | — | `VideoSharedEvent` | `shareCount++` |
-| `product.product-events` | — | `ProductCreatedEvent` | Tạo `ProductDocument`, `status = ACTIVE` |
+| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` / `ProductSuspendedEvent` / `ProductReactivatedEvent` | 4 event trên | `status = TAKEN_DOWN` / trả về `pendingStatus` / `SUSPENDED` / `ACTIVE`. Event khác trên topic (UserBanned…) bị bỏ qua |
+| `product.product-events` | — | `ProductCreatedEvent` | Tạo `ProductDocument` đầy đủ (`name`, `description`, `category`, `imageUrl`, `price`), `status = ACTIVE` |
 
-Hạn chế đã biết: (1) chưa nghe `admin.moderation-events` nên takedown không phản ánh vào search; (2) chưa migrate `kafka-lib` error handler — consumer lỗi sẽ retry vô hạn theo mặc định Spring Kafka, chưa có `<topic>.DLT`; (3) `CommentDeletedEvent` không làm giảm `commentCount`.
+Mọi consumer **claim `eventId` trước khi xử lý** (`op_type=create` trên index `processed_events`, 409 ⇒ đã xử lý) chứ không đọc-rồi-ghi: trên Elasticsearch một document vừa ghi chưa đọc lại được cho tới lần refresh kế tiếp (mặc định 1s), nên check-then-act để lọt mọi redelivery trong cửa sổ đó. Mọi cập nhật counter là scripted partial update kèm `retry_on_conflict`, không phải đọc-sửa-ghi cả document.
+
+Row `processed_events` được job retention xoá sau 30 ngày (`search.processed-events.retention-days`).
+
+Hạn chế đã biết: search-service không có outbox và không phát event nào, nên một event bị mất phía producer vẫn để lại index lệch vĩnh viễn.
 
 ## 8. Những điều KHÔNG nên làm phía Flutter
 
