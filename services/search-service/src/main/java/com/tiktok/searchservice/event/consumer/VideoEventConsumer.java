@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * video.video-events carries a publication and a deletion, both flat JSON objects with no type
@@ -61,6 +62,8 @@ public class VideoEventConsumer {
                 .id(event.videoId())
                 .userId(event.userId())
                 .title(event.title())
+                .description(event.description())
+                .tags(event.tags() == null ? List.of() : event.tags())
                 .status("PROCESSING")
                 .viewCount(0)
                 .likeCount(0)

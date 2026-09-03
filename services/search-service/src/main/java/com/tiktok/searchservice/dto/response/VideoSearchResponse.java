@@ -1,6 +1,7 @@
 package com.tiktok.searchservice.dto.response;
 
 import java.time.Instant;
+import java.util.List;
 
 public record VideoSearchResponse(
         String id,
@@ -9,6 +10,7 @@ public record VideoSearchResponse(
         String description,
         String thumbnailUrl,
         String status,
+        List<String> tags,
         long viewCount,
         long likeCount,
         long commentCount,

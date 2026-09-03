@@ -19,6 +19,7 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Only surfaces documents in a terminal "visible" state (video status PUBLISHED, product
@@ -31,13 +32,33 @@ public class SearchServiceImpl implements SearchService {
     private final ElasticsearchOperations elasticsearchOperations;
     private final SearchMapper searchMapper;
 
+    /**
+     * A hashtag as a caller types it — "#Dance", "dance", " Dance " — reduced to what
+     * video-service actually stored. It normalises tags at publish time (lowercase, {@code #}
+     * stripped) and the field is a keyword, so an un-normalised term matches nothing at all
+     * rather than matching loosely.
+     */
+    private static String normalizeHashtag(String hashtag) {
+        String stripped = hashtag.strip().toLowerCase(Locale.ROOT);
+        return stripped.startsWith("#") ? stripped.substring(1).strip() : stripped;
+    }
+
     @Override
-    public Page<VideoSearchResponse> searchVideos(String query, Pageable pageable) {
+    public Page<VideoSearchResponse> searchVideos(String query, String hashtag, Pageable pageable) {
         Criteria criteria = Criteria.where("status").is("PUBLISHED");
 
         if (StringUtils.hasText(query)) {
-            criteria = criteria.and(
-                    Criteria.where("title").matches(query).or("description").matches(query));
+            // Tags are in the free-text arm too, so a caller who types "dance" without the hash
+            // still finds videos whose only mention of it is a caption hashtag.
+            criteria = criteria.and(Criteria.where("title").matches(query)
+                    .or("description").matches(query)
+                    .or("tags").is(normalizeHashtag(query)));
+        }
+        if (StringUtils.hasText(hashtag)) {
+            String normalized = normalizeHashtag(hashtag);
+            if (!normalized.isEmpty()) {
+                criteria = criteria.and(Criteria.where("tags").is(normalized));
+            }
         }
 
         CriteriaQuery criteriaQuery = new CriteriaQuery(criteria, pageable);
