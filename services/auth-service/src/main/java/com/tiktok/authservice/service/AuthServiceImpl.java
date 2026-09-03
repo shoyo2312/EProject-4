@@ -105,8 +105,19 @@ public class AuthServiceImpl implements AuthService {
         return userMapper.toResponse(saved);
     }
 
+    /**
+     * No transaction of its own, unlike every other method here, because there is nothing in it to
+     * make atomic: the account lookup is one read, and the only write is the {@code refresh_tokens}
+     * row that {@link TokenIssuer#issue} now opens its own transaction for.
+     *
+     * <p>What the transaction did cost is a pooled connection held across the whole method, with
+     * the slowest thing in it sitting in the middle: bcrypt is deliberately expensive, ~100ms per
+     * verification, and there is a Redis round trip either side of it. Hibernate takes the
+     * connection at the first statement rather than at {@code begin()}, so the lookup claimed it
+     * and bcrypt kept it. Under a login burst that is connections parked doing no database work
+     * while the rest of the service queues for one.
+     */
     @Override
-    @Transactional
     public TokenResponse login(LoginRequest request) {
         String identifier = request.usernameOrEmail();
 
