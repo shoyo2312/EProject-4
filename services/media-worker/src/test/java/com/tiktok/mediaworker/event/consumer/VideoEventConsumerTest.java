@@ -58,7 +58,7 @@ class VideoEventConsumerTest {
 
     @Test
     void onMessage_transcodeSucceeds_publishesSuccessEvent() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid1", 1L, "My video", null, "s3://raw/vid1.mp4", List.of());
 
         when(transcodeService.transcode("vid1", "s3://raw/vid1.mp4"))
                 .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/master.m3u8", 30));
@@ -77,7 +77,7 @@ class VideoEventConsumerTest {
 
     @Test
     void onMessage_transcodeKeepsThrowing_publishesFailureEvent() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("vid2", 1L, "Broken video", "s3://raw/vid2.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid2", 1L, "Broken video", null, "s3://raw/vid2.mp4", List.of());
 
         when(transcodeService.transcode(anyString(), anyString())).thenThrow(new RuntimeException("MinIO unreachable"));
 
@@ -100,7 +100,7 @@ class VideoEventConsumerTest {
      */
     @Test
     void onMessage_transcodeRecoversOnASecondAttempt_publishesSuccess() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("vid5", 1L, "Flaky", "s3://raw/vid5.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid5", 1L, "Flaky", null, "s3://raw/vid5.mp4", List.of());
 
         when(transcodeService.transcode("vid5", "s3://raw/vid5.mp4"))
                 .thenThrow(new RuntimeException("MinIO unreachable"))
@@ -121,7 +121,7 @@ class VideoEventConsumerTest {
      */
     @Test
     void onMessage_publishFails_doesNotReportTheVideoAsFailed() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("vid6", 1L, "Fine", "s3://raw/vid6.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid6", 1L, "Fine", null, "s3://raw/vid6.mp4", List.of());
 
         when(transcodeService.transcode("vid6", "s3://raw/vid6.mp4"))
                 .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/master.m3u8", 30));

@@ -91,7 +91,8 @@ public class VideoEventPublisher {
 
     private ProducerRecord<String, String> toPublishedRecord(Video video) {
         VideoPublishedEvent event = VideoPublishedEvent.of(
-                video.getId(), video.getUserId(), video.getTitle(), video.getRawFileUrl(), video.getTags());
+                video.getId(), video.getUserId(), video.getTitle(), video.getDescription(),
+                video.getRawFileUrl(), video.getTags());
         try {
             return record(video.getId(), "VideoPublishedEvent", objectMapper.writeValueAsString(event));
         } catch (JsonProcessingException ex) {

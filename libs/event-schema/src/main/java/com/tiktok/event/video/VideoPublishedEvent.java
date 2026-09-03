@@ -13,6 +13,10 @@ public record VideoPublishedEvent(
         String videoId,
         Long userId,
         String title,
+        // Carried for the same reason as tags: search-service builds its index from this event
+        // and has no read path into video-service's Mongo, so a description that stays here is a
+        // description no query can ever match on.
+        String description,
         String rawFileUrl,
         // Carried on the event because recommendation-service has no read path into video-service's
         // Mongo, and tags are the only content feature a candidate generator has to work with —
@@ -34,10 +38,11 @@ public record VideoPublishedEvent(
      * identifiers from every other producer, all of which are UUIDs.
      */
     public static VideoPublishedEvent of(
-            String videoId, Long userId, String title, String rawFileUrl, List<String> tags) {
+            String videoId, Long userId, String title, String description, String rawFileUrl,
+            List<String> tags) {
         String eventId = UUID.nameUUIDFromBytes(
                 ("VideoPublishedEvent:" + videoId).getBytes(StandardCharsets.UTF_8)).toString();
-        return new VideoPublishedEvent(eventId, Instant.now(), videoId, userId, title, rawFileUrl,
-                tags == null ? List.of() : List.copyOf(tags));
+        return new VideoPublishedEvent(eventId, Instant.now(), videoId, userId, title, description,
+                rawFileUrl, tags == null ? List.of() : List.copyOf(tags));
     }
 }
