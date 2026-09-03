@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.BooleanSupplier;
 
 @Slf4j
@@ -30,6 +31,9 @@ import java.util.function.BooleanSupplier;
 public class LikeServiceImpl implements LikeService {
 
     private static final int MAX_LWT_RETRIES = 2;
+
+    /** Same ceiling the paged listings use — one feed page's worth of cards. */
+    private static final int MAX_BATCH_SIZE = 50;
 
     private final LikeByVideoRepository likeByVideoRepository;
     private final LikeByUserRepository likeByUserRepository;
@@ -151,7 +155,16 @@ public class LikeServiceImpl implements LikeService {
     public List<LikeStatusResponse> getStatuses(List<Long> videoIds, Long currentUserId) {
         // One point read per id against Cassandra/Redis rather than a fan-out of HTTP requests
         // through the gateway — the batch endpoint exists to collapse the latter, not the former.
-        return videoIds.stream().map(videoId -> getStatus(videoId, currentUserId)).toList();
+        // Which is also why the cap is here and not in the controller: every id costs a Cassandra
+        // point read and a cache read, and the ids arrive in a query string, so nothing else stops
+        // one request asking for thousands of round trips. Distinct first, so a list padded with
+        // one repeated id cannot use up the cap.
+        return videoIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .limit(MAX_BATCH_SIZE)
+                .map(videoId -> getStatus(videoId, currentUserId))
+                .toList();
     }
 
     @Override

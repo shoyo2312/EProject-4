@@ -1,5 +1,6 @@
 package com.tiktok.interactionservice.service;
 
+import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.request.WatchRequest;
 import com.tiktok.interactionservice.dto.response.WatchResponse;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
@@ -44,11 +45,20 @@ class ViewServiceImplWatchTest {
     private InteractionRateLimiter rateLimiter;
 
     @Mock
+    private VideoOwnershipClient videoOwnershipClient;
+
+    @Mock
     private StringRedisTemplate redisTemplate;
 
     private ViewService viewService() {
         return new ViewServiceImpl(videoCountersRepository, counterCacheService,
-                eventPublisher, rateLimiter, redisTemplate);
+                eventPublisher, rateLimiter, videoOwnershipClient, redisTemplate);
+    }
+
+    /** video-service knows the video's real length, probed out of the file by the transcode. */
+    private ViewService viewServiceWithProbedDuration(long durationMs) {
+        org.mockito.Mockito.when(videoOwnershipClient.durationMs(7L)).thenReturn(durationMs);
+        return viewService();
     }
 
     /** How the limiter behaves once this viewer is past their budget for this video. */
@@ -118,6 +128,48 @@ class ViewServiceImplWatchTest {
 
         assertThat(response.watchedMs()).isEqualTo(tenMinutes);
         verify(eventPublisher).publishWatch(7L, 1L, tenMinutes, tenMinutes, true);
+    }
+
+    /**
+     * The report says a one-millisecond video was watched for one millisecond — a perfect
+     * completion, at whatever rate the limiter allows, and the completion counter and the tag
+     * affinity both take it at face value. @Positive lets it through, and the ceiling never
+     * looked down.
+     */
+    @Test
+    void recordWatch_absurdlyShortDuration_isHeldToTheFloorAndIsNotACompletion() {
+        WatchResponse response = viewService().recordWatch(7L, 1L, new WatchRequest(1L, 1L));
+
+        assertThat(response.completed()).isFalse();
+        verify(eventPublisher).publishWatch(7L, 1L, 1L, 3_000L, false);
+    }
+
+    /**
+     * The real fix: the denominator comes from the file video-service probed, not from whoever
+     * is posting. A claim of ten seconds on a sixty-second video is a sixth of a watch.
+     */
+    @Test
+    void recordWatch_probedDuration_overridesWhatTheClientClaims() {
+        ViewService viewService = viewServiceWithProbedDuration(60_000L);
+
+        WatchResponse response = viewService.recordWatch(7L, 1L, new WatchRequest(10_000L, 10_000L));
+
+        assertThat(response.completed()).isFalse();
+        verify(eventPublisher).publishWatch(7L, 1L, 10_000L, 60_000L, false);
+    }
+
+    /**
+     * A probed duration is trusted without a floor: a genuinely two-second video is allowed to be
+     * completed in two seconds. Only the unverified fallback needs holding up.
+     */
+    @Test
+    void recordWatch_probedShortVideo_canStillBeCompleted() {
+        ViewService viewService = viewServiceWithProbedDuration(2_000L);
+
+        WatchResponse response = viewService.recordWatch(7L, 1L, new WatchRequest(2_000L, 2_000L));
+
+        assertThat(response.completed()).isTrue();
+        verify(eventPublisher).publishWatch(7L, 1L, 2_000L, 2_000L, true);
     }
 
     /**

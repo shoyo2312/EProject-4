@@ -176,7 +176,7 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 | `auth.user-events` | auth-service (outbox) | — (1 shape) | `UserRegisteredEvent` | user-service |
 | `auth.social-avatar-events` | auth-service (fire-and-forget) | — | `SocialAvatarDiscoveredEvent` | media-worker |
 | `video.video-events` | video-service (outbox per-doc) | `VideoPublishedEvent` / `VideoDeletedEvent` (vắng ⇒ Published) | `VideoPublishedEvent`, `VideoDeletedEvent` | media-worker, search-service, recommendation-service, analytics-service |
-| `media.video-transcoded-events` | media-worker (chờ ack 30s) | — | `VideoTranscodedEvent` | video-service, search-service |
+| `media.video-transcoded-events` | media-worker (chờ ack 30s) | — | `VideoTranscodedEvent` | video-service, search-service, recommendation-service |
 | `media.avatar-events` | media-worker (chờ ack 30s) | — | `AvatarMirroredEvent` | user-service |
 | `interaction.like-events` | interaction-service (chờ ack 5s) | — | `VideoLikeEvent` | video-service, recommendation-service, search-service |
 | `interaction.comment-events` | interaction-service (chờ ack 5s) | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | video-service, recommendation-service, search-service |

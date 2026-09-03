@@ -10,9 +10,10 @@ import jakarta.validation.constraints.PositiveOrZero;
  *
  * @param watchedMs  total played, summed across replays inside the session, so a looping video
  *                   reports more than its duration rather than starting over
- * @param durationMs the video's length as the player saw it, sent alongside rather than read from
- *                   the video record: what matters is the fraction of what was playable, and the
- *                   two can disagree while a re-transcode is in flight
+ * @param durationMs the video's length as the player saw it. Advisory only — the server prefers
+ *                   the duration video-service probed and falls back to this one, clamped, when
+ *                   there is none yet, because a client that sends watchedMs and durationMs equal
+ *                   would otherwise report a completion for every request
  */
 public record WatchRequest(
         @NotNull @PositiveOrZero Long watchedMs,

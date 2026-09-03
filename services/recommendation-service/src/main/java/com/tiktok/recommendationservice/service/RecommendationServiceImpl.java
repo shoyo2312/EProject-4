@@ -45,13 +45,7 @@ public class RecommendationServiceImpl implements RecommendationService {
     private final StringRedisTemplate redisTemplate;
 
     @Override
-    public void recordVideoPublished(String videoId, List<String> tags) {
-        addEngagement(videoId, PUBLISH_SCORE);
-        double publishedAt = Instant.now().getEpochSecond();
-        // Recorded for every video, not only tagged ones: the ranking model asks how old a video
-        // is whether or not this viewer has any interest in its tags.
-        redisTemplate.opsForZSet().add(RecoKeys.VIDEO_PUBLISHED, videoId, publishedAt);
-
+    public void recordVideoUploaded(String videoId, List<String> tags) {
         if (tags.isEmpty()) {
             return;
         }
@@ -59,6 +53,32 @@ public class RecommendationServiceImpl implements RecommendationService {
         redisTemplate.opsForSet().add(tagKey, tags.toArray(String[]::new));
         redisTemplate.expire(tagKey, RecoKeys.PROFILE_TTL);
 
+        // Two topics, so nothing orders the publication against the transcode result as far as
+        // this service is concerned: a lagging video.video-events partition can hand us the
+        // upload after the video is already live. Indexing the tags here in that case is what
+        // keeps a ready video out of half the indexes it belongs in.
+        Double publishedAt = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_PUBLISHED, videoId);
+        if (publishedAt != null) {
+            indexTags(videoId, tags, publishedAt);
+        }
+    }
+
+    @Override
+    public void recordVideoReady(String videoId) {
+        addEngagement(videoId, PUBLISH_SCORE);
+        double publishedAt = Instant.now().getEpochSecond();
+        // Recorded for every video, not only tagged ones: the ranking model asks how old a video
+        // is whether or not this viewer has any interest in its tags.
+        redisTemplate.opsForZSet().add(RecoKeys.VIDEO_PUBLISHED, videoId, publishedAt);
+
+        Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
+        if (tags == null || tags.isEmpty()) {
+            return;
+        }
+        indexTags(videoId, tags, publishedAt);
+    }
+
+    private void indexTags(String videoId, Iterable<String> tags, double publishedAt) {
         for (String tag : tags) {
             String index = RecoKeys.tagIndex(tag);
             redisTemplate.opsForZSet().add(index, videoId, publishedAt);

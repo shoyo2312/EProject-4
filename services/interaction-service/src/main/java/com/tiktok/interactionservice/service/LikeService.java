@@ -13,7 +13,11 @@ public interface LikeService {
 
     LikeStatusResponse getStatus(Long videoId, Long currentUserId);
 
-    /** Same answer as {@link #getStatus}, one per id, in the order given. */
+    /**
+     * Same answer as {@link #getStatus}, one per distinct id, in the order given. Capped: each id
+     * costs a point read, and the ids arrive in a query string, so anything past one page's worth
+     * is dropped rather than served.
+     */
     List<LikeStatusResponse> getStatuses(List<Long> videoIds, Long currentUserId);
 
     VideoIdPageResponse listLikedVideos(Long currentUserId, String cursor, int size);

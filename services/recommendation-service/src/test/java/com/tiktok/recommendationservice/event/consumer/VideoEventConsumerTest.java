@@ -48,13 +48,13 @@ class VideoEventConsumerTest {
     }
 
     @Test
-    void onMessage_newEvent_recordsPublish() throws Exception {
+    void onMessage_newEvent_recordsTheUpload() throws Exception {
         VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", null, "s3://raw/vid1.mp4", List.of("dance"));
         givenFirstDelivery(event.eventId());
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
 
-        verify(recommendationService).recordVideoPublished("vid1", List.of("dance"));
+        verify(recommendationService).recordVideoUploaded("vid1", List.of("dance"));
     }
 
     @Test
@@ -64,7 +64,7 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
 
-        verify(recommendationService, never()).recordVideoPublished("vid1", List.of("dance"));
+        verify(recommendationService, never()).recordVideoUploaded("vid1", List.of("dance"));
     }
 
     /**
@@ -78,7 +78,7 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), null);
 
-        verify(recommendationService).recordVideoPublished("vid2", List.of());
+        verify(recommendationService).recordVideoUploaded("vid2", List.of());
     }
 
     @Test
@@ -103,6 +103,6 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoDeletedEvent"));
 
-        verify(recommendationService, never()).recordVideoPublished("vid4", null);
+        verify(recommendationService, never()).recordVideoUploaded("vid4", null);
     }
 }

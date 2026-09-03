@@ -17,6 +17,11 @@ import java.nio.charset.StandardCharsets;
 /**
  * video.video-events carries a publication and a deletion, both flat JSON objects with no type
  * field, so routing is on the eventType header video-service sets — see its VideoEventPublisher.
+ *
+ * <p>A publication only stashes the video's tags; what puts it in front of viewers is the
+ * transcode result on media.video-transcoded-events — see VideoTranscodedEventConsumer. The
+ * publication fires while the video is still PROCESSING, because media-worker is triggered by
+ * that very event.
  */
 @Slf4j
 @Component
@@ -43,7 +48,7 @@ public class VideoEventConsumer {
         if (VIDEO_PUBLISHED.equals(eventType)) {
             VideoPublishedEvent event = objectMapper.readValue(payload, VideoPublishedEvent.class);
             inboxService.runOnce(event.eventId(), () ->
-                    recommendationService.recordVideoPublished(event.videoId(), event.tags()));
+                    recommendationService.recordVideoUploaded(event.videoId(), event.tags()));
         } else if (VIDEO_DELETED.equals(eventType)) {
             VideoDeletedEvent event = objectMapper.readValue(payload, VideoDeletedEvent.class);
             inboxService.runOnce(event.eventId(), () ->

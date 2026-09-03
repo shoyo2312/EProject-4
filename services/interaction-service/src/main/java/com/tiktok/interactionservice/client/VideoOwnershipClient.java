@@ -10,9 +10,10 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 /**
- * Answers "does this account own that video" and "are comments off", for the one caller who needs
- * to know something outside interaction-service's own data: a video's owner may delete any comment
- * on it, not only their own, and video-service is the only place that knows who a video belongs to.
+ * Answers "does this account own that video", "are comments off" and "how long is it really", for
+ * the callers who need something outside interaction-service's own data: a video's owner may delete
+ * any comment on it, not only their own, and video-service is the only place that knows who a video
+ * belongs to or what the transcode probed its duration to be.
  *
  * <p>Reads {@code /policy} rather than the video itself. {@code GET /videos/{id}} filters by
  * visibility and this client sends no token, so it answered 404 for exactly the videos where these
@@ -27,7 +28,7 @@ public class VideoOwnershipClient {
     private final RestClient videoServiceRestClient;
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record VideoPolicyView(Long userId, boolean commentsDisabled) {
+    private record VideoPolicyView(Long userId, boolean commentsDisabled, Integer durationSeconds) {
     }
 
     /**
@@ -48,6 +49,22 @@ public class VideoOwnershipClient {
     public boolean areCommentsDisabled(Long videoId) {
         VideoPolicyView view = fetch(videoId);
         return view != null && view.commentsDisabled();
+    }
+
+    /**
+     * The video's real length in milliseconds, as probed during transcoding, or 0 when nobody
+     * knows it yet — the transcode has not finished, or video-service could not be reached. The
+     * caller needs the difference: a duration this service confirmed can be trusted as the
+     * denominator of a watch ratio, a missing one leaves the client's own number to be treated
+     * with suspicion. Zero rather than null for "unknown" because every caller has to handle it
+     * either way, and a length of zero is not a thing a video can have.
+     */
+    public long durationMs(Long videoId) {
+        VideoPolicyView view = fetch(videoId);
+        if (view == null || view.durationSeconds() == null || view.durationSeconds() <= 0) {
+            return 0;
+        }
+        return view.durationSeconds() * 1000L;
     }
 
     private VideoPolicyView fetch(Long videoId) {

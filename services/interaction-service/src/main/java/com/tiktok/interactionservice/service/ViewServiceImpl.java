@@ -1,5 +1,6 @@
 package com.tiktok.interactionservice.service;
 
+import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.request.ViewRequest;
 import com.tiktok.interactionservice.dto.request.WatchRequest;
 import com.tiktok.interactionservice.dto.response.ViewResponse;
@@ -44,10 +45,21 @@ public class ViewServiceImpl implements ViewService {
      */
     private static final long MAX_DURATION_MS = Duration.ofMinutes(10).toMillis();
 
+    /**
+     * The shortest playable video, and the floor a client-reported duration is held to when
+     * video-service cannot confirm the real one. It is the sanity check the ceiling never was:
+     * {@code {"watchedMs": 1, "durationMs": 1}} passes @Positive, survives the clamp, and lands a
+     * ratio of 1.0 — a full completion, at whatever rate the rate limiter allows. Raising the
+     * denominator to this floor instead of rejecting the report keeps the watch counted while
+     * making the ratio what such a claim deserves.
+     */
+    private static final long MIN_DURATION_MS = Duration.ofSeconds(3).toMillis();
+
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
+    private final VideoOwnershipClient videoOwnershipClient;
     private final StringRedisTemplate redisTemplate;
 
     @Override
@@ -95,11 +107,13 @@ public class ViewServiceImpl implements ViewService {
 
     @Override
     public WatchResponse recordWatch(Long videoId, Long currentUserId, WatchRequest request) {
-        // Clamped because both numbers come from the client and nothing stops them claiming an
-        // hour on a fifteen-second video. Left unclamped that is not merely a wrong row, it is the
-        // most attractive row in the training set — the label is a ratio, and the highest ratios
-        // are what a ranker learns hardest from.
-        long durationMs = Math.min(request.durationMs(), MAX_DURATION_MS);
+        // The denominator comes from video-service when it knows it, and only falls back to the
+        // client's own claim when it does not. Both numbers arriving from the client is not merely
+        // a wrong row, it is the most attractive row in the training set — the label is a ratio,
+        // and the highest ratios are what a ranker learns hardest from. The fallback is clamped
+        // into [MIN, MAX]: past the ceiling the report describes a video that cannot exist here,
+        // and under the floor it describes one nobody could have watched.
+        long durationMs = resolveDurationMs(videoId, request.durationMs());
         long watchedMs = Math.min(request.watchedMs(), durationMs);
         boolean completed = watchedMs >= durationMs * COMPLETION_RATIO;
 
@@ -107,6 +121,23 @@ public class ViewServiceImpl implements ViewService {
         eventPublisher.publishWatch(videoId, currentUserId, watchedMs, durationMs, completed);
 
         return new WatchResponse(videoId, watchedMs, completed);
+    }
+
+    /**
+     * Prefers the duration the transcode probed out of the file over the one the player reports.
+     * A confirmed duration needs no floor — a genuinely two-second video is allowed to be
+     * completed in two seconds — and it is the fallback, not the real number, that a fabricated
+     * report can move.
+     *
+     * <p>Fails open to the clamped client value: a video still transcoding has no probed duration
+     * at all, and an unreachable video-service must not stop watches being recorded.
+     */
+    private long resolveDurationMs(Long videoId, long reportedMs) {
+        long probedMs = videoOwnershipClient.durationMs(videoId);
+        if (probedMs > 0) {
+            return Math.min(probedMs, MAX_DURATION_MS);
+        }
+        return Math.clamp(reportedMs, MIN_DURATION_MS, MAX_DURATION_MS);
     }
 
     /**
