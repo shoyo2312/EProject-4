@@ -20,7 +20,7 @@ endif
 	infra-up infra-down infra-reset infra-logs infra-status \
 	run-gateway run-auth run-user run-video run-interaction run-story \
 	run-recommendation run-chat run-order run-payment run-inventory \
-	run-admin run-analytics \
+	run-admin run-analytics run-search \
 	migrate-auth migrate-user migrate-order migrate-product migrate-payment \
 	migrate-inventory migrate-admin migrate-all
 
@@ -71,6 +71,7 @@ help:
 	@echo "    make run-order          Run order-service :8092"
 	@echo "    make run-payment        Run payment-service"
 	@echo "    make run-inventory      Run inventory-service"
+	@echo "    make run-search         Run search-service :8095"
 	@echo "    make run-admin          Run admin-service :8096"
 	@echo "    make run-analytics      Run analytics-service :8097"
 	@echo "    make rank-up            Start rank-service :8098 (internal)"
@@ -215,6 +216,9 @@ run-inventory:
 	./mvnw spring-boot:run -pl services/inventory-service -Dspring-boot.run.profiles=local
 
 # Cả hai service này phục vụ admin console (../tiktok-admin) và đều yêu cầu ROLE_ADMIN.
+run-search:
+	./mvnw spring-boot:run -pl services/search-service -Dspring-boot.run.profiles=local
+
 run-admin:
 	./mvnw spring-boot:run -pl services/admin-service -Dspring-boot.run.profiles=local
 
