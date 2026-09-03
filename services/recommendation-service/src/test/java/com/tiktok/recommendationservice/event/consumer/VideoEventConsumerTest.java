@@ -49,7 +49,7 @@ class VideoEventConsumerTest {
 
     @Test
     void onMessage_newEvent_recordsPublish() throws Exception {
-        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of("dance"));
+        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", null, "s3://raw/vid1.mp4", List.of("dance"));
         givenFirstDelivery(event.eventId());
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
@@ -59,7 +59,7 @@ class VideoEventConsumerTest {
 
     @Test
     void onMessage_duplicateEvent_isSkipped() throws Exception {
-        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", "s3://raw/vid1.mp4", List.of("dance"));
+        VideoPublishedEvent event = VideoPublishedEvent.of("vid1", 1L, "My video", null, "s3://raw/vid1.mp4", List.of("dance"));
         // A mock InboxService runs nothing unless told to, which is the redelivery case itself.
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
@@ -73,7 +73,7 @@ class VideoEventConsumerTest {
      */
     @Test
     void onMessage_withoutAHeader_isTreatedAsAPublication() throws Exception {
-        VideoPublishedEvent event = VideoPublishedEvent.of("vid2", 1L, "My video", "s3://raw/vid2.mp4", List.of());
+        VideoPublishedEvent event = VideoPublishedEvent.of("vid2", 1L, "My video", null, "s3://raw/vid2.mp4", List.of());
         givenFirstDelivery(event.eventId());
 
         consumer().onMessage(objectMapper.writeValueAsString(event), null);

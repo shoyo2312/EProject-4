@@ -53,7 +53,7 @@ class TrainingSinkConsumerTest {
     @Test
     void publishedEvent_storesTheTagsTheRankerTrainsOn() throws Exception {
         VideoPublishedEvent event = VideoPublishedEvent.of(
-                "vid1", 7L, "A title", "raw.mp4", List.of("dance", "music"));
+                "vid1", 7L, "A title", null, "raw.mp4", List.of("dance", "music"));
 
         new VideoEventConsumer(engagementEventRepository, trainingDataRepository, objectMapper)
                 .onMessage(objectMapper.writeValueAsString(event),

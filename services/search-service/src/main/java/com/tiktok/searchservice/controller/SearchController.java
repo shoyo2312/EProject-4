@@ -24,8 +24,9 @@ public class SearchController {
     @GetMapping("/videos")
     public ApiResponse<Page<VideoSearchResponse>> searchVideos(
             @RequestParam(required = false) String q,
+            @RequestParam(required = false) String hashtag,
             Pageable pageable) {
-        return ApiResponse.success(searchService.searchVideos(q, pageable));
+        return ApiResponse.success(searchService.searchVideos(q, hashtag, pageable));
     }
 
     @GetMapping("/products")

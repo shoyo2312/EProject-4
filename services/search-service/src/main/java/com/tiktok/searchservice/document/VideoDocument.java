@@ -10,6 +10,7 @@ import org.springframework.data.elasticsearch.annotations.Field;
 import org.springframework.data.elasticsearch.annotations.FieldType;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Search projection of a video, built from Kafka events rather than owning writes —
@@ -40,6 +41,14 @@ public class VideoDocument {
 
     @Field(type = FieldType.Keyword)
     private String status;
+
+    /**
+     * Hashtags, already normalised by video-service (lowercased, {@code #} stripped) — so a
+     * keyword field rather than text: a tag filter is an exact match on the whole tag, not an
+     * analysed match that would let "dancing" hit "dance". Never null; an untagged video is empty.
+     */
+    @Field(type = FieldType.Keyword)
+    private List<String> tags;
 
     @Field(type = FieldType.Long)
     private long viewCount;

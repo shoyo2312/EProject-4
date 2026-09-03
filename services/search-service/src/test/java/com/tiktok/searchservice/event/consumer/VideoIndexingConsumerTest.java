@@ -55,11 +55,13 @@ class VideoIndexingConsumerTest {
 
     @Test
     void onMessage_indexesVideoThenAppliesTranscoding() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("v1", 1L, "My first video", "s3://raw/1.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("v1", 1L, "My first video", "caption #dance", "s3://raw/1.mp4", List.of("dance"));
         videoEventConsumer.onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
         VideoDocument indexed = videoDocumentRepository.findById("v1").orElseThrow();
         assertThat(indexed.getTitle()).isEqualTo("My first video");
+        assertThat(indexed.getDescription()).isEqualTo("caption #dance");
+        assertThat(indexed.getTags()).containsExactly("dance");
         assertThat(indexed.getStatus()).isEqualTo("PROCESSING");
 
         VideoTranscodedEvent transcoded = VideoTranscodedEvent.success("v1", "http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
@@ -72,7 +74,7 @@ class VideoIndexingConsumerTest {
 
     @Test
     void onMessage_replay_isNoOp() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("v2", 1L, "title", "s3://raw/2.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("v2", 1L, "title", null, "s3://raw/2.mp4", List.of());
         String payload = objectMapper.writeValueAsString(published);
 
         videoEventConsumer.onMessage(payload, header("VideoPublishedEvent"));
@@ -87,7 +89,7 @@ class VideoIndexingConsumerTest {
      */
     @Test
     void onMessage_deletion_dropsTheDocumentFromTheIndex() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("v3", 1L, "title", "s3://raw/3.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("v3", 1L, "title", null, "s3://raw/3.mp4", List.of());
         videoEventConsumer.onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
         assertThat(videoDocumentRepository.findById("v3")).isPresent();
 
@@ -103,7 +105,7 @@ class VideoIndexingConsumerTest {
      */
     @Test
     void onMessage_deletion_isNotMistakenForAReplayOfThePublication() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("v4", 1L, "title", "s3://raw/4.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("v4", 1L, "title", null, "s3://raw/4.mp4", List.of());
         VideoDeletedEvent deleted = VideoDeletedEvent.of("v4", 1L, "s3://raw/4.mp4");
 
         assertThat(deleted.eventId()).isNotEqualTo(published.eventId());

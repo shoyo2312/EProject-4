@@ -9,7 +9,7 @@ import java.math.BigDecimal;
 
 public interface SearchService {
 
-    Page<VideoSearchResponse> searchVideos(String query, Pageable pageable);
+    Page<VideoSearchResponse> searchVideos(String query, String hashtag, Pageable pageable);
 
     Page<ProductSearchResponse> searchProducts(String query, String category, BigDecimal minPrice, BigDecimal maxPrice, Pageable pageable);
 }
