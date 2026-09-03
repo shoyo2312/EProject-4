@@ -5,6 +5,14 @@ spring:
   application:
     name: search-service
 
+  data:
+    web:
+      pageable:
+        # Không chặn thì caller đặt size=100000 và chạm max_result_window của Elasticsearch,
+        # trả 500 thay vì một trang.
+        max-page-size: 100
+        default-page-size: 20
+
   elasticsearch:
     uris: ${ELASTICSEARCH_URIS:http://localhost:9200}
 

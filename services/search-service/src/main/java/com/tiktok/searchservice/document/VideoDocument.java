@@ -43,6 +43,17 @@ public class VideoDocument {
     private String status;
 
     /**
+     * Where a transcode result parks itself when it arrives before the publication that carries
+     * the video's content — see SearchIndexWriter. Also what a moderation restore reads to put
+     * back the status the takedown interrupted, rather than assuming PUBLISHED.
+     */
+    @Field(type = FieldType.Keyword)
+    private String pendingStatus;
+
+    @Field(type = FieldType.Integer)
+    private Integer durationSeconds;
+
+    /**
      * Hashtags, already normalised by video-service (lowercased, {@code #} stripped) — so a
      * keyword field rather than text: a tag filter is an exact match on the whole tag, not an
      * analysed match that would let "dancing" hit "dance". Never null; an untagged video is empty.
@@ -64,25 +75,4 @@ public class VideoDocument {
 
     @Field(type = FieldType.Date, format = org.springframework.data.elasticsearch.annotations.DateFormat.date_hour_minute_second_millis)
     private Instant createdAt;
-
-    public void markPublished(String thumbnailUrl, Integer durationSeconds) {
-        this.status = "PUBLISHED";
-        this.thumbnailUrl = thumbnailUrl;
-    }
-
-    public void markFailed() {
-        this.status = "FAILED";
-    }
-
-    public void applyLikeDelta(long delta) {
-        this.likeCount = Math.max(0, this.likeCount + delta);
-    }
-
-    public void incrementCommentCount() {
-        this.commentCount++;
-    }
-
-    public void incrementShareCount() {
-        this.shareCount++;
-    }
 }

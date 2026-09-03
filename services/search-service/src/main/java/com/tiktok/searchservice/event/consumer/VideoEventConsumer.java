@@ -3,10 +3,7 @@ package com.tiktok.searchservice.event.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
-import com.tiktok.searchservice.document.ProcessedEventDocument;
-import com.tiktok.searchservice.document.VideoDocument;
-import com.tiktok.searchservice.repository.ProcessedEventRepository;
-import com.tiktok.searchservice.repository.VideoDocumentRepository;
+import com.tiktok.searchservice.index.SearchIndexWriter;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -15,8 +12,6 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.util.List;
 
 /**
  * video.video-events carries a publication and a deletion, both flat JSON objects with no type
@@ -30,8 +25,8 @@ public class VideoEventConsumer {
     private static final String VIDEO_PUBLISHED = "VideoPublishedEvent";
     private static final String VIDEO_DELETED = "VideoDeletedEvent";
 
-    private final VideoDocumentRepository videoDocumentRepository;
-    private final ProcessedEventRepository processedEventRepository;
+    private final SearchIndexWriter searchIndexWriter;
+    private final IdempotentEventProcessor idempotentEventProcessor;
     private final ObjectMapper objectMapper;
 
     @KafkaListener(topics = "video.video-events", groupId = "search-service")
@@ -45,58 +40,20 @@ public class VideoEventConsumer {
                 : new String(eventTypeHeader, StandardCharsets.UTF_8);
 
         if (VIDEO_PUBLISHED.equals(eventType)) {
-            handlePublished(objectMapper.readValue(payload, VideoPublishedEvent.class));
+            VideoPublishedEvent event = objectMapper.readValue(payload, VideoPublishedEvent.class);
+            idempotentEventProcessor.runOnce(event.eventId(), VIDEO_PUBLISHED, () ->
+                    searchIndexWriter.indexPublication(event.videoId(), event.userId(), event.title(),
+                            event.description(), event.tags(), event.occurredAt()));
         } else if (VIDEO_DELETED.equals(eventType)) {
-            handleDeleted(objectMapper.readValue(payload, VideoDeletedEvent.class));
+            VideoDeletedEvent event = objectMapper.readValue(payload, VideoDeletedEvent.class);
+            // The document goes, rather than gaining a deleted flag: search has no use for a video
+            // nobody can open, and every query would then have to remember to exclude it. Deleting
+            // an id that is not there is a no-op in Elasticsearch, which is what a VideoDeletedEvent
+            // for a video whose publication never went out looks like from here.
+            idempotentEventProcessor.runOnce(event.eventId(), VIDEO_DELETED, () ->
+                    searchIndexWriter.deleteVideo(event.videoId()));
         } else {
             log.debug("Ignoring video eventType={}", eventType);
         }
-    }
-
-    private void handlePublished(VideoPublishedEvent event) {
-        if (processedEventRepository.existsById(event.eventId())) {
-            return;
-        }
-
-        VideoDocument document = VideoDocument.builder()
-                .id(event.videoId())
-                .userId(event.userId())
-                .title(event.title())
-                .description(event.description())
-                .tags(event.tags() == null ? List.of() : event.tags())
-                .status("PROCESSING")
-                .viewCount(0)
-                .likeCount(0)
-                .commentCount(0)
-                .shareCount(0)
-                .createdAt(event.occurredAt())
-                .build();
-        videoDocumentRepository.save(document);
-
-        markProcessed(event.eventId(), VIDEO_PUBLISHED);
-    }
-
-    /**
-     * The document goes, rather than gaining a deleted flag: search has no use for a video nobody
-     * can open, and every query would then have to remember to exclude it. Deleting an id that is
-     * not there is a no-op in Elasticsearch, so a redelivery costs a round trip and nothing else —
-     * the processed-events record is kept for consistency with the publication path, not because
-     * this needs it.
-     */
-    private void handleDeleted(VideoDeletedEvent event) {
-        if (processedEventRepository.existsById(event.eventId())) {
-            return;
-        }
-
-        videoDocumentRepository.deleteById(event.videoId());
-        markProcessed(event.eventId(), VIDEO_DELETED);
-    }
-
-    private void markProcessed(String eventId, String eventType) {
-        processedEventRepository.save(ProcessedEventDocument.builder()
-                .id(eventId)
-                .eventType(eventType)
-                .processedAt(Instant.now())
-                .build());
     }
 }
