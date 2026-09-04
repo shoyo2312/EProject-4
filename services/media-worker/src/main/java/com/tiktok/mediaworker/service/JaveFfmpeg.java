@@ -21,11 +21,19 @@ import java.util.concurrent.TimeUnit;
 public class JaveFfmpeg implements Ffmpeg {
 
     /**
-     * Both invocations copy or decode a single frame, so they are bounded by disk rather than by
-     * the length of the video. A run past this is ffmpeg stuck on a malformed file, not a long
-     * one, and the listener thread it is holding matters more than the output would.
+     * A remux copies streams and a still frame decodes one picture, so both are bounded by disk
+     * rather than by the length of the video. A run past this is ffmpeg stuck on a malformed
+     * file, not a long one, and the listener thread it is holding matters more than the output.
      */
-    private static final long TIMEOUT_SECONDS = 120;
+    private static final long COPY_TIMEOUT_SECONDS = 120;
+
+    /**
+     * Normalizing decodes and re-encodes every frame, so it does scale with the video's length.
+     * Ten minutes covers the longest upload the limits allow with room to spare; past that the
+     * file is beyond what one worker should hold a partition for. The consumer's poll interval is
+     * set against this number — see application.yml.
+     */
+    private static final long ENCODE_TIMEOUT_SECONDS = 600;
 
     /** Only the tail of ffmpeg's diagnostics goes in the log; the head is banner and stream dumps. */
     private static final int LOG_TAIL_CHARS = 1000;
@@ -34,7 +42,7 @@ public class JaveFfmpeg implements Ffmpeg {
 
     @Override
     public boolean faststart(Path source, Path target) {
-        return run("faststart remux", List.of(
+        return run("faststart remux", COPY_TIMEOUT_SECONDS, List.of(
                 "-i", source.toString(),
                 "-c", "copy",
                 "-movflags", "+faststart",
@@ -43,8 +51,33 @@ public class JaveFfmpeg implements Ffmpeg {
     }
 
     @Override
+    public boolean normalize(Path source, Path target) {
+        return run("normalize", ENCODE_TIMEOUT_SECONDS, List.of(
+                "-i", source.toString(),
+                // iw/ih here are the dimensions after ffmpeg has applied the container's rotation,
+                // so the cap lands on the video as it will be seen: the long side at 1280, the
+                // short one at 720. min() against iw is what keeps a smaller upload from being
+                // upscaled into a bigger file for nothing, and -2 rounds the other side to an even
+                // number, which yuv420p requires.
+                "-vf", "scale='min(iw,if(gt(iw,ih),1280,720))':-2",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "23",
+                // yuv420p and the high profile are what Safari and older Android decoders accept;
+                // libx264 would otherwise carry a 10-bit or 4:2:2 source's pixel format through.
+                "-profile:v", "high",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-ac", "2",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                target.toString()));
+    }
+
+    @Override
     public boolean stillFrame(Path source, Path target, int atSecond) {
-        return run("still frame", List.of(
+        return run("still frame", COPY_TIMEOUT_SECONDS, List.of(
                 // -ss ahead of -i seeks by index instead of decoding up to the mark.
                 "-ss", String.valueOf(atSecond),
                 "-i", source.toString(),
@@ -56,7 +89,7 @@ public class JaveFfmpeg implements Ffmpeg {
                 target.toString()));
     }
 
-    private boolean run(String what, List<String> arguments) {
+    private boolean run(String what, long timeoutSeconds, List<String> arguments) {
         List<String> command = new ArrayList<>(List.of(executable, "-nostdin", "-y", "-loglevel", "error"));
         command.addAll(arguments);
 
@@ -72,8 +105,8 @@ public class JaveFfmpeg implements Ffmpeg {
                     .start();
             process.getOutputStream().close();
 
-            if (!process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                log.warn("ffmpeg {} did not finish within {}s, killing it", what, TIMEOUT_SECONDS);
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                log.warn("ffmpeg {} did not finish within {}s, killing it", what, timeoutSeconds);
                 return false;
             }
             if (process.exitValue() != 0) {

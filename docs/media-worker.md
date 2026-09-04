@@ -12,40 +12,66 @@ Tài liệu cho người **vận hành**, không phải client. `media-worker` (
 
 Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi đè cùng key với cùng nội dung (no-op an toàn khi redeliver). Việc idempotent thật nằm ở consumer phía sau (`video-service` / `user-service`), nơi có bảng inbox.
 
-## 2. Transcode — faststart remux + thumbnail, chưa phải HLS thật
+## 2. Transcode — normalize hoặc faststart remux, chưa phải HLS
 
-`TranscodeServiceImpl` chạy ffmpeg nhưng **không re-encode**. Nó:
+`TranscodeServiceImpl`:
 
 1. Đọc `rawFileUrl` từ `VideoPublishedEvent`, suy ra object key trong bucket (`MediaKeys.objectKey` — hỗ trợ cả `s3://bucket/key` và `https://cdn/.../bucket/key`).
 2. `statObject` lấy size → vượt `media.video.max-bytes` (500 MB) → `MediaRejectedException` (từ chối vĩnh viễn). Check **trước** khi tải để file quá cỡ chỉ tốn một HEAD.
-3. `downloadObject` về thư mục tạm, `VideoProbe` (JAVE/ffprobe) đọc `durationSeconds` từ file local → vượt `media.video.max-duration-seconds` (600s) → `MediaRejectedException`.
-4. **Faststart remux**: `ffmpeg -i source -c copy -movflags +faststart -f mp4` — cùng stream, cùng bytes video, chỉ dời moov atom lên đầu file để player bắt đầu phát từ những byte đầu thay vì chờ tải hết. Upload lên `hls/{videoId}/source.mp4`.
+3. `downloadObject` về thư mục tạm, `VideoProbe` (JAVE parse output `ffmpeg -i`) đọc duration + codec + kích thước từ file local. Duration vượt `media.video.max-duration-seconds` (600s) → `MediaRejectedException`.
+4. **Chọn một trong hai đường** theo `ProbedVideo.needsNormalizing()` (xem §2.1). Upload kết quả lên `hls/{videoId}/source.mp4`.
 5. **Thumbnail**: `ffmpeg -ss {t} -i source -frames:v 1 -vf scale=-2:720 -q:v 3` với `t = min(1, duration/2)` giây. Upload lên `thumbnails/{videoId}.jpg`.
 6. Trả `VideoTranscodedEvent.success(videoId, thumbnailUrl, hlsUrl="{endpoint}/{bucket}/hls/{id}/source.mp4", durationSeconds)`.
 7. `finally`: xoá thư mục tạm — trên mọi đường ra, kể cả khi lỗi.
 
-Hai bước ffmpeg **suy giảm chứ không fail** (`Ffmpeg` trả `boolean`, không throw):
-- Remux thất bại (container/codec mp4 muxer không copy được, vd. VP8/WebM) → upload nguyên file gốc. Video vẫn phát được, chỉ mất tối ưu khởi động.
-- Không decode được frame → `thumbnailUrl` null, web client fallback poster của nó.
+### 2.1. Hai đường: rẻ và đắt
 
-Lý do: `FAILED` ở `video-service` là terminal. Biến một trong hai thành exception nghĩa là báo hỏng một video hoàn toàn xem được.
+`ProbedVideo.needsNormalizing()` trả `false` khi file **đã** ở dạng browser phát được: video `h264`, audio `aac` (hoặc không có audio), và cạnh dài ≤ 1280 **và** cạnh ngắn ≤ 720.
 
-Hệ quả:
-- **Có thumbnail thật** (`thumbnails/{videoId}.jpg`), null chỉ khi frame không decode được.
-- `hlsUrl` vẫn là một file `.mp4` phẳng, phát qua `<video>` chứ không cần hls.js. Nó nằm dưới prefix `hls/{id}/` để cleanup (list đệ quy prefix đó) vẫn xoá được khi có HLS thật sau này.
-- **Chi phí mới**: file đi qua disk của worker (bản copy cũ không chuyển byte nào ra khỏi MinIO). Dời moov atom = viết lại container, không có thao tác server-side nào làm được. Dự trù **~2× kích thước upload** disk tạm cho mỗi transcode chạy song song.
-- CPU vẫn phẳng theo độ dài video (copy stream + 1 frame decode), không tỉ lệ thuận — đó là thứ giữ listener không biến thành hàng đợi.
-- Chưa làm: normalize format (HEVC/AV1 → H.264), auto-rotation, HLS segment, ABR ladder. Xem `Ffmpeg` khi cần thêm.
+| | Điều kiện | Lệnh | Chi phí CPU |
+|---|---|---|---|
+| **Faststart remux** (rẻ) | đã đúng dạng | `-c copy -movflags +faststart -f mp4` | phẳng theo độ dài video |
+| **Normalize** (đắt) | mọi trường hợp còn lại | `-vf scale='min(iw,if(gt(iw,ih),1280,720))':-2 -c:v libx264 -preset veryfast -crf 23 -profile:v high -pix_fmt yuv420p -c:a aac -b:a 128k -ac 2 -movflags +faststart` | tỉ lệ thuận với độ dài video |
 
-### Binary ffmpeg
+Normalize bắt các trường hợp thật: HEVC từ iPhone, AV1, VP8/VP9 từ MediaRecorder của trình duyệt, quay 4K từ điện thoại.
 
-Không có bước Dockerfile nào. `JaveFfmpeg` dùng chính binary mà JAVE2 (`jave-all-deps`) đã giải nén để probe, qua `DefaultFFMPEGLocator.getExecutablePath()` — dependency native duy nhất của worker vẫn là cái build đã ship sẵn cho mọi platform.
+**Auto-rotation nằm trong normalize, không phải bước riêng.** `iw`/`ih` trong filter là kích thước **sau khi** ffmpeg áp display matrix của container, nên:
+- Cap 720p rơi đúng vào video như người xem thấy: cạnh dài 1280, cạnh ngắn 720. Video dọc ra `720x1280`, ngang ra `1280x720`.
+- Góc quay được **nướng thẳng vào pixel** và matrix bị gỡ khỏi output — không có chuyện player xoay lần thứ hai. `JaveFfmpegTest` kiểm cả hai: normalize file `1920x1080` gắn rotation 90 ra `720x1280`, và normalize **hai lần** vẫn ra `720x1280`.
+- `min(iw, ...)` là thứ chặn upscale: clip `640x360` giữ nguyên `640x360`, không phình lên 720p cho không.
 
-Mỗi lần chạy có timeout **120 giây** rồi `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file tạm**, không phải pipe: pipe không ai đọc sẽ đầy buffer và ffmpeg block vĩnh viễn ở lệnh write — không timeout nào trên `waitFor` bắt được.
+Đường rẻ **không** gỡ rotation — file giữ nguyên display matrix và trình duyệt tự xoay đúng (`<video>` honor matrix từ lâu). Thumbnail cũng được ffmpeg autorotate.
+
+### 2.2. Hai đường hỏng khác nhau, có chủ đích
+
+- **Remux fail** → upload nguyên file gốc, log `info`. An toàn vì nhánh này chỉ chạy trên file **đã biết là phát được**; mất tối ưu khởi động, không mất video.
+- **Normalize fail** → **throw**. Fallback ở đây nghĩa là đặt một file HEVC/AV1 vào playback key và đưa người xem một video im lặng không phát được — tệ hơn `FAILED` mà ít nhất người upload còn nhìn thấy. Consumer retry 3 lần rồi báo `FAILED` với thông điệp generic.
+- **Không decode được frame** → `thumbnailUrl` null, web client fallback poster của nó. Không được biến một video xem được thành `FAILED` chỉ vì thiếu ảnh.
+
+### 2.3. Chi phí và giới hạn
+
+- **Disk**: file đi qua disk của worker (bản copy-only đầu tiên không chuyển byte nào ra khỏi MinIO). Dời moov atom = viết lại container, MinIO không có thao tác server-side nào làm được. Dự trù **~2× kích thước upload** disk tạm cho mỗi transcode chạy song song.
+- **Storage**: vẫn 1 file playback + 1 thumbnail cho mỗi video. Không có ABR ladder, không có segment.
+- Chưa làm: HLS segment (`master.m3u8` + `.ts`), ABR ladder, watermark, loudness normalization, frame sampling cho AI moderation.
+
+### 2.4. Binary ffmpeg và timeout
+
+Không có bước Dockerfile nào. `JaveFfmpeg` dùng chính binary mà JAVE2 (`jave-all-deps`) đã giải nén để probe, qua `DefaultFFMPEGLocator.getExecutablePath()` — dependency native duy nhất của worker vẫn là cái build đã ship sẵn cho mọi platform. **Không có `ffprobe`** trong bundle đó; JAVE lấy metadata bằng cách parse output của `ffmpeg -i`.
+
+| Lệnh | Timeout | Lý do |
+|---|---|---|
+| faststart remux, still frame | 120s | copy stream / decode 1 frame — chặn bởi disk, không theo độ dài video |
+| normalize | 600s | decode + encode từng frame — có tỉ lệ với độ dài video |
+
+Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file tạm**, không phải pipe: pipe không ai đọc sẽ đầy buffer và ffmpeg block vĩnh viễn ở lệnh write — không timeout nào trên `waitFor` bắt được.
 
 ### Retry & báo lỗi
 
 `VideoEventConsumer.transcodeWithRetries`: `media.transcode.attempts` (default 3), backoff `media.transcode.retry-backoff-millis` (default 2000ms, **sleep thẳng trên listener thread** — dừng partition; đủ khi một worker gánh cả topic).
+
+**Poll interval phải khớp với timeout normalize.** Normalize chạy trên listener thread, một message có thể giữ partition vài phút. Để mặc định 5 phút của Spring thì broker coi consumer chết giữa lúc encode → rebalance → redeliver đúng video đó → encode lại từ đầu, vòng sau chậm hơn vòng trước. Vì vậy `application.yml` đặt `max.poll.interval.ms: 3600000` (1 giờ) và `max-poll-records: 1`: 1 giờ phủ được worst case mà timeout cho phép — 3 lần transcode × 600s cộng download và backoff.
+
+*ponytail: đây là bản rẻ của việc đẩy transcode ra khỏi listener thread. Khi cần worker thứ hai chạy tiếp qua một video chậm thì đó mới là chỗ phải sửa.*
 
 - `MediaRejectedException` (quá cỡ / quá dài) → **không retry**, phát `VideoTranscodedEvent.failure(videoId, <thông điệp cho người dùng>)` ngay. Thông điệp này lên thẳng `VideoResponse.failureReason` (vd. `"Video is 12m30s; the maximum is 10m00s."`).
 - Exception khác (MinIO blip, probe lỗi) → retry đủ số lần; hết vẫn lỗi → `failure` với thông điệp generic `"Transcoding failed after N attempts. Try uploading the file again."` (KHÔNG lộ chuỗi nội bộ chứa endpoint/bucket/key).
@@ -83,6 +109,8 @@ URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) →
 | `media.transcode.retry-backoff-millis` | 2000 | Nghỉ giữa các lần thử |
 | `media.video.max-bytes` | 524288000 (500 MB) | Backstop cho giới hạn `video-service` ký vào POST policy. **Giữ khớp `VIDEO_MAX_BYTES` của video-service** |
 | `media.video.max-duration-seconds` | 600 (10 phút) | **Giữ khớp `VIDEO_MAX_DURATION_SECONDS` của video-service** |
+| `spring.kafka.consumer.properties.max.poll.interval.ms` | 3600000 (1 giờ) | Phải lớn hơn `attempts × 600s` + download; xem §Retry |
+| `spring.kafka.consumer.max-poll-records` | 1 | Một batch không được xếp chồng nhiều transcode vào cùng một poll |
 | `media.avatar.allowed-hosts` | 4 host Google/Facebook | Allow-list SSRF cho fetch avatar |
 | `media.avatar.max-bytes` | 5242880 (5 MB) | |
 | `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` | localhost:9000 / minioadmin / … / `video-media` | Credential MinIO **chỉ nằm ở service này** — đó là lý do cleanup chạy ở đây chứ không ở video-service |
@@ -93,7 +121,7 @@ URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) →
 |---|---|---|---|
 | Raw upload | `raw/{userId}/{videoId}.mp4` | client (presigned POST từ video-service) | cleanup, hoặc lifecycle 7 ngày |
 | Playback | `hls/{videoId}/source.mp4` | media-worker transcode | cleanup |
-| (HLS thật, tương lai) | `hls/{videoId}/master.m3u8` + segment | ffmpeg pipeline | cleanup (list prefix) |
+| (HLS thật, tương lai) | `hls/{videoId}/master.m3u8` + segment | chưa làm | cleanup (list prefix) |
 | Thumbnail | `thumbnails/{videoId}.jpg` | media-worker transcode | cleanup |
 | Avatar | `avatars/{userId}.jpg` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; ghi đè) |
 

@@ -64,6 +64,24 @@ class TranscodeServiceImplTest {
         }).when(minioClient).downloadObject(any(DownloadObjectArgs.class));
     }
 
+    private void stubProbe(int durationSeconds) {
+        // h264/aac at 720p: already browser-ready, so the cheap remux path is the default here.
+        when(videoProbe.probe(any())).thenReturn(new ProbedVideo(durationSeconds, "h264", "aac", 1280, 720));
+    }
+
+    private void stubProbeNeedingNormalizing() {
+        when(videoProbe.probe(any())).thenReturn(new ProbedVideo(42, "hevc", "aac", 1920, 1080));
+    }
+
+    private void stubNormalize(boolean succeeds) {
+        when(ffmpeg.normalize(any(), any())).thenAnswer(invocation -> {
+            if (succeeds) {
+                Files.writeString(invocation.getArgument(1), "re-encoded bytes");
+            }
+            return succeeds;
+        });
+    }
+
     private void stubFaststart(boolean succeeds) {
         when(ffmpeg.faststart(any(), any())).thenAnswer(invocation -> {
             if (succeeds) {
@@ -92,7 +110,7 @@ class TranscodeServiceImplTest {
     void transcode_withinLimits_uploadsFaststartPlaybackAndThumbnail() throws Exception {
         stubStat(10_000_000L);
         stubDownload();
-        when(videoProbe.durationSeconds(any())).thenReturn(42);
+        stubProbe(42);
         stubFaststart(true);
         stubStillFrame(true);
 
@@ -112,7 +130,7 @@ class TranscodeServiceImplTest {
     void transcode_containerThatWillNotRemux_storesTheUploadUnchanged() throws Exception {
         stubStat(10_000_000L);
         stubDownload();
-        when(videoProbe.durationSeconds(any())).thenReturn(42);
+        stubProbe(42);
         stubFaststart(false);
         stubStillFrame(true);
 
@@ -129,7 +147,7 @@ class TranscodeServiceImplTest {
     void transcode_noDecodableFrame_returnsNoThumbnailRatherThanFailing() throws Exception {
         stubStat(10_000_000L);
         stubDownload();
-        when(videoProbe.durationSeconds(any())).thenReturn(42);
+        stubProbe(42);
         stubFaststart(true);
         stubStillFrame(false);
 
@@ -144,7 +162,7 @@ class TranscodeServiceImplTest {
     void transcode_shortClip_takesTheFrameBeforeTheHalfwayMark() throws Exception {
         stubStat(10_000_000L);
         stubDownload();
-        when(videoProbe.durationSeconds(any())).thenReturn(1);
+        stubProbe(1);
         stubFaststart(true);
         stubStillFrame(true);
 
@@ -157,7 +175,7 @@ class TranscodeServiceImplTest {
     void transcode_removesItsScratchDirectory() throws Exception {
         stubStat(10_000_000L);
         stubDownload();
-        when(videoProbe.durationSeconds(any())).thenReturn(42);
+        stubProbe(42);
         stubFaststart(true);
         stubStillFrame(true);
 
@@ -185,7 +203,7 @@ class TranscodeServiceImplTest {
     void transcode_tooLong_isRejectedWithoutUploading() throws Exception {
         stubStat(10_000_000L);
         stubDownload();
-        when(videoProbe.durationSeconds(any())).thenReturn(601);
+        stubProbe(601);
 
         assertThatThrownBy(() -> service().transcode("vid123", RAW_URL))
                 .isInstanceOf(MediaRejectedException.class)
@@ -198,5 +216,35 @@ class TranscodeServiceImplTest {
     void transcode_uploadNotInBucket_failsBeforeAnyMinioCall() {
         assertThatThrownBy(() -> service().transcode("vid123", "s3://other-bucket/raw/7/vid123.mp4"))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void transcode_codecABrowserWillNotPlay_isReEncodedInsteadOfRemuxed() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbeNeedingNormalizing();
+        stubNormalize(true);
+        stubStillFrame(true);
+
+        TranscodeResult result = service().transcode("vid123", RAW_URL);
+
+        assertThat(result.hlsUrl()).isEqualTo("http://localhost:9000/video-media/hls/vid123/source.mp4");
+        verify(ffmpeg, never()).faststart(any(), any());
+        assertThat(uploads().get(0).filename()).endsWith("/playback.mp4");
+    }
+
+    @Test
+    void transcode_normalizeFails_isReportedRatherThanStoringAnUnplayableFile() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbeNeedingNormalizing();
+        stubNormalize(false);
+
+        // Falling back here would put an HEVC file at the playback key and hand the viewer a
+        // video that silently does not play.
+        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(minioClient, never()).uploadObject(any());
     }
 }

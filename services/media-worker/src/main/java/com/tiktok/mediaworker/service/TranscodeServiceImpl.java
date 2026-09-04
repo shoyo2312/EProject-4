@@ -21,19 +21,26 @@ import java.util.stream.Stream;
  * Turns an upload into the two objects the client needs: a playback file a player can start on
  * the first bytes of, and a still frame to show before it does.
  *
- * <p>Neither step re-encodes. The playback file is the upload remuxed with its moov atom moved to
- * the front ({@code -movflags +faststart}) — same streams, same bytes of video, only the index
- * relocated — and the thumbnail is one decoded frame. That keeps the CPU cost of an upload flat
- * in its length rather than proportional to it, which is what would turn this listener into a
- * queue. Format normalisation, HLS and multi-bitrate variants are deliberately not here.
+ * <p>Which of two paths an upload takes is decided by {@link ProbedVideo#needsNormalizing()}.
+ * A file already in the shape browsers play — H.264, AAC or silent, 720p or below — is only
+ * remuxed with its moov atom moved to the front ({@code -movflags +faststart}): same streams,
+ * same bytes of video, only the index relocated, and the CPU cost flat in the video's length.
+ * Anything else is decoded and re-encoded to that shape, which is the one genuinely expensive
+ * thing this worker does and the reason the consumer's poll interval is set where it is.
  *
- * <p>ponytail: the file is pulled through this worker's disk, where the previous copy-only
+ * <p>HLS segmenting and multi-bitrate variants are deliberately not here. The playback artifact
+ * is one flat mp4.
+ *
+ * <p>ponytail: the file is pulled through this worker's disk, where the original copy-only
  * version never moved a byte out of MinIO. Moving the moov atom means rewriting the container, so
  * there is no server-side operation that does it. Budget roughly 2x the upload's size in scratch
  * space per concurrent transcode.
  *
- * <p>Both ffmpeg steps degrade rather than fail — see {@link Ffmpeg}. A video whose container the
- * mp4 muxer will not take is stored as it arrived, and a frame that will not decode leaves
+ * <p>The two paths fail differently, and on purpose. A remux that the mp4 muxer refuses leaves
+ * the upload stored as it arrived, because that branch only runs on files already known to be
+ * playable. A normalize that fails is thrown, because falling back there would store an HEVC or
+ * AV1 file at the playback key and hand the viewer a video that silently will not play — worse
+ * than the FAILED the uploader would at least see. A frame that will not decode leaves
  * {@code thumbnailUrl} null, which is the state the client already falls back on.
  */
 @Slf4j
@@ -69,7 +76,8 @@ public class TranscodeServiceImpl implements TranscodeService {
             minioClient.downloadObject(DownloadObjectArgs.builder()
                     .bucket(bucket).object(sourceKey).filename(source.toString()).build());
 
-            int durationSeconds = videoProbe.durationSeconds(source.toUri().toString());
+            ProbedVideo probed = videoProbe.probe(source.toUri().toString());
+            int durationSeconds = probed.durationSeconds();
             if (durationSeconds > videoLimits.maxDurationSeconds()) {
                 throw new MediaRejectedException("Video is %s; the maximum is %s."
                         .formatted(humanDuration(durationSeconds), humanDuration(videoLimits.maxDurationSeconds())));
@@ -77,7 +85,16 @@ public class TranscodeServiceImpl implements TranscodeService {
 
             String playbackKey = MediaKeys.playback(videoId);
             Path playback = work.resolve("playback.mp4");
-            if (!ffmpeg.faststart(source, playback)) {
+            if (probed.needsNormalizing()) {
+                log.info("Normalizing video {} from {}/{} at {}x{}",
+                        videoId, probed.videoCodec(), probed.audioCodec(), probed.width(), probed.height());
+                if (!ffmpeg.normalize(source, playback)) {
+                    // Thrown rather than fallen back on: the consumer retries this a few times and
+                    // then reports FAILED, which is the honest outcome for a file that could not be
+                    // turned into something a browser plays.
+                    throw new IllegalStateException("Could not normalize video " + videoId);
+                }
+            } else if (!ffmpeg.faststart(source, playback)) {
                 log.info("Video {} could not be remuxed to mp4, storing the upload unchanged", videoId);
                 playback = source;
             }

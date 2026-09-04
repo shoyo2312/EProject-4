@@ -12,6 +12,16 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Normalizing re-encodes every frame and runs on the listener thread, so one message can
+      # hold the partition for minutes. Left at Spring's 5-minute default the broker would call
+      # this consumer dead mid-encode, rebalance, redeliver the same video and start the encode
+      # again — slower every round. The hour here covers the worst case the timeouts allow: three
+      # transcode attempts at the 600s ffmpeg cap plus their downloads and backoff.
+      # ponytail: this is the cheap version of moving transcoding off the listener thread. If a
+      # second worker ever has to keep flowing past a slow video, that is the change to make.
+      max-poll-records: 1
+      properties:
+        max.poll.interval.ms: 3600000
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
