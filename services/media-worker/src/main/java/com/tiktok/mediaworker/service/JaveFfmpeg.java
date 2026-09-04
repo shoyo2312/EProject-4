@@ -35,6 +35,9 @@ public class JaveFfmpeg implements Ffmpeg {
      */
     private static final long ENCODE_TIMEOUT_SECONDS = 600;
 
+    /** Long enough to show what the video is, short enough that nobody waits for it to loop. */
+    private static final int PREVIEW_SECONDS = 3;
+
     /** Only the tail of ffmpeg's diagnostics goes in the log; the head is banner and stream dumps. */
     private static final int LOG_TAIL_CHARS = 1000;
 
@@ -86,6 +89,23 @@ public class JaveFfmpeg implements Ffmpeg {
                 "-vf", "scale=-2:720",
                 "-q:v", "3",
                 "-f", "image2",
+                target.toString()));
+    }
+
+    @Override
+    public boolean animatedPreview(Path source, Path target, int fromSecond) {
+        return run("animated preview", COPY_TIMEOUT_SECONDS, List.of(
+                "-ss", String.valueOf(fromSecond),
+                "-t", String.valueOf(PREVIEW_SECONDS),
+                "-i", source.toString(),
+                // 8 fps and 240 tall is the whole budget: enough motion to read what the video is,
+                // small enough that a feed can pull one per card without a loading state.
+                "-vf", "fps=8,scale=-2:240",
+                "-an",
+                "-c:v", "libwebp_anim",
+                "-loop", "0",
+                "-q:v", "60",
+                "-f", "webp",
                 target.toString()));
     }
 

@@ -85,6 +85,9 @@ public class Video {
 
     private String thumbnailUrl;
 
+    /** Animated hover preview. Null for videos whose transcode produced none, and for older ones. */
+    private String previewUrl;
+
     private String hlsUrl;
 
     private Integer durationSeconds;
@@ -186,8 +189,9 @@ public class Video {
         this.commentsDisabled = commentsDisabled;
     }
 
-    public void markPublished(String thumbnailUrl, String hlsUrl, Integer durationSeconds) {
+    public void markPublished(String thumbnailUrl, String previewUrl, String hlsUrl, Integer durationSeconds) {
         this.thumbnailUrl = thumbnailUrl;
+        this.previewUrl = previewUrl;
         this.hlsUrl = hlsUrl;
         this.durationSeconds = durationSeconds;
         this.failureReason = null; // a redelivered publish must not leave a prior FAILED reason on the doc

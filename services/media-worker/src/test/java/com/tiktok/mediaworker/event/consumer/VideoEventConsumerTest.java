@@ -61,7 +61,7 @@ class VideoEventConsumerTest {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid1", 1L, "My video", null, "s3://raw/vid1.mp4", List.of());
 
         when(transcodeService.transcode("vid1", "s3://raw/vid1.mp4"))
-                .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/master.m3u8", 30));
+                .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/preview.webp", "http://minio/master.m3u8", 30));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
@@ -127,7 +127,7 @@ class VideoEventConsumerTest {
 
         when(transcodeService.transcode("vid5", "s3://raw/vid5.mp4"))
                 .thenThrow(new RuntimeException("MinIO unreachable"))
-                .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/master.m3u8", 30));
+                .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/preview.webp", "http://minio/master.m3u8", 30));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
@@ -147,7 +147,7 @@ class VideoEventConsumerTest {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid6", 1L, "Fine", null, "s3://raw/vid6.mp4", List.of());
 
         when(transcodeService.transcode("vid6", "s3://raw/vid6.mp4"))
-                .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/master.m3u8", 30));
+                .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/preview.webp", "http://minio/master.m3u8", 30));
         doThrow(new IllegalStateException("broker refused")).when(eventProducer).publish(any());
 
         String payload = objectMapper.writeValueAsString(published);

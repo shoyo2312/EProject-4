@@ -29,6 +29,14 @@ public final class MediaKeys {
         return "thumbnails/%s.jpg".formatted(videoId);
     }
 
+    /**
+     * The hover preview: a few seconds of animated WebP, stored beside the still thumbnail rather
+     * than under the playback prefix because it is not something a player ever loads.
+     */
+    public static String preview(String videoId) {
+        return "previews/%s.webp".formatted(videoId);
+    }
+
     /** Every HLS artifact of one video sits under this prefix — playlist, segments, variants. */
     public static String hlsPrefix(String videoId) {
         return "hls/%s/".formatted(videoId);

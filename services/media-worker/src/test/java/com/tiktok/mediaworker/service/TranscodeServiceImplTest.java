@@ -91,6 +91,15 @@ class TranscodeServiceImplTest {
         });
     }
 
+    private void stubAnimatedPreview(boolean succeeds) {
+        when(ffmpeg.animatedPreview(any(), any(), anyInt())).thenAnswer(invocation -> {
+            if (succeeds) {
+                Files.writeString(invocation.getArgument(1), "webp bytes");
+            }
+            return succeeds;
+        });
+    }
+
     private void stubStillFrame(boolean succeeds) {
         when(ffmpeg.stillFrame(any(), any(), anyInt())).thenAnswer(invocation -> {
             if (succeeds) {
@@ -113,17 +122,21 @@ class TranscodeServiceImplTest {
         stubProbe(42);
         stubFaststart(true);
         stubStillFrame(true);
+        stubAnimatedPreview(true);
 
         TranscodeResult result = service().transcode("vid123", RAW_URL);
 
         assertThat(result.hlsUrl()).isEqualTo("http://localhost:9000/video-media/hls/vid123/source.mp4");
         assertThat(result.thumbnailUrl()).isEqualTo("http://localhost:9000/video-media/thumbnails/vid123.jpg");
+        assertThat(result.previewUrl()).isEqualTo("http://localhost:9000/video-media/previews/vid123.webp");
         assertThat(result.durationSeconds()).isEqualTo(42);
 
         assertThat(uploads()).extracting(UploadObjectArgs::object)
-                .containsExactly("hls/vid123/source.mp4", "thumbnails/vid123.jpg");
+                .containsExactly("hls/vid123/source.mp4", "thumbnails/vid123.jpg", "previews/vid123.webp");
+        assertThat(uploads().get(2).contentType()).isEqualTo("image/webp");
         // One second in, which is where a 42s clip has a frame worth showing.
         verify(ffmpeg).stillFrame(any(), any(), eq(1));
+        verify(ffmpeg).animatedPreview(any(), any(), eq(1));
     }
 
     @Test
@@ -133,6 +146,7 @@ class TranscodeServiceImplTest {
         stubProbe(42);
         stubFaststart(false);
         stubStillFrame(true);
+        stubAnimatedPreview(true);
 
         TranscodeResult result = service().transcode("vid123", RAW_URL);
 
@@ -144,16 +158,18 @@ class TranscodeServiceImplTest {
     }
 
     @Test
-    void transcode_noDecodableFrame_returnsNoThumbnailRatherThanFailing() throws Exception {
+    void transcode_noDecodableFrame_returnsNoArtworkRatherThanFailing() throws Exception {
         stubStat(10_000_000L);
         stubDownload();
         stubProbe(42);
         stubFaststart(true);
         stubStillFrame(false);
+        stubAnimatedPreview(false);
 
         TranscodeResult result = service().transcode("vid123", RAW_URL);
 
         assertThat(result.thumbnailUrl()).isNull();
+        assertThat(result.previewUrl()).isNull();
         assertThat(result.hlsUrl()).isNotNull();
         assertThat(uploads()).extracting(UploadObjectArgs::object).containsExactly("hls/vid123/source.mp4");
     }
@@ -165,6 +181,7 @@ class TranscodeServiceImplTest {
         stubProbe(1);
         stubFaststart(true);
         stubStillFrame(true);
+        stubAnimatedPreview(true);
 
         service().transcode("vid123", RAW_URL);
 
@@ -178,6 +195,7 @@ class TranscodeServiceImplTest {
         stubProbe(42);
         stubFaststart(true);
         stubStillFrame(true);
+        stubAnimatedPreview(true);
 
         service().transcode("vid123", RAW_URL);
 
@@ -225,6 +243,7 @@ class TranscodeServiceImplTest {
         stubProbeNeedingNormalizing();
         stubNormalize(true);
         stubStillFrame(true);
+        stubAnimatedPreview(true);
 
         TranscodeResult result = service().transcode("vid123", RAW_URL);
 

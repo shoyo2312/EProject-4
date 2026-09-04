@@ -112,7 +112,7 @@ class VideoControllerTest {
     @Test
     void publish_withValidToken_createsVideo() throws Exception {
         CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, List.of());
-        VideoResponse response = new VideoResponse("v1", 42L, "title", "desc", null, null, null,
+        VideoResponse response = new VideoResponse("v1", 42L, "title", "desc", null, null, null, null,
                 VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null);
         when(videoService.publish(eq(42L), any())).thenReturn(response);
 
@@ -172,7 +172,7 @@ class VideoControllerTest {
     @ValueSource(strings = {"s3://video-media/raw/1.mp4", "https://cdn.example.com/raw/1.mp4"})
     void publish_rawFileUrlOnOurStorage_isAccepted(String rawFileUrl) throws Exception {
         CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC, List.of());
-        VideoResponse response = new VideoResponse("v1", 1L, "title", "desc", null, null, null,
+        VideoResponse response = new VideoResponse("v1", 1L, "title", "desc", null, null, null, null,
                 VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null);
         when(videoService.publish(eq(1L), any())).thenReturn(response);
 

@@ -70,7 +70,7 @@ class VideoStateUpdaterTest {
         };
 
         videoStateUpdater.apply(video.getId(),
-                v -> v.markPublished("http://minio/thumb.jpg", "http://minio/master.m3u8", 42),
+                v -> v.markPublished("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42),
                 writeWithATakedownInTheGap,
                 "VideoTranscodedEvent");
 

@@ -6,8 +6,8 @@ Tài liệu cho người **vận hành**, không phải client. `media-worker` (
 
 | Việc | Nghe topic | Phát topic | Ghi vào MinIO |
 |---|---|---|---|
-| Transcode video | `video.video-events` (`VideoPublishedEvent`) | `media.video-transcoded-events` (`VideoTranscodedEvent`) | `hls/{videoId}/source.mp4` + `thumbnails/{videoId}.jpg` |
-| Dọn media khi xoá video | `video.video-events` (`VideoDeletedEvent`) | — | xoá `thumbnails/{id}.jpg`, mọi object dưới `hls/{id}/`, và file raw |
+| Transcode video | `video.video-events` (`VideoPublishedEvent`) | `media.video-transcoded-events` (`VideoTranscodedEvent`) | `hls/{videoId}/source.mp4` + `thumbnails/{videoId}.jpg` + `previews/{videoId}.webp` |
+| Dọn media khi xoá video | `video.video-events` (`VideoDeletedEvent`) | — | xoá `thumbnails/{id}.jpg`, `previews/{id}.webp`, mọi object dưới `hls/{id}/`, và file raw |
 | Sao ảnh đại diện social | `auth.social-avatar-events` (`SocialAvatarDiscoveredEvent`) | `media.avatar-events` (`AvatarMirroredEvent`) | `avatars/{userId}.jpg` |
 
 Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi đè cùng key với cùng nội dung (no-op an toàn khi redeliver). Việc idempotent thật nằm ở consumer phía sau (`video-service` / `user-service`), nơi có bảng inbox.
@@ -21,8 +21,9 @@ Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi 
 3. `downloadObject` về thư mục tạm, `VideoProbe` (JAVE parse output `ffmpeg -i`) đọc duration + codec + kích thước từ file local. Duration vượt `media.video.max-duration-seconds` (600s) → `MediaRejectedException`.
 4. **Chọn một trong hai đường** theo `ProbedVideo.needsNormalizing()` (xem §2.1). Upload kết quả lên `hls/{videoId}/source.mp4`.
 5. **Thumbnail**: `ffmpeg -ss {t} -i source -frames:v 1 -vf scale=-2:720 -q:v 3` với `t = min(1, duration/2)` giây. Upload lên `thumbnails/{videoId}.jpg`.
-6. Trả `VideoTranscodedEvent.success(videoId, thumbnailUrl, hlsUrl="{endpoint}/{bucket}/hls/{id}/source.mp4", durationSeconds)`.
-7. `finally`: xoá thư mục tạm — trên mọi đường ra, kể cả khi lỗi.
+6. **Animated preview** (§2.2): `ffmpeg -ss {t} -t 3 -i source -vf fps=8,scale=-2:240 -an -c:v libwebp_anim -loop 0 -q:v 60` — cùng mốc `t`. Upload lên `previews/{videoId}.webp`, content-type `image/webp`.
+7. Trả `VideoTranscodedEvent.success(videoId, thumbnailUrl, previewUrl, hlsUrl="{endpoint}/{bucket}/hls/{id}/source.mp4", durationSeconds)`.
+8. `finally`: xoá thư mục tạm — trên mọi đường ra, kể cả khi lỗi.
 
 ### 2.1. Hai đường: rẻ và đắt
 
@@ -42,25 +43,36 @@ Normalize bắt các trường hợp thật: HEVC từ iPhone, AV1, VP8/VP9 từ
 
 Đường rẻ **không** gỡ rotation — file giữ nguyên display matrix và trình duyệt tự xoay đúng (`<video>` honor matrix từ lâu). Thumbnail cũng được ffmpeg autorotate.
 
-### 2.2. Hai đường hỏng khác nhau, có chủ đích
+### 2.2. Animated preview cho hover
+
+WebP động 3 giây, 8 fps, cao 240px, không audio. Con số nằm ở đó vì đây là thứ feed kéo về **mỗi card**, không phải thứ xem toàn màn hình: đủ chuyển động để biết video nói gì, đủ nhỏ để không cần loading state. Clip 3 giây test ra khoảng 8 KB.
+
+Rotation được ffmpeg autorotate như thumbnail, nên preview của video dọc ra khung dọc.
+
+`libwebp_anim` có trong bản ffmpeg JAVE bundle, nhưng **không được giả định**: nếu build trên platform nào đó thiếu encoder, `animatedPreview` trả `false` → `previewUrl` null → client fallback về `thumbnailUrl`. Không có gì hỏng.
+
+### 2.3. Hai đường hỏng khác nhau, có chủ đích
 
 - **Remux fail** → upload nguyên file gốc, log `info`. An toàn vì nhánh này chỉ chạy trên file **đã biết là phát được**; mất tối ưu khởi động, không mất video.
 - **Normalize fail** → **throw**. Fallback ở đây nghĩa là đặt một file HEVC/AV1 vào playback key và đưa người xem một video im lặng không phát được — tệ hơn `FAILED` mà ít nhất người upload còn nhìn thấy. Consumer retry 3 lần rồi báo `FAILED` với thông điệp generic.
-- **Không decode được frame** → `thumbnailUrl` null, web client fallback poster của nó. Không được biến một video xem được thành `FAILED` chỉ vì thiếu ảnh.
+- **Không decode được frame** → `thumbnailUrl` null, web client fallback poster của nó.
+- **Không dựng được preview** → `previewUrl` null, hover hiện thumbnail tĩnh.
 
-### 2.3. Chi phí và giới hạn
+Không được biến một video xem được thành `FAILED` chỉ vì thiếu ảnh.
+
+### 2.4. Chi phí và giới hạn
 
 - **Disk**: file đi qua disk của worker (bản copy-only đầu tiên không chuyển byte nào ra khỏi MinIO). Dời moov atom = viết lại container, MinIO không có thao tác server-side nào làm được. Dự trù **~2× kích thước upload** disk tạm cho mỗi transcode chạy song song.
-- **Storage**: vẫn 1 file playback + 1 thumbnail cho mỗi video. Không có ABR ladder, không có segment.
+- **Storage**: 1 file playback + 1 thumbnail + 1 preview (~10 KB) cho mỗi video. Không có ABR ladder, không có segment.
 - Chưa làm: HLS segment (`master.m3u8` + `.ts`), ABR ladder, watermark, loudness normalization, frame sampling cho AI moderation.
 
-### 2.4. Binary ffmpeg và timeout
+### 2.5. Binary ffmpeg và timeout
 
 Không có bước Dockerfile nào. `JaveFfmpeg` dùng chính binary mà JAVE2 (`jave-all-deps`) đã giải nén để probe, qua `DefaultFFMPEGLocator.getExecutablePath()` — dependency native duy nhất của worker vẫn là cái build đã ship sẵn cho mọi platform. **Không có `ffprobe`** trong bundle đó; JAVE lấy metadata bằng cách parse output của `ffmpeg -i`.
 
 | Lệnh | Timeout | Lý do |
 |---|---|---|
-| faststart remux, still frame | 120s | copy stream / decode 1 frame — chặn bởi disk, không theo độ dài video |
+| faststart remux, still frame, animated preview | 120s | copy stream / decode 1 frame — chặn bởi disk, không theo độ dài video |
 | normalize | 600s | decode + encode từng frame — có tỉ lệ với độ dài video |
 
 Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file tạm**, không phải pipe: pipe không ai đọc sẽ đầy buffer và ffmpeg block vĩnh viễn ở lệnh write — không timeout nào trên `waitFor` bắt được.
@@ -123,6 +135,7 @@ URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) →
 | Playback | `hls/{videoId}/source.mp4` | media-worker transcode | cleanup |
 | (HLS thật, tương lai) | `hls/{videoId}/master.m3u8` + segment | chưa làm | cleanup (list prefix) |
 | Thumbnail | `thumbnails/{videoId}.jpg` | media-worker transcode | cleanup |
+| Hover preview | `previews/{videoId}.webp` | media-worker transcode | cleanup |
 | Avatar | `avatars/{userId}.jpg` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; ghi đè) |
 
 ## 7. kafka-lib

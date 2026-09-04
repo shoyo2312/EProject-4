@@ -11,18 +11,21 @@ public record VideoTranscodedEvent(
         String videoId,
         boolean success,
         String thumbnailUrl,
+        /** Animated hover preview; null when none could be produced, and the client shows the still. */
+        String previewUrl,
         String hlsUrl,
         Integer durationSeconds,
         String failureReason
 ) implements DomainEvent {
 
-    public static VideoTranscodedEvent success(String videoId, String thumbnailUrl, String hlsUrl, Integer durationSeconds) {
-        return new VideoTranscodedEvent(
-                UUID.randomUUID().toString(), Instant.now(), videoId, true, thumbnailUrl, hlsUrl, durationSeconds, null);
+    public static VideoTranscodedEvent success(String videoId, String thumbnailUrl, String previewUrl,
+                                               String hlsUrl, Integer durationSeconds) {
+        return new VideoTranscodedEvent(UUID.randomUUID().toString(), Instant.now(), videoId, true,
+                thumbnailUrl, previewUrl, hlsUrl, durationSeconds, null);
     }
 
     public static VideoTranscodedEvent failure(String videoId, String reason) {
         return new VideoTranscodedEvent(
-                UUID.randomUUID().toString(), Instant.now(), videoId, false, null, null, null, reason);
+                UUID.randomUUID().toString(), Instant.now(), videoId, false, null, null, null, null, reason);
     }
 }

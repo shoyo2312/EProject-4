@@ -44,7 +44,7 @@ public class VideoTranscodedEventConsumer {
         // Deleted videos and takedowns landing mid-transcode are both handled by the updater; see
         // VideoStateUpdater for why the result is re-read rather than written twice.
         videoStateUpdater.apply(event.videoId(),
-                video -> video.markPublished(event.thumbnailUrl(), event.hlsUrl(), event.durationSeconds()),
+                video -> video.markPublished(event.thumbnailUrl(), event.previewUrl(), event.hlsUrl(), event.durationSeconds()),
                 videoRepository::updateTranscodeResult,
                 EVENT);
     }

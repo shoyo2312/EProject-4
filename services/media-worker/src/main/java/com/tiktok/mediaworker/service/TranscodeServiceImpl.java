@@ -18,8 +18,8 @@ import java.util.Comparator;
 import java.util.stream.Stream;
 
 /**
- * Turns an upload into the two objects the client needs: a playback file a player can start on
- * the first bytes of, and a still frame to show before it does.
+ * Turns an upload into the objects the client needs: a playback file a player can start on the
+ * first bytes of, and the artwork a feed shows before anyone presses play.
  *
  * <p>Which of two paths an upload takes is decided by {@link ProbedVideo#needsNormalizing()}.
  * A file already in the shape browsers play — H.264, AAC or silent, 720p or below — is only
@@ -27,6 +27,9 @@ import java.util.stream.Stream;
  * same bytes of video, only the index relocated, and the CPU cost flat in the video's length.
  * Anything else is decoded and re-encoded to that shape, which is the one genuinely expensive
  * thing this worker does and the reason the consumer's poll interval is set where it is.
+ *
+ * <p>The artwork is a still thumbnail plus a few seconds of animated WebP for the hover preview,
+ * both taken one second in.
  *
  * <p>HLS segmenting and multi-bitrate variants are deliberately not here. The playback artifact
  * is one flat mp4.
@@ -41,7 +44,8 @@ import java.util.stream.Stream;
  * playable. A normalize that fails is thrown, because falling back there would store an HEVC or
  * AV1 file at the playback key and hand the viewer a video that silently will not play — worse
  * than the FAILED the uploader would at least see. A frame that will not decode leaves
- * {@code thumbnailUrl} null, which is the state the client already falls back on.
+ * {@code thumbnailUrl} null, which is the state the client already falls back on, and a preview
+ * that cannot be built leaves {@code previewUrl} null and the hover showing the still instead.
  */
 @Slf4j
 @Service
@@ -98,39 +102,49 @@ public class TranscodeServiceImpl implements TranscodeService {
                 log.info("Video {} could not be remuxed to mp4, storing the upload unchanged", videoId);
                 playback = source;
             }
-            minioClient.uploadObject(UploadObjectArgs.builder()
-                    .bucket(bucket).object(playbackKey)
-                    .filename(playback.toString())
-                    .contentType("video/mp4")
-                    .build());
+            String hlsUrl = upload(bucket, playbackKey, playback, "video/mp4");
+
+            int stillSecond = thumbnailSecond(durationSeconds);
 
             String thumbnailUrl = null;
             Path thumbnail = work.resolve("thumbnail.jpg");
-            if (ffmpeg.stillFrame(source, thumbnail, thumbnailSecond(durationSeconds))) {
-                String thumbnailKey = MediaKeys.thumbnail(videoId);
-                minioClient.uploadObject(UploadObjectArgs.builder()
-                        .bucket(bucket).object(thumbnailKey)
-                        .filename(thumbnail.toString())
-                        .contentType("image/jpeg")
-                        .build());
-                thumbnailUrl = url(bucket, thumbnailKey);
+            if (ffmpeg.stillFrame(source, thumbnail, stillSecond)) {
+                thumbnailUrl = upload(bucket, MediaKeys.thumbnail(videoId), thumbnail, "image/jpeg");
             } else {
                 log.info("Video {} yielded no still frame, leaving it without a thumbnail", videoId);
             }
 
+            String previewUrl = null;
+            Path preview = work.resolve("preview.webp");
+            if (ffmpeg.animatedPreview(source, preview, stillSecond)) {
+                previewUrl = upload(bucket, MediaKeys.preview(videoId), preview, "image/webp");
+            } else {
+                log.info("Video {} yielded no animated preview, hover falls back to the thumbnail", videoId);
+            }
+
             log.info("Video {} is playable at {} ({}s)", videoId, playbackKey, durationSeconds);
-            return new TranscodeResult(thumbnailUrl, url(bucket, playbackKey), durationSeconds);
+            return new TranscodeResult(thumbnailUrl, previewUrl, hlsUrl, durationSeconds);
         } finally {
             deleteRecursively(work);
         }
     }
 
     /**
-     * One second in, so the frame is past the fade-in and black leader most clips open on, but
-     * never past the halfway mark of a clip too short to have one.
+     * One second in, so the still and the preview both start past the fade-in and black leader
+     * most clips open on, but never past the halfway mark of a clip too short to have one.
      */
     private static int thumbnailSecond(int durationSeconds) {
         return Math.min(1, durationSeconds / 2);
+    }
+
+    @SneakyThrows
+    private String upload(String bucket, String key, Path file, String contentType) {
+        minioClient.uploadObject(UploadObjectArgs.builder()
+                .bucket(bucket).object(key)
+                .filename(file.toString())
+                .contentType(contentType)
+                .build());
+        return url(bucket, key);
     }
 
     private String url(String bucket, String key) {

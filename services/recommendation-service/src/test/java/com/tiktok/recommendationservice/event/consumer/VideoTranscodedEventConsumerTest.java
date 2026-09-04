@@ -41,7 +41,7 @@ class VideoTranscodedEventConsumerTest {
 
     @Test
     void onMessage_success_makesTheVideoReachableFromTheFeed() throws Exception {
-        VideoTranscodedEvent event = VideoTranscodedEvent.success("vid1", "thumb", "hls", 12);
+        VideoTranscodedEvent event = VideoTranscodedEvent.success("vid1", "thumb", "preview", "hls", 12);
         givenFirstDelivery(event.eventId());
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
@@ -66,7 +66,7 @@ class VideoTranscodedEventConsumerTest {
 
     @Test
     void onMessage_duplicateEvent_isSkipped() throws Exception {
-        VideoTranscodedEvent event = VideoTranscodedEvent.success("vid3", "thumb", "hls", 12);
+        VideoTranscodedEvent event = VideoTranscodedEvent.success("vid3", "thumb", "preview", "hls", 12);
         // A mock InboxService runs nothing unless told to, which is the redelivery case itself.
 
         consumer().onMessage(objectMapper.writeValueAsString(event));

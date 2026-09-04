@@ -40,4 +40,15 @@ public interface Ffmpeg {
      * @return false if no frame could be decoded at that point
      */
     boolean stillFrame(Path source, Path target, int atSecond);
+
+    /**
+     * Writes a short silent animated WebP starting at {@code fromSecond} into {@code target} —
+     * three seconds at 8 frames a second, 240 pixels tall, rotation applied. This is what a feed
+     * plays under the cursor before the viewer commits to opening the video, so it is built to be
+     * tens of kilobytes rather than to look good full size.
+     *
+     * @return false if no preview could be produced, including on a build whose ffmpeg has no
+     *         WebP encoder — the feed falls back to the still thumbnail
+     */
+    boolean animatedPreview(Path source, Path target, int fromSecond);
 }

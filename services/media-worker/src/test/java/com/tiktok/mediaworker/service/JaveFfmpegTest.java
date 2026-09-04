@@ -190,4 +190,59 @@ class JaveFfmpegTest {
         Files.write(mp4, bytes);
         return mp4;
     }
+
+    @Test
+    void animatedPreview_writesAMultiFrameWebpWithRotationApplied(@TempDir Path work) throws Exception {
+        Path rotated = rotate90(synthesize(work.resolve("rotated.mp4"), "1920x1080"));
+        Path target = work.resolve("preview.webp");
+
+        assertThat(ffmpeg.animatedPreview(rotated, target, 0)).isTrue();
+
+        byte[] webp = Files.readAllBytes(target);
+        assertThat(new String(webp, 0, 4, java.nio.charset.StandardCharsets.US_ASCII)).isEqualTo("RIFF");
+        assertThat(new String(webp, 8, 4, java.nio.charset.StandardCharsets.US_ASCII)).isEqualTo("WEBP");
+        // ANIM is the animation header and ANMF is one frame: a still would have neither, which is
+        // what a wrong fps or a missing -loop would silently produce.
+        assertThat(indexOfAtom(webp, "ANIM")).isNotEqualTo(Integer.MAX_VALUE);
+        assertThat(countAtom(webp, "ANMF")).isGreaterThan(1);
+        // Canvas is 240 tall and portrait, so the rotation went into the frames here too.
+        assertThat(canvasHeight(webp)).isEqualTo(240);
+        assertThat(canvasWidth(webp)).isLessThan(240);
+        // Small enough that a feed can pull one per card.
+        assertThat(webp.length).isLessThan(500_000);
+    }
+
+    @Test
+    void animatedPreview_refusesInputItCannotDecode(@TempDir Path work) throws Exception {
+        Path notMedia = work.resolve("notes.txt");
+        Files.writeString(notMedia, "this is not a video");
+
+        assertThat(ffmpeg.animatedPreview(notMedia, work.resolve("preview.webp"), 0)).isFalse();
+    }
+
+    private static int countAtom(byte[] bytes, String atom) {
+        int count = 0;
+        for (int from = 0; from < bytes.length; ) {
+            int at = indexOfAtom(java.util.Arrays.copyOfRange(bytes, from, bytes.length), atom);
+            if (at == Integer.MAX_VALUE) {
+                break;
+            }
+            count++;
+            from += at + atom.length();
+        }
+        return count;
+    }
+
+    /** The extended-format chunk carries the canvas size as two 24-bit little-endian minus-ones. */
+    private static int canvasWidth(byte[] webp) {
+        return littleEndian24(webp, indexOfAtom(webp, "VP8X") + 12) + 1;
+    }
+
+    private static int canvasHeight(byte[] webp) {
+        return littleEndian24(webp, indexOfAtom(webp, "VP8X") + 15) + 1;
+    }
+
+    private static int littleEndian24(byte[] bytes, int at) {
+        return (bytes[at] & 0xFF) | ((bytes[at + 1] & 0xFF) << 8) | ((bytes[at + 2] & 0xFF) << 16);
+    }
 }

@@ -63,7 +63,8 @@ class VideoTranscodedEventConsumerTest {
                 .build());
 
         VideoTranscodedEvent event = VideoTranscodedEvent.success(
-                video.getId(), "http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
+                video.getId(), "http://minio/thumb.jpg", "http://minio/preview.webp",
+                "http://minio/master.m3u8", 42);
         consumer.onMessage(objectMapper.writeValueAsString(event));
 
         Video updated = videoRepository.findById(video.getId()).orElseThrow();
@@ -108,7 +109,8 @@ class VideoTranscodedEventConsumerTest {
         videoRepository.save(video);
 
         VideoTranscodedEvent event = VideoTranscodedEvent.success(
-                video.getId(), "http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
+                video.getId(), "http://minio/thumb.jpg", "http://minio/preview.webp",
+                "http://minio/master.m3u8", 42);
         consumer.onMessage(objectMapper.writeValueAsString(event));
 
         Video after = videoRepository.findById(video.getId()).orElseThrow();
@@ -133,7 +135,8 @@ class VideoTranscodedEventConsumerTest {
         videoRepository.updateStatus(video, VideoStatus.PROCESSING);
 
         VideoTranscodedEvent event = VideoTranscodedEvent.success(
-                video.getId(), "http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
+                video.getId(), "http://minio/thumb.jpg", "http://minio/preview.webp",
+                "http://minio/master.m3u8", 42);
         consumer.onMessage(objectMapper.writeValueAsString(event));
 
         Video after = videoRepository.findById(video.getId()).orElseThrow();
@@ -180,7 +183,8 @@ class VideoTranscodedEventConsumerTest {
                 .build());
 
         VideoTranscodedEvent event = VideoTranscodedEvent.success(
-                video.getId(), "http://minio/thumb.jpg", "http://minio/master.m3u8", 42);
+                video.getId(), "http://minio/thumb.jpg", "http://minio/preview.webp",
+                "http://minio/master.m3u8", 42);
         String payload = objectMapper.writeValueAsString(event);
 
         consumer.onMessage(payload);
