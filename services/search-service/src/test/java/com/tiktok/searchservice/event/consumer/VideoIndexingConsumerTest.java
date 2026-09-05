@@ -215,8 +215,12 @@ class VideoIndexingConsumerTest {
     }
 
     private void deleteAll(Class<?> type) {
-        elasticsearchOperations.delete(Query.findAll(), type);
-        elasticsearchOperations.indexOps(type).refresh();
+        var indexOps = elasticsearchOperations.indexOps(type);
+        if (indexOps.exists()) {
+            indexOps.delete();
+        }
+        indexOps.createWithMapping();
+        indexOps.refresh();
     }
 
     private byte[] header(String eventType) {
