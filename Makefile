@@ -215,6 +215,9 @@ run-payment:
 run-inventory:
 	./mvnw spring-boot:run -pl services/inventory-service -Dspring-boot.run.profiles=local
 
+run-notification:
+	./mvnw spring-boot:run -pl services/notification-service -Dspring-boot.run.profiles=local
+
 # Cả hai service này phục vụ admin console (../tiktok-admin) và đều yêu cầu ROLE_ADMIN.
 run-search:
 	./mvnw spring-boot:run -pl services/search-service -Dspring-boot.run.profiles=local

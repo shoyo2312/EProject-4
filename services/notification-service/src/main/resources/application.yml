@@ -8,6 +8,9 @@ spring:
   data:
     mongodb:
       uri: mongodb://root:password@localhost:27017/notification_db?authSource=admin
+      # Off by default since Spring Data Mongo 3.x, which left recipient_feed_idx uncreated:
+      # every inbox read was a collection scan sorted in memory.
+      auto-index-creation: true
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}

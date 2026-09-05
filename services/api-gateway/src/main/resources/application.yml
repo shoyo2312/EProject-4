@@ -39,6 +39,12 @@ spring:
           uri: ${ADMIN_SERVICE_URI:http://localhost:8096}
           predicates:
             - Path=/api/v1/admin/**
+        # Every endpoint here is the caller's own inbox — the service reads the
+        # recipient from the token, so there is nothing public to expose.
+        - id: notification-service
+          uri: ${NOTIFICATION_SERVICE_URI:http://localhost:8089}
+          predicates:
+            - Path=/api/v1/notifications/**
         - id: search-service
           uri: ${SEARCH_SERVICE_URI:http://localhost:8095}
           predicates:
