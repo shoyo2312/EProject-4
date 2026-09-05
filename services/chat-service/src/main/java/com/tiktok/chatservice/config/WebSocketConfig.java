@@ -18,6 +18,16 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
+        // Two registrations of the same path, deliberately. The first is a plain
+        // WebSocket endpoint, which is what a mobile client connects to; the second adds
+        // the SockJS fallback URLs under /ws/** for browsers that cannot hold a socket
+        // open. Only .withSockJS() registers those, and it does not leave a raw endpoint
+        // behind — a phone talking plain STOMP-over-WebSocket would have nothing to reach.
+        registry.addEndpoint("/ws")
+                .addInterceptors(jwtHandshakeInterceptor)
+                .setHandshakeHandler(new UserPrincipalHandshakeHandler())
+                .setAllowedOriginPatterns("*");
+
         registry.addEndpoint("/ws")
                 .addInterceptors(jwtHandshakeInterceptor)
                 .setHandshakeHandler(new UserPrincipalHandshakeHandler())

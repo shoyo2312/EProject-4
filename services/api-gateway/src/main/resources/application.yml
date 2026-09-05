@@ -45,6 +45,18 @@ spring:
           uri: ${NOTIFICATION_SERVICE_URI:http://localhost:8089}
           predicates:
             - Path=/api/v1/notifications/**
+        - id: chat-service
+          uri: ${CHAT_SERVICE_URI:http://localhost:8088}
+          predicates:
+            - Path=/api/v1/conversations/**
+        # The STOMP endpoint, and the SockJS URLs under it. Left as http:// on
+        # purpose: the gateway's websocket filter switches the scheme itself
+        # when a request carries an Upgrade header, and SockJS's /ws/info probe
+        # is a plain GET that must not be spoken to as a socket.
+        - id: chat-websocket
+          uri: ${CHAT_SERVICE_URI:http://localhost:8088}
+          predicates:
+            - Path=/ws/**
         - id: search-service
           uri: ${SEARCH_SERVICE_URI:http://localhost:8095}
           predicates:
