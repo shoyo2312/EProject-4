@@ -8,6 +8,12 @@ spring:
   data:
     mongodb:
       uri: mongodb://root:password@localhost:27017/chat_db?authSource=admin
+      # Off by default since Spring Data Mongo 3.x. Without it the unique
+      # participant_key_idx was never created, which is the whole mechanism
+      # ConversationServiceImpl.createConversation relies on to converge two
+      # concurrent "start conversation" calls onto one document: no index, no
+      # DuplicateKeyException, two threads each happily save their own.
+      auto-index-creation: true
 
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}

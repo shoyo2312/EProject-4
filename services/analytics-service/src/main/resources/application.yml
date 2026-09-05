@@ -6,7 +6,11 @@ spring:
     name: analytics-service
 
   datasource:
-    url: jdbc:clickhouse://${CLICKHOUSE_HOST:localhost}:${CLICKHOUSE_PORT:8123}/analytics_db
+    # http_connection_provider is stated rather than left to the driver: clickhouse-jdbc
+    # prefers the Apache client, which is an optional dependency we do not ship, so every
+    # insert logged a NoClassDefFoundError stack trace before falling back to this same
+    # provider. Naming it skips the failed attempt; the connection behaviour is unchanged.
+    url: jdbc:clickhouse://${CLICKHOUSE_HOST:localhost}:${CLICKHOUSE_PORT:8123}/analytics_db?http_connection_provider=HTTP_URL_CONNECTION
     username: ${CLICKHOUSE_USER:default}
     password: ${CLICKHOUSE_PASSWORD:clickhouse}
     driver-class-name: com.clickhouse.jdbc.ClickHouseDriver

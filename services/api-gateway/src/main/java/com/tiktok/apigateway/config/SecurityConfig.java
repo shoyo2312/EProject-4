@@ -43,6 +43,12 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .pathMatchers(HttpMethod.GET, "/api/v1/recommendations/trending").permitAll()
                         .pathMatchers(HttpMethod.GET, "/api/v1/search/**").permitAll()
+                        // The chat handshake carries its token as a query parameter, not a
+                        // header: a browser cannot set one on a WebSocket/SockJS handshake.
+                        // chat-service validates it itself in JwtHandshakeInterceptor and
+                        // refuses the upgrade with a 401 — this filter would reject every
+                        // handshake before it ever got there.
+                        .pathMatchers("/ws/**").permitAll()
                         .anyExchange().authenticated())
                 .addFilterAt(authenticationWebFilter, SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();
