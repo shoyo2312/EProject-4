@@ -56,12 +56,12 @@ class MediaCleanupServiceImplTest {
     }
 
     @Test
-    void deleteMediaFor_removesTheThumbnailAndTheSourceUpload() throws Exception {
+    void deleteMediaFor_removesTheArtworkAndTheSourceUpload() throws Exception {
         stubListing();
 
         service().deleteMediaFor("vid1", "s3://video-media/raw/7/vid1.mp4");
 
-        assertThat(removedKeys()).contains("thumbnails/vid1.jpg", "raw/7/vid1.mp4");
+        assertThat(removedKeys()).contains("thumbnails/vid1.jpg", "previews/vid1.webp", "raw/7/vid1.mp4");
     }
 
     /**
@@ -87,7 +87,7 @@ class MediaCleanupServiceImplTest {
 
         service().deleteMediaFor("vid1", "https://elsewhere.example.test/other-bucket/raw/7/vid1.mp4");
 
-        assertThat(removedKeys()).containsExactly("thumbnails/vid1.jpg");
+        assertThat(removedKeys()).containsExactly("thumbnails/vid1.jpg", "previews/vid1.webp");
     }
 
     /** One object that will not go must not take the rest of the cleanup with it. */
@@ -100,7 +100,7 @@ class MediaCleanupServiceImplTest {
 
         service().deleteMediaFor("vid1", "s3://video-media/raw/7/vid1.mp4");
 
-        assertThat(removedKeys()).hasSize(3);
+        assertThat(removedKeys()).hasSize(4);
     }
 
     /**

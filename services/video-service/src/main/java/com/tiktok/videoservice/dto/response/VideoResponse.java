@@ -12,6 +12,8 @@ public record VideoResponse(
         String title,
         String description,
         String thumbnailUrl,
+        /** Animated preview to play under the cursor; null means fall back to {@code thumbnailUrl}. */
+        String previewUrl,
         String hlsUrl,
         Integer durationSeconds,
         VideoStatus status,

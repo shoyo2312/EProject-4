@@ -35,6 +35,7 @@ public class MediaCleanupServiceImpl implements MediaCleanupService {
     public void deleteMediaFor(String videoId, String rawFileUrl) {
         List<String> keys = new ArrayList<>();
         keys.add(MediaKeys.thumbnail(videoId));
+        keys.add(MediaKeys.preview(videoId));
         keys.addAll(listUnder(MediaKeys.hlsPrefix(videoId)));
         // Skipped rather than guessed when the URL does not name this bucket — see
         // MediaKeys.objectKey. The abandoned-upload lifecycle rule is what covers it then.

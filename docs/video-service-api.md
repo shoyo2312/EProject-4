@@ -127,6 +127,7 @@ Response `data` → `VideoResponse`:
   "title": "Tiêu đề",
   "description": "Mô tả",         // có thể null
   "thumbnailUrl": null,           // null cho tới khi transcode xong
+  "previewUrl": null,             // WebP động cho hover; null nghĩa là fallback về thumbnailUrl
   "hlsUrl": null,                 // null cho tới khi transcode xong
   "durationSeconds": null,        // null cho tới khi transcode xong
   "status": "PROCESSING",
@@ -244,7 +245,7 @@ File trên MinIO (bản gốc, thumbnail, và toàn bộ output HLS) do media-wo
 ### `VideoStatus`
 | Giá trị | Ý nghĩa với client |
 |---|---|
-| `PROCESSING` | Vừa đăng, đang transcode. Chưa có `hlsUrl`/`thumbnailUrl`, chưa lên feed. Hiện spinner/placeholder. |
+| `PROCESSING` | Vừa đăng, đang transcode. Chưa có `hlsUrl`/`thumbnailUrl`/`previewUrl`, chưa lên feed. Hiện spinner/placeholder. |
 | `PUBLISHED` | Phát được, đã có `hlsUrl`. Trạng thái duy nhất xuất hiện trên `/feed`. |
 | `FAILED` | Transcode hỏng, hoặc file bị từ chối vì vượt 500 MB / 10 phút. `failureReason` mang lý do (xem mục 3.2). Chỉ chủ video nhìn thấy; UI nên hiện `failureReason` và cho xoá + đăng lại. |
 | `TAKEN_DOWN` | Bị admin gỡ vì vi phạm. Chỉ chủ video nhìn thấy. Nếu được khôi phục, video quay lại **đúng trạng thái trước khi gỡ** (không mặc định thành `PUBLISHED`) — client đừng tự đoán trạng thái sau khôi phục, cứ đọc lại từ server. |
@@ -317,7 +318,7 @@ Mọi consumer idempotent qua `IdempotentEventProcessor` (bảng `processed_even
 
 | Topic | Event | Tác dụng |
 |---|---|---|
-| `media.video-transcoded-events` | `VideoTranscodedEvent` | `success` → `status = PUBLISHED` + `hlsUrl`/`thumbnailUrl`/`durationSeconds`; ngược lại `status = FAILED` + `failureReason`. Qua `VideoStateUpdater` (re-read nếu có takedown chen giữa) |
+| `media.video-transcoded-events` | `VideoTranscodedEvent` | `success` → `status = PUBLISHED` + `hlsUrl`/`thumbnailUrl`/`previewUrl`/`durationSeconds`; ngược lại `status = FAILED` + `failureReason`. Qua `VideoStateUpdater` (re-read nếu có takedown chen giữa) |
 | `interaction.like-events` | `VideoLikeEvent` | `likeCount += liked ? 1 : -1` |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (route theo header; vắng ⇒ Created) | `commentCount ± 1` |
 | `interaction.view-events` | `VideoViewedEvent` | `viewCount += 1` (chỉ view đã qua dedupe của interaction-service) |

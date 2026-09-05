@@ -1,17 +1,16 @@
 package com.tiktok.mediaworker.service;
 
 /**
- * One question media-worker needs answered about an upload before it will transcode it:
- * how long is it. Split behind an interface so TranscodeServiceImpl's size/duration rules
- * are unit-testable without the ffprobe binary or a presigned URL.
+ * What media-worker needs to know about an upload before it processes it: how long it is, and
+ * whether it is already in the shape a browser plays. Split behind an interface so
+ * TranscodeServiceImpl's rules are unit-testable without the ffmpeg binary.
  */
 public interface VideoProbe {
 
     /**
-     * @param httpUrl an {@code http(s)://} or {@code file://} URL ffprobe can open — for the
-     *                real upload this is a short-lived presigned GET
-     * @return the media duration rounded to the nearest second
-     * @throws IllegalStateException if the URL yields no readable duration
+     * @param url an {@code http(s)://} or {@code file://} URL ffmpeg can open
+     * @return what could be read off the file, with the duration rounded to the nearest second
+     * @throws IllegalStateException if the URL yields no readable video stream or duration
      */
-    int durationSeconds(String httpUrl);
+    ProbedVideo probe(String url);
 }

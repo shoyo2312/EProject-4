@@ -72,7 +72,7 @@ class VideoIndexingConsumerTest {
         assertThat(indexed.getTags()).containsExactly("dance");
         assertThat(indexed.getStatus()).isEqualTo("PROCESSING");
 
-        transcode(VideoTranscodedEvent.success("v1", "http://minio/thumb.jpg", "http://minio/master.m3u8", 42));
+        transcode(VideoTranscodedEvent.success("v1", "http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42));
 
         VideoDocument transcoded = video("v1").orElseThrow();
         assertThat(transcoded.getStatus()).isEqualTo("PUBLISHED");
@@ -89,7 +89,7 @@ class VideoIndexingConsumerTest {
      */
     @Test
     void onMessage_transcodeBeforePublication_stillEndsPublished() throws Exception {
-        transcode(VideoTranscodedEvent.success("v5", "http://minio/thumb.jpg", "http://minio/master.m3u8", 7));
+        transcode(VideoTranscodedEvent.success("v5", "http://minio/thumb.jpg", null, "http://minio/master.m3u8", 7));
 
         // Not searchable yet: the stub has no content to show, so it must not carry a status.
         assertThat(video("v5").orElseThrow().getStatus()).isNull();
@@ -107,7 +107,7 @@ class VideoIndexingConsumerTest {
     void onMessage_publicationReplay_doesNotOverwriteTranscodedStatus() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("v6", 1L, "title", null, "s3://raw/6.mp4", List.of());
         videoEventConsumer.onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
-        transcode(VideoTranscodedEvent.success("v6", "http://minio/t.jpg", "http://minio/m.m3u8", 9));
+        transcode(VideoTranscodedEvent.success("v6", "http://minio/t.jpg", null, "http://minio/m.m3u8", 9));
 
         // Same videoId, a fresh event: the derived eventId is stable, so this is a genuine replay.
         videoEventConsumer.onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
@@ -177,7 +177,7 @@ class VideoIndexingConsumerTest {
     @Test
     void onMessage_takedownThenRestore_returnsTheTranscodedStatus() throws Exception {
         publish("v8", "title", null, List.of());
-        transcode(VideoTranscodedEvent.success("v8", "http://minio/t.jpg", "http://minio/m.m3u8", 5));
+        transcode(VideoTranscodedEvent.success("v8", "http://minio/t.jpg", null, "http://minio/m.m3u8", 5));
 
         VideoTakenDownEvent takenDown = VideoTakenDownEvent.of("v8", 99L, "spam");
         adminModerationEventConsumer.onMessage(
@@ -215,8 +215,12 @@ class VideoIndexingConsumerTest {
     }
 
     private void deleteAll(Class<?> type) {
-        elasticsearchOperations.delete(Query.findAll(), type);
-        elasticsearchOperations.indexOps(type).refresh();
+        var indexOps = elasticsearchOperations.indexOps(type);
+        if (indexOps.exists()) {
+            indexOps.delete();
+        }
+        indexOps.createWithMapping();
+        indexOps.refresh();
     }
 
     private byte[] header(String eventType) {
