@@ -8,26 +8,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Exercises the real ffprobe binary JAVE2 unpacks — no network, the input is a file URL.
- * The size/duration decision logic is unit-tested against a mocked VideoProbe elsewhere.
+ * Exercises the real ffmpeg binary JAVE2 unpacks — no network, the input is a file URL.
+ * The decision logic built on top of the numbers read here is unit-tested in ProbedVideoTest.
  */
 class JaveVideoProbeTest {
 
     private final VideoProbe probe = new JaveVideoProbe();
 
     @Test
-    void durationSeconds_readsTheLengthOfARealClip() throws Exception {
+    void probe_readsTheDurationCodecsAndSizeOfARealClip() throws Exception {
         Path fixture = Path.of(
                 JaveVideoProbeTest.class.getResource("/fixtures/sample-3s.mp4").toURI());
 
-        int seconds = probe.durationSeconds(fixture.toUri().toString());
+        ProbedVideo probed = probe.probe(fixture.toUri().toString());
 
-        assertThat(seconds).isBetween(2, 4); // fixture is 3s
+        assertThat(probed.durationSeconds()).isBetween(2, 4); // fixture is 3s
+        // The decoder string ffmpeg prints carries a profile and a tag; only the codec survives.
+        assertThat(probed.videoCodec()).isEqualTo("h264");
+        assertThat(probed.width()).isPositive();
+        assertThat(probed.height()).isPositive();
     }
 
     @Test
-    void durationSeconds_throwsWhenTheUrlIsNotMedia() {
-        assertThatThrownBy(() -> probe.durationSeconds("file:///no/such/file.mp4"))
+    void probe_throwsWhenTheUrlIsNotMedia() {
+        assertThatThrownBy(() -> probe.probe("file:///no/such/file.mp4"))
                 .isInstanceOf(IllegalStateException.class);
     }
 }

@@ -552,7 +552,7 @@ class VideoServiceImplTest {
 
     private void markPublished(String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
-        video.markPublished(null, null, null);
+        video.markPublished(null, null, null, null);
         videoRepository.save(video);
     }
 

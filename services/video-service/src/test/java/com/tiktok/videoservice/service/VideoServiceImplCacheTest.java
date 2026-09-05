@@ -142,7 +142,7 @@ class VideoServiceImplCacheTest {
     @Test
     void getByIds_filtersAPrivateCachedVideoOutForAStranger() {
         VideoResponse privateVideo = new VideoResponse(
-                "A", OWNER, "t", "d", null, null, 10, VideoStatus.PUBLISHED,
+                "A", OWNER, "t", "d", null, null, null, 10, VideoStatus.PUBLISHED,
                 VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now(), null);
 
         when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", privateVideo));
@@ -159,7 +159,7 @@ class VideoServiceImplCacheTest {
     @Test
     void friendsVideo_isVisibleOnlyToAConfirmedFriend() {
         VideoResponse friendsVideo = new VideoResponse(
-                "A", OWNER, "t", "d", null, null, 10, VideoStatus.PUBLISHED,
+                "A", OWNER, "t", "d", null, null, null, 10, VideoStatus.PUBLISHED,
                 VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now(), null);
         when(videoCache.get("A")).thenReturn(Optional.of(friendsVideo));
 
@@ -219,7 +219,7 @@ class VideoServiceImplCacheTest {
 
     private static VideoResponse publicVideo(String id) {
         return new VideoResponse(
-                id, OWNER, "title", "description", "https://cdn/t.jpg", "https://cdn/v.m3u8",
+                id, OWNER, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
                 10, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null);
     }
 }

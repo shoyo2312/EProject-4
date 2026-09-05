@@ -111,6 +111,7 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("thumbnailUrl", video.getThumbnailUrl())
+                .set("previewUrl", video.getPreviewUrl())
                 .set("hlsUrl", video.getHlsUrl())
                 .set("durationSeconds", video.getDurationSeconds())
                 .set("failureReason", video.getFailureReason())); // null on the success path — clears a stale reason
