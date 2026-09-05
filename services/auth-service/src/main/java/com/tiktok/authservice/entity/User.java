@@ -69,6 +69,25 @@ public class User extends BaseEntity {
         this.status = UserStatus.LOCKED;
     }
 
+    public void ban() {
+        this.status = UserStatus.BANNED;
+    }
+
+    /**
+     * Only lifts a ban. LOCKED comes from somewhere else entirely, and an unban that reset it to
+     * ACTIVE would silently undo that other decision.
+     */
+    public void unban() {
+        if (this.status == UserStatus.BANNED) {
+            this.status = UserStatus.ACTIVE;
+        }
+    }
+
+    public void promoteToAdmin() {
+        this.role = UserRole.ADMIN;
+        this.emailVerified = true;
+    }
+
     public void markEmailVerified() {
         this.emailVerified = true;
         this.emailVerifiedAt = Instant.now();

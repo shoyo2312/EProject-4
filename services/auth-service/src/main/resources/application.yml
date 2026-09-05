@@ -21,6 +21,11 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: auth-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -61,6 +66,12 @@ auth:
     refresh-token-grace: 7d
     verification-token-grace: 1d
     published-outbox-grace: 7d
+  admin:
+    # First ADMIN account for the admin console. Both must be set or nothing is provisioned;
+    # an account that already owns this email is promoted, never overwritten.
+    email: ${ADMIN_EMAIL:}
+    password: ${ADMIN_PASSWORD:}
+    username: ${ADMIN_USERNAME:admin}
   mail:
     from: ${MAIL_FROM:no-reply@tiktok-clone.dev}
   turnstile:
