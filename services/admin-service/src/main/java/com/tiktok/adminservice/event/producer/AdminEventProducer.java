@@ -1,11 +1,13 @@
 package com.tiktok.adminservice.event.producer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tiktok.adminservice.entity.CommentTarget;
 import com.tiktok.adminservice.entity.ModerationAction;
 import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.OutboxEvent;
 import com.tiktok.adminservice.repository.OutboxEventRepository;
 import com.tiktok.event.DomainEvent;
+import com.tiktok.event.admin.CommentRemovedEvent;
 import com.tiktok.event.admin.ProductReactivatedEvent;
 import com.tiktok.event.admin.ProductSuspendedEvent;
 import com.tiktok.event.admin.UserBannedEvent;
@@ -48,6 +50,10 @@ public class AdminEventProducer {
             case UNBAN_USER -> UserUnbannedEvent.of(Long.valueOf(targetId), adminId, reason);
             case TAKEDOWN_VIDEO -> VideoTakenDownEvent.of(targetId, adminId, reason);
             case RESTORE_VIDEO -> VideoRestoredEvent.of(targetId, adminId, reason);
+            case REMOVE_COMMENT -> {
+                CommentTarget target = CommentTarget.parse(targetId);
+                yield CommentRemovedEvent.of(target.videoId(), target.commentId(), adminId, reason);
+            }
             case SUSPEND_PRODUCT -> ProductSuspendedEvent.of(Long.valueOf(targetId), adminId, reason);
             case REACTIVATE_PRODUCT -> ProductReactivatedEvent.of(Long.valueOf(targetId), adminId, reason);
             case WARN_USER, DISMISS_REPORT -> null;
