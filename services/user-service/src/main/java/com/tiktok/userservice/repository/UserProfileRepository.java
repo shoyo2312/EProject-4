@@ -30,12 +30,21 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
      * <p>Ordered by follower count because the query is short and ambiguous by nature — several
      * accounts match "an" — and the one people mean is almost always the biggest. The userId
      * tiebreak keeps paging stable across two profiles with the same count.
+     *
+     * <p>Blocks are excluded in the query rather than filtered out of the page afterwards, because
+     * a page filtered afterwards is short and its total still counts rows the caller can never
+     * reach — a client paging towards that total never arrives. Here the two agree.
      */
     @Query("select p from UserProfile p where p.deletedAt is null "
             + "and (lower(p.displayName) like lower(concat('%', :query, '%')) "
             + "or lower(p.username) like lower(concat('%', :query, '%'))) "
+            + "and not exists (select 1 from UserBlock b where b.deletedAt is null "
+            + "and ((b.blockerId = :viewerId and b.blockedId = p.userId) "
+            + "or (b.blockedId = :viewerId and b.blockerId = p.userId))) "
             + "order by p.followerCount desc, p.userId asc")
-    Page<UserProfile> search(@Param("query") String query, Pageable pageable);
+    Page<UserProfile> search(@Param("viewerId") Long viewerId,
+                             @Param("query") String query,
+                             Pageable pageable);
 
     /**
      * Points a profile at the copy media-worker made of its provider picture.

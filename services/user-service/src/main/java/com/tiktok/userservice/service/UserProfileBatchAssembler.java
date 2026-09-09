@@ -19,6 +19,11 @@ import java.util.stream.Collectors;
 /**
  * Resolves a page of user ids to profiles with a single batched query, shared by every
  * list endpoint (followers/following/blocked/muted) so none of them fall back to N+1 lookups.
+ *
+ * <p>No block filter here, and there must not be one: the ids arrive already decided. Followers and
+ * following are narrowed by the repository ({@code findFollowerIdsVisibleTo}), while the blocked
+ * and muted lists are the viewer's own bookkeeping — filtering blocks out of the blocked list would
+ * empty the very page it exists to render.
  */
 @Slf4j
 @Component

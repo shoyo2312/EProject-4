@@ -110,9 +110,10 @@ public class FollowServiceImpl implements FollowService {
     public Page<UserProfileResponse> listFollowers(Long viewerId, Long userId, Pageable pageable) {
         profileVisibilityGuard.requireVisible(viewerId, userId);
 
-        Page<Long> followerIds = userFollowRepository.findByFollowingIdAndDeletedAtIsNull(userId, pageable)
-                .map(UserFollow::getFollowerId);
-        return profileBatchAssembler.toResponses(followerIds);
+        // Visible-to rather than the plain lookup: the guard above answers whether this list may be
+        // read, the query answers who in it may be shown. Someone who blocked the viewer is neither.
+        return profileBatchAssembler.toResponses(
+                userFollowRepository.findFollowerIdsVisibleTo(viewerId, userId, pageable));
     }
 
     @Override
@@ -120,8 +121,7 @@ public class FollowServiceImpl implements FollowService {
     public Page<UserProfileResponse> listFollowing(Long viewerId, Long userId, Pageable pageable) {
         profileVisibilityGuard.requireVisible(viewerId, userId);
 
-        Page<Long> followingIds = userFollowRepository.findByFollowerIdAndDeletedAtIsNull(userId, pageable)
-                .map(UserFollow::getFollowingId);
-        return profileBatchAssembler.toResponses(followingIds);
+        return profileBatchAssembler.toResponses(
+                userFollowRepository.findFollowingIdsVisibleTo(viewerId, userId, pageable));
     }
 }

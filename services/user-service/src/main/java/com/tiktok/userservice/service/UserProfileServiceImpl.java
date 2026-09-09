@@ -11,7 +11,6 @@ import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -85,23 +84,12 @@ public class UserProfileServiceImpl implements UserProfileService {
         // The sort is part of the query — a Pageable carrying its own would be appended to it and
         // fight the follower-count ordering the search is built around.
         Pageable unsorted = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize());
-        Page<UserProfile> page = userProfileRepository.search(query.strip(), unsorted);
 
-        List<Long> ids = page.getContent().stream().map(UserProfile::getUserId).toList();
-        Set<Long> hidden = ids.isEmpty()
-                ? Set.of()
-                : Set.copyOf(userBlockRepository.findBlockedIdsAmong(viewerId, ids));
-
-        List<UserProfileResponse> visible = page.getContent().stream()
-                .filter(profile -> !hidden.contains(profile.getUserId()))
-                .map(userProfileMapper::toResponse)
-                .toList();
-
-        // The count handed in is the one before the block filter — the number of rows the query
-        // matched, which is what the next page is positioned against. PageImpl trims it down to
-        // what it can see on a last page; that is its own behaviour and harmless here, since a
-        // page shorter than asked for is already the contract above.
-        return new PageImpl<>(visible, unsorted, page.getTotalElements());
+        // Blocks are excluded by the query, so the page comes back full and its total is a number
+        // the caller can actually page to. Filtering the page here instead handed out short pages
+        // under a total that counted rows this viewer is never shown.
+        return userProfileRepository.search(viewerId, query.strip(), unsorted)
+                .map(userProfileMapper::toResponse);
     }
 
     @Override
