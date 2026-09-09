@@ -63,26 +63,29 @@ public class LikeServiceImpl implements LikeService {
             // like stays stored against a counter that is short by one for good — the same
             // compensation ViewServiceImpl does around its play claim.
             boolean countered = false;
+            boolean listed = false;
             try {
                 videoCountersRepository.incrementLikeCount(videoId, 1);
                 countered = true;
-                likeByUserRepository.save(LikeByUser.builder()
-                        .key(LikeByUserKey.builder()
-                                .userId(currentUserId)
-                                .createdAt(likedAt)
-                                .videoId(videoId)
-                                .build())
-                        .build());
+                likeByUserRepository.save(likeByUserRow(videoId, currentUserId, likedAt));
+                listed = true;
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishLike(videoId, currentUserId, true);
             } catch (RuntimeException ex) {
                 String what = "like of video %d by user %d".formatted(videoId, currentUserId);
-                // The counter first, then the claim, and only if the counter actually moved.
-                // Giving the claim back alone is what made a failed publish permanent: the
-                // increment had already landed, so the client's retry took a fresh claim and
-                // added a second one for the same like.
+                // The counter first, then the reverse index, then the claim, each only if it
+                // actually landed. Giving the claim back alone is what made a failed publish
+                // permanent: the increment had already landed, so the client's retry took a fresh
+                // claim and added a second one for the same like. The reverse-index row is here
+                // for the same reason in the other direction — left behind, it puts the video in
+                // the user's liked list with no claim behind it, so listLikedVideos and getStatus
+                // disagree for good.
                 if (countered) {
                     undo(() -> videoCountersRepository.incrementLikeCount(videoId, -1), what, ex);
+                }
+                if (listed) {
+                    undo(() -> likeByUserRepository.deleteById(
+                            likeByUserKey(videoId, currentUserId, likedAt)), what, ex);
                 }
                 undo(() -> likeByVideoRepository.deleteIfExists(videoId, currentUserId), what, ex);
                 throw ex;
@@ -116,14 +119,12 @@ public class LikeServiceImpl implements LikeService {
             // failure after it puts the like row back rather than leaving the video counted as
             // liked by someone whose like is gone.
             boolean countered = false;
+            boolean delisted = false;
             try {
                 videoCountersRepository.incrementLikeCount(videoId, -1);
                 countered = true;
-                likeByUserRepository.deleteById(LikeByUserKey.builder()
-                        .userId(currentUserId)
-                        .createdAt(likedAt)
-                        .videoId(videoId)
-                        .build());
+                likeByUserRepository.deleteById(likeByUserKey(videoId, currentUserId, likedAt));
+                delisted = true;
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishLike(videoId, currentUserId, false);
             } catch (RuntimeException ex) {
@@ -131,8 +132,16 @@ public class LikeServiceImpl implements LikeService {
                 if (countered) {
                     undo(() -> videoCountersRepository.incrementLikeCount(videoId, 1), what, ex);
                 }
+                // The reverse-index row goes back too, under the timestamp the claim addresses it
+                // by. Without this a failure after the delete — a publish that throws, say —
+                // restores the claim over a list entry that is gone, and the video stays liked
+                // according to getStatus while listLikedVideos has never heard of it.
+                if (delisted) {
+                    undo(() -> likeByUserRepository.save(
+                            likeByUserRow(videoId, currentUserId, likedAt)), what, ex);
+                }
                 // The original timestamp, not a fresh one: the restored claim has to keep
-                // addressing the reverse-index row that is still there.
+                // addressing the reverse-index row restored above.
                 undo(() -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, likedAt),
                         what, ex);
                 throw ex;
@@ -188,6 +197,14 @@ public class LikeServiceImpl implements LikeService {
      * seeing, and a compensation that fails leaves exactly the inconsistency that existed before
      * this method — loud in the log, and no worse than not trying.
      */
+    private static LikeByUserKey likeByUserKey(Long videoId, Long userId, Instant likedAt) {
+        return LikeByUserKey.builder().userId(userId).createdAt(likedAt).videoId(videoId).build();
+    }
+
+    private static LikeByUser likeByUserRow(Long videoId, Long userId, Instant likedAt) {
+        return LikeByUser.builder().key(likeByUserKey(videoId, userId, likedAt)).build();
+    }
+
     private void undo(Runnable compensation, String what, RuntimeException cause) {
         try {
             compensation.run();
