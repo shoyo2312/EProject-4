@@ -26,6 +26,11 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        // Before the blanket GET rule below, which would otherwise make the
+                        // whole platform's video list — every owner, every status, including
+                        // taken-down ones — readable without a token.
+                        .requestMatchers("/api/v1/videos/admin", "/api/v1/videos/admin/**")
+                        .hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .anyRequest().authenticated()
                 )
