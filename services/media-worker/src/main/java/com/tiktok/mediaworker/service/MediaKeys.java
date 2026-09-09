@@ -18,11 +18,13 @@ public final class MediaKeys {
      * One key per user, overwritten rather than versioned: the profile stores this URL, so a fresh
      * key per copy would leave the profile pointing at the old object with nothing to update it.
      *
-     * <p>The extension is a label, not a promise — whatever the provider served is stored, with its
-     * own content type on the object, and browsers go by that rather than by the name.
+     * <p>No extension, unlike the derived keys below: those name bytes this worker produced in a
+     * format it chose, while an avatar is whatever the provider served — or, on the same key, what
+     * a user uploaded through user-service. A ".jpg" on it would be a claim about the bytes that
+     * nothing checks and both writers routinely break. The content type sits on the object.
      */
     public static String avatar(Long userId) {
-        return "avatars/%d.jpg".formatted(userId);
+        return "avatars/%d".formatted(userId);
     }
 
     public static String thumbnail(String videoId) {

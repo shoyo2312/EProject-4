@@ -82,7 +82,7 @@ class AvatarMirrorServiceTest {
 
         String url = service().mirror(42L, "https://lh3.googleusercontent.com/a/x");
 
-        assertThat(url).isEqualTo("http://localhost:9000/video-media/avatars/42.jpg");
+        assertThat(url).isEqualTo("http://localhost:9000/video-media/avatars/42");
         verify(minioClient, never()).putObject(any(PutObjectArgs.class));
     }
 }
