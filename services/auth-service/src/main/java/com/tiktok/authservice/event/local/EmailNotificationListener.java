@@ -47,6 +47,17 @@ public class EmailNotificationListener {
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onAdminLoginOtpRequested(AdminLoginOtpRequestedEvent event) {
+        try {
+            log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] admin login OTP for {} = {}", event.email(), event.otp());
+            mailService.sendAdminLoginOtp(event.email(), event.otp());
+        } catch (Exception e) {
+            log.error("Failed to send admin login email to {}", event.email(), e);
+        }
+    }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onPasswordResetRequested(PasswordResetRequestedEvent event) {
         try {
             log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] password reset OTP for {} = {}", event.email(), event.otp());

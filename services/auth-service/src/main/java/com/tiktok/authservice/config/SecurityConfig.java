@@ -24,7 +24,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST,
-                                "/api/v1/auth/register", "/api/v1/auth/login",
+                                "/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/login/otp",
                                 "/api/v1/auth/refresh", "/api/v1/auth/logout",
                                 "/api/v1/auth/verify-email", "/api/v1/auth/resend-verification",
                                 "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
@@ -32,6 +32,9 @@ public class SecurityConfig {
                                 "/api/v1/auth/oauth/google", "/api/v1/auth/oauth/facebook",
                                 "/api/v1/auth/oauth/google/link", "/api/v1/auth/oauth/facebook/link").permitAll()
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        // The admin console's user directory — the whole platform's accounts,
+                        // not the caller's own, so authenticated is not enough.
+                        .requestMatchers("/api/v1/auth/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(new JwtAuthenticationFilter(jwtProvider, accessTokenBlacklist),

@@ -3,6 +3,7 @@ package com.tiktok.authservice.service;
 import com.tiktok.authservice.config.RetentionProperties;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
+import com.tiktok.authservice.repository.RememberedDeviceRepository;
 import com.tiktok.authservice.repository.VerificationTokenRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +39,7 @@ public class ExpiredRecordCleanup {
 
     private final RefreshTokenRepository refreshTokenRepository;
     private final VerificationTokenRepository verificationTokenRepository;
+    private final RememberedDeviceRepository rememberedDeviceRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final RetentionProperties retention;
     private final TransactionTemplate transactionTemplate;
@@ -51,6 +53,8 @@ public class ExpiredRecordCleanup {
                 now.minus(retention.refreshTokenGrace()), batchSize));
         sweep("verification tokens", () -> verificationTokenRepository.deleteExpiredBefore(
                 now.minus(retention.verificationTokenGrace()), batchSize));
+        sweep("remembered devices", () -> rememberedDeviceRepository.deleteExpiredBefore(
+                now.minus(retention.rememberedDeviceGrace()), batchSize));
         sweep("published outbox events", () -> outboxEventRepository.deletePublishedBefore(
                 now.minus(retention.publishedOutboxGrace()), batchSize));
     }

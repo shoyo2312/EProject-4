@@ -1,6 +1,7 @@
 package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.dto.request.AddEmailRequest;
+import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
@@ -16,6 +17,10 @@ public interface AuthService {
     UserResponse register(RegisterRequest request);
 
     TokenResponse login(LoginRequest request);
+
+    /** Second step of admin-console login: exchanges the emailed OTP (plus a fresh Turnstile
+     *  token) for a session. Only reached after {@link #login} answered {@code MFA_REQUIRED}. */
+    TokenResponse loginWithOtp(AdminLoginOtpRequest request);
 
     TokenResponse refresh(RefreshTokenRequest request);
 

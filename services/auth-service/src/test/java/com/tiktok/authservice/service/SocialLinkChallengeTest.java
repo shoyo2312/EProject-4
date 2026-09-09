@@ -36,7 +36,7 @@ class SocialLinkChallengeTest {
     private final OtpService otpService = mock(OtpService.class);
     private final OtpRateLimiter otpRateLimiter = mock(OtpRateLimiter.class);
     private final SocialAccountRegistrar registrar = mock(SocialAccountRegistrar.class);
-    private final OtpProperties otpProperties = new OtpProperties(900_000L, 900_000L);
+    private final OtpProperties otpProperties = new OtpProperties(900_000L, 900_000L, 300_000L);
 
     private final SocialLinkChallenge challenge =
             new SocialLinkChallenge(otpService, otpRateLimiter, otpProperties, registrar);

@@ -39,6 +39,14 @@ public class MailServiceImpl implements MailService {
     }
 
     @Override
+    public void sendAdminLoginOtp(String toEmail, String otp) {
+        send(toEmail, "Your admin sign-in code", "Admin console sign-in",
+                "Enter this code to finish signing in to the admin console.",
+                otp, otpProperties.adminLoginExpiryMillis(),
+                "If this wasn't you, someone has your password — change it now.");
+    }
+
+    @Override
     public void sendSocialLinkOtp(String toEmail, String otp, String provider) {
         send(toEmail, "Confirm your " + provider + " sign-in", "Confirm your " + provider + " sign-in",
                 "Someone signed in with a " + provider + " account using this email address and wants "

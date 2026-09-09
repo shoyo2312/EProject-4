@@ -57,6 +57,8 @@ auth:
   otp:
     email-verification-expiry-millis: 900000
     password-reset-expiry-millis: 900000
+    # Admin-login second factor: entered right after it is sent, so 5 minutes is plenty.
+    admin-login-expiry-millis: 300000
   retention:
     # Off-peak, and daily: nothing here is urgent, and the graces are measured in days.
     cron: "0 30 3 * * *"
@@ -66,6 +68,7 @@ auth:
     refresh-token-grace: 7d
     verification-token-grace: 1d
     published-outbox-grace: 7d
+    remembered-device-grace: 1d
   admin:
     # First ADMIN account for the admin console. Both must be set or nothing is provisioned;
     # an account that already owns this email is promoted, never overwritten.

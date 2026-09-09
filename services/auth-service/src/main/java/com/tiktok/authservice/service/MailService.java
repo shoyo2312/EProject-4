@@ -6,6 +6,9 @@ public interface MailService {
 
     void sendPasswordResetOtp(String toEmail, String otp);
 
+    /** The second-factor code for signing in to the admin console. */
+    void sendAdminLoginOtp(String toEmail, String otp);
+
     /**
      * @param provider named in the body on purpose: the recipient can only judge whether to ignore
      *                 this mail if they are told which account is asking to be attached.

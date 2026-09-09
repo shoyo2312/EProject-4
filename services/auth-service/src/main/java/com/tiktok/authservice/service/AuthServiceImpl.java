@@ -3,6 +3,7 @@ package com.tiktok.authservice.service;
 import com.tiktok.authservice.config.JwtProperties;
 import com.tiktok.authservice.config.OtpProperties;
 import com.tiktok.authservice.dto.request.AddEmailRequest;
+import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
@@ -26,6 +27,7 @@ import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
+import com.tiktok.authservice.exception.MfaRequiredException;
 import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.mapper.UserMapper;
@@ -69,6 +71,7 @@ public class AuthServiceImpl implements AuthService {
     private final SessionRevoker sessionRevoker;
     private final TokenIssuer tokenIssuer;
     private final TurnstileService turnstileService;
+    private final AdminMfaService adminMfaService;
 
     @Override
     @Transactional
@@ -155,7 +158,28 @@ public class AuthServiceImpl implements AuthService {
             throw new EmailNotVerifiedException();
         }
 
+        // Admin-console sessions get a second factor: Cloudflare Turnstile, then an emailed OTP
+        // unless this browser was remembered. Everyone else signs in on the password alone.
+        if (user.getRole() == UserRole.ADMIN) {
+            turnstileService.verify(request.turnstileToken());
+            if (!adminMfaService.isTrustedDevice(user, request.deviceToken())) {
+                adminMfaService.issueLoginChallenge(user);
+                throw new MfaRequiredException();
+            }
+        }
+
         return issueTokens(user);
+    }
+
+    /**
+     * Second step of admin login: a fresh Turnstile token and the code just mailed. On success
+     * this is the first point a session is issued for that admin. See {@link AdminMfaService}.
+     */
+    @Override
+    public TokenResponse loginWithOtp(AdminLoginOtpRequest request) {
+        turnstileService.verify(request.turnstileToken());
+        return adminMfaService.completeLogin(
+                request.usernameOrEmail(), request.otp(), request.rememberDevice());
     }
 
     @Override

@@ -30,6 +30,8 @@ public record RetentionProperties(
 
         Duration verificationTokenGrace,
 
-        Duration publishedOutboxGrace
+        Duration publishedOutboxGrace,
+
+        Duration rememberedDeviceGrace
 ) {
 }
