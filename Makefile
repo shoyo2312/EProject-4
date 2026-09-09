@@ -19,10 +19,11 @@ endif
 	test test-auth test-user \
 	infra-up infra-down infra-reset infra-logs infra-status \
 	run-gateway run-auth run-user run-video run-interaction run-story \
-	run-recommendation run-chat run-order run-payment run-inventory \
+	run-recommendation run-chat run-order run-payment run-inventory run-media run-notification \
 	run-admin run-analytics run-search \
 	migrate-auth migrate-user migrate-order migrate-product migrate-payment \
-	migrate-inventory migrate-admin migrate-all
+	migrate-inventory migrate-admin migrate-all \
+	moderation-up moderation-test
 
 # Hiển thị help
 help:
@@ -64,10 +65,12 @@ help:
 	@echo "    make run-auth           Run auth-service :8081"
 	@echo "    make run-user           Run user-service :8082"
 	@echo "    make run-video          Run video-service :8083"
+	@echo "    make run-media          Run media-worker :8084"
 	@echo "    make run-interaction    Run interaction-service :8085"
 	@echo "    make run-story          Run story-service :8086"
 	@echo "    make run-recommendation Run recommendation-service :8087"
 	@echo "    make run-chat           Run chat-service :8088"
+	@echo "    make run-notification   Run notification-service :8089"
 	@echo "    make run-order          Run order-service :8092"
 	@echo "    make run-payment        Run payment-service"
 	@echo "    make run-inventory      Run inventory-service"
@@ -77,6 +80,8 @@ help:
 	@echo "    make rank-up            Start rank-service :8098 (internal)"
 	@echo "    make rank-train         Train the feed ranking model from ClickHouse"
 	@echo "    make rank-test          Run rank-service tests"
+	@echo "    make moderation-up      Start moderation-service :8099 (NSFW screening)"
+	@echo "    make moderation-test    Run moderation-service tests"
 	@echo ""
 	@echo "  Database:"
 	@echo "    make migrate-auth       Chạy Flyway migration cho auth-service"
@@ -194,6 +199,11 @@ run-user:
 run-video:
 	./mvnw spring-boot:run -pl services/video-service -Dspring-boot.run.profiles=local
 
+# Transcodes uploaded videos into HLS. Without it an upload stays PENDING forever:
+# video-service only flips a video to PUBLISHED on the event this worker emits.
+run-media:
+	./mvnw spring-boot:run -pl services/media-worker -Dspring-boot.run.profiles=local
+
 run-interaction:
 	./mvnw spring-boot:run -pl services/interaction-service -Dspring-boot.run.profiles=local
 
@@ -227,6 +237,22 @@ run-admin:
 
 run-analytics:
 	./mvnw spring-boot:run -pl services/analytics-service -Dspring-boot.run.profiles=local
+
+# ─────────────────────────────────────────────────────────────────
+# moderation-service (Python)
+# ─────────────────────────────────────────────────────────────────
+
+# First build downloads the model weights into the image, so it is slow once and offline after.
+moderation-up:
+	docker compose up -d --build moderation-service
+
+# verdict.py is pure arithmetic and imports nothing heavy, so the tests need neither torch nor
+# the weights -- but they still run in the image, because that is the only place the Python
+# version this service ships on is written down.
+moderation-test:
+	docker compose run --rm --no-deps --entrypoint sh \
+		-v "$$(pwd)/services/moderation-service:/app" moderation-service -c \
+		"pip install -q -r requirements-dev.txt && python -m pytest -q"
 
 # ─────────────────────────────────────────────────────────────────
 # rank-service (Python)
