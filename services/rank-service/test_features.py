@@ -12,13 +12,14 @@ import app as rank_app
 from features import (
     FEATURE_NAMES,
     NEUTRAL_QUALITY,
+    PER_TAG,
     TOP_TAGS,
     affinity_delta,
     completion_rate,
     log_watches,
     to_row,
 )
-from train import user_tag_affinity
+from train import candidate_tags, user_tag_affinity
 
 
 def test_completion_rate_needs_enough_watches():
@@ -120,3 +121,22 @@ def test_rank_returns_no_scores_until_a_model_exists():
     })
     assert response.status_code == 200
     assert response.json()["scores"] == {}
+
+
+def test_candidate_tags_keeps_only_the_window_serving_reads():
+    """A tag offers its newest PER_TAG videos and no more — see FeedServiceImpl.videosTagged."""
+    tags = pd.DataFrame({
+        "video_id": [f"v{i}" for i in range(PER_TAG + 5)] + ["old"],
+        "tag": ["dance"] * (PER_TAG + 5) + ["music"],
+        "published_at": list(range(PER_TAG + 5)) + [0],
+    })
+
+    kept = candidate_tags(tags)
+
+    dance = kept[kept["tag"] == "dance"]
+    assert len(dance) == PER_TAG
+    # Newest kept, oldest dropped: v0..v4 are the five that aged out of the window.
+    assert "v0" not in set(dance["video_id"])
+    assert f"v{PER_TAG + 4}" in set(dance["video_id"])
+    # The cap is per tag, so a quiet tag keeps its only video.
+    assert set(kept[kept["tag"] == "music"]["video_id"]) == {"old"}

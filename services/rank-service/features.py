@@ -45,6 +45,14 @@ UNKNOWN_AGE_HOURS = 24.0
 # same column name — the model then learns from a feature it is never served.
 TOP_TAGS = 5
 
+# How many videos a tag can offer as candidates. Must match PER_TAG in FeedServiceImpl: serving
+# reads each of the viewer's tags with ZREVRANGE 0..PER_TAG-1 over reco:tag:{tag}, so only the
+# newest videos carrying a tag ever pick up affinity from it. A candidate that carries the
+# viewer's tag but has aged out of that window scores tag_affinity 0 online; training that joins
+# over the whole of video_tags gives it a real value, and the model then leans on a signal it is
+# not served — the drift this file exists to prevent, with no symptom beyond a worse feed.
+PER_TAG = 100
+
 
 def completion_rate(watches: float, completions: float) -> float:
     """One viewer finishing the only watch a video ever had is not a 100% completion rate."""
