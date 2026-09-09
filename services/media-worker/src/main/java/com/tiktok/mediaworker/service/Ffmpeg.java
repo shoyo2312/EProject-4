@@ -1,6 +1,7 @@
 package com.tiktok.mediaworker.service;
 
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * The two ffmpeg invocations the pipeline makes, split behind an interface for the same reason
@@ -51,4 +52,19 @@ public interface Ffmpeg {
      *         WebP encoder — the feed falls back to the still thumbnail
      */
     boolean animatedPreview(Path source, Path target, int fromSecond);
+
+    /**
+     * Writes up to {@code count} JPEG frames spread evenly across the whole video into
+     * {@code targetDir}, each scaled down to roughly the size an image classifier wants.
+     *
+     * <p>Evenly spread rather than taken from the front, because moderation is the caller: a
+     * sample of the opening seconds tells you nothing about a video whose last thirty seconds are
+     * the problem, and uploads shaped exactly that way are the ones worth catching. The samples
+     * are offset half an interval in so the first one is not the black leader most clips open on.
+     *
+     * @param durationSeconds the video's length, used to space the samples; values below one
+     *                        second are treated as one
+     * @return the frames actually written, in order, or an empty list if none could be decoded
+     */
+    List<Path> sampleFrames(Path source, Path targetDir, int count, int durationSeconds);
 }

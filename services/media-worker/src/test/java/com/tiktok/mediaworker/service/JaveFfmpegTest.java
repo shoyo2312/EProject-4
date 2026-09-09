@@ -39,6 +39,31 @@ class JaveFfmpegTest {
     }
 
     @Test
+    void sampleFrames_spreadsTheSamplesAcrossTheWholeClip(@TempDir Path work) throws Exception {
+        List<Path> frames = ffmpeg.sampleFrames(fixture(), work, 6, 3);
+
+        assertThat(frames).hasSize(6);
+        for (Path frame : frames) {
+            byte[] image = Files.readAllBytes(frame);
+            assertThat(image[0] & 0xFF).isEqualTo(0xFF);
+            assertThat(image[1] & 0xFF).isEqualTo(0xD8);
+        }
+        // The point of sampling rather than taking the opening frames: the last sample has to come
+        // from near the end, or a video that only turns explicit late is screened on nothing.
+        assertThat(Files.readAllBytes(frames.get(0)))
+                .as("samples taken seconds apart in a real clip are not the same picture")
+                .isNotEqualTo(Files.readAllBytes(frames.get(frames.size() - 1)));
+    }
+
+    @Test
+    void sampleFrames_returnsNothingForInputItCannotDecode(@TempDir Path work) throws Exception {
+        Path notMedia = work.resolve("notes.txt");
+        Files.writeString(notMedia, "this is not a video");
+
+        assertThat(ffmpeg.sampleFrames(notMedia, work, 6, 3)).isEmpty();
+    }
+
+    @Test
     void faststart_refusesInputItCannotCopyIntoMp4(@TempDir Path work) throws Exception {
         Path notMedia = work.resolve("notes.txt");
         Files.writeString(notMedia, "this is not a video");
