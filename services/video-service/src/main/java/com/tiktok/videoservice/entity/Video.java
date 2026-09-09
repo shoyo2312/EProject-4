@@ -59,6 +59,9 @@ import java.util.List;
         // See VideoEventPublisher.publishPendingDeletions.
         @CompoundIndex(name = "delete_outbox_idx",
                 def = "{'deleteEventPublishedAt': 1, 'deletedAt': 1}"),
+        // The visibility-change poll. Only ever a handful of rows carry a non-null value at any
+        // moment, but the collection it scans without this index is the largest one here.
+        @CompoundIndex(name = "visibility_outbox_idx", def = "{'visibilityEventPendingAt': 1}"),
         // One upload is one video. Enforced here rather than by checking before the insert,
         // because a check followed by an insert lets two concurrent publishes of the same key
         // both pass and produce two documents, two VideoPublishedEvents, and two transcode jobs
@@ -102,12 +105,27 @@ public class Video {
     private VideoStatus statusBeforeTakedown;
 
     /**
+     * Why moderation took this video down — the reason string from the admin's action, carried on
+     * VideoTakenDownEvent. Kept on the document rather than read back from admin-service's audit
+     * log, so any listing that shows a TAKEN_DOWN video can say why without one extra call per
+     * row. Cleared by a restore. Null for videos never taken down, and for those taken down
+     * before this field existed.
+     */
+    private String takedownReason;
+
+    /**
      * Why the last transcode attempt gave up — the message from media-worker's
      * VideoTranscodedEvent.failureReason. Shown to the uploader instead of a generic
      * "transcoding failed". Null for videos that never failed, and for ones that failed
      * before this field existed.
      */
     private String failureReason;
+
+    /**
+     * What automatic moderation found. Null for videos uploaded before this existed and for ones
+     * still transcoding. See {@link VideoModeration} for why the numbers are kept.
+     */
+    private VideoModeration moderation;
 
     private VideoVisibility visibility;
 
@@ -156,6 +174,18 @@ public class Video {
      */
     private Instant deleteEventPublishedAt;
 
+    /**
+     * The third outbox slot, for VideoVisibilityChangedEvent. Unlike the other two this one is
+     * set and cleared repeatedly: an owner can move a video between PUBLIC, FRIENDS and PRIVATE
+     * as often as they like, and every one of those has to reach the read paths that keep their
+     * own copy. Null means there is nothing to announce.
+     *
+     * <p>It doubles as the timestamp of the change, which is what makes the event id stable
+     * across a redelivery and still different for each change — see
+     * {@link com.tiktok.event.video.VideoVisibilityChangedEvent#of}.
+     */
+    private Instant visibilityEventPendingAt;
+
     @CreatedDate
     private Instant createdAt;
 
@@ -179,9 +209,19 @@ public class Video {
         this.deletedAt = Instant.now();
     }
 
-    /** Owner setting their own video to PUBLIC, FRIENDS or PRIVATE from the detail page. */
+    /**
+     * Owner setting their own video to PUBLIC, FRIENDS or PRIVATE from the detail page. Queues the
+     * announcement in the same object as the change, because a visibility this service knows about
+     * and search-service does not is exactly the gap that left private videos searchable.
+     */
     public void changeVisibility(VideoVisibility visibility) {
         this.visibility = visibility;
+        this.visibilityEventPendingAt = Instant.now();
+    }
+
+    /** The queued visibility change has been acknowledged by the broker; nothing left to send. */
+    public void markVisibilityEventPublished() {
+        this.visibilityEventPendingAt = null;
     }
 
     /** Owner turning new comments on or off for their own video. */
@@ -189,18 +229,39 @@ public class Video {
         this.commentsDisabled = commentsDisabled;
     }
 
-    public void markPublished(String thumbnailUrl, String previewUrl, String hlsUrl, Integer durationSeconds) {
+    /**
+     * Transcode succeeded. This does not publish the video: it goes to PENDING_MODERATION and
+     * waits for a verdict, so nothing reaches a viewer before it has been screened. A video that
+     * stops here is a video moderation never answered about, which is a bug worth being able to
+     * see rather than one that silently publishes.
+     */
+    public void markTranscoded(String thumbnailUrl, String previewUrl, String hlsUrl, Integer durationSeconds) {
         this.thumbnailUrl = thumbnailUrl;
         this.previewUrl = previewUrl;
         this.hlsUrl = hlsUrl;
         this.durationSeconds = durationSeconds;
         this.failureReason = null; // a redelivered publish must not leave a prior FAILED reason on the doc
-        applyTranscodeOutcome(VideoStatus.PUBLISHED);
+        applyOutcome(VideoStatus.PENDING_MODERATION);
+    }
+
+    /**
+     * The moderation verdict, and the status that follows from it.
+     *
+     * <p>REJECTED is the model's own removal and stays distinct from TAKEN_DOWN, which is an
+     * admin's. An admin overturning either goes through {@link #markRestored()}.
+     */
+    public void applyModeration(VideoModeration moderation) {
+        this.moderation = moderation;
+        applyOutcome(switch (moderation.getVerdict()) {
+            case APPROVED -> VideoStatus.PUBLISHED;
+            case REVIEW -> VideoStatus.PENDING_REVIEW;
+            case REJECTED -> VideoStatus.REJECTED;
+        });
     }
 
     public void markFailed(String reason) {
         this.failureReason = reason;
-        applyTranscodeOutcome(VideoStatus.FAILED);
+        applyOutcome(VideoStatus.FAILED);
     }
 
     /**
@@ -213,8 +274,13 @@ public class Video {
      * <p>While the video is down the outcome is recorded as what a restore should return to, and
      * {@code status} stays TAKEN_DOWN. The media fields are written either way — they describe the
      * file, not its moderation state, and the video needs them the moment it comes back.
+     *
+     * <p>The automatic verdict goes through here too, for the same reason and one more: an admin
+     * who took a video down while the classifier was still looking at it has already made the
+     * decision the classifier was about to make, and an APPROVED landing afterwards must not undo
+     * it.
      */
-    private void applyTranscodeOutcome(VideoStatus outcome) {
+    private void applyOutcome(VideoStatus outcome) {
         if (this.status == VideoStatus.TAKEN_DOWN) {
             this.statusBeforeTakedown = outcome;
         } else {
@@ -222,11 +288,12 @@ public class Video {
         }
     }
 
-    public void markTakenDown() {
+    public void markTakenDown(String reason) {
         // Guarded so a repeated takedown doesn't record TAKEN_DOWN as the state to restore to.
         if (this.status != VideoStatus.TAKEN_DOWN) {
             this.statusBeforeTakedown = this.status;
         }
+        this.takedownReason = reason;
         this.status = VideoStatus.TAKEN_DOWN;
     }
 
@@ -238,6 +305,7 @@ public class Video {
     public void markRestored() {
         this.status = this.statusBeforeTakedown == null ? VideoStatus.PUBLISHED : this.statusBeforeTakedown;
         this.statusBeforeTakedown = null;
+        this.takedownReason = null; // a restored video is not down, so nothing should still say why it was
     }
 
     public void markEventPublished() {

@@ -5,6 +5,7 @@ import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.ModerationActionResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
 import com.tiktok.adminservice.dto.response.StatsSummaryResponse;
+import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import org.springframework.data.domain.Page;
@@ -19,6 +20,14 @@ public interface AdminService {
     ReportResponse getReport(Long reportId);
 
     ReportResponse resolveReport(Long adminId, Long reportId, ResolveReportRequest request);
+
+    /**
+     * A moderation decision taken straight from the console, with no report behind it.
+     * {@code targetId} is a string because target ids are not one type: a user is a Snowflake
+     * long, a video is a Mongo document id.
+     */
+    ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
+                                      ModerationActionType actionType, String reason);
 
     Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Pageable pageable);
 

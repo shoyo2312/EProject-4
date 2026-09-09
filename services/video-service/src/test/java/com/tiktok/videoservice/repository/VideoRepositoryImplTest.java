@@ -60,12 +60,14 @@ class VideoRepositoryImplTest {
     void updateTranscodeResult_keepsConcurrentLikes() {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PROCESSING, 5);
 
-        stale.markPublished("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42);
+        stale.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42);
         assertThat(videoRepository.updateTranscodeResult(stale, VideoStatus.PROCESSING)).isTrue();
 
         Video after = reload(stale);
         assertThat(after.getLikeCount()).isEqualTo(5);
-        assertThat(after.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(after.getStatus())
+                .as("a finished transcode owes a moderation verdict before it can be published")
+                .isEqualTo(VideoStatus.PENDING_MODERATION);
         assertThat(after.getHlsUrl()).isEqualTo("http://minio/master.m3u8");
         assertThat(after.getThumbnailUrl()).isEqualTo("http://minio/thumb.jpg");
         assertThat(after.getDurationSeconds()).isEqualTo(42);
@@ -87,7 +89,7 @@ class VideoRepositoryImplTest {
     void updateStatus_moderation_keepsConcurrentLikes() {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PUBLISHED, 7);
 
-        stale.markTakenDown();
+        stale.markTakenDown("policy violation");
         assertThat(videoRepository.updateStatus(stale, VideoStatus.PUBLISHED)).isTrue();
 
         Video after = reload(stale);
@@ -99,7 +101,7 @@ class VideoRepositoryImplTest {
     @Test
     void updateStatus_moderation_restoreClearsStatusBeforeTakedown() {
         Video video = save(VideoStatus.PUBLISHED);
-        video.markTakenDown();
+        video.markTakenDown("policy violation");
         videoRepository.updateStatus(video, VideoStatus.PUBLISHED);
 
         Video takenDown = reload(video);
@@ -114,7 +116,7 @@ class VideoRepositoryImplTest {
     /**
      * The interleaving that costs a takedown: the transcode consumer reads a PROCESSING video, a
      * moderator takes it down while the transcode is still running, and the consumer then writes
-     * PUBLISHED from what it read minutes ago. Unconditional, that write wins by arriving last
+     * its outcome from what it read minutes ago. Unconditional, that write wins by arriving last
      * and the video is back on the feed with nothing recording it was ever removed.
      */
     @Test
@@ -123,10 +125,10 @@ class VideoRepositoryImplTest {
         Video staleReadByTranscode = reload(video);
 
         Video readByModerator = reload(video);
-        readByModerator.markTakenDown();
+        readByModerator.markTakenDown("policy violation");
         assertThat(videoRepository.updateStatus(readByModerator, VideoStatus.PROCESSING)).isTrue();
 
-        staleReadByTranscode.markPublished("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42);
+        staleReadByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42);
 
         assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, VideoStatus.PROCESSING))
                 .as("the status moved after it was read, so this write must be refused")
@@ -199,7 +201,7 @@ class VideoRepositoryImplTest {
      * The other half of the same race. VideoStateUpdater checks deletedAt when it reads, but a
      * transcode runs for minutes and an owner can delete inside that window — so the check has to
      * be in the write filter too. Without it the stale write lands on a deleted document and
-     * leaves it both deleted and PUBLISHED, which is the combination VideoStateUpdater's own
+     * leaves it both deleted and moved on from PROCESSING, which is the combination VideoStateUpdater's own
      * javadoc says nothing later corrects.
      */
     @Test
@@ -211,7 +213,7 @@ class VideoRepositoryImplTest {
         readByOwner.markDeleted();
         videoRepository.updateSoftDeleted(readByOwner);
 
-        staleReadByTranscode.markPublished("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42);
+        staleReadByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42);
 
         assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, VideoStatus.PROCESSING))
                 .as("the video was deleted after it was read, so this write must be refused")
@@ -220,7 +222,7 @@ class VideoRepositoryImplTest {
         Video after = reload(video);
         assertThat(after.getDeletedAt()).isNotNull();
         assertThat(after.getStatus())
-                .as("a deleted video must never come back as PUBLISHED")
+                .as("a deleted video must never come back")
                 .isEqualTo(VideoStatus.PROCESSING);
         assertThat(after.getHlsUrl()).isNull();
     }

@@ -62,6 +62,26 @@ public interface VideoRepositoryCustom {
     List<Video> findFeedPage(Collection<Long> userIds, Instant beforeCreatedAt, String beforeId, int limit);
 
     /**
+     * The admin console's video listing: every video regardless of owner, status or visibility.
+     *
+     * <p>Not expressible as a derived query — both filters are optional, which is four
+     * combinations, and the title match is a case-insensitive substring rather than an equality.
+     *
+     * <p>Soft-deleted videos stay out. A video its owner removed is gone as far as the platform is
+     * concerned; what a moderator needs to see is TAKEN_DOWN, which is a status and not a deletion.
+     *
+     * <p>No index serves this well: the sort is on createdAt while the filters are a status
+     * equality and a regex, so with a status given Mongo can take bounds from {@code feed_idx} but
+     * not the sort. Acceptable only because this is one screen with one admin behind it — do not
+     * reuse it on a user-facing path.
+     *
+     * @param status null for every status
+     * @param term   case-insensitive substring of the title, or null for no title filter
+     */
+    org.springframework.data.domain.Page<Video> findForAdmin(
+            VideoStatus status, String term, org.springframework.data.domain.Pageable pageable);
+
+    /**
      * Transcode succeeded: the media fields it produced, plus where the outcome was recorded.
      *
      * @param expectedStatus the status read before the change was applied — see
@@ -76,7 +96,7 @@ public interface VideoRepositoryCustom {
      * <p>One method for both, not two identical ones. They write the same pair for the same
      * reason — {@code statusBeforeTakedown} is where a takedown parks the state a restore returns
      * to — so the second copy was a second body to keep in step with {@link Video} for nothing.
-     * What each call means is already on the line above it at the call site: {@code markTakenDown()},
+     * What each call means is already on the line above it at the call site: {@code markTakenDown(reason)},
      * {@code markRestored()}. A failed transcode writes the same pair but owns {@code failureReason}
      * on top of it — see {@link #updateFailed}.
      *
@@ -103,6 +123,20 @@ public interface VideoRepositoryCustom {
      * @return false when the status moved underneath — re-read and re-apply
      */
     boolean updateFailed(Video video, VideoStatus expectedStatus);
+
+    /**
+     * The automatic moderation verdict: the status pair plus the scores behind it.
+     *
+     * <p>Separate from {@link #updateStatus} because only this path owns {@code moderation},
+     * keeping each write scoped to the fields its own operation owns.
+     *
+     * <p>Conditioned on the status the caller read, for the reason {@link #updateStatus} gives and
+     * one specific to this path: a moderator can take a video down while the classifier is still
+     * scoring it, and an unconditional APPROVED landing afterwards would put it back on the feed.
+     *
+     * @return false when the status moved underneath — re-read and re-apply
+     */
+    boolean updateModeration(Video video, VideoStatus expectedStatus);
 
     /** Outbox flag, set once the broker acknowledges the VideoPublishedEvent. */
     void updateEventPublished(Video video);
@@ -141,6 +175,17 @@ public interface VideoRepositoryCustom {
      * consumers the {@code compareAndSet} writes guard against.
      */
     void updateVisibility(Video video);
+
+    /**
+     * Clears the visibility outbox slot, but only if it still holds the moment that was actually
+     * announced. An owner who changes visibility again while the broker is acknowledging the
+     * previous change writes a newer timestamp into the slot; clearing it unconditionally would
+     * throw that change away and leave every read path holding the value before it.
+     *
+     * @return false when the slot moved underneath, meaning a newer change is queued and the next
+     *         poll will send it
+     */
+    boolean clearVisibilityEventPending(String videoId, java.time.Instant announced);
 
     /**
      * The owner turning comments on/off from the detail page. Unconditional, same reasoning as

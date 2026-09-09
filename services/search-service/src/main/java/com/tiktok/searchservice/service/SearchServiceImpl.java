@@ -22,8 +22,9 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Only surfaces documents in a terminal "visible" state (video status PUBLISHED, product
- * status ACTIVE) — everything else is still being indexed or was marked inactive upstream.
+ * Only surfaces documents in a terminal "visible" state (video status PUBLISHED and visibility
+ * PUBLIC, product status ACTIVE) — everything else is still being indexed, was marked inactive
+ * upstream, or is not the searcher's to see.
  */
 @Service
 @RequiredArgsConstructor
@@ -45,7 +46,21 @@ public class SearchServiceImpl implements SearchService {
 
     @Override
     public Page<VideoSearchResponse> searchVideos(String query, String hashtag, Pageable pageable) {
-        Criteria criteria = Criteria.where("status").is("PUBLISHED");
+        // Both conditions, because they answer different questions: status says the video finished
+        // moderation, visibility says who may see it. Filtering on status alone handed a PRIVATE
+        // video — title, description, thumbnail — to any anonymous caller, since video-service's
+        // own visibility check never runs on this read path.
+        //
+        // Search has no viewer identity to work with (the gateway lets these calls through
+        // unauthenticated), so FRIENDS is excluded along with PRIVATE rather than resolved. A
+        // friend looking for a friend's video finds it on the profile listing, which does know
+        // who is asking.
+        //
+        // Documents indexed before the field existed have no visibility and so match nothing
+        // here. That is the safe direction, and they gain the field the next time their
+        // publication event is replayed.
+        Criteria criteria = Criteria.where("status").is("PUBLISHED")
+                .and(Criteria.where("visibility").is("PUBLIC"));
 
         if (StringUtils.hasText(query)) {
             // Tags are in the free-text arm too, so a caller who types "dance" without the hash

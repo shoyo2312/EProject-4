@@ -52,6 +52,7 @@ public class SearchIndexWriter {
             ctx._source.title = params.title;
             ctx._source.description = params.containsKey('description') ? params.description : null;
             ctx._source.tags = params.tags;
+            ctx._source.visibility = params.containsKey('visibility') ? params.visibility : 'PUBLIC';
             ctx._source.createdAt = params.createdAt;
             if (ctx._source.status == null) {
               ctx._source.status = ctx._source.pendingStatus != null ? ctx._source.pendingStatus : 'PROCESSING';
@@ -90,6 +91,8 @@ public class SearchIndexWriter {
 
     private static final String STATUS_SCRIPT = "ctx._source.status = params.status;";
 
+    private static final String VISIBILITY_SCRIPT = "ctx._source.visibility = params.visibility;";
+
     private final ElasticsearchOperations elasticsearchOperations;
 
     /**
@@ -109,16 +112,18 @@ public class SearchIndexWriter {
     }
 
     public void indexPublication(String videoId, Long userId, String title, String description,
-                                 List<String> tags, Instant createdAt) {
+                                 String visibility, List<String> tags, Instant createdAt) {
         Map<String, Object> params = new HashMap<>();
         params.put("userId", userId);
         params.put("title", title);
         params.put("description", description);
+        params.put("visibility", visibility);
         params.put("tags", tags == null ? List.of() : tags);
         params.put("createdAt", ES_DATE.format(createdAt));
 
         Map<String, Object> upsert = new HashMap<>(params);
         upsert.put("status", "PROCESSING");
+        upsert.putIfAbsent("visibility", "PUBLIC");
         upsert.put("viewCount", 0);
         upsert.put("likeCount", 0);
         upsert.put("commentCount", 0);
@@ -157,6 +162,15 @@ public class SearchIndexWriter {
 
     public void applyVideoStatus(String videoId, String status) {
         update(VideoDocument.class, videoId, STATUS_SCRIPT, Map.of("status", status), null);
+    }
+
+    /**
+     * No upsert, like the counters: a visibility change for a video this index has never heard of
+     * is one whose publication has not arrived yet, and that event carries the current visibility
+     * itself — creating a stub here would only race it.
+     */
+    public void applyVisibility(String videoId, String visibility) {
+        update(VideoDocument.class, videoId, VISIBILITY_SCRIPT, Map.of("visibility", visibility), null);
     }
 
     public void restoreVideo(String videoId) {

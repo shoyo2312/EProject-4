@@ -384,6 +384,44 @@ services:
       - tiktok-network
 
   # ─────────────────────────────────────────────────────────────────
+  # moderation-service (NSFW frame classifier — Python)
+  # ─────────────────────────────────────────────────────────────────
+
+  # No auth and no gateway route, like rank-service: it holds no user data and is only ever
+  # called by media-worker. Unlike rank-service it does publish a port, bound to the loopback
+  # address only -- media-worker runs on the host via `make run-media`, not in this compose file,
+  # so with no mapping at all every upload would fail its check and land in the admin queue.
+  #
+  # The image bakes the model in at build time and runs with HF_HUB_OFFLINE=1, so the first build
+  # downloads a few hundred MB and every start after that is offline. Budget ~1.5 GB of RAM.
+  #
+  # The thresholds live here rather than in media-worker: they belong to the model, and tuning
+  # them should be a restart of this container, not a rebuild of a Java service.
+  moderation-service:
+    build: ./services/moderation-service
+    container_name: tt-moderation-service
+    ports:
+      - "127.0.0.1:8099:8099"
+    environment:
+      MODERATION_REVIEW_THRESHOLD: ${MODERATION_REVIEW_THRESHOLD:-0.60}
+      MODERATION_REJECT_THRESHOLD: ${MODERATION_REJECT_THRESHOLD:-0.90}
+      MODERATION_MIN_REJECT_FRAMES: ${MODERATION_MIN_REJECT_FRAMES:-2}
+      # Second opinion on the review band only. Both blank by default, which turns it off — the
+      # service then behaves exactly as it did before, so a missing account is not a broken build.
+      AZURE_CONTENT_SAFETY_ENDPOINT: ${AZURE_CONTENT_SAFETY_ENDPOINT:-}
+      AZURE_CONTENT_SAFETY_KEY: ${AZURE_CONTENT_SAFETY_KEY:-}
+      MODERATION_ESCALATE_FRAMES: ${MODERATION_ESCALATE_FRAMES:-3}
+    healthcheck:
+      # Unhealthy until the weights are in memory, which takes a few seconds on a cold start.
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health')\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - tiktok-network
+
+  # ─────────────────────────────────────────────────────────────────
   # MinIO (Object Storage — Videos, Images)
   # ─────────────────────────────────────────────────────────────────
 

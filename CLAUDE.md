@@ -40,10 +40,11 @@ tiktok-backend/
     ├── search-service/   :8095  Elasticsearch
     ├── admin-service/    :8096  PostgreSQL + Security
     ├── analytics-service/ :8097  ClickHouse / Kafka consumer (+ sink dữ liệu huấn luyện)
-    └── rank-service/      :8098  **Python** FastAPI + LightGBM — KHÔNG phải module Maven
+    ├── rank-service/      :8098  **Python** FastAPI + LightGBM — KHÔNG phải module Maven
+    └── moderation-service/ :8099  **Python** FastAPI + ViT NSFW classifier — KHÔNG phải module Maven
 ```
 
-`rank-service` là ngoại lệ duy nhất không phải Java: nó không nằm trong `pom.xml` gốc, `./mvnw` không build nó, và `make build` không đụng đến nó. Build/test qua `make rank-up` / `make rank-test`. Nó chỉ đến được từ mạng nội bộ, không có route ở gateway và không xác thực JWT — xem `docs/ranking-model.md`.
+`rank-service` và `moderation-service` là hai ngoại lệ không phải Java: chúng không nằm trong `pom.xml` gốc, `./mvnw` không build chúng, và `make build` không đụng đến. Build/test qua `make rank-up`/`make rank-test` và `make moderation-up`/`make moderation-test`. Cả hai chỉ đến được từ mạng nội bộ, không có route ở gateway và không xác thực JWT — xem `docs/ranking-model.md` và `docs/moderation.md`.
 
 ## 3. Package Structure (mỗi service)
 ```
@@ -104,11 +105,11 @@ com.tiktok.{service}/
 - Event class lấy từ `libs/event-schema`
 - **Topic trộn nhiều event type** (`admin.moderation-events`, `video.video-events`): payload JSON không có field phân biệt loại — dùng Kafka header `eventType` (đọc qua `@Header(name = "eventType")`) để route, KHÔNG suy đoán từ shape JSON. Thiếu route thì Jackson **vẫn parse được** sang class sai với mọi field vắng mặt là null, không exception, không log — service chỉ âm thầm làm sai việc. `video.video-events` mang `VideoPublishedEvent` + `VideoDeletedEvent` cùng key `videoId`, nên Kafka đảm bảo thứ tự. Ngoại lệ: video bị xoá trước khi publication kịp announce vẫn phát `VideoDeletedEvent` — file raw đã nằm trong MinIO và event này là thứ duy nhất còn nhắc tới key đó. Mọi consumer của `VideoDeletedEvent` phải no-op với `videoId` lạ. Consumer coi **header vắng mặt = `VideoPublishedEvent`** (producer đời cũ chỉ gửi loại đó)
 - **kafka-lib usage**: dependency `<artifactId>kafka-lib</artifactId>`, auto-config qua Spring Boot — không cần `@Configuration` cục bộ. Hai thứ độc lập nhau:
-  - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `auth-service`, `user-service`, `video-service`, `recommendation-service`, `media-worker`, `search-service`
+  - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `auth-service`, `user-service`, `video-service`, `recommendation-service`, `media-worker`, `search-service`, `interaction-service`
   - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`, `product-service`
   - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, inventory, notification, order, payment) — vẫn dùng default retry-vô-hạn của Spring Kafka
   - CÓ outbox nhưng CHƯA migrate dispatcher (inventory, order, payment) — vẫn `markPublished()` ngay sau `send()`, tức là đang mất event khi broker từ chối. **Khi động vào 1 trong 3 service này, migrate luôn**: các bước trong `docs/outbox-migration.md`, marker `TODO(outbox)` nằm ngay tại chỗ lỗi trong từng `OutboxPublisher`
-  - interaction, story không có consumer lẫn outbox — không cần `kafka-lib`
+  - story không có consumer lẫn outbox — không cần `kafka-lib`. interaction có consumer (`AdminModerationEventConsumer`) nhưng không có outbox: Cassandra không có transaction đa bảng để ghép outbox vào, nên `InteractionEventPublisher` chờ broker ack rồi mới coi là xong
 
 ### JWT Authentication & security-lib
 - **security-lib usage**: 13 services (admin, cart, chat, interaction, inventory, notification, order, payment, product, recommendation, story, user, video) dùng centralized `security-lib` để validate JWT token
@@ -123,19 +124,29 @@ com.tiktok.{service}/
   - Tất cả fail-open khi Redis chết; service không có Redis trên classpath nhận bản no-op
 - **Refresh rotation**: `/refresh` xoay token bằng `RefreshTokenRepository.claimForRotation()` — một `UPDATE ... WHERE rotated_at IS NULL` set cả `revoked_at` lẫn `rotated_at`, KHÔNG phải đọc-kiểm-tra-rồi-ghi. Số row ảnh hưởng là kết quả kiểm tra: 0 nghĩa là request khác vừa xoay token này. Đọc rồi check `rotatedAt == null` rồi mới ghi thì hai request đồng thời đều thấy null, đều xoay, và hai chain cùng sống — đúng kịch bản attacker + user thật mà replay detection sinh ra để bắt. `revoked_at IS NULL` KHÔNG được nằm trong `WHERE`: logout revoke mà không rotate, tính nhầm thành thua race thì logout ở 1 máy sẽ đá văng mọi máy khác
 - **Replay detection**: trình lại token ĐÃ rotate mà chưa hết hạn → `SessionRevoker.revokeAllSessions()` giết toàn bộ phiên của user. Chỉ `rotated_at` mới kích hoạt, KHÔNG phải `revoked_at` (lý do như trên). Ngoại lệ là **grace window** `auth.jwt.rotation-grace-millis` (10s): trong khoảng đó chỉ trả 401, không giết phiên — client retry một request `/refresh` mất response trông y hệt kẻ trộm, khác nhau ở thời điểm. Client thật chỉ refresh khi access token hết hạn (15 phút sau), kẻ trộm còn muộn hơn. Nới grace = nới cửa sổ replay, giữ ở scale của request timeout. `SessionRevoker` chạy `REQUIRES_NEW` vì luồng replay revoke xong rồi throw; chạy chung transaction thì throw sẽ rollback luôn việc revoke
-- **Ban**: `admin.moderation-events` mang `UserBannedEvent`/`UserUnbannedEvent`; `auth-service/AdminModerationEventConsumer` đặt `UserStatus.BANNED` rồi gọi `SessionRevoker` — chỉ đổi status là chưa đủ, access token stateless vẫn sống hết 15 phút. Không cần inbox: cả hai thao tác là gán trạng thái (redelivery ra cùng kết quả) và topic key theo `userId` nên ban/unban của một account giữ đúng thứ tự
+- **Xoá comment**: `admin.moderation-events` mang `CommentRemovedEvent`; `interaction-service/AdminModerationEventConsumer` gọi `CommentService.removeByAdmin()`. Không cần inbox: write duy nhất là LWT `markDeletedIfNotDeleted`, redelivery thấy comment đã xoá thì trả false và không giảm counter lần hai. `targetId` của action là chuỗi `"videoId:commentId"` (xem `admin-service/CommentTarget`) — comment id một mình vô dụng vì `comments_by_video` partition theo video. Không có restore: un-delete chỉ nằm ở compensation trong interaction-service, có điều kiện đúng lần xoá nó vừa ghi; un-delete vô điều kiện sẽ hồi sinh cả comment người khác xoá. **Danh sách comment thì đọc từ interaction-service** — `GET /api/v1/interactions/admin/videos/{videoId}/comments` (`AdminCommentDirectory`), theo từng video vì không có bảng nào xếp comment toàn sàn theo thời gian
+- **Ban**: `admin.moderation-events` mang `UserBannedEvent`/`UserUnbannedEvent`; `auth-service/AdminModerationEventConsumer` đặt `UserStatus.BANNED` rồi gọi `SessionRevoker` — chỉ đổi status là chưa đủ, access token stateless vẫn sống hết 15 phút. Không cần inbox: cả hai thao tác là gán trạng thái (redelivery ra cùng kết quả) và topic key theo `userId` nên ban/unban của một account giữ đúng thứ tự. Hai đường vào: resolve một report, hoặc `POST /api/v1/admin/users/{id}/ban|unban` thẳng từ console (cùng `ModerationAction`, `reportId` null). **Danh sách user thì nằm ở auth-service** — `GET /api/v1/auth/admin/users` (`AdminUserDirectory`), vì đó mới là DB sở hữu `status`/`role`; admin-service không được đọc DB service khác và proxy qua HTTP chỉ thêm một điểm hỏng
 - **Tài khoản ADMIN**: `register` luôn tạo `UserRole.USER`. Admin đầu tiên do `AdminAccountBootstrap` cấp lúc startup từ `auth.admin.email` + `auth.admin.password` (env `ADMIN_EMAIL`/`ADMIN_PASSWORD`); thiếu một trong hai thì không làm gì. Account đã tồn tại với email đó được promote, KHÔNG ghi đè password
 - **Login**: bắt buộc `emailVerified` — chưa verify thì 403 `EMAIL_NOT_VERIFIED` (khác `INVALID_CREDENTIALS` có chủ đích: client cần biết để mở màn hình gửi lại OTP)
 - **Exceptions (NOT using security-lib)**:
   - `api-gateway`: dùng WebFlux (không có servlet API) — giữ JwtConfig/JwtProperties riêng
   - `auth-service`: cấp phát JWT token (khác config: accessTokenExpiryMillis/refreshTokenExpiryMillis, prefix `auth.jwt`) — giữ file riêng + đã có fail-fast validation
 
+### Kiểm duyệt video tự động
+- Video **không** publish thẳng sau khi transcode. `Video.markTranscoded()` đặt `PENDING_MODERATION`; chỉ `VideoModerationCompletedEvent` mới đưa nó sang `PUBLISHED`/`PENDING_REVIEW`/`REJECTED`. Đừng "sửa" chỗ này về `PUBLISHED` — đó là toàn bộ điểm của tính năng
+- Mọi read path lọc `status == PUBLISHED` (whitelist, không phải blacklist), nên thêm status mới là mặc định vô hình với viewer. Giữ nguyên kiểu lọc đó
+- **Thất bại không bao giờ là pass**: classifier chết → retry 3 lần → `REVIEW`, không phải `PUBLISHED`, cũng không phải `REJECTED`. `ModerationService.moderate()` không bao giờ throw, vì video không có verdict sẽ kẹt ở `PENDING_MODERATION` mà không có gì đẩy nó đi tiếp
+- Ngưỡng nằm trong env của `moderation-service`, KHÔNG nằm trong media-worker: chúng thuộc về model, chỉnh là restart một container chứ không phải rebuild service Java. Đổi ngưỡng hay đổi weights thì bump `MODERATION_MODEL_VERSION`
+- Điểm số lưu trên document (`video.moderation`) chứ không chỉ log — tune ngưỡng nghĩa là đối chiếu model chấm bao nhiêu với việc admin sau đó duyệt hay không, và log thì đã cuộn mất
+- Frame lấy **rải đều toàn video**, không phải mấy giây đầu — xem `Ffmpeg.sampleFrames`
+- Chi tiết: `docs/moderation.md`
+
 ### Dev-only affordances — PHẢI gỡ trước khi deploy production
 Những thứ dưới đây cố ý nằm trong repo để test thủ công (Postman) không cần đọc email thật. Chúng vi phạm rule "KHÔNG lưu sensitive data vào log" ở §6 và chỉ được chấp nhận ở local:
 
 | Cái gì | Ở đâu | Rủi ro nếu lên production |
 |---|---|---|
-| `log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] ... OTP ...")` | `auth-service/event/local/EmailNotificationListener.java` (3 chỗ: verify email + social link + reset password) | OTP hiện nguyên văn trong log — ai đọc được log là chiếm được tài khoản bất kỳ. Riêng mã social link còn tệ hơn một bậc: nó là nửa còn lại của việc gắn tài khoản provider vào tài khoản sẵn có, nên chỉ cần đọc log rồi tạo một tài khoản Facebook khai email nạn nhân là chiếm được |
+| `log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] ... OTP ...")` | `auth-service/event/local/EmailNotificationListener.java` (4 chỗ: verify email + social link + reset password + admin login) | OTP hiện nguyên văn trong log — ai đọc được log là chiếm được tài khoản bất kỳ. Riêng mã social link còn tệ hơn một bậc: nó là nửa còn lại của việc gắn tài khoản provider vào tài khoản sẵn có, nên chỉ cần đọc log rồi tạo một tài khoản Facebook khai email nạn nhân là chiếm được. Mã admin login là factor thứ hai của console — đọc log + biết password là vào được admin |
 
 **Trước mỗi lần deploy thật**: `grep -rn "DEV ONLY" services/` phải trả về rỗng.
 
@@ -166,6 +177,7 @@ make help           # Xem tất cả lệnh
 - [ ] KHÔNG dùng `@Data` trên `@Entity`
 - [ ] KHÔNG lưu sensitive data (password, token thô) vào Redis/log
 - [ ] Mọi Kafka consumer PHẢI idempotent (claim eventId trước khi xử lý, xem §Kafka)
+- [ ] KHÔNG để video lên feed mà chưa qua kiểm duyệt — xem §Kiểm duyệt video tự động
 - [ ] MongoDB service: BẬT `spring.data.mongodb.auto-index-creation` — mặc định TẮT từ Spring Data Mongo 3.x, `@Indexed`/`@CompoundIndex` sẽ im lặng không được tạo
 - [ ] `api-gateway` dùng WebFlux — KHÔNG import `spring-boot-starter-web`
 - [ ] **Feature của ranking model chỉ được định nghĩa một chỗ**: `services/rank-service/features.py`. Đổi tên, đổi thứ tự, hay đổi công thức một feature ở một phía (Java `CandidateFeatures` / Python `FEATURE_NAMES` / cột ClickHouse) mà không đổi phía kia là lỗi **không có triệu chứng**: mô hình vẫn trả về số, API vẫn 200, chỉ có feed là tệ đi. Xem `docs/ranking-model.md` §2 trước khi động vào

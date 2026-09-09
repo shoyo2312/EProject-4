@@ -12,5 +12,14 @@ public interface VideoMapper {
     // (getById, getByIds, feed, listByUser, the two owner mutations) is covered at once.
     @Mapping(target = "commentCount",
             expression = "java(video.isCommentsDisabled() ? null : video.getCommentCount())")
+    @Mapping(target = "moderation", ignore = true)
     VideoResponse toResponse(Video video);
+
+    /**
+     * The same response with the classifier's numbers attached. A machine-removed video sets no
+     * takedownReason, so this is the only account of why it went down.
+     */
+    @Mapping(target = "commentCount",
+            expression = "java(video.isCommentsDisabled() ? null : video.getCommentCount())")
+    VideoResponse toAdminResponse(Video video);
 }

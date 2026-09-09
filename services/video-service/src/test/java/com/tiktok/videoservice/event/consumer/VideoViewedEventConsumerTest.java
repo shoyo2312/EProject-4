@@ -111,7 +111,7 @@ class VideoViewedEventConsumerTest {
     @Test
     void onMessage_takenDownVideo_leavesTheCountAlone() throws Exception {
         Video video = publishedVideo();
-        video.markTakenDown();
+        video.markTakenDown("policy violation");
         videoRepository.save(video);
 
         consumer.onMessage(objectMapper.writeValueAsString(

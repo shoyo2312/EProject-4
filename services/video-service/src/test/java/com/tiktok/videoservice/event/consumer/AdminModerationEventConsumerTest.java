@@ -61,12 +61,15 @@ class AdminModerationEventConsumerTest {
 
         Video updated = videoRepository.findById(video.getId()).orElseThrow();
         assertThat(updated.getStatus()).isEqualTo(VideoStatus.TAKEN_DOWN);
+        assertThat(updated.getTakedownReason())
+                .as("the reason is what any listing shows for why the video is down")
+                .isEqualTo("nudity");
     }
 
     @Test
     void onMessage_restored_marksVideoPublished() throws Exception {
         Video video = videoRepository.save(publishedVideo("s3://video-media/raw/2.mp4"));
-        video.markTakenDown();
+        video.markTakenDown("policy violation");
         videoRepository.save(video);
 
         VideoRestoredEvent event = VideoRestoredEvent.of(video.getId(), 99L, "appeal accepted");
@@ -74,12 +77,15 @@ class AdminModerationEventConsumerTest {
 
         Video updated = videoRepository.findById(video.getId()).orElseThrow();
         assertThat(updated.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(updated.getTakedownReason())
+                .as("a restored video is not down, so nothing should still say why it was")
+                .isNull();
     }
 
     @Test
     void onMessage_restored_returnsToStatusBeforeTakedown() throws Exception {
         Video video = videoRepository.save(processingVideo());
-        video.markTakenDown();
+        video.markTakenDown("policy violation");
         videoRepository.save(video);
 
         VideoRestoredEvent event = VideoRestoredEvent.of(video.getId(), 99L, "appeal accepted");

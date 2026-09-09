@@ -63,17 +63,22 @@ user:
 
 app:
   media:
-    # Hosts allowed for UpdateProfileRequest.avatarUrl (must also be https - see @ValidMediaUrl).
+    # Hosts allowed for UpdateProfileRequest.avatarUrl (http or https - see @ValidMediaUrl).
     # Override MEDIA_ALLOWED_HOSTS (comma-separated) with the real CDN/MinIO public host(s) in prod.
     # No allowed-buckets here: this service accepts no s3:// URLs.
-    allowed-hosts: ${MEDIA_ALLOWED_HOSTS:cdn.tiktok-clone.local}
+    #
+    # localhost is in the default because minio.endpoint below defaults to it: the avatar upload
+    # hands the client a URL on that host, and a client PATCHing its own profile back must not be
+    # rejected on a URL we produced. Keep the two in step - a deployment that moves MINIO_ENDPOINT,
+    # or fronts it with a CDN, has to name that host here as well.
+    allowed-hosts: ${MEDIA_ALLOWED_HOSTS:cdn.tiktok-clone.local,localhost}
   avatar:
     # The size POST /users/me/avatar accepts. Mirrored by the client's own check, and by the
     # multipart limits above, which have to stay larger than it.
     max-bytes: ${AVATAR_MAX_BYTES:5242880}
 
 # Where uploaded avatars are written. Same bucket media-worker mirrors social pictures into, on
-# purpose: both paths write avatars/{userId}.jpg, so a profile has one avatar object, not two.
+# purpose: both paths write avatars/{userId}, so a profile has one avatar object, not two.
 minio:
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
   access-key: ${MINIO_ACCESS_KEY:minioadmin}

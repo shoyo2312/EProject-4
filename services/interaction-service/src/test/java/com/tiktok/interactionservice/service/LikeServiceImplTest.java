@@ -119,6 +119,37 @@ class LikeServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(afterRetry.likeCount()).isEqualTo(1L);
     }
 
+    /**
+     * The reverse index is written between the counter and the publish, so a publish that fails
+     * has to take it back too. Left behind, it is a video in the user's liked list with no claim
+     * behind it: listLikedVideos shows it, getStatus says it was never liked.
+     */
+    @Test
+    void like_whenThePublishFails_leavesNothingInTheLikedList() {
+        when(kafkaTemplate.send(any(ProducerRecord.class)))
+                .thenThrow(new IllegalStateException("broker refused the record"));
+
+        assertThatThrownBy(() -> likeService.like(17L, 1L)).isInstanceOf(IllegalStateException.class);
+
+        assertThat(likeService.listLikedVideos(1L, null, 20).videoIds()).isEmpty();
+        assertThat(likeService.getStatus(17L, 1L).liked()).isFalse();
+    }
+
+    /** The mirror image: a failed unlike must not empty the list it half-removed the video from. */
+    @Test
+    void unlike_whenThePublishFails_keepsTheVideoInTheLikedList() {
+        likeService.like(18L, 1L);
+
+        reset(kafkaTemplate);
+        when(kafkaTemplate.send(any(ProducerRecord.class)))
+                .thenThrow(new IllegalStateException("broker refused the record"));
+
+        assertThatThrownBy(() -> likeService.unlike(18L, 1L)).isInstanceOf(IllegalStateException.class);
+
+        assertThat(likeService.getStatus(18L, 1L).liked()).isTrue();
+        assertThat(likeService.listLikedVideos(1L, null, 20).videoIds()).containsExactly(18L);
+    }
+
     @Test
     void like_isPerUser_countReflectsMultipleLikers() {
         likeService.like(15L, 1L);

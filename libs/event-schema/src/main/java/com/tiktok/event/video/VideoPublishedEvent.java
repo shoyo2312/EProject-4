@@ -18,6 +18,13 @@ public record VideoPublishedEvent(
         // description no query can ever match on.
         String description,
         String rawFileUrl,
+        // Who is allowed to see the video: PUBLIC, FRIENDS or PRIVATE, as video-service's
+        // VideoVisibility names them. Carried because search-service builds its own read path off
+        // this event and never calls video-service, so without it a PRIVATE video is returned to
+        // any anonymous search — status alone says the video finished moderation, not who may see
+        // it. Null only on events from a producer older than this field; consumers read that as
+        // PUBLIC, which is what the producer of the day only ever published.
+        String visibility,
         // Carried on the event because recommendation-service has no read path into video-service's
         // Mongo, and tags are the only content feature a candidate generator has to work with —
         // everything else it knows about a video is engagement, which is what it is trying to
@@ -39,10 +46,10 @@ public record VideoPublishedEvent(
      */
     public static VideoPublishedEvent of(
             String videoId, Long userId, String title, String description, String rawFileUrl,
-            List<String> tags) {
+            String visibility, List<String> tags) {
         String eventId = UUID.nameUUIDFromBytes(
                 ("VideoPublishedEvent:" + videoId).getBytes(StandardCharsets.UTF_8)).toString();
         return new VideoPublishedEvent(eventId, Instant.now(), videoId, userId, title, description,
-                rawFileUrl, tags == null ? List.of() : List.copyOf(tags));
+                rawFileUrl, visibility, tags == null ? List.of() : List.copyOf(tags));
     }
 }

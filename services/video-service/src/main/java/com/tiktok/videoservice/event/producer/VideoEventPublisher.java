@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
+import com.tiktok.event.video.VideoVisibilityChangedEvent;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.repository.VideoRepository;
@@ -26,11 +27,11 @@ import java.util.List;
  * <p>Marking is delegated to {@link OutboxDispatcher} so a video is only marked published once
  * the broker acknowledges it — see that class for why doing it inline loses events.
  *
- * <p>Both event types go to one topic under the video's own id as the key, so Kafka orders them
- * per video: no consumer is handed a deletion for a video it has not been told about. Because the
- * topic now carries two shapes, every record leaves here with an {@code eventType} header, which
- * is what consumers route on — the payloads are both flat JSON objects and neither carries a type
- * field of its own.
+ * <p>All three event types go to one topic under the video's own id as the key, so Kafka orders
+ * them per video: no consumer is handed a deletion, or a visibility change, for a video it has not
+ * been told about. Because the topic carries several shapes, every record leaves here with an
+ * {@code eventType} header, which is what consumers route on — the payloads are all flat JSON
+ * objects and none of them carries a type field of its own.
  */
 @Slf4j
 @Component
@@ -89,10 +90,36 @@ public class VideoEventPublisher {
         }
     }
 
+    /**
+     * The owner moved a video between PUBLIC, FRIENDS and PRIVATE. Announced because visibility
+     * rides on the publication event, and that one is sent once: without this poll a video
+     * indexed while it was public stays searchable by anyone for as long as the index lives.
+     *
+     * <p>The event carries the visibility as it is now, not the change that queued it. A row that
+     * was flipped twice before the poll got to it therefore announces the second value once and
+     * skips the intermediate one, which is the state every consumer wants anyway.
+     */
+    @Scheduled(fixedDelay = 5000)
+    public void publishPendingVisibilityChanges() {
+        List<Video> pending = videoRepository
+                .findTop100ByVisibilityEventPendingAtIsNotNullOrderByVisibilityEventPendingAtAsc();
+        if (pending.isEmpty()) {
+            return;
+        }
+
+        int published = outboxDispatcher.dispatch(
+                pending, this::toVisibilityRecord, this::markVisibilityPublished);
+
+        if (published < pending.size()) {
+            log.warn("Published {}/{} video visibility events, the rest stay pending for the next poll",
+                    published, pending.size());
+        }
+    }
+
     private ProducerRecord<String, String> toPublishedRecord(Video video) {
         VideoPublishedEvent event = VideoPublishedEvent.of(
                 video.getId(), video.getUserId(), video.getTitle(), video.getDescription(),
-                video.getRawFileUrl(), video.getTags());
+                video.getRawFileUrl(), visibilityName(video), video.getTags());
         try {
             return record(video.getId(), "VideoPublishedEvent", objectMapper.writeValueAsString(event));
         } catch (JsonProcessingException ex) {
@@ -122,6 +149,30 @@ public class VideoEventPublisher {
         }
     }
 
+    private ProducerRecord<String, String> toVisibilityRecord(Video video) {
+        VideoVisibilityChangedEvent event = VideoVisibilityChangedEvent.of(
+                video.getId(), video.getUserId(), visibilityName(video),
+                video.getVisibilityEventPendingAt());
+        try {
+            return record(video.getId(), "VideoVisibilityChangedEvent",
+                    objectMapper.writeValueAsString(event));
+        } catch (JsonProcessingException ex) {
+            // No parking counterpart, for the same reason as the deletion event: every field is an
+            // id or an enum name this service produced, so there is nothing here Jackson can
+            // refuse that would not be a bug in the event class.
+            throw new UncheckedIOException(ex);
+        }
+    }
+
+    /**
+     * Documents written before the visibility field existed have none. PUBLIC is what they
+     * behaved as, so that is what the consumers are told rather than a null they would each have
+     * to decide about.
+     */
+    private static String visibilityName(Video video) {
+        return video.getVisibility() == null ? "PUBLIC" : video.getVisibility().name();
+    }
+
     private ProducerRecord<String, String> record(String key, String eventType, String payload) {
         ProducerRecord<String, String> record = new ProducerRecord<>(TOPIC, key, payload);
         record.headers().add(new RecordHeader(EVENT_TYPE_HEADER, eventType.getBytes(StandardCharsets.UTF_8)));
@@ -136,6 +187,19 @@ public class VideoEventPublisher {
     private void markDeletePublished(Video video) {
         video.markDeleteEventPublished();
         videoRepository.updateDeleteEventPublished(video);
+    }
+
+    /**
+     * Conditional on the slot still holding the moment that was announced — an owner who changed
+     * visibility again while this record was in flight has written a newer one, and clearing that
+     * would drop the change nobody has sent yet.
+     */
+    private void markVisibilityPublished(Video video) {
+        boolean cleared = videoRepository.clearVisibilityEventPending(
+                video.getId(), video.getVisibilityEventPendingAt());
+        if (cleared) {
+            video.markVisibilityEventPublished();
+        }
     }
 
     private void markEventFailed(Video video) {

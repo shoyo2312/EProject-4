@@ -19,6 +19,16 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: interaction-service
+      # "latest" would drop every moderation event already on the topic whenever this group has
+      # no committed offset — a first deploy, or offsets aged out — and a dropped removal is a
+      # comment that stays up with nothing left to say it should not be. Replay is safe: the
+      # soft delete is an LWT conditioned on the comment still being live, so a redelivered
+      # removal changes nothing and never decrements the counter twice.
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer

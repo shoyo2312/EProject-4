@@ -14,8 +14,7 @@ import java.util.List;
 
 /**
  * Search projection of a video, built from Kafka events rather than owning writes —
- * search-service never calls video-service's DB directly. Fields the source events don't
- * carry yet (description, visibility) stay null/absent until an event supplies them.
+ * search-service never calls video-service's DB directly.
  */
 @Getter
 @Builder
@@ -41,6 +40,16 @@ public class VideoDocument {
 
     @Field(type = FieldType.Keyword)
     private String status;
+
+    /**
+     * PUBLIC, FRIENDS or PRIVATE, from the publication event and kept current by
+     * VideoVisibilityChangedEvent. Status is not a substitute for it: a video that has cleared
+     * moderation is PUBLISHED whatever its owner set here, so a query filtering on status alone
+     * hands a private video to anyone who searches. Absent only on documents indexed before this
+     * field existed — see SearchServiceImpl for how those are treated.
+     */
+    @Field(type = FieldType.Keyword)
+    private String visibility;
 
     /**
      * Where a transcode result parks itself when it arrives before the publication that carries

@@ -54,11 +54,11 @@ class AvatarUploadServiceTest {
         ArgumentCaptor<PutObjectArgs> put = ArgumentCaptor.forClass(PutObjectArgs.class);
         verify(minioClient).putObject(put.capture());
         assertThat(put.getValue().bucket()).isEqualTo("video-media");
-        assertThat(put.getValue().object()).isEqualTo("avatars/42.jpg");
+        assertThat(put.getValue().object()).isEqualTo("avatars/42");
         assertThat(put.getValue().contentType()).isEqualTo("image/png");
 
         assertThat(response.avatarUrl())
-                .startsWith("http://localhost:9000/video-media/avatars/42.jpg?v=")
+                .startsWith("http://localhost:9000/video-media/avatars/42?v=")
                 // Without the query the second upload of a fixed key is served from cache.
                 .matches(".*\\?v=\\d+$");
     }

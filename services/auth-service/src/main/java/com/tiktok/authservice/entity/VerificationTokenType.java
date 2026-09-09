@@ -9,5 +9,13 @@ public enum VerificationTokenType {
      * reused EMAIL_VERIFICATION: this code is mailed to an address that is usually already
      * verified, to authorise a different action, and one must never be spendable as the other.
      */
-    SOCIAL_LINK
+    SOCIAL_LINK,
+
+    /**
+     * Second factor for admin-console sign-in: the account passed its password and is an ADMIN,
+     * so a fresh code is mailed and no session is issued until it comes back. Its own type for
+     * the same reason as SOCIAL_LINK — mailed to an already-verified address to authorise a
+     * different action, and never interchangeable with an email-verification code.
+     */
+    ADMIN_LOGIN
 }

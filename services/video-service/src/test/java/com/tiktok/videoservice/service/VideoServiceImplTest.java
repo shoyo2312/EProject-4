@@ -5,7 +5,9 @@ import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoModeration;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.AlreadyPublishedException;
@@ -550,15 +552,25 @@ class VideoServiceImplTest {
                 new CreateVideoRequest(title, null, "s3://video-media/raw/" + userId + "/" + title.replace(' ', '-') + ".mp4", visibility, List.of()));
     }
 
+    /**
+     * The whole path a video takes to the feed: transcoded, then cleared by moderation. Both
+     * steps, because a transcode alone now stops at PENDING_MODERATION and nothing there is
+     * visible to anyone.
+     */
     private void markPublished(String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
-        video.markPublished(null, null, null, null);
+        video.markTranscoded(null, null, null, null);
+        video.applyModeration(VideoModeration.builder()
+                .verdict(ModerationVerdict.APPROVED)
+                .totalFrames(10)
+                .checkedAt(java.time.Instant.now())
+                .build());
         videoRepository.save(video);
     }
 
     private void markTakenDown(String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
-        video.markTakenDown();
+        video.markTakenDown("policy violation");
         videoRepository.updateStatus(video, VideoStatus.PUBLISHED);
     }
 }

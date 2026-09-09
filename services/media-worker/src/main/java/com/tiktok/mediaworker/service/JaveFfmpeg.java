@@ -8,7 +8,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Locale;
 import java.util.List;
+import java.util.stream.Stream;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -37,6 +40,12 @@ public class JaveFfmpeg implements Ffmpeg {
 
     /** Long enough to show what the video is, short enough that nobody waits for it to loop. */
     private static final int PREVIEW_SECONDS = 3;
+
+    /**
+     * Moderation frames are fed straight to an image classifier that resizes to 224 anyway, so
+     * anything larger is bytes over the wire and pixels thrown away on the other side.
+     */
+    private static final int MODERATION_FRAME_HEIGHT = 224;
 
     /** Only the tail of ffmpeg's diagnostics goes in the log; the head is banner and stream dumps. */
     private static final int LOG_TAIL_CHARS = 1000;
@@ -107,6 +116,46 @@ public class JaveFfmpeg implements Ffmpeg {
                 "-q:v", "60",
                 "-f", "webp",
                 target.toString()));
+    }
+
+    /**
+     * One ffmpeg pass, not one per frame. The fps filter picks frames at a fixed interval, which
+     * is exactly an even spread once the interval is the video's length divided by the count, and
+     * a single decode of the file costs far less than {@code count} seeks into it.
+     */
+    @Override
+    public List<Path> sampleFrames(Path source, Path targetDir, int count, int durationSeconds) {
+        int frames = Math.max(1, count);
+        double duration = Math.max(1, durationSeconds);
+        double interval = duration / frames;
+
+        boolean produced = run("frame sampling", COPY_TIMEOUT_SECONDS, List.of(
+                // Half an interval in, so the samples land in the middle of their slice rather
+                // than on its edge — the first one included, which would otherwise be frame zero.
+                "-ss", format(interval / 2),
+                "-i", source.toString(),
+                "-vf", "fps=" + format(1 / interval) + ",scale=-2:" + MODERATION_FRAME_HEIGHT,
+                // The fps filter rounds, so it can emit one more than asked for on some durations.
+                "-frames:v", String.valueOf(frames),
+                "-q:v", "5",
+                "-f", "image2",
+                targetDir.resolve("frame-%03d.jpg").toString()));
+
+        if (!produced) {
+            return List.of();
+        }
+        try (Stream<Path> written = Files.list(targetDir)) {
+            // Lexicographic order is chronological here: the pattern is zero-padded.
+            return written.sorted(Comparator.comparing(Path::getFileName)).toList();
+        } catch (IOException e) {
+            log.warn("Could not list sampled frames in {}", targetDir, e);
+            return List.of();
+        }
+    }
+
+    /** ffmpeg parses its own arguments, so the decimal separator must not follow the locale. */
+    private static String format(double value) {
+        return String.format(Locale.ROOT, "%.6f", value);
     }
 
     private boolean run(String what, long timeoutSeconds, List<String> arguments) {

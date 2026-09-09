@@ -37,6 +37,9 @@ public class CommentServiceImpl implements CommentService {
     /** How many all-deleted pages to skip past before handing the client a cursor and giving up. */
     private static final int MAX_PAGES_SCANNED = 5;
 
+    /** How many times a losing like-tally write re-reads and tries again — see moveLikes. */
+    private static final int MAX_LIKE_CAS_RETRIES = 3;
+
     private final CommentByVideoRepository commentByVideoRepository;
     private final CommentLikeRepository commentLikeRepository;
     private final VideoCountersRepository videoCountersRepository;
@@ -186,26 +189,59 @@ public class CommentServiceImpl implements CommentService {
             throw new NotCommentOwnerException(commentId);
         }
 
-        // The read above answers "may this caller delete it"; it cannot answer "is it still there",
-        // because another delete can land between the read and the write. The condition does, and
-        // only the caller it applies for is allowed to move the counter — a save() would let both
-        // racing deletes decrement, and a counter table has no way back from that.
-        Instant deletedAt = Instant.now();
-        boolean deleted = commentByVideoRepository.markDeletedIfNotDeleted(videoId, commentId, deletedAt);
-        if (!deleted) {
+        if (!softDelete(videoId, commentId, currentUserId)) {
             throw new CommentNotFoundException(commentId);
         }
+    }
 
-        // Undone if the counter never moved, for the reason addComment restores its row: this
-        // caller is the only one allowed to decrement for this comment, so a failure here is the
-        // one and only chance to apply it. Conditioned on the deletion still being ours, so a
-        // restore cannot resurrect a comment somebody deleted in the meantime.
+    @Override
+    public void removeByAdmin(Long videoId, Long commentId) {
+        CommentByVideo comment = commentByVideoRepository
+                .findById(CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build())
+                .orElse(null);
+
+        // Unknown or already gone is a no-op, not an error: this runs off a Kafka event, and a
+        // moderation event naming a comment this service has never seen — or one a redelivery
+        // already applied — must not be retried into the DLQ. The consumer contract in CLAUDE.md
+        // requires ignoring unknown ids for exactly this reason.
+        if (comment == null || comment.isDeleted()) {
+            log.debug("Moderation removal of comment {} on video {}: nothing to remove", commentId, videoId);
+            return;
+        }
+
+        // The comment's own author, not the admin: this event feeds video-service's counter and
+        // recommendation-service's tag profiles, which read the id as a participant in the video's
+        // interactions. An admin id there would attribute the removal to somebody who never
+        // interacted with the video at all.
+        softDelete(videoId, commentId, comment.getUserId());
+    }
+
+    /**
+     * Soft-deletes one comment and takes its counter down with it. Returns whether this call is
+     * the one that deleted it.
+     *
+     * <p>The caller's read answers "may this caller delete it"; it cannot answer "is it still
+     * there", because another delete can land between the read and the write. The condition does,
+     * and only the caller it applies for is allowed to move the counter — a save() would let both
+     * racing deletes decrement, and a counter table has no way back from that.
+     *
+     * <p>The deletion is undone if the counter never moved, for the reason addComment restores its
+     * row: this caller is the only one allowed to decrement for this comment, so a failure here is
+     * the one and only chance to apply it. Conditioned on the deletion still being ours, so a
+     * restore cannot resurrect a comment somebody deleted in the meantime.
+     */
+    private boolean softDelete(Long videoId, Long commentId, Long userId) {
+        Instant deletedAt = Instant.now();
+        if (!commentByVideoRepository.markDeletedIfNotDeleted(videoId, commentId, deletedAt)) {
+            return false;
+        }
+
         boolean countered = false;
         try {
             videoCountersRepository.incrementCommentCount(videoId, -1);
             countered = true;
             counterCacheService.invalidate(videoId);
-            eventPublisher.publishCommentDeleted(commentId, videoId, currentUserId);
+            eventPublisher.publishCommentDeleted(commentId, videoId, userId);
         } catch (RuntimeException ex) {
             if (countered) {
                 undoCounter(videoId, 1);
@@ -213,6 +249,7 @@ public class CommentServiceImpl implements CommentService {
             commentByVideoRepository.restoreIfDeletedAt(videoId, commentId, deletedAt);
             throw ex;
         }
+        return true;
     }
 
     @Override
@@ -223,11 +260,7 @@ public class CommentServiceImpl implements CommentService {
         // a retried like finds the row already there, is told newlyLiked=false, and leaves the
         // tally alone.
         boolean newlyLiked = commentLikeRepository.insertIfNotExists(commentId, currentUserId, Instant.now());
-        int likeCount = comment.likeCount();
-        if (newlyLiked) {
-            likeCount += 1;
-            commentByVideoRepository.updateLikes(videoId, commentId, likeCount);
-        }
+        int likeCount = newlyLiked ? moveLikes(videoId, commentId, comment, 1) : comment.likeCount();
         return new CommentLikeResponse(commentId, true, likeCount);
     }
 
@@ -236,12 +269,35 @@ public class CommentServiceImpl implements CommentService {
         CommentByVideo comment = liveComment(videoId, commentId);
 
         boolean wasLiked = commentLikeRepository.deleteIfExists(commentId, currentUserId);
-        int likeCount = comment.likeCount();
-        if (wasLiked) {
-            likeCount = Math.max(0, likeCount - 1);
-            commentByVideoRepository.updateLikes(videoId, commentId, likeCount);
-        }
+        int likeCount = wasLiked ? moveLikes(videoId, commentId, comment, -1) : comment.likeCount();
         return new CommentLikeResponse(commentId, false, likeCount);
+    }
+
+    /**
+     * Moves the denormalised tally by one, conditioned on the value that was read — the membership
+     * LWT above says this caller may move the count, not that nobody else is moving it at the same
+     * moment. A losing write re-reads and tries again rather than overwriting whoever won.
+     *
+     * <p>Giving up after the retries leaves the tally one short rather than failing the request:
+     * the like itself is already recorded, and an error here would tell the caller their like did
+     * not happen when it did.
+     */
+    private int moveLikes(Long videoId, Long commentId, CommentByVideo read, int delta) {
+        CommentByVideo current = read;
+        for (int attempt = 0; attempt <= MAX_LIKE_CAS_RETRIES; attempt++) {
+            int next = Math.max(0, current.likeCount() + delta);
+            boolean applied = current.getLikes() == null
+                    ? commentByVideoRepository.initLikesIfUnset(videoId, commentId, next)
+                    : commentByVideoRepository.updateLikesIfMatches(
+                            videoId, commentId, next, current.getLikes());
+            if (applied) {
+                return next;
+            }
+            current = liveComment(videoId, commentId);
+        }
+        log.warn("Like tally on comment {} of video {} lost a change after {} attempts; it is now "
+                + "off by one", commentId, videoId, MAX_LIKE_CAS_RETRIES + 1);
+        return current.likeCount();
     }
 
     private CommentByVideo liveComment(Long videoId, Long commentId) {

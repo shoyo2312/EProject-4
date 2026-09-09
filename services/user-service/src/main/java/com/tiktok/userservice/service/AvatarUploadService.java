@@ -56,10 +56,15 @@ public class AvatarUploadService {
         String contentType = requireSupported(file);
 
         // One key per user, overwritten in place — the same key media-worker mirrors a social
-        // avatar to. Sharing it is what stops the two paths from leaving a user with two pictures
-        // and no rule about which wins; the mirror skips a key that already exists, so a picture
-        // uploaded here is never replaced by a provider's.
-        String key = "avatars/%d.jpg".formatted(userId);
+        // avatar to (MediaKeys.avatar). Sharing it is what stops the two paths from leaving a user
+        // with two pictures and no rule about which wins; the mirror skips a key that already
+        // exists, so a picture uploaded here is never replaced by a provider's.
+        //
+        // No extension: the key is fixed while the format is whatever was uploaded, so any
+        // extension here is a claim about the bytes that is wrong as often as it is right, and
+        // anything keying off it (CDN rules, the mirror writing the same key) is misled. The
+        // content type travels on the object instead, which is what browsers actually read.
+        String key = "avatars/%d".formatted(userId);
 
         try (InputStream body = file.getInputStream()) {
             minioClient.putObject(PutObjectArgs.builder()

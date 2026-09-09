@@ -59,7 +59,7 @@ public class AdminModerationEventConsumer {
      */
     private void handleTakenDown(VideoTakenDownEvent event) {
         idempotentEventProcessor.runOnce(event.eventId(), VIDEO_TAKEN_DOWN, () ->
-                videoStateUpdater.apply(event.videoId(), Video::markTakenDown,
+                videoStateUpdater.apply(event.videoId(), video -> video.markTakenDown(event.reason()),
                         videoRepository::updateStatus, VIDEO_TAKEN_DOWN));
     }
 

@@ -25,6 +25,13 @@ public interface CommentService {
 
     void deleteComment(Long videoId, Long commentId, Long currentUserId);
 
+    /**
+     * Removes a comment on an admin's decision, with no ownership check — the decision was already
+     * made and recorded in admin-service. A no-op when the comment is unknown or already gone, so
+     * that a redelivered moderation event is harmless.
+     */
+    void removeByAdmin(Long videoId, Long commentId);
+
     CommentLikeResponse likeComment(Long videoId, Long commentId, Long currentUserId);
 
     CommentLikeResponse unlikeComment(Long videoId, Long commentId, Long currentUserId);

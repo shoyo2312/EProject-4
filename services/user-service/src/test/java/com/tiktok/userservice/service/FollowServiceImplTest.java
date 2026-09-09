@@ -186,4 +186,20 @@ class FollowServiceImplTest {
         Page<UserProfileResponse> followers = followService.listFollowers(3L, 1L, PageRequest.of(0, 10));
         assertThat(followers.getContent()).extracting(UserProfileResponse::userId).containsExactly(3L);
     }
+
+    @Test
+    @Transactional
+    void listFollowers_hidesAnEntryThatBlockedTheViewer_andCountsItOutOfTheTotal() {
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        followService.follow(2L, 1L);
+        followService.follow(3L, 1L);
+        // Carol blocks bob. Alice's follower list stays readable to bob — carol is not in it.
+        blockService.block(3L, 2L);
+
+        Page<UserProfileResponse> asBob = followService.listFollowers(2L, 1L, PageRequest.of(0, 10));
+
+        assertThat(asBob.getContent()).extracting(UserProfileResponse::userId).containsExactly(2L);
+        // The total counts what this viewer can reach, so a client paging towards it terminates.
+        assertThat(asBob.getTotalElements()).isEqualTo(1);
+    }
 }

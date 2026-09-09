@@ -1,6 +1,7 @@
 package com.tiktok.authservice.controller;
 
 import com.tiktok.authservice.dto.request.AddEmailRequest;
+import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
@@ -37,6 +38,15 @@ public class AuthController {
     @PostMapping("/login")
     public ApiResponse<TokenResponse> login(@Valid @RequestBody LoginRequest request) {
         return ApiResponse.success(authService.login(request));
+    }
+
+    /**
+     * Second step of admin-console login. Reached only after {@code /login} answered
+     * {@code MFA_REQUIRED}; exchanges the emailed code for a session.
+     */
+    @PostMapping("/login/otp")
+    public ApiResponse<TokenResponse> loginWithOtp(@Valid @RequestBody AdminLoginOtpRequest request) {
+        return ApiResponse.success(authService.loginWithOtp(request));
     }
 
     @PostMapping("/refresh")

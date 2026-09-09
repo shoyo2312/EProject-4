@@ -51,9 +51,10 @@ class VideoStateUpdaterTest {
 
     /**
      * A takedown landing in the gap between the transcode consumer's read and its write. The
-     * first attempt is refused; the second reads TAKEN_DOWN and records PUBLISHED as the state a
-     * restore should return to — which is what the first attempt would have done had the document
-     * looked then like it does now.
+     * first attempt is refused; the second reads TAKEN_DOWN and records PENDING_MODERATION as the
+     * state a restore should return to — which is what the first attempt would have done had the
+     * document looked then like it does now. A restore therefore puts the video back where the
+     * transcode left it, still owing a moderation verdict, rather than straight onto the feed.
      */
     @Test
     void apply_whenATakedownLandsMidFlight_reReadsAndRecordsTheOutcomeForRestore() {
@@ -63,14 +64,14 @@ class VideoStateUpdaterTest {
         BiPredicate<Video, VideoStatus> writeWithATakedownInTheGap = (candidate, expectedStatus) -> {
             if (moderatorHasActed.compareAndSet(false, true)) {
                 Video moderatorsCopy = videoRepository.findByIdAndDeletedAtIsNull(video.getId()).orElseThrow();
-                moderatorsCopy.markTakenDown();
+                moderatorsCopy.markTakenDown("policy violation");
                 videoRepository.updateStatus(moderatorsCopy, VideoStatus.PROCESSING);
             }
             return videoRepository.updateTranscodeResult(candidate, expectedStatus);
         };
 
         videoStateUpdater.apply(video.getId(),
-                v -> v.markPublished("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42),
+                v -> v.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42),
                 writeWithATakedownInTheGap,
                 "VideoTranscodedEvent");
 
@@ -78,7 +79,7 @@ class VideoStateUpdaterTest {
         assertThat(after.getStatus())
                 .as("the takedown must survive the transcode result that overtook it")
                 .isEqualTo(VideoStatus.TAKEN_DOWN);
-        assertThat(after.getStatusBeforeTakedown()).isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(after.getStatusBeforeTakedown()).isEqualTo(VideoStatus.PENDING_MODERATION);
         assertThat(after.getHlsUrl())
                 .as("the media the transcode produced is needed the moment the video comes back")
                 .isEqualTo("http://minio/master.m3u8");

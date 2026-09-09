@@ -5,6 +5,9 @@ import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import lombok.RequiredArgsConstructor;
 import org.bson.Document;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
@@ -16,6 +19,7 @@ import org.springframework.data.mongodb.core.query.Update;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
 
@@ -66,6 +70,25 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
+    public Page<Video> findForAdmin(VideoStatus status, String term, Pageable pageable) {
+        Criteria criteria = where("deletedAt").is(null);
+        if (status != null) {
+            criteria = criteria.and("status").is(status);
+        }
+        if (term != null && !term.isBlank()) {
+            // Quoted, so a title search for "c++" or "(2026)" is a search and not a regex the
+            // user accidentally wrote — an unescaped one throws or matches the wrong rows.
+            criteria = criteria.and("title").regex(Pattern.quote(term), "i");
+        }
+
+        Query query = Query.query(criteria).with(pageable);
+        List<Video> videos = mongoTemplate.find(query, Video.class);
+        // The count repeats the match without the paging, which is what Page needs for its total.
+        long total = mongoTemplate.count(Query.query(criteria), Video.class);
+        return new PageImpl<>(videos, pageable, total);
+    }
+
+    @Override
     public UserVideoStats sumUserVideoStats(Long userId, boolean includeHidden) {
         Criteria criteria = where("userId").is(userId).and("deletedAt").is(null);
         if (!includeHidden) {
@@ -103,7 +126,7 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     // statusBeforeTakedown is part of both transcode writes because that is where the outcome
-    // goes while the video is down — see Video.applyTranscodeOutcome. Leaving it out would drop
+    // goes while the video is down — see Video.applyOutcome. Leaving it out would drop
     // the only record of the result on exactly the videos that need it at restore time.
     @Override
     public boolean updateTranscodeResult(Video video, VideoStatus expectedStatus) {
@@ -121,7 +144,9 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     public boolean updateStatus(Video video, VideoStatus expectedStatus) {
         return compareAndSet(video.getId(), expectedStatus, new Update()
                 .set("status", video.getStatus())
-                .set("statusBeforeTakedown", video.getStatusBeforeTakedown()));
+                .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
+                // Written on both sides of the pair: a takedown sets it, a restore clears it.
+                .set("takedownReason", video.getTakedownReason()));
     }
 
     @Override
@@ -130,6 +155,14 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("failureReason", video.getFailureReason()));
+    }
+
+    @Override
+    public boolean updateModeration(Video video, VideoStatus expectedStatus) {
+        return compareAndSet(video.getId(), expectedStatus, new Update()
+                .set("status", video.getStatus())
+                .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
+                .set("moderation", video.getModeration()));
     }
 
     @Override
@@ -154,7 +187,18 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
 
     @Override
     public void updateVisibility(Video video) {
-        update(video.getId(), new Update().set("visibility", video.getVisibility()));
+        // Both fields in one write: Mongo is atomic per document, so the change and the
+        // announcement it owes cannot end up on opposite sides of a crash.
+        update(video.getId(), new Update()
+                .set("visibility", video.getVisibility())
+                .set("visibilityEventPendingAt", video.getVisibilityEventPendingAt()));
+    }
+
+    @Override
+    public boolean clearVisibilityEventPending(String videoId, Instant announced) {
+        Query query = Query.query(
+                where("_id").is(videoId).and("visibilityEventPendingAt").is(announced));
+        return write(query, new Update().set("visibilityEventPendingAt", null)) > 0;
     }
 
     @Override

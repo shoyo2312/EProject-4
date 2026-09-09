@@ -97,6 +97,27 @@ public class AdminServiceImpl implements AdminService {
     }
 
     @Override
+    @Transactional
+    public ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
+                                            ModerationActionType actionType, String reason) {
+        // No existence check against the owning service: this one cannot read its database, and an
+        // extra HTTP call would only move the failure. An action against an id that does not exist
+        // is a no-op on the consumer side, and the audit row is still the honest record of the
+        // decision. Consumers are required to ignore unknown ids for exactly this reason.
+        ModerationAction action = ModerationAction.builder()
+                .adminId(adminId)
+                .actionType(actionType)
+                .targetType(targetType)
+                .targetId(targetId)
+                .reason(reason)
+                .build();
+        moderationActionRepository.save(action);
+        adminEventProducer.publishFor(action);
+
+        return adminMapper.toResponse(action);
+    }
+
+    @Override
     public Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Pageable pageable) {
         Page<ModerationAction> actions = targetType != null && targetId != null
                 ? moderationActionRepository.findByTargetTypeAndTargetIdOrderByCreatedAtDesc(targetType, targetId, pageable)

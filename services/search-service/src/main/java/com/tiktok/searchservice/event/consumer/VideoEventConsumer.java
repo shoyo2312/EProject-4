@@ -3,6 +3,7 @@ package com.tiktok.searchservice.event.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
+import com.tiktok.event.video.VideoVisibilityChangedEvent;
 import com.tiktok.searchservice.index.SearchIndexWriter;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -24,6 +25,7 @@ public class VideoEventConsumer {
 
     private static final String VIDEO_PUBLISHED = "VideoPublishedEvent";
     private static final String VIDEO_DELETED = "VideoDeletedEvent";
+    private static final String VIDEO_VISIBILITY_CHANGED = "VideoVisibilityChangedEvent";
 
     private final SearchIndexWriter searchIndexWriter;
     private final IdempotentEventProcessor idempotentEventProcessor;
@@ -43,7 +45,7 @@ public class VideoEventConsumer {
             VideoPublishedEvent event = objectMapper.readValue(payload, VideoPublishedEvent.class);
             idempotentEventProcessor.runOnce(event.eventId(), VIDEO_PUBLISHED, () ->
                     searchIndexWriter.indexPublication(event.videoId(), event.userId(), event.title(),
-                            event.description(), event.tags(), event.occurredAt()));
+                            event.description(), event.visibility(), event.tags(), event.occurredAt()));
         } else if (VIDEO_DELETED.equals(eventType)) {
             VideoDeletedEvent event = objectMapper.readValue(payload, VideoDeletedEvent.class);
             // The document goes, rather than gaining a deleted flag: search has no use for a video
@@ -52,6 +54,14 @@ public class VideoEventConsumer {
             // for a video whose publication never went out looks like from here.
             idempotentEventProcessor.runOnce(event.eventId(), VIDEO_DELETED, () ->
                     searchIndexWriter.deleteVideo(event.videoId()));
+        } else if (VIDEO_VISIBILITY_CHANGED.equals(eventType)) {
+            VideoVisibilityChangedEvent event =
+                    objectMapper.readValue(payload, VideoVisibilityChangedEvent.class);
+            // The whole reason the index carries visibility at all: an owner making a video
+            // private has to take it out of everyone else's search results, and status does not
+            // move when they do.
+            idempotentEventProcessor.runOnce(event.eventId(), VIDEO_VISIBILITY_CHANGED, () ->
+                    searchIndexWriter.applyVisibility(event.videoId(), event.visibility()));
         } else {
             log.debug("Ignoring video eventType={}", eventType);
         }
