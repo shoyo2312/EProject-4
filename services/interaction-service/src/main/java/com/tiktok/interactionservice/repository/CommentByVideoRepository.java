@@ -16,15 +16,32 @@ public interface CommentByVideoRepository extends CassandraRepository<CommentByV
     Slice<CommentByVideo> findByVideoId(@Param("videoId") Long videoId, Pageable pageable);
 
     /**
-     * Writes the denormalised per-comment like tally. Plain UPDATE, not an LWT: the right to move
-     * the count is already gated by the {@code comment_likes} membership LWT in the service, and
-     * two different users liking the same comment at the same instant losing one increment is an
-     * acceptable undercount here — nothing reconciles it, but nothing depends on it being exact.
+     * Writes the denormalised per-comment like tally, conditioned on the value the caller read.
+     * The {@code comment_likes} membership LWT grants the right to move the count, but it does not
+     * serialise the read-modify-write around it: two different users liking the same comment both
+     * pass their own membership check, both read 5, and both write 6. Nothing reconciles this
+     * tally afterwards, so a lost increment is permanent.
+     *
+     * @return false when the stored value is no longer {@code expected} — re-read and re-apply
      */
-    @Query("UPDATE comments_by_video SET likes = :likes WHERE video_id = :videoId AND comment_id = :commentId")
-    void updateLikes(@Param("videoId") Long videoId,
-                     @Param("commentId") Long commentId,
-                     @Param("likes") int likes);
+    @Query("UPDATE comments_by_video SET likes = :likes "
+            + "WHERE video_id = :videoId AND comment_id = :commentId IF likes = :expected")
+    boolean updateLikesIfMatches(@Param("videoId") Long videoId,
+                                 @Param("commentId") Long commentId,
+                                 @Param("likes") int likes,
+                                 @Param("expected") int expected);
+
+    /**
+     * The same write for a comment nobody has liked yet, whose {@code likes} column is still
+     * unset. A separate method because the condition is against {@code null}, which has to be a
+     * literal in the query rather than a bound value — same shape as
+     * {@link #markDeletedIfNotDeleted}.
+     */
+    @Query("UPDATE comments_by_video SET likes = :likes "
+            + "WHERE video_id = :videoId AND comment_id = :commentId IF likes = null")
+    boolean initLikesIfUnset(@Param("videoId") Long videoId,
+                             @Param("commentId") Long commentId,
+                             @Param("likes") int likes);
 
     /**
      * Lightweight-transaction soft delete. Returns whether this call is the one that deleted the

@@ -26,6 +26,10 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        // Before the permissive comment rules below. The admin listing returns
+                        // removed comments and every comment on a video regardless of who posted
+                        // it — a moderation view, not the public thread.
+                        .requestMatchers("/api/v1/interactions/admin/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/like-status").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/comments").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/counts").permitAll()

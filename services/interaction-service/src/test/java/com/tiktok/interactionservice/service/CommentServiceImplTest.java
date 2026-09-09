@@ -130,6 +130,28 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(commentService.unlikeComment(52L, comment.commentId(), 2L).likeCount()).isZero();
     }
 
+    /**
+     * The tally is a read-modify-write, and the membership LWT does not serialise it: two users
+     * liking at the same moment both read the same value and both wrote it back plus one, losing
+     * an increment nothing ever reconciles. The write is conditioned on what was read, so the
+     * loser has to re-read — which is what this asserts by moving the stored value underneath the
+     * caller before the write it is about to make.
+     */
+    @Test
+    void likeComment_writeConditionedOnTheValueItRead() {
+        CommentResponse comment = commentService.addComment(54L, 1L, "contended");
+        commentService.likeComment(54L, comment.commentId(), 2L);
+
+        // Whoever else is liking this comment got there first; the value this caller read is stale.
+        assertThat(commentByVideoRepository.updateLikesIfMatches(54L, comment.commentId(), 7, 1))
+                .isTrue();
+        assertThat(commentByVideoRepository.updateLikesIfMatches(54L, comment.commentId(), 2, 1))
+                .isFalse();
+
+        // A third user's like now builds on 7, not on the 1 the first caller had in hand.
+        assertThat(commentService.likeComment(54L, comment.commentId(), 3L).likeCount()).isEqualTo(8);
+    }
+
     @Test
     void likeComment_onMissingComment_isRejected() {
         assertThatThrownBy(() -> commentService.likeComment(53L, 999999L, 1L))
@@ -246,5 +268,49 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     void deleteComment_unknownComment_throwsNotFound() {
         assertThatThrownBy(() -> commentService.deleteComment(25L, 999L, 1L))
                 .isInstanceOf(CommentNotFoundException.class);
+    }
+
+    /** The whole point of the admin path: no ownership check, and no video-service round trip. */
+    @Test
+    void removeByAdmin_removesSomebodyElsesComment() {
+        CommentResponse comment = commentService.addComment(30L, 1L, "not the admin's comment");
+
+        commentService.removeByAdmin(30L, comment.commentId());
+
+        assertThat(commentService.listComments(30L, null, 20).items()).isEmpty();
+        assertThat(videoCountersRepository.findById(30L))
+                .get()
+                .extracting(counters -> counters.getCommentCount())
+                .isEqualTo(0L);
+    }
+
+    /**
+     * A redelivered moderation event must not decrement twice. The LWT is what guarantees it —
+     * this is the reason the consumer carries no inbox table.
+     */
+    @Test
+    void removeByAdmin_replayed_decrementsTheCountOnce() {
+        commentService.addComment(31L, 1L, "stays");
+        CommentResponse removed = commentService.addComment(31L, 2L, "goes");
+
+        commentService.removeByAdmin(31L, removed.commentId());
+        commentService.removeByAdmin(31L, removed.commentId());
+
+        assertThat(videoCountersRepository.findById(31L))
+                .get()
+                .extracting(counters -> counters.getCommentCount())
+                .isEqualTo(1L);
+    }
+
+    /**
+     * An event naming a comment this service has never seen is ignored, not thrown: throwing would
+     * retry it into the DLQ forever, and the CLAUDE.md consumer contract requires ignoring unknown
+     * ids.
+     */
+    @Test
+    void removeByAdmin_unknownComment_isNoOp() {
+        commentService.removeByAdmin(32L, 999L);
+
+        assertThat(videoCountersRepository.findById(32L)).isEmpty();
     }
 }
