@@ -8,8 +8,10 @@ import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
+import com.tiktok.event.video.VideoVisibilityChangedEvent;
 import com.tiktok.searchservice.document.ProcessedEventDocument;
 import com.tiktok.searchservice.document.VideoDocument;
+import com.tiktok.searchservice.service.SearchService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,7 +24,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import org.springframework.data.domain.PageRequest;
+
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -52,6 +57,9 @@ class VideoIndexingConsumerTest {
 
     @Autowired
     private ElasticsearchOperations elasticsearchOperations;
+
+    @Autowired
+    private SearchService searchService;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -105,7 +113,7 @@ class VideoIndexingConsumerTest {
     /** A publication landing after a transcode must not roll the status back to PROCESSING. */
     @Test
     void onMessage_publicationReplay_doesNotOverwriteTranscodedStatus() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("v6", 1L, "title", null, "s3://raw/6.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("v6", 1L, "title", null, "s3://raw/6.mp4", "PUBLIC", List.of());
         videoEventConsumer.onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
         transcode(VideoTranscodedEvent.success("v6", "http://minio/t.jpg", null, "http://minio/m.m3u8", 9));
 
@@ -117,7 +125,7 @@ class VideoIndexingConsumerTest {
 
     @Test
     void onMessage_replay_isNoOp() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("v2", 1L, "title", null, "s3://raw/2.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("v2", 1L, "title", null, "s3://raw/2.mp4", "PUBLIC", List.of());
         String payload = objectMapper.writeValueAsString(published);
 
         videoEventConsumer.onMessage(payload, header("VideoPublishedEvent"));
@@ -147,7 +155,7 @@ class VideoIndexingConsumerTest {
      */
     @Test
     void onMessage_deletion_isNotMistakenForAReplayOfThePublication() {
-        VideoPublishedEvent published = VideoPublishedEvent.of("v4", 1L, "title", null, "s3://raw/4.mp4", List.of());
+        VideoPublishedEvent published = VideoPublishedEvent.of("v4", 1L, "title", null, "s3://raw/4.mp4", "PUBLIC", List.of());
         VideoDeletedEvent deleted = VideoDeletedEvent.of("v4", 1L, "s3://raw/4.mp4");
 
         assertThat(deleted.eventId()).isNotEqualTo(published.eventId());
@@ -191,9 +199,57 @@ class VideoIndexingConsumerTest {
         assertThat(video("v8").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
     }
 
+    /**
+     * A private video is PUBLISHED like any other — moderation is what sets that, and it does not
+     * look at visibility. Search is a read path of its own, with no viewer identity and no call
+     * into video-service, so filtering on status alone handed the title, description and thumbnail
+     * of every private video to anyone who searched for it.
+     */
+    @Test
+    void searchVideos_excludesPrivateVideosUntilTheirOwnerMakesThemPublic() throws Exception {
+        publish("v9", "diary entry", "not for you", "PRIVATE", List.of());
+        transcode(VideoTranscodedEvent.success("v9", "http://minio/t.jpg", null, "http://minio/m.m3u8", 3));
+        assertThat(video("v9").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("diary", null, PageRequest.of(0, 10))).isEmpty();
+
+        VideoVisibilityChangedEvent madePublic =
+                VideoVisibilityChangedEvent.of("v9", 1L, "PUBLIC", Instant.now());
+        videoEventConsumer.onMessage(objectMapper.writeValueAsString(madePublic),
+                header("VideoVisibilityChangedEvent"));
+
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("diary", null, PageRequest.of(0, 10)))
+                .extracting(response -> response.id())
+                .containsExactly("v9");
+    }
+
+    /** And the way back: a public video its owner hides leaves the results it was already in. */
+    @Test
+    void searchVideos_dropsAVideoItsOwnerMakesPrivate() throws Exception {
+        publish("v10", "beach trip", null, List.of());
+        transcode(VideoTranscodedEvent.success("v10", "http://minio/t.jpg", null, "http://minio/m.m3u8", 3));
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("beach", null, PageRequest.of(0, 10))).hasSize(1);
+
+        VideoVisibilityChangedEvent madePrivate =
+                VideoVisibilityChangedEvent.of("v10", 1L, "PRIVATE", Instant.now());
+        videoEventConsumer.onMessage(objectMapper.writeValueAsString(madePrivate),
+                header("VideoVisibilityChangedEvent"));
+
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("beach", null, PageRequest.of(0, 10))).isEmpty();
+    }
+
     private void publish(String videoId, String title, String description, List<String> tags) throws Exception {
+        publish(videoId, title, description, "PUBLIC", tags);
+    }
+
+    private void publish(String videoId, String title, String description, String visibility,
+                         List<String> tags) throws Exception {
         VideoPublishedEvent event = VideoPublishedEvent.of(
-                videoId, 1L, title, description, "s3://raw/" + videoId + ".mp4", tags);
+                videoId, 1L, title, description, "s3://raw/" + videoId + ".mp4", visibility, tags);
         videoEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
     }
 
