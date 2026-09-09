@@ -1,7 +1,6 @@
 package com.tiktok.analyticsservice.controller;
 
 import com.tiktok.analyticsservice.dto.response.DailyCountResponse;
-import com.tiktok.analyticsservice.dto.response.DailyRevenueResponse;
 import com.tiktok.analyticsservice.dto.response.DailySignupResponse;
 import com.tiktok.analyticsservice.dto.response.VideoEngagementSummaryResponse;
 import com.tiktok.analyticsservice.service.AnalyticsService;
@@ -30,11 +29,6 @@ public class AnalyticsController {
     @GetMapping("/engagement/videos/{videoId}")
     public ApiResponse<VideoEngagementSummaryResponse> getVideoEngagementSummary(@PathVariable String videoId) {
         return ApiResponse.success(analyticsService.getVideoEngagementSummary(videoId));
-    }
-
-    @GetMapping("/revenue/daily")
-    public ApiResponse<List<DailyRevenueResponse>> getDailyRevenue(@RequestParam(defaultValue = "7") int days) {
-        return ApiResponse.success(analyticsService.getDailyRevenue(days));
     }
 
     @GetMapping("/signups/daily")

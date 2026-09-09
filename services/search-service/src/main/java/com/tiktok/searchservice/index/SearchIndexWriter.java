@@ -1,6 +1,5 @@
 package com.tiktok.searchservice.index;
 
-import com.tiktok.searchservice.document.ProductDocument;
 import com.tiktok.searchservice.document.VideoDocument;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -19,7 +18,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Every write into the two search indexes, expressed as a partial update rather than a
+ * Every write into the video search index, expressed as a partial update rather than a
  * read-modify-write.
  *
  * <p>The consumers used to do {@code findById} → mutate → {@code save()}, which re-indexes the
@@ -175,11 +174,6 @@ public class SearchIndexWriter {
 
     public void restoreVideo(String videoId) {
         update(VideoDocument.class, videoId, RESTORE_SCRIPT, Map.of(), null);
-    }
-
-    public void applyProductStatus(Long productId, String status) {
-        update(ProductDocument.class, String.valueOf(productId), STATUS_SCRIPT,
-                Map.of("status", status), null);
     }
 
     public void deleteVideo(String videoId) {

@@ -11,7 +11,7 @@
 ![Maven](https://img.shields.io/badge/Build-Maven-C71A36?logo=apachemaven&logoColor=white)
 ![Docker](https://img.shields.io/badge/Container-Docker-2496ED?logo=docker&logoColor=white)
 
-18 microservices · 5 shared libraries · Saga, Outbox & Inbox patterns · Soft-delete-first
+13 microservices · 5 shared libraries · Outbox & Inbox patterns · Soft-delete-first
 
 </div>
 
@@ -63,14 +63,6 @@ flowchart LR
         NOTI["notification-service :8089"]
     end
 
-    subgraph Commerce["Commerce"]
-        PROD["product-service :8090"]
-        CART["cart-service :8091"]
-        ORDER["order-service :8092"]
-        PAY["payment-service :8093"]
-        INV["inventory-service :8094"]
-    end
-
     subgraph Platform["Platform"]
         SEARCH["search-service :8095"]
         ADMIN["admin-service :8096"]
@@ -78,10 +70,7 @@ flowchart LR
     end
 
     GW --> Core
-    GW --> Commerce
     GW --> Platform
-    ORDER -.Kafka Outbox.-> PAY
-    ORDER -.Kafka Outbox.-> INV
     VIDEO -.Kafka.-> MEDIA
     VIDEO -.Kafka.-> REC
 ```
@@ -109,11 +98,6 @@ tiktok-backend/
 │   ├── recommendation-service/ # :8087 — For You feed AI
 │   ├── chat-service/        # :8088 — Realtime chat (WebSocket)
 │   ├── notification-service/ # :8089 — Push, In-app (MongoDB)
-│   ├── product-service/     # :8090 — Sản phẩm, Danh mục
-│   ├── cart-service/        # :8091 — Giỏ hàng
-│   ├── order-service/       # :8092 — Đặt hàng, Saga orchestrator
-│   ├── payment-service/     # :8093 — Thanh toán, Ví
-│   ├── inventory-service/   # :8094 — Tồn kho
 │   ├── search-service/      # :8095 — Elasticsearch wrapper
 │   ├── admin-service/       # :8096 — Admin BFF
 │   └── analytics-service/   # :8097 — ClickHouse analytics
@@ -170,11 +154,6 @@ make help
 |----------------------|---------------------------|-------|
 | auth-service         | PostgreSQL (auth_db)      | 5432  |
 | user-service         | PostgreSQL (user_db)      | 5433  |
-| product-service      | PostgreSQL (product_db)   | 5434  |
-| cart-service         | PostgreSQL (cart_db)      | 5435  |
-| order-service        | PostgreSQL (order_db)     | 5436  |
-| payment-service      | PostgreSQL (payment_db)   | 5437  |
-| inventory-service    | PostgreSQL (inventory_db) | 5438  |
 | admin-service        | PostgreSQL (admin_db)     | 5439  |
 | video-service        | MongoDB (video_db)        | 27017 |
 | story-service        | MongoDB (story_db)        | 27017 |

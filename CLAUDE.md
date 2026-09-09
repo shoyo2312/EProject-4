@@ -32,11 +32,6 @@ tiktok-backend/
     ├── recommendation-service/ :8087  Kafka consumer + Redis (trending + feed cá nhân hoá, xếp hạng qua rank-service)
     ├── chat-service/     :8088  MongoDB + WebSocket
     ├── notification-service/   :8089  MongoDB + FCM
-    ├── product-service/  :8090  PostgreSQL + Flyway
-    ├── cart-service/     :8091  Redis primary + PostgreSQL backup
-    ├── order-service/    :8092  PostgreSQL + Saga orchestrator + Outbox
-    ├── payment-service/  :8093  PostgreSQL + Outbox (immutable ledger)
-    ├── inventory-service/ :8094  PostgreSQL + Outbox + optimistic lock
     ├── search-service/   :8095  Elasticsearch
     ├── admin-service/    :8096  PostgreSQL + Security
     ├── analytics-service/ :8097  ClickHouse / Kafka consumer (+ sink dữ liệu huấn luyện)
@@ -106,13 +101,12 @@ com.tiktok.{service}/
 - **Topic trộn nhiều event type** (`admin.moderation-events`, `video.video-events`): payload JSON không có field phân biệt loại — dùng Kafka header `eventType` (đọc qua `@Header(name = "eventType")`) để route, KHÔNG suy đoán từ shape JSON. Thiếu route thì Jackson **vẫn parse được** sang class sai với mọi field vắng mặt là null, không exception, không log — service chỉ âm thầm làm sai việc. `video.video-events` mang `VideoPublishedEvent` + `VideoDeletedEvent` cùng key `videoId`, nên Kafka đảm bảo thứ tự. Ngoại lệ: video bị xoá trước khi publication kịp announce vẫn phát `VideoDeletedEvent` — file raw đã nằm trong MinIO và event này là thứ duy nhất còn nhắc tới key đó. Mọi consumer của `VideoDeletedEvent` phải no-op với `videoId` lạ. Consumer coi **header vắng mặt = `VideoPublishedEvent`** (producer đời cũ chỉ gửi loại đó)
 - **kafka-lib usage**: dependency `<artifactId>kafka-lib</artifactId>`, auto-config qua Spring Boot — không cần `@Configuration` cục bộ. Hai thứ độc lập nhau:
   - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `auth-service`, `user-service`, `video-service`, `recommendation-service`, `media-worker`, `search-service`, `interaction-service`
-  - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`, `product-service`
-  - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, inventory, notification, order, payment) — vẫn dùng default retry-vô-hạn của Spring Kafka
-  - CÓ outbox nhưng CHƯA migrate dispatcher (inventory, order, payment) — vẫn `markPublished()` ngay sau `send()`, tức là đang mất event khi broker từ chối. **Khi động vào 1 trong 3 service này, migrate luôn**: các bước trong `docs/outbox-migration.md`, marker `TODO(outbox)` nằm ngay tại chỗ lỗi trong từng `OutboxPublisher`
+  - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`
+  - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, notification) — vẫn dùng default retry-vô-hạn của Spring Kafka
   - story không có consumer lẫn outbox — không cần `kafka-lib`. interaction có consumer (`AdminModerationEventConsumer`) nhưng không có outbox: Cassandra không có transaction đa bảng để ghép outbox vào, nên `InteractionEventPublisher` chờ broker ack rồi mới coi là xong
 
 ### JWT Authentication & security-lib
-- **security-lib usage**: 13 services (admin, cart, chat, interaction, inventory, notification, order, payment, product, recommendation, story, user, video) dùng centralized `security-lib` để validate JWT token
+- **security-lib usage**: 8 services (admin, chat, interaction, notification, recommendation, story, user, video) dùng centralized `security-lib` để validate JWT token
   - Dependency: `<artifactId>security-lib</artifactId>`
   - Auto-configured via Spring Boot auto-configuration (`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`)
   - Services KHÔNG cần `@Configuration` cục bộ cho JWT — được inject tự động

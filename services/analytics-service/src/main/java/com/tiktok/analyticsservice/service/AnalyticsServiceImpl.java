@@ -1,11 +1,9 @@
 package com.tiktok.analyticsservice.service;
 
 import com.tiktok.analyticsservice.dto.response.DailyCountResponse;
-import com.tiktok.analyticsservice.dto.response.DailyRevenueResponse;
 import com.tiktok.analyticsservice.dto.response.DailySignupResponse;
 import com.tiktok.analyticsservice.dto.response.VideoEngagementSummaryResponse;
 import com.tiktok.analyticsservice.repository.EngagementEventRepository;
-import com.tiktok.analyticsservice.repository.RevenueEventRepository;
 import com.tiktok.analyticsservice.repository.UserSignupEventRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -17,7 +15,6 @@ import java.util.List;
 public class AnalyticsServiceImpl implements AnalyticsService {
 
     private final EngagementEventRepository engagementEventRepository;
-    private final RevenueEventRepository revenueEventRepository;
     private final UserSignupEventRepository userSignupEventRepository;
 
     @Override
@@ -28,11 +25,6 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     @Override
     public VideoEngagementSummaryResponse getVideoEngagementSummary(String videoId) {
         return engagementEventRepository.findSummaryByVideoId(videoId);
-    }
-
-    @Override
-    public List<DailyRevenueResponse> getDailyRevenue(int days) {
-        return revenueEventRepository.findDailyRevenue(days);
     }
 
     @Override
