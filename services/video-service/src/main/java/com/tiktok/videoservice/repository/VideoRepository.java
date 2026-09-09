@@ -63,4 +63,12 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      * key. See {@code VideoEventPublisher#publishPendingDeletions}.
      */
     List<Video> findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc();
+
+    /**
+     * Visibility-change outbox poll. Soft-deleted videos are included on purpose: a video made
+     * private and then deleted still has to have the visibility change announced, because the
+     * deletion event only reaches consumers that keep the video at all — and the change may be
+     * the one that removes it from a read path the deletion would otherwise race.
+     */
+    List<Video> findTop100ByVisibilityEventPendingAtIsNotNullOrderByVisibilityEventPendingAtAsc();
 }

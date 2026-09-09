@@ -68,7 +68,9 @@ class VideoTranscodedEventConsumerTest {
         consumer.onMessage(objectMapper.writeValueAsString(event));
 
         Video updated = videoRepository.findById(video.getId()).orElseThrow();
-        assertThat(updated.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(updated.getStatus())
+                .as("a transcode makes a video playable, not public — moderation decides that")
+                .isEqualTo(VideoStatus.PENDING_MODERATION);
         assertThat(updated.getThumbnailUrl()).isEqualTo("http://minio/thumb.jpg");
         assertThat(updated.getHlsUrl()).isEqualTo("http://minio/master.m3u8");
         assertThat(updated.getDurationSeconds()).isEqualTo(42);
@@ -131,7 +133,7 @@ class VideoTranscodedEventConsumerTest {
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build());
-        video.markTakenDown();
+        video.markTakenDown("policy violation");
         videoRepository.updateStatus(video, VideoStatus.PROCESSING);
 
         VideoTranscodedEvent event = VideoTranscodedEvent.success(
@@ -144,8 +146,9 @@ class VideoTranscodedEventConsumerTest {
                 .as("a transcode finishing after a takedown must not put the video back on the feed")
                 .isEqualTo(VideoStatus.TAKEN_DOWN);
         assertThat(after.getStatusBeforeTakedown())
-                .as("a restore must return it to PUBLISHED, not the PROCESSING it was taken down in")
-                .isEqualTo(VideoStatus.PUBLISHED);
+                .as("a restore must return it to where the transcode left it, not the PROCESSING "
+                        + "it was taken down in — still owing a moderation verdict")
+                .isEqualTo(VideoStatus.PENDING_MODERATION);
         assertThat(after.getHlsUrl()).isEqualTo("http://minio/master.m3u8");
     }
 
@@ -159,7 +162,7 @@ class VideoTranscodedEventConsumerTest {
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build());
-        video.markTakenDown();
+        video.markTakenDown("policy violation");
         videoRepository.updateStatus(video, VideoStatus.PROCESSING);
 
         VideoTranscodedEvent event = VideoTranscodedEvent.failure(video.getId(), "boom");

@@ -26,6 +26,10 @@ public record VideoResponse(
         List<String> tags,
         Instant createdAt,
         /** Why the transcode failed; null unless {@code status == FAILED}. */
-        String failureReason
+        String failureReason,
+        /** Why moderation removed it; null unless {@code status == TAKEN_DOWN}. */
+        String takedownReason,
+        /** What the classifier scored. Null on every public read path — admin console only. */
+        ModerationResponse moderation
 ) {
 }

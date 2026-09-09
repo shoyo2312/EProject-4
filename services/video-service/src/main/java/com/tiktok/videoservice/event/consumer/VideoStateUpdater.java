@@ -19,7 +19,7 @@ import java.util.function.Consumer;
  * different listener threads and genuinely overlap: transcoding takes minutes, which is ample
  * time for a moderator to act on the same video. Reading the document, deciding from
  * {@code video.getStatus()}, and writing the result back is three steps with two gaps, and a
- * takedown landing in either gap is lost — {@code Video.applyTranscodeOutcome} makes the right
+ * takedown landing in either gap is lost — {@code Video.applyOutcome} makes the right
  * decision from a status that is no longer true.
  *
  * <p>The write is therefore conditional on the status that was read, and losing means re-reading
@@ -47,7 +47,7 @@ public class VideoStateUpdater {
      * many times over; writing anyway leaves a document that is both deleted and PUBLISHED, a
      * combination no read path expects and nothing later corrects.
      *
-     * @param change what the event does to the video, e.g. {@code Video::markTakenDown}
+     * @param change what the event does to the video, e.g. {@code video -> video.markTakenDown(reason)}
      * @param write  the matching repository write, e.g. {@code videoRepository::updateStatus}
      * @param what   event name, for logs only
      */
