@@ -1,8 +1,6 @@
 package com.tiktok.searchservice.service;
 
-import com.tiktok.searchservice.document.ProductDocument;
 import com.tiktok.searchservice.document.VideoDocument;
-import com.tiktok.searchservice.dto.response.ProductSearchResponse;
 import com.tiktok.searchservice.dto.response.VideoSearchResponse;
 import com.tiktok.searchservice.mapper.SearchMapper;
 import lombok.RequiredArgsConstructor;
@@ -17,14 +15,13 @@ import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.Locale;
 
 /**
  * Only surfaces documents in a terminal "visible" state (video status PUBLISHED and visibility
- * PUBLIC, product status ACTIVE) — everything else is still being indexed, was marked inactive
- * upstream, or is not the searcher's to see.
+ * PUBLIC) — everything else is still being indexed, was marked inactive upstream, or is not the
+ * searcher's to see.
  */
 @Service
 @RequiredArgsConstructor
@@ -86,36 +83,6 @@ public class SearchServiceImpl implements SearchService {
         SearchHits<VideoDocument> hits = elasticsearchOperations.search(criteriaQuery, VideoDocument.class);
 
         List<VideoSearchResponse> content = hits.getSearchHits().stream()
-                .map(SearchHit::getContent)
-                .map(searchMapper::toResponse)
-                .toList();
-
-        return new PageImpl<>(content, pageable, hits.getTotalHits());
-    }
-
-    @Override
-    public Page<ProductSearchResponse> searchProducts(String query, String category, BigDecimal minPrice, BigDecimal maxPrice, Pageable pageable) {
-        Criteria criteria = Criteria.where("status").is("ACTIVE");
-
-        if (StringUtils.hasText(query)) {
-            criteria = criteria.and(
-                    Criteria.where("name").matches(query).or("description").matches(query));
-        }
-        if (StringUtils.hasText(category)) {
-            criteria = criteria.and(Criteria.where("category").is(category));
-        }
-        if (minPrice != null) {
-            criteria = criteria.and(Criteria.where("price").greaterThanEqual(minPrice));
-        }
-        if (maxPrice != null) {
-            criteria = criteria.and(Criteria.where("price").lessThanEqual(maxPrice));
-        }
-
-        CriteriaQuery criteriaQuery = new CriteriaQuery(criteria, pageable);
-        criteriaQuery.setTrackTotalHits(true);
-        SearchHits<ProductDocument> hits = elasticsearchOperations.search(criteriaQuery, ProductDocument.class);
-
-        List<ProductSearchResponse> content = hits.getSearchHits().stream()
                 .map(SearchHit::getContent)
                 .map(searchMapper::toResponse)
                 .toList();

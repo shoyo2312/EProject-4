@@ -122,7 +122,7 @@ class AdminServiceImplTest {
         Report pending = Report.builder()
                 .id(8L)
                 .reporterId(1L)
-                .targetType(ReportTargetType.PRODUCT)
+                .targetType(ReportTargetType.VIDEO)
                 .targetId("p1")
                 .reason("false report")
                 .status(ReportStatus.PENDING)

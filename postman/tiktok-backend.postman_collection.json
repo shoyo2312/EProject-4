@@ -4613,22 +4613,6 @@
             "header": [],
             "url": "{{searchBaseUrl}}/api/v1/search/videos?hashtag=%23Dance"
           }
-        },
-        {
-          "name": "Search Products - by keyword",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{searchBaseUrl}}/api/v1/search/products?q={{searchQuery}}&page=0&size=20"
-          }
-        },
-        {
-          "name": "Search Products - category + price range",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{searchBaseUrl}}/api/v1/search/products?category=fashion&minPrice=10&maxPrice=100000"
-          }
         }
       ]
     },

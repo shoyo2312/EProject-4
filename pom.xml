@@ -40,11 +40,6 @@
         <module>services/recommendation-service</module>
         <module>services/chat-service</module>
         <module>services/notification-service</module>
-        <module>services/product-service</module>
-        <module>services/cart-service</module>
-        <module>services/order-service</module>
-        <module>services/payment-service</module>
-        <module>services/inventory-service</module>
         <module>services/search-service</module>
         <module>services/admin-service</module>
         <module>services/analytics-service</module>

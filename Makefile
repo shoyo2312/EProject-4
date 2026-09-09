@@ -12,17 +12,17 @@ ifneq (,$(wildcard ./.env))
 endif
 
 .PHONY: help \
-	build build-libs build-auth build-user build-video build-order build-interaction \
+	build build-libs build-auth build-user build-video build-interaction \
 	build-story build-recommendation build-chat build-gateway \
-	build-product build-payment build-inventory build-admin \
+	build-admin \
 	clean \
 	test test-auth test-user \
 	infra-up infra-down infra-reset infra-logs infra-status \
 	run-gateway run-auth run-user run-video run-interaction run-story \
-	run-recommendation run-chat run-order run-payment run-inventory run-media run-notification \
+	run-recommendation run-chat run-media run-notification \
 	run-admin run-analytics run-search \
-	migrate-auth migrate-user migrate-order migrate-product migrate-payment \
-	migrate-inventory migrate-admin migrate-all \
+	migrate-auth migrate-user \
+	migrate-admin migrate-all \
 	moderation-up moderation-test
 
 # Hiển thị help
@@ -40,10 +40,6 @@ help:
 	@echo "    make build-story        Build story-service"
 	@echo "    make build-recommendation Build recommendation-service"
 	@echo "    make build-chat         Build chat-service"
-	@echo "    make build-order        Build order-service"
-	@echo "    make build-product      Build product-service"
-	@echo "    make build-payment      Build payment-service"
-	@echo "    make build-inventory    Build inventory-service"
 	@echo "    make build-admin        Build admin-service"
 	@echo "    make build-gateway      Build api-gateway"
 	@echo "    make clean              Clean tất cả target/"
@@ -71,9 +67,6 @@ help:
 	@echo "    make run-recommendation Run recommendation-service :8087"
 	@echo "    make run-chat           Run chat-service :8088"
 	@echo "    make run-notification   Run notification-service :8089"
-	@echo "    make run-order          Run order-service :8092"
-	@echo "    make run-payment        Run payment-service"
-	@echo "    make run-inventory      Run inventory-service"
 	@echo "    make run-search         Run search-service :8095"
 	@echo "    make run-admin          Run admin-service :8096"
 	@echo "    make run-analytics      Run analytics-service :8097"
@@ -86,10 +79,6 @@ help:
 	@echo "  Database:"
 	@echo "    make migrate-auth       Chạy Flyway migration cho auth-service"
 	@echo "    make migrate-user       Chạy Flyway migration cho user-service"
-	@echo "    make migrate-order      Chạy Flyway migration cho order-service"
-	@echo "    make migrate-product    Chạy Flyway migration cho product-service"
-	@echo "    make migrate-payment    Chạy Flyway migration cho payment-service"
-	@echo "    make migrate-inventory  Chạy Flyway migration cho inventory-service"
 	@echo "    make migrate-admin      Chạy Flyway migration cho admin-service"
 	@echo "    make migrate-all        Chạy Flyway migration tất cả PostgreSQL services"
 	@echo ""
@@ -113,9 +102,6 @@ build-user:
 build-video:
 	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,services/video-service -am
 
-build-order:
-	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,services/order-service -am
-
 build-interaction:
 	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,libs/crypto-lib,services/interaction-service -am
 
@@ -127,15 +113,6 @@ build-recommendation:
 
 build-chat:
 	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,services/chat-service -am
-
-build-product:
-	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,services/product-service -am
-
-build-payment:
-	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,services/payment-service -am
-
-build-inventory:
-	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,services/inventory-service -am
 
 build-admin:
 	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,services/admin-service -am
@@ -216,15 +193,6 @@ run-recommendation:
 run-chat:
 	./mvnw spring-boot:run -pl services/chat-service -Dspring-boot.run.profiles=local
 
-run-order:
-	./mvnw spring-boot:run -pl services/order-service -Dspring-boot.run.profiles=local
-
-run-payment:
-	./mvnw spring-boot:run -pl services/payment-service -Dspring-boot.run.profiles=local
-
-run-inventory:
-	./mvnw spring-boot:run -pl services/inventory-service -Dspring-boot.run.profiles=local
-
 run-notification:
 	./mvnw spring-boot:run -pl services/notification-service -Dspring-boot.run.profiles=local
 
@@ -289,20 +257,8 @@ migrate-auth:
 migrate-user:
 	./mvnw flyway:migrate -pl services/user-service
 
-migrate-order:
-	./mvnw flyway:migrate -pl services/order-service
-
-migrate-product:
-	./mvnw flyway:migrate -pl services/product-service
-
-migrate-payment:
-	./mvnw flyway:migrate -pl services/payment-service
-
-migrate-inventory:
-	./mvnw flyway:migrate -pl services/inventory-service
-
 migrate-admin:
 	./mvnw flyway:migrate -pl services/admin-service
 
 migrate-all:
-	./mvnw flyway:migrate -pl services/auth-service,services/user-service,services/product-service,services/order-service,services/payment-service,services/inventory-service,services/admin-service
+	./mvnw flyway:migrate -pl services/auth-service,services/user-service,services/admin-service

@@ -11,11 +11,10 @@ API Gateway :8080          ← Rate limit, JWT verify, Route
     ├──► auth-service :8081     ← /auth/** (không cần JWT)
     ├──► user-service :8082     ← /users/**
     ├──► video-service :8083    ← /videos/**
-    ├──► order-service :8092    ← /orders/**
     └──► ...
 ```
 
-## 2. Ba Luồng Quan Trọng
+## 2. Hai Luồng Quan Trọng
 
 ### 2a. Upload Video → Feed Fan-out
 
@@ -28,19 +27,7 @@ Client → video-service (lưu metadata MongoDB)
         └→ Feed Fan-out consumer (ghi vào Redis/Cassandra feed của followers)
 ```
 
-### 2b. Đặt Hàng — Saga (Order → Inventory → Payment)
-
-```
-Client → order-service
-    1. Tạo Order (status=PENDING) + ghi outbox_events [1 transaction]
-    2. Outbox Relay → Kafka → inventory-service
-         ✅ ReserveOK → Kafka → payment-service
-              ✅ PayOK → Kafka → order-service (CONFIRMED) → notification-service
-              ❌ PayFail → Kafka → inventory-service (release) → order (CANCELLED)
-         ❌ ReserveFail → order (CANCELLED) → notification-service
-```
-
-### 2c. Chat Realtime
+### 2b. Chat Realtime
 
 ```
 Client A ──WebSocket──► chat-service (instance 1)
@@ -55,24 +42,22 @@ A gửi msg → instance 1 → lưu MongoDB
 
 | Pattern                  | Dùng ở                                            | Mục đích                                           |
 |--------------------------|---------------------------------------------------|----------------------------------------------------|
-| **Outbox**               | order, payment, inventory, video                  | Đảm bảo event publish không mất khi crash          |
-| **Saga (Orchestration)** | order-service                                     | Distributed transaction: order→inventory→payment   |
-| **CQRS**                 | video-service, order-service, interaction-service | Tách read model (Redis/Cassandra) khỏi write model |
+| **Outbox**               | auth, admin, video                                | Đảm bảo event publish không mất khi crash          |
+| **CQRS**                 | video-service, interaction-service                | Tách read model (Redis/Cassandra) khỏi write model |
 | **Idempotent Consumer**  | Mọi Kafka consumer                                | Chống xử lý trùng (inbox_events table)             |
 | **Soft Delete**          | Tất cả services                                   | `deleted_at` thay vì xoá thật                      |
-| **Optimistic Lock**      | inventory, order, payment                         | `@Version` chống race condition                    |
+| **Optimistic Lock**      | `BaseEntity` (`@Version`)                         | Chống race condition trên update                   |
 | **Dead Letter Queue**    | user-service, video-service (qua `kafka-lib`)     | Poison message retry 3 lần → `<topic>.DLT` thay vì kẹt consumer vô hạn |
 
 ## 4. Database per Service
 
-| Service                                                     | DB            | Notes                          |
-|-------------------------------------------------------------|---------------|--------------------------------|
-| auth, user, product, cart, order, payment, inventory, admin | PostgreSQL    | JPA + Flyway                   |
-| video, story, chat, notification                            | MongoDB       | `@Document`                    |
-| interaction                                                 | Cassandra     | write-heavy (like/comment)     |
-| search                                                      | Elasticsearch | sync từ Kafka                  |
-| analytics                                                   | ClickHouse    | OLAP                           |
-| cart (primary)                                              | Redis         | backup định kỳ sang PostgreSQL |
+| Service                          | DB            | Notes                      |
+|----------------------------------|---------------|----------------------------|
+| auth, user, admin                | PostgreSQL    | JPA + Flyway               |
+| video, story, chat, notification | MongoDB       | `@Document`                |
+| interaction                      | Cassandra     | write-heavy (like/comment) |
+| search                           | Elasticsearch | sync từ Kafka              |
+| analytics                        | ClickHouse    | OLAP                       |
 
 ## 5. Shared Libraries (`libs/`)
 
@@ -89,12 +74,8 @@ event-schema     ← Services produce/consume Kafka events (mọi record impleme
   ├── video/       VideoPublishedEvent, VideoDeletedEvent, VideoTranscodedEvent
   ├── interaction/ VideoLikeEvent, CommentCreatedEvent, CommentDeletedEvent,
   │                VideoSharedEvent, VideoViewedEvent, VideoWatchEvent
-  ├── admin/       UserBannedEvent, UserUnbannedEvent, VideoTakenDownEvent, VideoRestoredEvent,
-  │                ProductSuspendedEvent, ProductReactivatedEvent
-  ├── product/     ProductCreatedEvent
-  ├── order/       OrderCreatedEvent, OrderConfirmedEvent, OrderCancelledEvent, OrderItem
-  ├── payment/     PaymentCompletedEvent, PaymentFailedEvent
-  └── inventory/   InventoryReservedEvent, InventoryReleasedEvent, InventoryReservationFailedEvent
+  └── admin/       UserBannedEvent, UserUnbannedEvent, VideoTakenDownEvent, VideoRestoredEvent,
+                   CommentRemovedEvent
 
 crypto-lib       ← auth-service + api-gateway + admin-service
   ├── JwtProvider         (generate, validate, extract claims)
@@ -122,12 +103,11 @@ kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
 
 ### 5a. JWT Authentication — security-lib (Centralized)
 
-**13 Services sử dụng security-lib** (auto-configured via Spring Boot):
+**8 Services sử dụng security-lib** (auto-configured via Spring Boot):
 
 ```
-admin-service, cart-service, chat-service, interaction-service,
-inventory-service, notification-service, order-service, payment-service,
-product-service, recommendation-service, story-service, user-service, video-service
+admin-service, chat-service, interaction-service, notification-service,
+recommendation-service, story-service, user-service, video-service
 ```
 
 **2 Services giữ custom JWT config** (exceptions — lý do khác nhau):
@@ -149,16 +129,7 @@ auth-service, admin-service, video-service                          ← OutboxDi
 retry-vô-hạn của Spring Kafka (thêm dependency `kafka-lib` khi cần):
 
 ```
-analytics-service, inventory-service, notification-service,
-order-service, payment-service, search-service
-```
-
-**Chưa migrate outbox** — vẫn `markPublished()` ngay sau `send()`, event mất khi broker từ chối.
-Các bước migrate: [`docs/outbox-migration.md`](outbox-migration.md) (marker `TODO(outbox)` đặt sẵn
-tại chỗ lỗi trong từng file):
-
-```
-inventory-service, order-service, payment-service, product-service
+analytics-service, notification-service, search-service
 ```
 
 **Không cần `kafka-lib`** — không có consumer lẫn outbox:
@@ -183,8 +154,7 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 | `interaction.share-events` | interaction-service (chờ ack 5s) | — | `VideoSharedEvent` | recommendation-service, search-service |
 | `interaction.view-events` | interaction-service (chờ ack 5s) | — | `VideoViewedEvent` | video-service, search-service |
 | `interaction.watch-events` | interaction-service (fire-and-forget) | — | `VideoWatchEvent` | recommendation-service, analytics-service |
-| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), search-service (thêm `ProductSuspendedEvent` + `ProductReactivatedEvent`) |
-| `product.product-events` | product-service (OutboxDispatcher) | — | `ProductCreatedEvent` | search-service, inventory-service |
+| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / `CommentRemovedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), search-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), auth-service (`UserBannedEvent` + `UserUnbannedEvent`), interaction-service (`CommentRemovedEvent`) |
 
 Ghi chú:
 - **Topic trộn nhiều shape** (`video.video-events`, `interaction.comment-events`, `admin.moderation-events`) route bằng Kafka header `eventType`, KHÔNG suy từ JSON. Thiếu route → Jackson vẫn parse sang class sai với field null, không exception. Xem `CLAUDE.md` §Kafka.
@@ -206,11 +176,6 @@ Ghi chú:
 | recommendation-service | 8087 | —              |
 | chat-service           | 8088 | Mongo:27017    |
 | notification-service   | 8089 | Mongo:27017    |
-| product-service        | 8090 | PG:5434        |
-| cart-service           | 8091 | PG:5435        |
-| order-service          | 8092 | PG:5436        |
-| payment-service        | 8093 | PG:5437        |
-| inventory-service      | 8094 | PG:5438        |
 | search-service         | 8095 | ES:9200        |
 | admin-service          | 8096 | PG:5439        |
 | analytics-service      | 8097 | ClickHouse:8123 |
@@ -226,9 +191,8 @@ Ghi chú:
 | [`video-service-api.md`](video-service-api.md) | client | Upload URL, publish, feed cursor, feed/following, batch, delete + §8 events |
 | [`interaction-service-api.md`](interaction-service-api.md) | client | Like / comment / share / view / watch + §7 events |
 | [`recommendation-service-api.md`](recommendation-service-api.md) | client | `/trending`, `/feed` (chỉ trả id) + §8 events |
-| [`search-service-api.md`](search-service-api.md) | client | Tìm video (q / hashtag), tìm sản phẩm + §7 events |
+| [`search-service-api.md`](search-service-api.md) | client | Tìm video (q / hashtag) + §7 events |
 | [`media-worker.md`](media-worker.md) | vận hành | Transcode (copy, chưa ffmpeg), cleanup MinIO, mirror avatar |
 | [`ranking-model.md`](ranking-model.md) | vận hành | Huấn luyện + phục vụ `rank-service`, hợp đồng feature |
-| [`outbox-migration.md`](outbox-migration.md) | backend | Các bước migrate `markPublished()` sang `OutboxDispatcher` |
 
-Chưa có doc riêng: `admin-service`, `analytics-service`, `story/chat/notification/product/cart/order/payment/inventory` (chưa expose qua gateway).
+Chưa có doc riêng: `admin-service`, `analytics-service`, `story/chat/notification` (chưa expose qua gateway).

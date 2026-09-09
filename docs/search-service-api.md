@@ -1,6 +1,6 @@
 # Search Service — API Contract cho Flutter Mobile
 
-Tài liệu này mô tả **những gì client (Flutter/Dart) cần biết** để tích hợp đúng với `search-service`: tìm video (theo từ khoá hoặc hashtag) và tìm sản phẩm. Không phải tài liệu thiết kế backend — chỉ phần hợp đồng API (contract). Đọc kèm `docs/video-service-api.md` vì kết quả tìm video **không đủ để phát** — xem mục 4.
+Tài liệu này mô tả **những gì client (Flutter/Dart) cần biết** để tích hợp đúng với `search-service`: tìm video (theo từ khoá hoặc hashtag). Không phải tài liệu thiết kế backend — chỉ phần hợp đồng API (contract). Đọc kèm `docs/video-service-api.md` vì kết quả tìm video **không đủ để phát** — xem mục 4.
 
 Quy tắc token: **mọi endpoint đều public, không cần token.** Gửi token cũng không đổi kết quả (khác `video-service`/`interaction-service`). Gateway route `GET /api/v1/search/**` là public.
 
@@ -14,7 +14,7 @@ Quy tắc token: **mọi endpoint đều public, không cần token.** Gửi tok
 | Base URL (qua gateway) | `http://<gateway-host>:8080/api/v1/search` |
 | Docs tương tác | `http://localhost:8095/swagger-ui.html` (chạy trực tiếp service khi dev) |
 
-Kho dữ liệu phía server là Elasticsearch. Index được dựng **hoàn toàn từ Kafka event** (video published/deleted/transcoded, like, comment, share, product created) — service này **không có database riêng và không đọc database của service khác**. Hệ quả cho client: kết quả tìm kiếm **trễ vài giây** so với thao tác thật (đăng video, like…), và một video vừa xoá có thể còn xuất hiện trong ~5 giây. Xem mục 5.
+Kho dữ liệu phía server là Elasticsearch. Index được dựng **hoàn toàn từ Kafka event** (video published/deleted/transcoded, like, comment, share) — service này **không có database riêng và không đọc database của service khác**. Hệ quả cho client: kết quả tìm kiếm **trễ vài giây** so với thao tác thật (đăng video, like…), và một video vừa xoá có thể còn xuất hiện trong ~5 giây. Xem mục 5.
 
 ## 2. Response envelope & phân trang
 
@@ -24,7 +24,7 @@ Mọi response bọc trong `ApiResponse<T>` như các service khác. `data` là 
 {
   "success": true,
   "data": {
-    "content": [ /* VideoSearchResponse[] hoặc ProductSearchResponse[] */ ],
+    "content": [ /* VideoSearchResponse[] */ ],
     "pageable": { "pageNumber": 0, "pageSize": 20 },
     "totalElements": 137,
     "totalPages": 7,
@@ -89,35 +89,6 @@ Response `data.content[]` → `VideoSearchResponse`:
 
 > **Các counter (`viewCount`/`likeCount`/…) trong kết quả tìm kiếm là bản sao trễ nhất trong hệ thống** — chúng đến từ Kafka event và search-service không có outbox nên có thể lệch vĩnh viễn nếu một event bị mất. Đừng hiển thị chúng như số chính xác; nguồn sự thật là `interaction-service` `GET /counts` (xem `docs/interaction-service-api.md` mục 4).
 
-### 3.2 `GET /products` — tìm sản phẩm
-
-Query param (tất cả optional):
-
-| Param | Kiểu | Ý nghĩa |
-|---|---|---|
-| `q` | string | Từ khoá tự do, khớp trên `name` và `description` |
-| `category` | string | Lọc chính xác theo category |
-| `minPrice`, `maxPrice` | số thập phân | Khoảng giá (bao gồm 2 đầu) |
-| `page`, `size`, `sort` | | Xem mục 2 |
-
-Chỉ trả sản phẩm `status = ACTIVE`.
-
-Response `data.content[]` → `ProductSearchResponse`:
-```json
-{
-  "id": 987654321098765,          // số (product id, không phải video Snowflake dạng chuỗi)
-  "sellerId": 123456789012345,
-  "name": "Áo thun",
-  "description": "...",           // có thể null
-  "price": 199000.00,            // số thập phân — dùng Decimal/String phía Dart, KHÔNG double
-  "category": "fashion",
-  "imageUrl": "...",             // có thể null
-  "createdAt": "2026-09-01T10:00:00Z"
-}
-```
-
-> Tính năng thương mại điện tử có thể đang tắt ở môi trường dev (`docker-compose` không chạy `product-service`). Khi đó index `products` rỗng và endpoint này luôn trả trang rỗng — không phải lỗi.
-
 ## 4. Kết quả tìm video KHÔNG đủ để phát — client phải tự lấy nội dung từ video-service
 
 `VideoSearchResponse` **không có** `hlsUrl`. Không có URL này thì không phát được. Luồng đúng ở client:
@@ -167,8 +138,7 @@ search-service **chỉ tiêu thụ**, không phát event nào. Toàn bộ index 
 | `interaction.view-events` | — | `VideoViewedEvent` | `viewCount++` |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | `commentCount++` / `commentCount--` (kẹp ≥ 0) |
 | `interaction.share-events` | — | `VideoSharedEvent` | `shareCount++` |
-| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` / `ProductSuspendedEvent` / `ProductReactivatedEvent` | 4 event trên | `status = TAKEN_DOWN` / trả về `pendingStatus` / `SUSPENDED` / `ACTIVE`. Event khác trên topic (UserBanned…) bị bỏ qua |
-| `product.product-events` | — | `ProductCreatedEvent` | Tạo `ProductDocument` đầy đủ (`name`, `description`, `category`, `imageUrl`, `price`), `status = ACTIVE` |
+| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` | 2 event trên | `status = TAKEN_DOWN` / trả về `pendingStatus`. Event khác trên topic (UserBanned…) bị bỏ qua |
 
 Mọi consumer **claim `eventId` trước khi xử lý** (`op_type=create` trên index `processed_events`, 409 ⇒ đã xử lý) chứ không đọc-rồi-ghi: trên Elasticsearch một document vừa ghi chưa đọc lại được cho tới lần refresh kế tiếp (mặc định 1s), nên check-then-act để lọt mọi redelivery trong cửa sổ đó. Mọi cập nhật counter là scripted partial update kèm `retry_on_conflict`, không phải đọc-sửa-ghi cả document.
 

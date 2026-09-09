@@ -17,7 +17,7 @@ Stack: Spring Cloud Gateway (**WebFlux/reactive** — KHÔNG có servlet API, KH
 | admin-service | `/api/v1/admin/**` | `ADMIN_SERVICE_URI` → `:8096` |
 | analytics-service | `/api/v1/analytics/**` | `ANALYTICS_SERVICE_URI` → `:8097` |
 
-**Không route qua gateway** (chỉ đến được từ mạng nội bộ): `media-worker` (`:8084`, không có REST API), `rank-service` (`:8098`, xem `docs/ranking-model.md` §5), `story/chat/notification/product/cart/order/payment/inventory` (chưa expose).
+**Không route qua gateway** (chỉ đến được từ mạng nội bộ): `media-worker` (`:8084`, không có REST API), `rank-service` (`:8098`, xem `docs/ranking-model.md` §5), `story/chat/notification` (chưa expose).
 
 Route không khớp path nào → `404` với envelope `ApiResponse` (xem mục 4).
 
