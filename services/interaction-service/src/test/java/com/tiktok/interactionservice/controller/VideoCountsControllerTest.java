@@ -49,4 +49,22 @@ class VideoCountsControllerTest extends AbstractInteractionServiceIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(50));
     }
+
+    @Test
+    void batch_deduplicatesBeforeApplyingTheCap() throws Exception {
+        // If distinct() runs after limit(), the controller would limit to 50 first (all the same id),
+        // then deduplicate to 1 row — test would fail. This pins the correct ordering: distinct-then-cap.
+        StringBuilder ids = new StringBuilder();
+        for (int i = 0; i < 55; i++) {
+            ids.append("1000");
+            if (i < 54) ids.append(",");
+        }
+        for (int i = 1; i <= 10; i++) {
+            ids.append(",").append(2000 + i);
+        }
+
+        mockMvc.perform(get("/api/v1/interactions/videos/counts/batch").param("videoIds", ids.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(11));
+    }
 }
