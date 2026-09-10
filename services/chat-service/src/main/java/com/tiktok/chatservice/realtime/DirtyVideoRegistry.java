@@ -21,8 +21,12 @@ public class DirtyVideoRegistry {
     }
 
     /**
-     * Takes the current contents and removes exactly those. Events arriving during the flush land
-     * in the set and go out in the next window rather than being dropped with the drained ones.
+     * Takes the current contents and removes exactly those. An event for a video that was NOT
+     * drained lands in the set and goes out in the next window. One for a video that WAS drained,
+     * arriving in the nanoseconds between the copy and the removal, is erased by that removal —
+     * the copy and the remove are two steps, not one. The cost is a single stale render: the frame
+     * already in flight carries a snapshot taken microseconds earlier, and the next event on that
+     * video corrects it. Swap the backing set atomically instead if that ever needs to be airtight.
      */
     public Set<String> drain() {
         Set<String> drained = Set.copyOf(dirty);
