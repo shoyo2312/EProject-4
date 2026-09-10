@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
+import com.tiktok.event.interaction.VideoSavedEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.event.interaction.VideoViewedEvent;
 import com.tiktok.event.interaction.VideoWatchEvent;
@@ -51,6 +52,7 @@ public class InteractionEventPublisher {
     private static final String LIKE_TOPIC = "interaction.like-events";
     private static final String COMMENT_TOPIC = "interaction.comment-events";
     private static final String SHARE_TOPIC = "interaction.share-events";
+    private static final String SAVE_TOPIC = "interaction.save-events";
     private static final String VIEW_TOPIC = "interaction.view-events";
     private static final String WATCH_TOPIC = "interaction.watch-events";
     private static final String EVENT_TYPE_HEADER = "eventType";
@@ -129,6 +131,14 @@ public class InteractionEventPublisher {
         VideoSharedEvent event = VideoSharedEvent.of(shareId, videoId, userId);
         confirm(new ProducerRecord<>(
                 SHARE_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event)));
+    }
+
+    /** Confirmed like the rest, because it moves save_count. */
+    @SneakyThrows
+    public void publishSave(Long videoId, Long userId, boolean saved) {
+        VideoSavedEvent event = VideoSavedEvent.of(videoId, userId, saved);
+        confirm(new ProducerRecord<>(
+                SAVE_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event)));
     }
 
     /**

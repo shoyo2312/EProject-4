@@ -7,6 +7,7 @@ import com.tiktok.interactionservice.entity.SaveByUser;
 import com.tiktok.interactionservice.entity.SaveByUserKey;
 import com.tiktok.interactionservice.entity.SaveByUserTime;
 import com.tiktok.interactionservice.entity.SaveByUserTimeKey;
+import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.InteractionConflictException;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
 import com.tiktok.interactionservice.exception.SaveRateLimitedException;
@@ -42,6 +43,7 @@ public class SaveServiceImpl implements SaveService {
     private final InteractionRateLimiter rateLimiter;
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
+    private final InteractionEventPublisher eventPublisher;
 
     @Override
     public SaveStatusResponse save(Long videoId, Long currentUserId) {
@@ -68,6 +70,7 @@ public class SaveServiceImpl implements SaveService {
                                 .build())
                         .build());
                 counterCacheService.invalidate(videoId);
+                eventPublisher.publishSave(videoId, currentUserId, true);
             } catch (RuntimeException ex) {
                 // Counter first, then the claim, each only if it actually landed. Giving the
                 // claim back alone would leave the increment behind, so the client's retry takes
@@ -112,6 +115,7 @@ public class SaveServiceImpl implements SaveService {
                         .videoId(videoId)
                         .build());
                 counterCacheService.invalidate(videoId);
+                eventPublisher.publishSave(videoId, currentUserId, false);
             } catch (RuntimeException ex) {
                 if (countered) {
                     undo(() -> videoCountersRepository.incrementSaveCount(videoId, 1),

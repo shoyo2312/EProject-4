@@ -3,6 +3,7 @@ package com.tiktok.interactionservice.service;
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
 import com.tiktok.interactionservice.dto.response.SaveStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
+import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
 import com.tiktok.interactionservice.repository.SaveByUserRepository;
 import com.tiktok.interactionservice.repository.SaveByUserTimeRepository;
@@ -10,9 +11,12 @@ import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 
 class SaveServiceImplTest extends AbstractInteractionServiceIT {
 
@@ -149,5 +153,32 @@ class SaveServiceImplTest extends AbstractInteractionServiceIT {
         saveService.unsave(33L, 1L);
 
         assertThat(counterCacheService.getCounts(33L).saveCount()).isZero();
+    }
+
+    @SpyBean
+    private InteractionEventPublisher eventPublisher;
+
+    @Test
+    void save_publishesASaveEvent() {
+        saveService.save(40L, 1L);
+
+        verify(eventPublisher).publishSave(40L, 1L, true);
+    }
+
+    @Test
+    void save_calledTwiceBySameUser_publishesOnce() {
+        saveService.save(41L, 1L);
+        saveService.save(41L, 1L);
+
+        verify(eventPublisher).publishSave(41L, 1L, true);
+        verifyNoMoreInteractions(eventPublisher);
+    }
+
+    @Test
+    void unsave_publishesAnUnsaveEvent() {
+        saveService.save(42L, 1L);
+        saveService.unsave(42L, 1L);
+
+        verify(eventPublisher).publishSave(42L, 1L, false);
     }
 }
