@@ -6,6 +6,7 @@ import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
 import com.tiktok.interactionservice.repository.SaveByUserRepository;
 import com.tiktok.interactionservice.repository.SaveByUserTimeRepository;
+import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,10 +25,14 @@ class SaveServiceImplTest extends AbstractInteractionServiceIT {
     @Autowired
     private SaveByUserTimeRepository saveByUserTimeRepository;
 
+    @Autowired
+    private VideoCountersRepository videoCountersRepository;
+
     @BeforeEach
     void cleanUp() {
         saveByUserRepository.deleteAll();
         saveByUserTimeRepository.deleteAll();
+        videoCountersRepository.deleteAll();
     }
 
     @Test
@@ -111,5 +116,38 @@ class SaveServiceImplTest extends AbstractInteractionServiceIT {
     void listSavedVideos_withACursorThisServiceNeverIssued_isABadRequest() {
         assertThatThrownBy(() -> saveService.listSavedVideos(1L, "not-a-cursor!!", 20))
                 .isInstanceOf(InvalidCursorException.class);
+    }
+
+    @Autowired
+    private CounterCacheService counterCacheService;
+
+    @Test
+    void save_movesTheSaveCounter() {
+        saveService.save(30L, 1L);
+
+        assertThat(counterCacheService.getCounts(30L).saveCount()).isEqualTo(1);
+    }
+
+    @Test
+    void save_calledTwiceBySameUser_movesTheCounterOnce() {
+        saveService.save(31L, 1L);
+        saveService.save(31L, 1L);
+
+        assertThat(counterCacheService.getCounts(31L).saveCount()).isEqualTo(1);
+    }
+
+    @Test
+    void unsave_movesTheSaveCounterBack() {
+        saveService.save(32L, 1L);
+        saveService.unsave(32L, 1L);
+
+        assertThat(counterCacheService.getCounts(32L).saveCount()).isZero();
+    }
+
+    @Test
+    void unsave_ofAVideoNeverSaved_leavesTheCounterAlone() {
+        saveService.unsave(33L, 1L);
+
+        assertThat(counterCacheService.getCounts(33L).saveCount()).isZero();
     }
 }

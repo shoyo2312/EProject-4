@@ -94,9 +94,12 @@ CREATE TABLE IF NOT EXISTS video_counters (
     like_count    counter,
     comment_count counter,
     share_count   counter,
-    view_count    counter
+    view_count    counter,
+    save_count    counter
 );
 
 -- For clusters created before view_count existed: CREATE TABLE IF NOT EXISTS above is a no-op
 -- on an existing table and would leave the column missing.
 ALTER TABLE video_counters ADD IF NOT EXISTS view_count counter;
+-- Same reason, for clusters created before saves were counted publicly.
+ALTER TABLE video_counters ADD IF NOT EXISTS save_count counter;

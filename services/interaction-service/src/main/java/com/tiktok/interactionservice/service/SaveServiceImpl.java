@@ -12,6 +12,7 @@ import com.tiktok.interactionservice.exception.InvalidCursorException;
 import com.tiktok.interactionservice.exception.SaveRateLimitedException;
 import com.tiktok.interactionservice.repository.SaveByUserRepository;
 import com.tiktok.interactionservice.repository.SaveByUserTimeRepository;
+import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.cassandra.CassandraInvalidQueryException;
@@ -39,6 +40,8 @@ public class SaveServiceImpl implements SaveService {
     private final SaveByUserRepository saveByUserRepository;
     private final SaveByUserTimeRepository saveByUserTimeRepository;
     private final InteractionRateLimiter rateLimiter;
+    private final VideoCountersRepository videoCountersRepository;
+    private final CounterCacheService counterCacheService;
 
     @Override
     public SaveStatusResponse save(Long videoId, Long currentUserId) {
@@ -49,7 +52,14 @@ public class SaveServiceImpl implements SaveService {
                 () -> saveByUserRepository.insertIfNotExists(currentUserId, videoId, savedAt));
 
         if (newlySaved) {
+            // The LWT is what grants the right to move the counter, and it grants it exactly
+            // once. A failure past this point has to give the claim back, or the save stays
+            // stored against a counter that is short by one for good — the same compensation
+            // LikeServiceImpl does around its claim.
+            boolean countered = false;
             try {
+                videoCountersRepository.incrementSaveCount(videoId, 1);
+                countered = true;
                 saveByUserTimeRepository.save(SaveByUserTime.builder()
                         .key(SaveByUserTimeKey.builder()
                                 .userId(currentUserId)
@@ -57,11 +67,17 @@ public class SaveServiceImpl implements SaveService {
                                 .videoId(videoId)
                                 .build())
                         .build());
+                counterCacheService.invalidate(videoId);
             } catch (RuntimeException ex) {
-                // Give the claim back, or the video is saved as far as the status check is
-                // concerned and missing from the listing for good: the client's retry finds the
-                // claim already taken and never writes the listing row.
-                undo(() -> saveByUserRepository.deleteIfExists(currentUserId, videoId), videoId, currentUserId, ex);
+                // Counter first, then the claim, each only if it actually landed. Giving the
+                // claim back alone would leave the increment behind, so the client's retry takes
+                // a fresh claim and adds a second one for the same save.
+                if (countered) {
+                    undo(() -> videoCountersRepository.incrementSaveCount(videoId, -1),
+                            videoId, currentUserId, ex);
+                }
+                undo(() -> saveByUserRepository.deleteIfExists(currentUserId, videoId),
+                        videoId, currentUserId, ex);
                 throw ex;
             }
         }
@@ -86,14 +102,23 @@ public class SaveServiceImpl implements SaveService {
 
         boolean wasSaved = executeLwtWithRetry(() -> saveByUserRepository.deleteIfExists(currentUserId, videoId));
         if (wasSaved) {
+            boolean countered = false;
             try {
+                videoCountersRepository.incrementSaveCount(videoId, -1);
+                countered = true;
                 saveByUserTimeRepository.deleteById(SaveByUserTimeKey.builder()
                         .userId(currentUserId)
                         .createdAt(savedAt)
                         .videoId(videoId)
                         .build());
+                counterCacheService.invalidate(videoId);
             } catch (RuntimeException ex) {
-                // Put the claim back so the two tables still agree: saved, and listed.
+                if (countered) {
+                    undo(() -> videoCountersRepository.incrementSaveCount(videoId, 1),
+                            videoId, currentUserId, ex);
+                }
+                // The original timestamp, not a fresh one: the restored claim has to keep
+                // addressing the listing row.
                 undo(() -> saveByUserRepository.insertIfNotExists(currentUserId, videoId, savedAt),
                         videoId, currentUserId, ex);
                 throw ex;
