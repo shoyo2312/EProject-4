@@ -59,7 +59,8 @@ public class VideoStatsFanout {
         String eventType = eventTypeHeader == null ? "" : new String(eventTypeHeader);
         CommentFrame frame = switch (eventType) {
             case "CommentCreatedEvent" -> CommentFrame.created(videoId, text(node, "commentId"),
-                    text(node, "userId"), text(node, "content"), text(node, "occurredAt"));
+                    text(node, "userId"), text(node, "content"), text(node, "occurredAt"),
+                    text(node, "parentId"), text(node, "replyToUserId"));
             case "CommentDeletedEvent" -> CommentFrame.deleted(videoId, text(node, "commentId"));
             default -> null;
         };
@@ -68,6 +69,27 @@ public class VideoStatsFanout {
             return;
         }
         messaging.convertAndSend(VideoTopics.comments(videoId), frame);
+    }
+
+    /**
+     * Its own topic, not a third shape on interaction.comment-events — see
+     * CommentLikeChangedEvent for why putting it there would inflate every video's comment count.
+     * No dirty mark: a like on a comment moves no counter on the video.
+     */
+    @KafkaListener(topics = "interaction.comment-like-events")
+    public void onCommentLikeEvent(String payload) {
+        JsonNode node = parse(payload);
+        if (node == null) {
+            return;
+        }
+        String videoId = text(node, "videoId");
+        String commentId = text(node, "commentId");
+        JsonNode likeCount = node.get("likeCount");
+        if (videoId == null || commentId == null || likeCount == null || !likeCount.isNumber()) {
+            return;
+        }
+        messaging.convertAndSend(VideoTopics.comments(videoId),
+                CommentFrame.liked(videoId, commentId, likeCount.asInt()));
     }
 
     /**
