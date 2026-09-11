@@ -31,5 +31,8 @@ public interface AdminService {
 
     Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Pageable pageable);
 
+    /** Number of reports filed against one target — the console shows it next to that user/video. */
+    long countReports(ReportTargetType targetType, String targetId);
+
     StatsSummaryResponse getStatsSummary();
 }

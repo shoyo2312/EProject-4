@@ -22,4 +22,7 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     Page<Report> findByDeletedAtIsNull(Pageable pageable);
 
     long countByStatusAndDeletedAtIsNull(ReportStatus status);
+
+    /** How many reports have been filed against one user or video — shown on its console row. */
+    long countByTargetTypeAndTargetIdAndDeletedAtIsNull(ReportTargetType targetType, String targetId);
 }
