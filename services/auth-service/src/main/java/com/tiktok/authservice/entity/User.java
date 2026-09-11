@@ -50,6 +50,25 @@ public class User extends BaseEntity {
     private Instant emailVerifiedAt;
 
     /**
+     * Last time a token pair was issued for this account — a fresh sign-in or a refresh. Advanced
+     * from {@code TokenIssuer}, the one funnel every sign-in path ends in. Not a precise login
+     * clock (a background refresh moves it too); enough to tell a dormant account from a live one.
+     */
+    @Column(name = "last_login_at")
+    private Instant lastLoginAt;
+
+    /** When the current ban was applied; null unless {@code status == BANNED}. Cleared on unban. */
+    @Column(name = "banned_at")
+    private Instant bannedAt;
+
+    /**
+     * Reason carried on the {@code UserBannedEvent} that banned this account, kept here so the
+     * admin console shows it without reading admin-service's audit log. Cleared on unban.
+     */
+    @Column(name = "ban_reason")
+    private String banReason;
+
+    /**
      * Claims an address for an account that has none. Verified state is cleared rather than left
      * alone: the address is unproven until its OTP comes back, and an account that could set
      * {@code email} while {@code emailVerified} stayed true would be able to receive password
@@ -69,8 +88,10 @@ public class User extends BaseEntity {
         this.status = UserStatus.LOCKED;
     }
 
-    public void ban() {
+    public void ban(String reason) {
         this.status = UserStatus.BANNED;
+        this.bannedAt = Instant.now();
+        this.banReason = reason;
     }
 
     /**
@@ -80,7 +101,14 @@ public class User extends BaseEntity {
     public void unban() {
         if (this.status == UserStatus.BANNED) {
             this.status = UserStatus.ACTIVE;
+            this.bannedAt = null;
+            this.banReason = null;
         }
+    }
+
+    /** Advances {@link #lastLoginAt}; see its field doc for why a refresh counts. */
+    public void recordLogin() {
+        this.lastLoginAt = Instant.now();
     }
 
     public void promoteToAdmin() {
