@@ -559,7 +559,7 @@ class VideoServiceImplTest {
      */
     private void markPublished(String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
-        video.markTranscoded(null, null, null, null);
+        video.markTranscoded(null, null, null, null, null, null);
         video.applyModeration(VideoModeration.builder()
                 .verdict(ModerationVerdict.APPROVED)
                 .totalFrames(10)

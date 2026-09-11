@@ -137,6 +137,8 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .set("previewUrl", video.getPreviewUrl())
                 .set("hlsUrl", video.getHlsUrl())
                 .set("durationSeconds", video.getDurationSeconds())
+                .set("width", video.getWidth())
+                .set("height", video.getHeight())
                 .set("failureReason", video.getFailureReason())); // null on the success path — clears a stale reason
     }
 
