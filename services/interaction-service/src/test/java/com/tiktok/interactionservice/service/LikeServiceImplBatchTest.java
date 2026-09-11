@@ -42,10 +42,13 @@ class LikeServiceImplBatchTest {
     @Mock
     private InteractionEventPublisher eventPublisher;
 
+    @Mock
+    private InteractionRateLimiter rateLimiter;
+
     private LikeService likeService() {
         lenient().when(counterCacheService.getCounts(anyLong())).thenReturn(VideoCounts.ZERO);
         return new LikeServiceImpl(likeByVideoRepository, likeByUserRepository,
-                videoCountersRepository, counterCacheService, eventPublisher);
+                videoCountersRepository, counterCacheService, eventPublisher, rateLimiter);
     }
 
     /**

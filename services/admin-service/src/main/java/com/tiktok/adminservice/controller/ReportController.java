@@ -38,6 +38,18 @@ public class ReportController {
         return ApiResponse.success(adminService.listReports(status, targetType, pageable));
     }
 
+    /**
+     * How many reports stand against one target. Its own endpoint rather than a field on the
+     * listing because the console asks per expanded row, not per page. Literal {@code /count} is
+     * matched ahead of {@code /{reportId}}.
+     */
+    @GetMapping("/count")
+    public ApiResponse<Long> count(
+            @RequestParam ReportTargetType targetType,
+            @RequestParam String targetId) {
+        return ApiResponse.success(adminService.countReports(targetType, targetId));
+    }
+
     @GetMapping("/{reportId}")
     public ApiResponse<ReportResponse> getById(@PathVariable Long reportId) {
         return ApiResponse.success(adminService.getReport(reportId));

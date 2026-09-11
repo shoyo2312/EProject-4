@@ -5,6 +5,7 @@ import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.entity.RefreshToken;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
+import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
 import lombok.RequiredArgsConstructor;
@@ -38,10 +39,17 @@ public class TokenIssuer {
     private final JwtProvider jwtProvider;
     private final JwtProperties jwtProperties;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final UserRepository userRepository;
 
     @Transactional
     public TokenResponse issue(User user) {
         String subject = String.valueOf(user.getId());
+
+        // The one place every sign-in path ends, so the one place last_login_at is stamped.
+        // save() rather than dirty-check: on the password-login path this entity was loaded
+        // before any transaction was open and is detached here.
+        user.recordLogin();
+        userRepository.save(user);
 
         String accessToken = jwtProvider.generateToken(
                 subject,

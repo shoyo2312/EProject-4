@@ -203,6 +203,15 @@ public class Video {
     @LastModifiedDate
     private Instant updatedAt;
 
+    /**
+     * When the video first became visible — the first transition into PUBLISHED, whether from the
+     * moderation verdict or a later restore. Distinct from {@code createdAt} (the upload) because
+     * a video sits in transcoding then PENDING_MODERATION for some time before it goes live, and
+     * distinct from {@code updatedAt} (any write). Null for a video that has never been PUBLISHED,
+     * and for ones published before this field existed.
+     */
+    private Instant publishedAt;
+
     private Instant deletedAt;
 
     @Version
@@ -271,6 +280,7 @@ public class Video {
             case REVIEW -> VideoStatus.PENDING_REVIEW;
             case REJECTED -> VideoStatus.REJECTED;
         });
+        stampPublishedAtIfLive();
     }
 
     public void markFailed(String reason) {
@@ -320,6 +330,14 @@ public class Video {
         this.status = this.statusBeforeTakedown == null ? VideoStatus.PUBLISHED : this.statusBeforeTakedown;
         this.statusBeforeTakedown = null;
         this.takedownReason = null; // a restored video is not down, so nothing should still say why it was
+        stampPublishedAtIfLive();
+    }
+
+    /** First time the video is actually visible, remember when. Later transitions leave it alone. */
+    private void stampPublishedAtIfLive() {
+        if (this.status == VideoStatus.PUBLISHED && this.publishedAt == null) {
+            this.publishedAt = Instant.now();
+        }
     }
 
     public void markEventPublished() {

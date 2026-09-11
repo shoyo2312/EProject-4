@@ -15,8 +15,28 @@ spring:
       # DuplicateKeyException, two threads each happily save their own.
       auto-index-creation: true
 
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      # Unique per instance on purpose. enableSimpleBroker keeps STOMP subscriptions in this
+      # process's memory, so a record delivered to one replica cannot reach a client attached to
+      # another. Making every replica its own consumer group means every replica sees every
+      # record and serves only its own clients — a STOMP relay's job, done with one line.
+      group-id: realtime-${random.uuid}
+      # Nothing here is replayed. A replica that has just started has no business re-sending
+      # yesterday's counters, and the frames are snapshots that the next event corrects anyway.
+      auto-offset-reset: latest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
+
+downstream:
+  interaction-service-uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
+
+realtime:
+  flush-interval-millis: 500
 
 springdoc:
   api-docs:

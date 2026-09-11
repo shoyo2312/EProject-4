@@ -10,6 +10,7 @@ import com.tiktok.interactionservice.entity.LikeByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.InteractionConflictException;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
+import com.tiktok.interactionservice.exception.LikeRateLimitedException;
 import com.tiktok.interactionservice.repository.LikeByUserRepository;
 import com.tiktok.interactionservice.repository.LikeByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
@@ -40,9 +41,12 @@ public class LikeServiceImpl implements LikeService {
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
     private final InteractionEventPublisher eventPublisher;
+    private final InteractionRateLimiter rateLimiter;
 
     @Override
     public LikeStatusResponse like(Long videoId, Long currentUserId) {
+        rateLimiter.require("like-rate", videoId, currentUserId, LikeRateLimitedException::new);
+
         // Read before the write, and add the delta here rather than reading again afterwards. A
         // Cassandra counter read is not guaranteed to see the increment that just happened, and
         // the read after an invalidate is the one that repopulates the cache — so a stale value
@@ -109,6 +113,9 @@ public class LikeServiceImpl implements LikeService {
         if (claim == null) {
             return new LikeStatusResponse(videoId, false, Math.max(likeCount, 0));
         }
+
+        rateLimiter.require("like-rate", videoId, currentUserId, LikeRateLimitedException::new);
+
         Instant likedAt = claim.getCreatedAt();
 
         boolean wasLiked = executeLwtWithRetry(

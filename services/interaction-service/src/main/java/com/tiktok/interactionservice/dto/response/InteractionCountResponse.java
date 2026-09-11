@@ -5,6 +5,7 @@ public record InteractionCountResponse(
         long likeCount,
         long commentCount,
         long shareCount,
-        long viewCount
+        long viewCount,
+        long saveCount
 ) {
 }

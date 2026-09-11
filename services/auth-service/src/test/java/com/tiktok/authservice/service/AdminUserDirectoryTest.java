@@ -1,6 +1,6 @@
 package com.tiktok.authservice.service;
 
-import com.tiktok.authservice.dto.response.UserResponse;
+import com.tiktok.authservice.dto.response.AdminUserResponse;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
@@ -69,14 +69,14 @@ class AdminUserDirectoryTest {
     @Test
     void listsEveryoneWhenNeitherFilterIsGiven() {
         assertThat(directory.search(null, null, FIRST_PAGE))
-                .extracting(UserResponse::username)
+                .extracting(AdminUserResponse::username)
                 .containsExactlyInAnyOrder("johndoe", "janedoe", "ghost");
     }
 
     @Test
     void filtersByStatusAlone() {
         assertThat(directory.search(null, UserStatus.BANNED, FIRST_PAGE))
-                .extracting(UserResponse::username)
+                .extracting(AdminUserResponse::username)
                 .containsExactly("janedoe");
     }
 
@@ -84,18 +84,18 @@ class AdminUserDirectoryTest {
     void searchesUsernameAndEmailCaseInsensitively() {
         assertThat(directory.search("JOHN", null, FIRST_PAGE))
                 .as("matches the username and, for a different casing, the address too")
-                .extracting(UserResponse::username)
+                .extracting(AdminUserResponse::username)
                 .containsExactly("johndoe");
 
         assertThat(directory.search("jane@EXAMPLE", null, FIRST_PAGE))
-                .extracting(UserResponse::username)
+                .extracting(AdminUserResponse::username)
                 .containsExactly("janedoe");
     }
 
     @Test
     void combinesBothFilters() {
         assertThat(directory.search("doe", UserStatus.ACTIVE, FIRST_PAGE))
-                .extracting(UserResponse::username)
+                .extracting(AdminUserResponse::username)
                 .containsExactly("johndoe");
     }
 
@@ -106,7 +106,7 @@ class AdminUserDirectoryTest {
         userRepository.save(ghost);
 
         assertThat(directory.search(null, null, FIRST_PAGE))
-                .extracting(UserResponse::username)
+                .extracting(AdminUserResponse::username)
                 .doesNotContain("ghost");
     }
 

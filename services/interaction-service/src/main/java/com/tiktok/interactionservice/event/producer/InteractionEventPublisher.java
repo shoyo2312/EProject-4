@@ -3,7 +3,9 @@ package com.tiktok.interactionservice.event.producer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
+import com.tiktok.event.interaction.CommentLikeChangedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
+import com.tiktok.event.interaction.VideoSavedEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.event.interaction.VideoViewedEvent;
 import com.tiktok.event.interaction.VideoWatchEvent;
@@ -50,7 +52,9 @@ public class InteractionEventPublisher {
 
     private static final String LIKE_TOPIC = "interaction.like-events";
     private static final String COMMENT_TOPIC = "interaction.comment-events";
+    private static final String COMMENT_LIKE_TOPIC = "interaction.comment-like-events";
     private static final String SHARE_TOPIC = "interaction.share-events";
+    private static final String SAVE_TOPIC = "interaction.save-events";
     private static final String VIEW_TOPIC = "interaction.view-events";
     private static final String WATCH_TOPIC = "interaction.watch-events";
     private static final String EVENT_TYPE_HEADER = "eventType";
@@ -71,8 +75,10 @@ public class InteractionEventPublisher {
      * video-service's VideoEventPublisher on video.video-events.
      */
     @SneakyThrows
-    public void publishCommentCreated(Long commentId, Long videoId, Long userId, String content) {
-        CommentCreatedEvent event = CommentCreatedEvent.of(commentId, videoId, userId, content);
+    public void publishCommentCreated(Long commentId, Long videoId, Long userId, String content,
+                                      Long parentId, Long replyToUserId) {
+        CommentCreatedEvent event = CommentCreatedEvent.of(commentId, videoId, userId, content,
+                parentId, replyToUserId);
         confirm(commentRecord(videoId, "CommentCreatedEvent", objectMapper.writeValueAsString(event)));
     }
 
@@ -80,6 +86,29 @@ public class InteractionEventPublisher {
     public void publishCommentDeleted(Long commentId, Long videoId, Long userId) {
         CommentDeletedEvent event = CommentDeletedEvent.of(commentId, videoId, userId);
         confirm(commentRecord(videoId, "CommentDeletedEvent", objectMapper.writeValueAsString(event)));
+    }
+
+    /**
+     * Not confirmed, unlike the counter-bearing sends above: nothing downstream derives a stored
+     * number from this topic. The tally already lives in Cassandra and rides back on the HTTP
+     * response, so a record the broker refuses costs other viewers a stale like count until their
+     * next fetch — not a permanent divergence worth failing the request over. The failure is
+     * logged rather than swallowed, same shape as {@link #publishWatch}.
+     */
+    @SneakyThrows
+    public void publishCommentLikeChanged(Long commentId, Long videoId, Long userId,
+                                          boolean liked, int likeCount) {
+        CommentLikeChangedEvent event =
+                CommentLikeChangedEvent.of(commentId, videoId, userId, liked, likeCount);
+        kafkaTemplate.send(new ProducerRecord<>(COMMENT_LIKE_TOPIC, String.valueOf(videoId),
+                        objectMapper.writeValueAsString(event)))
+                .whenComplete((result, failure) -> {
+                    if (failure != null) {
+                        log.warn("Like change on comment {} of video {} was not accepted by the "
+                                + "broker; other viewers keep a stale tally: {}",
+                                commentId, videoId, failure.getMessage());
+                    }
+                });
     }
 
     private ProducerRecord<String, String> commentRecord(Long videoId, String eventType, String payload) {
@@ -129,6 +158,14 @@ public class InteractionEventPublisher {
         VideoSharedEvent event = VideoSharedEvent.of(shareId, videoId, userId);
         confirm(new ProducerRecord<>(
                 SHARE_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event)));
+    }
+
+    /** Confirmed like the rest, because it moves save_count. */
+    @SneakyThrows
+    public void publishSave(Long videoId, Long userId, boolean saved) {
+        VideoSavedEvent event = VideoSavedEvent.of(videoId, userId, saved);
+        confirm(new ProducerRecord<>(
+                SAVE_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event)));
     }
 
     /**

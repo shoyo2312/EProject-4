@@ -32,6 +32,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/interactions/admin/**").hasRole("ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/like-status").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/comments").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/counts/batch").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/counts").permitAll()
                         .anyRequest().authenticated()
                 )
