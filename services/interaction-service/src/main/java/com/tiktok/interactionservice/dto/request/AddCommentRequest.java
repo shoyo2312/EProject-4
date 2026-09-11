@@ -4,7 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 public record AddCommentRequest(
-        @NotBlank @Size(max = 1000) String content,
+        @NotBlank @Size(max = 150) String content,
         /**
          * Omitted for a top-level comment. For a reply, the id of the comment being replied to —
          * either a top-level comment or another reply; the service flattens a reply-to-a-reply onto

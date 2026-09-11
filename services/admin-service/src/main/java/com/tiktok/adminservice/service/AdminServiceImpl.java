@@ -126,6 +126,11 @@ public class AdminServiceImpl implements AdminService {
     }
 
     @Override
+    public long countReports(ReportTargetType targetType, String targetId) {
+        return reportRepository.countByTargetTypeAndTargetIdAndDeletedAtIsNull(targetType, targetId);
+    }
+
+    @Override
     public StatsSummaryResponse getStatsSummary() {
         return new StatsSummaryResponse(
                 reportRepository.countByStatusAndDeletedAtIsNull(ReportStatus.PENDING),

@@ -103,7 +103,8 @@ public class CommentServiceImpl implements CommentService {
             videoCountersRepository.incrementCommentCount(videoId, 1);
             countered = true;
             counterCacheService.invalidate(videoId);
-            eventPublisher.publishCommentCreated(commentId, videoId, currentUserId, content);
+            eventPublisher.publishCommentCreated(commentId, videoId, currentUserId, content,
+                    resolvedParentId, replyToUserId);
         } catch (RuntimeException ex) {
             // The counter is taken back as well as the row. Removing the row while the increment
             // stands leaves the video showing more comments than it lists — the mirror image of
@@ -261,6 +262,11 @@ public class CommentServiceImpl implements CommentService {
         // tally alone.
         boolean newlyLiked = commentLikeRepository.insertIfNotExists(commentId, currentUserId, Instant.now());
         int likeCount = newlyLiked ? moveLikes(videoId, commentId, comment, 1) : comment.likeCount();
+        // Only on an actual change: a retried like moved nothing, and announcing it would wake
+        // every open panel to redraw the number it already shows.
+        if (newlyLiked) {
+            eventPublisher.publishCommentLikeChanged(commentId, videoId, currentUserId, true, likeCount);
+        }
         return new CommentLikeResponse(commentId, true, likeCount);
     }
 
@@ -270,6 +276,9 @@ public class CommentServiceImpl implements CommentService {
 
         boolean wasLiked = commentLikeRepository.deleteIfExists(commentId, currentUserId);
         int likeCount = wasLiked ? moveLikes(videoId, commentId, comment, -1) : comment.likeCount();
+        if (wasLiked) {
+            eventPublisher.publishCommentLikeChanged(commentId, videoId, currentUserId, false, likeCount);
+        }
         return new CommentLikeResponse(commentId, false, likeCount);
     }
 

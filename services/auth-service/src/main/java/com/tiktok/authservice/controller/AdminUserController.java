@@ -1,6 +1,6 @@
 package com.tiktok.authservice.controller;
 
-import com.tiktok.authservice.dto.response.UserResponse;
+import com.tiktok.authservice.dto.response.AdminUserResponse;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.service.AdminUserDirectory;
 import com.tiktok.common.response.ApiResponse;
@@ -27,7 +27,7 @@ public class AdminUserController {
     private final AdminUserDirectory adminUserDirectory;
 
     @GetMapping
-    public ApiResponse<Page<UserResponse>> list(
+    public ApiResponse<Page<AdminUserResponse>> list(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) UserStatus status,
             @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {

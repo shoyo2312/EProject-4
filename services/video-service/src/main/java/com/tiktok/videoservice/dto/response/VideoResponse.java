@@ -25,6 +25,12 @@ public record VideoResponse(
         boolean commentsDisabled,
         List<String> tags,
         Instant createdAt,
+        /** Last write of any kind to the document. */
+        Instant updatedAt,
+        /** First time the video went live; null if it never has. See {@code Video.publishedAt}. */
+        Instant publishedAt,
+        /** The raw upload's object path in MinIO. Admin reads only — {@code null} on public ones. */
+        String rawFileUrl,
         /** Why the transcode failed; null unless {@code status == FAILED}. */
         String failureReason,
         /** Why moderation removed it; null unless {@code status == TAKEN_DOWN}. */

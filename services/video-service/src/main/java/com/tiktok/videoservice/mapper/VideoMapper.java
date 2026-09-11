@@ -13,6 +13,8 @@ public interface VideoMapper {
     @Mapping(target = "commentCount",
             expression = "java(video.isCommentsDisabled() ? null : video.getCommentCount())")
     @Mapping(target = "moderation", ignore = true)
+    // The raw upload path is an internal MinIO object key; it never leaves on a public read.
+    @Mapping(target = "rawFileUrl", ignore = true)
     VideoResponse toResponse(Video video);
 
     /**

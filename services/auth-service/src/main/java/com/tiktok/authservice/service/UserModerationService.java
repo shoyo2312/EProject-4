@@ -26,13 +26,13 @@ public class UserModerationService {
     private final SessionRevoker sessionRevoker;
 
     @Transactional
-    public void ban(Long userId, Long adminId) {
+    public void ban(Long userId, Long adminId, String reason) {
         User user = userRepository.findById(userId).orElse(null);
         if (user == null) {
             log.warn("Ban for unknown userId={} ignored", userId);
             return;
         }
-        user.ban();
+        user.ban(reason);
         userRepository.save(user);
         sessionRevoker.revokeAllSessions(userId);
         log.info("Banned userId={} by adminId={}", userId, adminId);

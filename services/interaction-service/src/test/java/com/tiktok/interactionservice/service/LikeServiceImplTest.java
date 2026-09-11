@@ -3,6 +3,7 @@ package com.tiktok.interactionservice.service;
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
 import com.tiktok.interactionservice.dto.response.LikeStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
+import com.tiktok.interactionservice.exception.LikeRateLimitedException;
 import com.tiktok.interactionservice.repository.LikeByUserRepository;
 import com.tiktok.interactionservice.repository.LikeByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
@@ -37,6 +38,9 @@ class LikeServiceImplTest extends AbstractInteractionServiceIT {
 
     @Autowired
     private StringRedisTemplate redisTemplate;
+
+    @Autowired
+    private CounterCacheService counterCacheService;
 
     @BeforeEach
     void cleanUp() {
@@ -199,5 +203,16 @@ class LikeServiceImplTest extends AbstractInteractionServiceIT {
         likeService.unlike(43L, 1L);
 
         assertThat(likeService.listLikedVideos(1L, null, 20).videoIds()).isEmpty();
+    }
+
+    @Test
+    void like_pastTheLimit_isRefusedAndLeavesTheCounterAlone() {
+        // The bucket is per (viewer, video, hour) and allows 60. Set it to the ceiling directly
+        // rather than calling like/unlike sixty times, which would take sixty Cassandra rounds.
+        redisTemplate.opsForValue().set("interaction:like-rate:1:60", "60");
+
+        assertThatThrownBy(() -> likeService.like(60L, 1L))
+                .isInstanceOf(LikeRateLimitedException.class);
+        assertThat(counterCacheService.getCounts(60L).likeCount()).isZero();
     }
 }

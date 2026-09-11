@@ -63,7 +63,7 @@ class AdminModerationEventConsumerTest {
 
     @Test
     void unbanRestoresTheAccount() throws Exception {
-        user.ban();
+        user.ban("spam");
 
         consumer.onMessage(json(UserUnbannedEvent.of(USER_ID, ADMIN_ID, "appeal upheld")),
                 header("UserUnbannedEvent"));
