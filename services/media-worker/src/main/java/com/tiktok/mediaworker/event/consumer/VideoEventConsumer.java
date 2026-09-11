@@ -101,7 +101,7 @@ public class VideoEventConsumer {
                 TranscodeResult result = transcodeService.transcode(event.videoId(), event.rawFileUrl());
                 return VideoTranscodedEvent.success(
                         event.videoId(), result.thumbnailUrl(), result.previewUrl(),
-                        result.hlsUrl(), result.durationSeconds());
+                        result.hlsUrl(), result.durationSeconds(), result.width(), result.height());
             } catch (MediaRejectedException e) {
                 // Permanently unacceptable — retrying re-probes the same file to the same answer.
                 log.warn("Rejecting video {}: {}", event.videoId(), e.getMessage());

@@ -11,10 +11,16 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
+import java.awt.Dimension;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.Iterator;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 /**
@@ -108,11 +114,14 @@ public class TranscodeServiceImpl implements TranscodeService {
 
             String thumbnailUrl = null;
             Path thumbnail = work.resolve("thumbnail.jpg");
-            if (ffmpeg.stillFrame(source, thumbnail, stillSecond)) {
+            boolean hasStillFrame = ffmpeg.stillFrame(source, thumbnail, stillSecond);
+            if (hasStillFrame) {
                 thumbnailUrl = upload(bucket, MediaKeys.thumbnail(videoId), thumbnail, "image/jpeg");
             } else {
                 log.info("Video {} yielded no still frame, leaving it without a thumbnail", videoId);
             }
+
+            Dimension display = displaySize(probed, hasStillFrame ? thumbnail : null);
 
             String previewUrl = null;
             Path preview = work.resolve("preview.webp");
@@ -122,8 +131,10 @@ public class TranscodeServiceImpl implements TranscodeService {
                 log.info("Video {} yielded no animated preview, hover falls back to the thumbnail", videoId);
             }
 
-            log.info("Video {} is playable at {} ({}s)", videoId, playbackKey, durationSeconds);
-            return new TranscodeResult(thumbnailUrl, previewUrl, hlsUrl, durationSeconds);
+            log.info("Video {} is playable at {} ({}s, {}x{})",
+                    videoId, playbackKey, durationSeconds, display.width, display.height);
+            return new TranscodeResult(thumbnailUrl, previewUrl, hlsUrl, durationSeconds,
+                    display.width, display.height);
         } finally {
             deleteRecursively(work);
         }
@@ -135,6 +146,53 @@ public class TranscodeServiceImpl implements TranscodeService {
      */
     private static int thumbnailSecond(int durationSeconds) {
         return Math.min(1, durationSeconds / 2);
+    }
+
+    /**
+     * The size a player will show, which is not always the size ffmpeg probed. A rotated capture
+     * is stored in its pre-rotation dimensions — a portrait phone video reads as 1920x1080 — and
+     * a client handed those lays every landscape video out as portrait, or the reverse.
+     *
+     * <p>The still frame settles it: {@link Ffmpeg#stillFrame} decodes with the container's
+     * rotation applied, so its orientation is the one a viewer sees. Only the orientation is
+     * taken from it — the frame is scaled to a fixed height, so its pixel counts are not the
+     * video's. Without a still (a file that would not decode one) the probe's numbers stand,
+     * which is right for everything unrotated and better than sending nothing at all.
+     */
+    static Dimension displaySize(ProbedVideo probed, Path stillFrame) {
+        int width = probed.width();
+        int height = probed.height();
+
+        boolean rotated = jpegSize(stillFrame)
+                // Equal sides are a square, which says nothing about rotation either way.
+                .filter(still -> still.width != still.height && width != height)
+                .map(still -> (still.width > still.height) != (width > height))
+                .orElse(false);
+
+        return rotated ? new Dimension(height, width) : new Dimension(width, height);
+    }
+
+    /** Header read only — the reader answers with the size without decoding any pixels. */
+    private static Optional<Dimension> jpegSize(Path file) {
+        if (file == null) {
+            return Optional.empty();
+        }
+        try (ImageInputStream stream = ImageIO.createImageInputStream(file.toFile())) {
+            Iterator<ImageReader> readers = stream == null ? null : ImageIO.getImageReaders(stream);
+            if (readers == null || !readers.hasNext()) {
+                return Optional.empty();
+            }
+            ImageReader reader = readers.next();
+            try {
+                reader.setInput(stream);
+                return Optional.of(new Dimension(reader.getWidth(0), reader.getHeight(0)));
+            } finally {
+                reader.dispose();
+            }
+        } catch (IOException e) {
+            log.warn("Could not measure {}, falling back to the probed dimensions", file, e);
+            return Optional.empty();
+        }
     }
 
     @SneakyThrows
