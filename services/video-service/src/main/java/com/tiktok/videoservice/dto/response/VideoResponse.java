@@ -16,6 +16,14 @@ public record VideoResponse(
         String previewUrl,
         String hlsUrl,
         Integer durationSeconds,
+        /**
+         * Display size of the playback file, rotation applied — lay the player out to this ratio.
+         * Null while the video is still transcoding, when the file could not be measured, and for
+         * videos uploaded before this was recorded; fall back to a default ratio then rather than
+         * assuming portrait, which crops every landscape video.
+         */
+        Integer width,
+        Integer height,
         VideoStatus status,
         VideoVisibility visibility,
         long viewCount,

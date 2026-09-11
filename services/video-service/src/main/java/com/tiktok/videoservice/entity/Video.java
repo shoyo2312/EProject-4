@@ -95,6 +95,17 @@ public class Video {
 
     private Integer durationSeconds;
 
+    /**
+     * Display size of the playback file, rotation already applied — the shape a client lays the
+     * player out to. Kept on the document because a feed cannot wait for the first frame to learn
+     * whether a video is portrait or landscape, and a client with nothing to read picks one shape
+     * for both. Null for videos still transcoding, for ones whose file could not be measured, and
+     * for everything uploaded before these existed; the client falls back to its default ratio.
+     */
+    private Integer width;
+
+    private Integer height;
+
     private VideoStatus status;
 
     /**
@@ -244,11 +255,14 @@ public class Video {
      * stops here is a video moderation never answered about, which is a bug worth being able to
      * see rather than one that silently publishes.
      */
-    public void markTranscoded(String thumbnailUrl, String previewUrl, String hlsUrl, Integer durationSeconds) {
+    public void markTranscoded(String thumbnailUrl, String previewUrl, String hlsUrl, Integer durationSeconds,
+                               Integer width, Integer height) {
         this.thumbnailUrl = thumbnailUrl;
         this.previewUrl = previewUrl;
         this.hlsUrl = hlsUrl;
         this.durationSeconds = durationSeconds;
+        this.width = width;
+        this.height = height;
         this.failureReason = null; // a redelivered publish must not leave a prior FAILED reason on the doc
         applyOutcome(VideoStatus.PENDING_MODERATION);
     }

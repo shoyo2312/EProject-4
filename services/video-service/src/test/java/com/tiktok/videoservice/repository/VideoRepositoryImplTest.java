@@ -60,7 +60,7 @@ class VideoRepositoryImplTest {
     void updateTranscodeResult_keepsConcurrentLikes() {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PROCESSING, 5);
 
-        stale.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42);
+        stale.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42, 1080, 1920);
         assertThat(videoRepository.updateTranscodeResult(stale, VideoStatus.PROCESSING)).isTrue();
 
         Video after = reload(stale);
@@ -128,7 +128,7 @@ class VideoRepositoryImplTest {
         readByModerator.markTakenDown("policy violation");
         assertThat(videoRepository.updateStatus(readByModerator, VideoStatus.PROCESSING)).isTrue();
 
-        staleReadByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42);
+        staleReadByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42, 1080, 1920);
 
         assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, VideoStatus.PROCESSING))
                 .as("the status moved after it was read, so this write must be refused")
@@ -213,7 +213,7 @@ class VideoRepositoryImplTest {
         readByOwner.markDeleted();
         videoRepository.updateSoftDeleted(readByOwner);
 
-        staleReadByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42);
+        staleReadByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42, 1080, 1920);
 
         assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, VideoStatus.PROCESSING))
                 .as("the video was deleted after it was read, so this write must be refused")

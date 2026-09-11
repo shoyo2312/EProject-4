@@ -13,6 +13,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import javax.imageio.ImageIO;
+import java.awt.Dimension;
+import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -107,6 +110,58 @@ class TranscodeServiceImplTest {
             }
             return succeeds;
         });
+    }
+
+    /** A real JPEG, because {@code displaySize} reads the frame's header to learn its shape. */
+    private static Path jpeg(int width, int height) throws Exception {
+        Path file = Files.createTempFile("still", ".jpg");
+        ImageIO.write(new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB), "jpg", file.toFile());
+        return file;
+    }
+
+    @Test
+    void displaySize_rotatedCapture_takesOrientationFromTheStillFrame() throws Exception {
+        // A portrait phone capture is stored pre-rotation, so the probe reads it as landscape.
+        ProbedVideo probed = new ProbedVideo(42, "h264", "aac", 1920, 1080);
+
+        Dimension display = TranscodeServiceImpl.displaySize(probed, jpeg(405, 720));
+
+        assertThat(display).isEqualTo(new Dimension(1080, 1920));
+    }
+
+    @Test
+    void displaySize_unrotatedLandscape_keepsTheProbedDimensions() throws Exception {
+        ProbedVideo probed = new ProbedVideo(42, "h264", "aac", 1920, 1080);
+
+        Dimension display = TranscodeServiceImpl.displaySize(probed, jpeg(1280, 720));
+
+        assertThat(display).isEqualTo(new Dimension(1920, 1080));
+    }
+
+    @Test
+    void displaySize_withoutAStillFrame_keepsTheProbedDimensions() {
+        ProbedVideo probed = new ProbedVideo(42, "h264", "aac", 1920, 1080);
+
+        assertThat(TranscodeServiceImpl.displaySize(probed, null)).isEqualTo(new Dimension(1920, 1080));
+    }
+
+    @Test
+    void transcode_landscapeUpload_reportsLandscapeDimensions() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbe(42);
+        stubFaststart(true);
+        when(ffmpeg.stillFrame(any(), any(), anyInt())).thenAnswer(invocation -> {
+            ImageIO.write(new BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB), "jpg",
+                    ((Path) invocation.getArgument(1)).toFile());
+            return true;
+        });
+        stubAnimatedPreview(true);
+
+        TranscodeResult result = service().transcode("vid123", RAW_URL);
+
+        assertThat(result.width()).isEqualTo(1280);
+        assertThat(result.height()).isEqualTo(720);
     }
 
     private List<UploadObjectArgs> uploads() throws Exception {
