@@ -15,9 +15,6 @@ public interface VideoMapper {
     @Mapping(target = "moderation", ignore = true)
     // The raw upload path is an internal MinIO object key; it never leaves on a public read.
     @Mapping(target = "rawFileUrl", ignore = true)
-    // A deleted video is unreachable on every public path, so this would always be null there
-    // anyway; ignored rather than mapped so no future public route can start leaking it.
-    @Mapping(target = "deletedAt", ignore = true)
     VideoResponse toResponse(Video video);
 
     /**

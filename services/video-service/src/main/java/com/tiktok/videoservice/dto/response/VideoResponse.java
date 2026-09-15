@@ -43,12 +43,6 @@ public record VideoResponse(
         String failureReason,
         /** Why moderation removed it; null unless {@code status == TAKEN_DOWN}. */
         String takedownReason,
-        /**
-         * When the owner deleted the video. Admin reads only — a deleted video never reaches a
-         * public read path, so this is null everywhere else. The console needs it because the
-         * by-id admin route deliberately answers for videos the listing hides.
-         */
-        Instant deletedAt,
         /** What the classifier scored. Null on every public read path — admin console only. */
         ModerationResponse moderation
 ) {
