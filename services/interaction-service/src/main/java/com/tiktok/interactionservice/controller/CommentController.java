@@ -56,6 +56,21 @@ public class CommentController {
                 videoId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE), currentUserId));
     }
 
+    /**
+     * The replies of one comment. Split off the listing above, which returns top-level comments
+     * only: a thread of 200 replies is not something every comment page should be carrying.
+     */
+    @GetMapping("/videos/{videoId}/comments/{commentId}/replies")
+    public ApiResponse<CommentPageResponse> listReplies(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long videoId,
+            @PathVariable Long commentId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "3") int size) {
+        return ApiResponse.success(commentService.listReplies(
+                videoId, commentId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE), currentUserId));
+    }
+
     @DeleteMapping("/videos/{videoId}/comments/{commentId}")
     public ApiResponse<Void> deleteComment(
             @AuthenticationPrincipal Long currentUserId,

@@ -9,11 +9,23 @@ import org.springframework.data.domain.Slice;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.List;
 
 public interface CommentByVideoRepository extends CassandraRepository<CommentByVideo, CommentByVideoKey> {
 
     @Query("SELECT * FROM comments_by_video WHERE video_id = :videoId")
     Slice<CommentByVideo> findByVideoId(@Param("videoId") Long videoId, Pageable pageable);
+
+    /**
+     * The rows behind one page of {@code comment_index} ids. A single-partition {@code IN}: the
+     * video is fixed and the ids all cluster inside it, so this is one read however long the page.
+     *
+     * <p>Comes back in the table's own clustering order (id descending), not in the order of
+     * {@code commentIds} — the caller re-orders to the page it asked for.
+     */
+    @Query("SELECT * FROM comments_by_video WHERE video_id = :videoId AND comment_id IN :commentIds")
+    List<CommentByVideo> findAllByCommentIds(@Param("videoId") Long videoId,
+                                             @Param("commentIds") List<Long> commentIds);
 
     /**
      * Writes the denormalised per-comment like tally, conditioned on the value the caller read.

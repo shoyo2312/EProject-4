@@ -66,6 +66,38 @@ ALTER TABLE comments_by_video ADD IF NOT EXISTS parent_id bigint;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS reply_to_user_id bigint;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS likes int;
 
+-- Index that makes both comment listings a single-partition read.
+--
+-- comments_by_video stays the source of truth for every comment — content, likes, deleted_at,
+-- and every point lookup by (video_id, comment_id) — but it cannot answer "top-level only"
+-- (Cassandra has no WHERE parent_id = null) or "one parent's replies, paged" without
+-- ALLOW FILTERING over the whole video. This holds ids only, partitioned so that each of those
+-- two questions is one partition:
+--
+--   (video_id, 0)          -> the video's top-level comments, read ORDER BY comment_id DESC
+--   (video_id, parent_id)  -> that comment's replies,         read ORDER BY comment_id ASC
+--
+-- 0 is the sentinel for "top-level": a Snowflake id is never 0, and a null partition key
+-- component is not allowed. Rows are never deleted here — a soft-deleted comment keeps its index
+-- row and the reader skips it, exactly as it did when the listing read comments_by_video.
+CREATE TABLE IF NOT EXISTS comment_index (
+    video_id   bigint,
+    parent_id  bigint,
+    comment_id bigint,
+    PRIMARY KEY ((video_id, parent_id), comment_id)
+) WITH CLUSTERING ORDER BY (comment_id ASC);
+
+-- How many live replies hang off one comment, for the "View N replies" button. A counter rather
+-- than a column on comments_by_video: two people replying to the same comment at once would both
+-- read the same int and write the same +1, and unlike the like tally there is no membership LWT
+-- to serialise them.
+CREATE TABLE IF NOT EXISTS comment_counters (
+    video_id    bigint,
+    comment_id  bigint,
+    reply_count counter,
+    PRIMARY KEY ((video_id, comment_id))
+);
+
 -- "Did user X like comment Y" membership + idempotent like/unlike via LWT (IF NOT EXISTS /
 -- IF EXISTS), same pattern as likes_by_video. The per-comment count is denormalised onto
 -- comments_by_video.likes so the listing carries it without a second read.
@@ -103,3 +135,4 @@ CREATE TABLE IF NOT EXISTS video_counters (
 ALTER TABLE video_counters ADD IF NOT EXISTS view_count counter;
 -- Same reason, for clusters created before saves were counted publicly.
 ALTER TABLE video_counters ADD IF NOT EXISTS save_count counter;
+-- Same reason, for clusters created before reposts were counted.
