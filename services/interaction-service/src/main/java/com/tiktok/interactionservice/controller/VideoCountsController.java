@@ -46,7 +46,7 @@ public class VideoCountsController {
                 .map(videoId -> {
                     VideoCounts c = counterCacheService.getCounts(videoId);
                     return new InteractionCountResponse(videoId, c.likeCount(), c.commentCount(),
-                            c.shareCount(), c.viewCount(), c.saveCount());
+                            c.shareCount(), c.viewCount(), c.saveCount(), c.repostCount());
                 })
                 .toList();
         return ApiResponse.success(counts);

@@ -5,7 +5,8 @@ public record VideoCounts(
         long commentCount,
         long shareCount,
         long viewCount,
-        long saveCount
+        long saveCount,
+        long repostCount
 ) {
-    public static final VideoCounts ZERO = new VideoCounts(0, 0, 0, 0, 0);
+    public static final VideoCounts ZERO = new VideoCounts(0, 0, 0, 0, 0, 0);
 }

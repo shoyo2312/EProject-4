@@ -62,17 +62,17 @@ class CounterCacheServiceImplTest {
 
         assertThat(service.getCounts(7L)).isEqualTo(VideoCounts.ZERO);
         // Rewritten in the current shape, so the next read is a hit again.
-        org.mockito.Mockito.verify(valueOps).set(eq("interaction:counters:7"), eq("0:0:0:0:0"), any(Duration.class));
+        org.mockito.Mockito.verify(valueOps).set(eq("interaction:counters:7"), eq("0:0:0:0:0:0"), any(Duration.class));
     }
 
     @Test
     void getCounts_readsBackWhatItWrote() {
         when(redisTemplate.opsForValue()).thenReturn(valueOps);
-        when(valueOps.get(anyString())).thenReturn("3:2:1:9:5");
+        when(valueOps.get(anyString())).thenReturn("3:2:1:9:5:4");
 
         VideoCounts counts = service.getCounts(7L);
 
-        assertThat(counts).isEqualTo(new VideoCounts(3L, 2L, 1L, 9L, 5L));
+        assertThat(counts).isEqualTo(new VideoCounts(3L, 2L, 1L, 9L, 5L, 4L));
         org.mockito.Mockito.verifyNoInteractions(repository);
     }
 }
