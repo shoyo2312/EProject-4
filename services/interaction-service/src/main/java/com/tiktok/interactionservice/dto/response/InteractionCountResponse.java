@@ -6,6 +6,7 @@ public record InteractionCountResponse(
         long commentCount,
         long shareCount,
         long viewCount,
-        long saveCount
+        long saveCount,
+        long repostCount
 ) {
 }

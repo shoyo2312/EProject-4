@@ -41,4 +41,7 @@ public class VideoCounters {
 
     @Column("save_count")
     private Long saveCount;
+
+    @Column("repost_count")
+    private Long repostCount;
 }
