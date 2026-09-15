@@ -8,6 +8,7 @@ import com.tiktok.userservice.exception.AlreadyFollowingException;
 import com.tiktok.userservice.exception.CannotFollowBlockedUserException;
 import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.NotFollowingException;
+import com.tiktok.userservice.event.producer.UserEventPublisher;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
@@ -28,6 +29,7 @@ public class FollowServiceImpl implements FollowService {
     private final UserBlockRepository userBlockRepository;
     private final UserProfileBatchAssembler profileBatchAssembler;
     private final ProfileVisibilityGuard profileVisibilityGuard;
+    private final UserEventPublisher userEventPublisher;
 
     @Override
     @Transactional
@@ -76,6 +78,7 @@ public class FollowServiceImpl implements FollowService {
 
         userProfileRepository.incrementFollowingCount(followerId);
         userProfileRepository.incrementFollowerCount(followingId);
+        userEventPublisher.publishFollowChanged(followerId, followingId, true);
 
         return new FollowResponse(followerId, followingId);
     }
@@ -89,6 +92,7 @@ public class FollowServiceImpl implements FollowService {
         follow.markDeleted();
         userProfileRepository.decrementFollowingCount(followerId);
         userProfileRepository.decrementFollowerCount(followingId);
+        userEventPublisher.publishFollowChanged(followerId, followingId, false);
     }
 
     @Override
