@@ -15,6 +15,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,7 +23,11 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.util.concurrent.CompletableFuture;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 /**
  * A relationship row can outlive the profile it points at — the profile is soft-deleted, or its
@@ -71,6 +76,9 @@ class UserProfileBatchAssemblerTest {
         userMuteRepository.deleteAll();
         userProfileRepository.deleteAll();
 
+        // The follow-changed realtime publish (confirmed send) needs a non-null future to
+        // .get() on, same as every other confirmed-send test in this codebase.
+        when(kafkaTemplate.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(null));
         userProfileService.createFromRegisteredEvent(1L, "alice", null);
         userProfileService.createFromRegisteredEvent(2L, "bob", null);
     }
