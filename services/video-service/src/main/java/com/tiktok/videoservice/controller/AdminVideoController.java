@@ -10,6 +10,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -34,5 +35,15 @@ public class AdminVideoController {
             @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC)
             Pageable pageable) {
         return ApiResponse.success(adminVideoDirectory.search(q, status, pageable));
+    }
+
+    /**
+     * The moderation console reaching one video by id — from a report, which carries the id and
+     * nothing else. The listing cannot stand in for this: it matches on title only, and it drops
+     * videos their owner deleted.
+     */
+    @GetMapping("/{videoId}")
+    public ApiResponse<VideoResponse> getById(@PathVariable String videoId) {
+        return ApiResponse.success(adminVideoDirectory.getById(videoId));
     }
 }
