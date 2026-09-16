@@ -43,6 +43,9 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .pathMatchers(HttpMethod.GET, "/api/v1/recommendations/trending").permitAll()
                         .pathMatchers(HttpMethod.GET, "/api/v1/search/**").permitAll()
+                        // A repost is public, like the videos on a profile — the Reposts tab
+                        // has to load for a signed-out viewer too.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/interactions/users/*/reposts").permitAll()
                         // The chat handshake carries its token as a query parameter, not a
                         // header: a browser cannot set one on a WebSocket/SockJS handshake.
                         // chat-service validates it itself in JwtHandshakeInterceptor and

@@ -30,7 +30,7 @@ public class CounterCacheServiceImpl implements CounterCacheService {
     private static final String KEY_PREFIX = "interaction:counters:";
     private static final Duration TTL = Duration.ofSeconds(300);
     private static final String SEPARATOR = ":";
-    private static final int FIELDS = 5;
+    private static final int FIELDS = 6;
 
     private final VideoCountersRepository videoCountersRepository;
     private final StringRedisTemplate redisTemplate;
@@ -97,7 +97,8 @@ public class CounterCacheServiceImpl implements CounterCacheService {
                     Long.parseLong(parts[1]),
                     Long.parseLong(parts[2]),
                     Long.parseLong(parts[3]),
-                    Long.parseLong(parts[4]));
+                    Long.parseLong(parts[4]),
+                    Long.parseLong(parts[5]));
         } catch (NumberFormatException e) {
             return null;
         }
@@ -105,12 +106,13 @@ public class CounterCacheServiceImpl implements CounterCacheService {
 
     private void writeCache(String key, VideoCounts counts) {
         try {
-            redisTemplate.opsForValue().set(key, "%d%s%d%s%d%s%d%s%d".formatted(
+            redisTemplate.opsForValue().set(key, "%d%s%d%s%d%s%d%s%d%s%d".formatted(
                     counts.likeCount(), SEPARATOR,
                     counts.commentCount(), SEPARATOR,
                     counts.shareCount(), SEPARATOR,
                     counts.viewCount(), SEPARATOR,
-                    counts.saveCount()), TTL);
+                    counts.saveCount(), SEPARATOR,
+                    counts.repostCount()), TTL);
         } catch (RuntimeException e) {
             log.warn("Could not populate the counter cache for {}: {}", key, e.getMessage());
         }
@@ -122,7 +124,8 @@ public class CounterCacheServiceImpl implements CounterCacheService {
                 orZero(counters.getCommentCount()),
                 orZero(counters.getShareCount()),
                 orZero(counters.getViewCount()),
-                orZero(counters.getSaveCount()));
+                orZero(counters.getSaveCount()),
+                orZero(counters.getRepostCount()));
     }
 
     private long orZero(Long value) {

@@ -34,6 +34,6 @@ public class ShareController {
         VideoCounts counts = counterCacheService.getCounts(videoId);
         return ApiResponse.success(new InteractionCountResponse(
                 videoId, counts.likeCount(), counts.commentCount(), counts.shareCount(),
-                counts.viewCount(), counts.saveCount()));
+                counts.viewCount(), counts.saveCount(), counts.repostCount()));
     }
 }
