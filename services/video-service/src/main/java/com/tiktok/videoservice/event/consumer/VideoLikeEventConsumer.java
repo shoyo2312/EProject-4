@@ -2,16 +2,20 @@ package com.tiktok.videoservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.VideoLikeEvent;
+import com.tiktok.event.video.VideoLikeOwnerEvent;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -26,9 +30,12 @@ import static org.springframework.data.mongodb.core.query.Criteria.where;
 @RequiredArgsConstructor
 public class VideoLikeEventConsumer {
 
+    private static final String LIKE_OWNER_TOPIC = "video.like-owner-events";
+
     private final IdempotentEventProcessor idempotentEventProcessor;
     private final MongoTemplate mongoTemplate;
     private final ObjectMapper objectMapper;
+    private final KafkaTemplate<String, String> kafkaTemplate;
 
     @KafkaListener(topics = "interaction.like-events", groupId = "video-service")
     @SneakyThrows
@@ -63,11 +70,36 @@ public class VideoLikeEventConsumer {
             target = target.and("likeCount").gt(0);
         }
 
-        var result = mongoTemplate.updateFirst(Query.query(target), new Update().inc("likeCount", delta), Video.class);
+        // findAndModify over updateFirst: the matched document (pre-update) carries the owner id
+        // this consumer would otherwise need a second query for, on the same round trip.
+        Video video = mongoTemplate.findAndModify(Query.query(target), new Update().inc("likeCount", delta),
+                FindAndModifyOptions.options(), Video.class);
 
-        if (result.getMatchedCount() == 0) {
+        if (video == null) {
             log.warn("VideoLikeEvent(liked={}) matched nothing: videoId={} is unknown, deleted{}",
                     event.liked(), event.videoId(), event.liked() ? "" : ", or already at zero likes");
+            return;
         }
+
+        publishOwnerChanged(event.videoId(), video.getUserId());
+    }
+
+    /**
+     * Realtime hint only, unconfirmed — same tolerance as interaction-service's
+     * publishCommentLikeChanged: a dropped record here costs one stale render on the owner's
+     * profile until their next like, not a wrong stored number. See VideoLikeOwnerEvent.
+     */
+    @SneakyThrows
+    private void publishOwnerChanged(Long videoId, Long ownerId) {
+        VideoLikeOwnerEvent event = VideoLikeOwnerEvent.of(videoId, ownerId);
+        kafkaTemplate.send(new ProducerRecord<>(LIKE_OWNER_TOPIC, String.valueOf(ownerId),
+                        objectMapper.writeValueAsString(event)))
+                .whenComplete((result, failure) -> {
+                    if (failure != null) {
+                        log.warn("Owner-likes hint for video {} owner {} was not accepted by the "
+                                + "broker; that profile's realtime total-likes stays stale until "
+                                + "their next like: {}", videoId, ownerId, failure.getMessage());
+                    }
+                });
     }
 }

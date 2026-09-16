@@ -127,6 +127,15 @@ public class VideoController {
         return ApiResponse.success(videoService.getUserStats(currentUserId, userId));
     }
 
+    /**
+     * Same public totals as {@link #getUserStats}, batched for chat-service's realtime fan-out —
+     * see interaction-service's VideoCountsController for the identical reasoning.
+     */
+    @GetMapping("/users/stats/batch")
+    public ApiResponse<List<UserVideoStatsResponse>> getUserStatsBatch(@RequestParam List<Long> ids) {
+        return ApiResponse.success(videoService.getUserStatsBatch(ids));
+    }
+
     @DeleteMapping("/{videoId}")
     public ApiResponse<Void> delete(
             @AuthenticationPrincipal Long currentUserId,

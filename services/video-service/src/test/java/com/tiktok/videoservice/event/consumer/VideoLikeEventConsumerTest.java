@@ -7,6 +7,7 @@ import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.repository.ProcessedEventRepository;
 import com.tiktok.videoservice.repository.VideoRepository;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,7 +20,11 @@ import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.util.concurrent.CompletableFuture;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @Testcontainers
@@ -49,6 +54,9 @@ class VideoLikeEventConsumerTest {
     void cleanUp() {
         videoRepository.deleteAll();
         processedEventRepository.deleteAll();
+        // The owner-likes realtime hint publish (fire-and-forget) needs a non-null future to
+        // chain .whenComplete() onto, same as every other unconfirmed-send test in this codebase.
+        when(kafkaTemplate.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(null));
     }
 
     @Test

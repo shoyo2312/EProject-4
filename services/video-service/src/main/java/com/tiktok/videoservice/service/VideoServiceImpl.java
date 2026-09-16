@@ -448,6 +448,20 @@ public class VideoServiceImpl implements VideoService {
                 userId, stats.videoCount(), stats.totalLikes(), stats.totalViews());
     }
 
+    /**
+     * One Mongo aggregation per id, not the $group-by-owner query this could be — the ids in a
+     * realtime flush window are usually a handful of accounts, not enough to be worth a different
+     * query shape from {@link #getUserStats}.
+     * ponytail: $group by owner across ids in one query if a flush window ever spans hundreds of
+     * accounts.
+     */
+    @Override
+    public List<UserVideoStatsResponse> getUserStatsBatch(List<Long> userIds) {
+        return userIds.stream()
+                .map(userId -> getUserStats(null, userId))
+                .toList();
+    }
+
     @Override
     public void delete(Long requesterId, String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)

@@ -63,6 +63,13 @@ public interface VideoService {
     UserVideoStatsResponse getUserStats(Long requesterId, Long userId);
 
     /**
+     * Public totals for several owners at once, for chat-service's realtime fan-out — always the
+     * public (includeHidden=false) numbers, since there is no per-owner requester to check
+     * self-ness against in a batch.
+     */
+    List<UserVideoStatsResponse> getUserStatsBatch(List<Long> userIds);
+
+    /**
      * Owner and comment setting, with no visibility filtering — see {@link VideoPolicyResponse}
      * for why this is not a projection of {@link #getById}.
      */
