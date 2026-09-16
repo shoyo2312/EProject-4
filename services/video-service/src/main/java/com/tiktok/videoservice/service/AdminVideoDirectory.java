@@ -2,6 +2,7 @@ package com.tiktok.videoservice.service;
 
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.VideoRepository;
 import lombok.RequiredArgsConstructor;
@@ -28,5 +29,20 @@ public class AdminVideoDirectory {
     public Page<VideoResponse> search(String query, VideoStatus status, Pageable pageable) {
         String term = (query == null || query.isBlank()) ? null : query.trim();
         return videoRepository.findForAdmin(status, term, pageable).map(videoMapper::toAdminResponse);
+    }
+
+    /**
+     * One video by id, with no visibility rule applied at all — deliberately unlike
+     * {@code VideoService.getById}, which hides anything not PUBLISHED and PUBLIC.
+     *
+     * <p>That rule is exactly wrong for moderation: the videos a moderator most needs to read back
+     * are the ones nobody else can see — taken down, still processing, private, or deleted by their
+     * owner after being reported. The listing hides owner-deleted videos too, so this is the only
+     * route that answers for one; {@code deletedAt} on the response is what says so.
+     */
+    public VideoResponse getById(String videoId) {
+        return videoRepository.findById(videoId)
+                .map(videoMapper::toAdminResponse)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
     }
 }
