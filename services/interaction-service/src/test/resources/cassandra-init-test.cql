@@ -81,7 +81,8 @@ CREATE TABLE IF NOT EXISTS video_counters (
     comment_count counter,
     share_count   counter,
     view_count    counter,
-    save_count    counter
+    save_count    counter,
+    repost_count  counter
 );
 
 -- For clusters created before view_count existed: CREATE TABLE IF NOT EXISTS above is a no-op
@@ -89,3 +90,5 @@ CREATE TABLE IF NOT EXISTS video_counters (
 ALTER TABLE video_counters ADD IF NOT EXISTS view_count counter;
 -- Same reason, for clusters created before saves were counted publicly.
 ALTER TABLE video_counters ADD IF NOT EXISTS save_count counter;
+-- Same reason, for clusters created before reposts existed.
+ALTER TABLE video_counters ADD IF NOT EXISTS repost_count counter;
