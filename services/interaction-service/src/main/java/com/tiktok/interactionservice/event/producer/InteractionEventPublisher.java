@@ -5,6 +5,7 @@ import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.event.interaction.CommentLikeChangedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
+import com.tiktok.event.interaction.VideoRepostedEvent;
 import com.tiktok.event.interaction.VideoSavedEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.event.interaction.VideoViewedEvent;
@@ -54,6 +55,7 @@ public class InteractionEventPublisher {
     private static final String COMMENT_TOPIC = "interaction.comment-events";
     private static final String COMMENT_LIKE_TOPIC = "interaction.comment-like-events";
     private static final String SHARE_TOPIC = "interaction.share-events";
+    private static final String REPOST_TOPIC = "interaction.repost-events";
     private static final String SAVE_TOPIC = "interaction.save-events";
     private static final String VIEW_TOPIC = "interaction.view-events";
     private static final String WATCH_TOPIC = "interaction.watch-events";
@@ -158,6 +160,14 @@ public class InteractionEventPublisher {
         VideoSharedEvent event = VideoSharedEvent.of(shareId, videoId, userId);
         confirm(new ProducerRecord<>(
                 SHARE_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event)));
+    }
+
+    /** Confirmed like the rest, because it moves repost_count. */
+    @SneakyThrows
+    public void publishRepost(Long videoId, Long userId, boolean reposted) {
+        VideoRepostedEvent event = VideoRepostedEvent.of(videoId, userId, reposted);
+        confirm(new ProducerRecord<>(
+                REPOST_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event)));
     }
 
     /** Confirmed like the rest, because it moves save_count. */

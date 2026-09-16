@@ -117,6 +117,23 @@ CREATE TABLE IF NOT EXISTS shares_by_video (
     PRIMARY KEY ((video_id), share_id)
 ) WITH CLUSTERING ORDER BY (share_id DESC);
 
+-- Repost is a toggle, same shape as likes_by_video — membership row plus reverse index for
+-- "who reposted this video" (the repost badge) and un-repost's delete.
+CREATE TABLE IF NOT EXISTS reposts_by_video (
+    video_id   bigint,
+    user_id    bigint,
+    created_at timestamp,
+    PRIMARY KEY ((video_id), user_id)
+);
+
+-- Reverse index for the profile's "Reposts" tab — same shape as likes_by_user.
+CREATE TABLE IF NOT EXISTS reposts_by_user (
+    user_id    bigint,
+    created_at timestamp,
+    video_id   bigint,
+    PRIMARY KEY ((user_id), created_at, video_id)
+) WITH CLUSTERING ORDER BY (created_at DESC, video_id ASC);
+
 -- views_by_video is gone: view dedup is per playback now, keyed on the client's playId in
 -- Redis, so nothing durable is written per view. Existing clusters can DROP TABLE views_by_video.
 
@@ -127,7 +144,8 @@ CREATE TABLE IF NOT EXISTS video_counters (
     comment_count counter,
     share_count   counter,
     view_count    counter,
-    save_count    counter
+    save_count    counter,
+    repost_count  counter
 );
 
 -- For clusters created before view_count existed: CREATE TABLE IF NOT EXISTS above is a no-op
@@ -136,3 +154,4 @@ ALTER TABLE video_counters ADD IF NOT EXISTS view_count counter;
 -- Same reason, for clusters created before saves were counted publicly.
 ALTER TABLE video_counters ADD IF NOT EXISTS save_count counter;
 -- Same reason, for clusters created before reposts were counted.
+ALTER TABLE video_counters ADD IF NOT EXISTS repost_count counter;

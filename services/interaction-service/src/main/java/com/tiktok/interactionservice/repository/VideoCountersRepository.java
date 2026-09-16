@@ -21,4 +21,7 @@ public interface VideoCountersRepository extends CassandraRepository<VideoCounte
 
     @Query("UPDATE video_counters SET save_count = save_count + :delta WHERE video_id = :videoId")
     void incrementSaveCount(@Param("videoId") Long videoId, @Param("delta") long delta);
+
+    @Query("UPDATE video_counters SET repost_count = repost_count + :delta WHERE video_id = :videoId")
+    void incrementRepostCount(@Param("videoId") Long videoId, @Param("delta") long delta);
 }
