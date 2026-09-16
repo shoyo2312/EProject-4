@@ -23,6 +23,16 @@ public interface CommentService {
         return listComments(videoId, cursor, size, null);
     }
 
+    /**
+     * One top-level comment's replies, oldest first — the order a thread reads in. Paged the same
+     * way as {@link #listComments}: an unknown {@code parentId} is an empty page, not an error.
+     */
+    CommentPageResponse listReplies(Long videoId, Long parentId, String cursor, int size, Long currentUserId);
+
+    default CommentPageResponse listReplies(Long videoId, Long parentId, String cursor, int size) {
+        return listReplies(videoId, parentId, cursor, size, null);
+    }
+
     void deleteComment(Long videoId, Long commentId, Long currentUserId);
 
     /**
