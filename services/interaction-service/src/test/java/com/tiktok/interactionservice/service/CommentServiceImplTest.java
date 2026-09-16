@@ -9,6 +9,7 @@ import com.tiktok.interactionservice.exception.CommentsDisabledException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
+import com.tiktok.interactionservice.repository.CommentIndexRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,9 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     private CommentByVideoRepository commentByVideoRepository;
 
     @Autowired
+    private CommentIndexRepository commentIndexRepository;
+
+    @Autowired
     private VideoCountersRepository videoCountersRepository;
 
     @Autowired
@@ -43,6 +47,7 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     @BeforeEach
     void cleanUp() {
         commentByVideoRepository.deleteAll();
+        commentIndexRepository.deleteAll();
         videoCountersRepository.deleteAll();
         redisTemplate.getConnectionFactory().getConnection().flushAll();
     }
@@ -65,8 +70,11 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(reply.parentId()).isEqualTo(parent.commentId());
         // Direct reply to a top-level comment: no "A > B" label, the target is the thread owner.
         assertThat(reply.replyToUserId()).isNull();
+        // The listing is top-level only; the reply lives behind its parent's own endpoint.
         assertThat(commentService.listComments(40L, null, 20).items())
-                .filteredOn(c -> c.commentId().equals(reply.commentId()))
+                .extracting(CommentResponse::commentId)
+                .containsExactly(parent.commentId());
+        assertThat(commentService.listReplies(40L, parent.commentId(), null, 20).items())
                 .singleElement()
                 .extracting(CommentResponse::parentId)
                 .isEqualTo(parent.commentId());
@@ -82,7 +90,7 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(nested.parentId()).isEqualTo(top.commentId());
         // Target was itself a reply: its author is recorded for the "A > B" label, and it survives the listing.
         assertThat(nested.replyToUserId()).isEqualTo(2L);
-        assertThat(commentService.listComments(41L, null, 20).items())
+        assertThat(commentService.listReplies(41L, top.commentId(), null, 20).items())
                 .filteredOn(c -> c.commentId().equals(nested.commentId()))
                 .singleElement()
                 .extracting(CommentResponse::replyToUserId)
@@ -224,6 +232,85 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
 
         CommentPageResponse page = commentService.listComments(23L, null, 20);
         assertThat(page.items()).isEmpty();
+    }
+
+    /**
+     * A reply whose parent is gone can never be rendered — the list hangs replies off a parent —
+     * so leaving it counted is how a video ends up reading "1 comments" over an empty list.
+     */
+    @Test
+    void deleteComment_takesItsRepliesAndTheirCountWithIt() {
+        CommentResponse parent = commentService.addComment(29L, 1L, "thread starter");
+        commentService.addComment(29L, 2L, "reply one", parent.commentId());
+        commentService.addComment(29L, 3L, "reply two", parent.commentId());
+        CommentResponse other = commentService.addComment(29L, 4L, "unrelated");
+
+        commentService.deleteComment(29L, parent.commentId(), 1L);
+
+        assertThat(commentService.listComments(29L, null, 20).items())
+                .extracting(CommentResponse::commentId)
+                .containsExactly(other.commentId());
+        assertThat(commentService.listReplies(29L, parent.commentId(), null, 20).items()).isEmpty();
+        assertThat(videoCountersRepository.findById(29L))
+                .get()
+                .extracting(counters -> counters.getCommentCount())
+                .isEqualTo(1L);
+    }
+
+    @Test
+    void deleteComment_reply_leavesTheThreadAlone() {
+        CommentResponse parent = commentService.addComment(30L, 1L, "thread starter");
+        CommentResponse reply = commentService.addComment(30L, 2L, "reply", parent.commentId());
+
+        commentService.deleteComment(30L, reply.commentId(), 2L);
+
+        assertThat(commentService.listComments(30L, null, 20).items())
+                .extracting(CommentResponse::commentId)
+                .containsExactly(parent.commentId());
+        assertThat(videoCountersRepository.findById(30L))
+                .get()
+                .extracting(counters -> counters.getCommentCount())
+                .isEqualTo(1L);
+    }
+
+    /** Oldest first, and paged — the client reveals three at a time behind "View N replies". */
+    @Test
+    void listReplies_readsOldestFirstInPages() {
+        CommentResponse parent = commentService.addComment(31L, 1L, "thread starter");
+        commentService.addComment(31L, 2L, "one", parent.commentId());
+        commentService.addComment(31L, 2L, "two", parent.commentId());
+        commentService.addComment(31L, 2L, "three", parent.commentId());
+
+        CommentPageResponse firstPage = commentService.listReplies(31L, parent.commentId(), null, 2);
+        assertThat(firstPage.items()).extracting(CommentResponse::content).containsExactly("one", "two");
+        assertThat(firstPage.hasMore()).isTrue();
+
+        CommentPageResponse secondPage =
+                commentService.listReplies(31L, parent.commentId(), firstPage.nextCursor(), 2);
+        assertThat(secondPage.items()).extracting(CommentResponse::content).containsExactly("three");
+        assertThat(secondPage.hasMore()).isFalse();
+    }
+
+    /** The number behind "View N replies", and it comes down again when a reply is deleted. */
+    @Test
+    void listComments_carriesTheReplyCount() {
+        CommentResponse parent = commentService.addComment(32L, 1L, "thread starter");
+        commentService.addComment(32L, 2L, "one", parent.commentId());
+        CommentResponse second = commentService.addComment(32L, 2L, "two", parent.commentId());
+
+        assertThat(commentService.listComments(32L, null, 20).items())
+                .singleElement()
+                .extracting(CommentResponse::replyCount)
+                .isEqualTo(2);
+
+        commentService.deleteComment(32L, second.commentId(), 2L);
+
+        assertThat(commentService.listComments(32L, null, 20).items().get(0).replyCount()).isEqualTo(1);
+    }
+
+    @Test
+    void listReplies_unknownParent_isAnEmptyPage() {
+        assertThat(commentService.listReplies(33L, 999999L, null, 20).items()).isEmpty();
     }
 
     @Test
