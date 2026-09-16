@@ -12,5 +12,6 @@ public interface CommentMapper {
     @Mapping(target = "videoId", source = "key.videoId")
     @Mapping(target = "likeCount", expression = "java(comment.likeCount())")
     @Mapping(target = "likedByMe", ignore = true)
+    @Mapping(target = "replyCount", ignore = true)
     CommentResponse toResponse(CommentByVideo comment);
 }
