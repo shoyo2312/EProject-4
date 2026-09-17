@@ -51,10 +51,15 @@ CATEGORIES = tuple(
 
 @dataclass(frozen=True)
 class SecondOpinion:
-    """What the escalation concluded. `verdict` is None when nothing usable came back."""
+    """What the escalation concluded. `verdict` is None when nothing usable came back.
+
+    `code` is a short, fixed token rather than a sentence, because it is stored on every video
+    this escalation touched and is what a later "why were these all REVIEW" query groups by. The
+    failure's own words go to this module's log, where they can be as long as they need to be.
+    """
 
     verdict: str | None
-    detail: str
+    code: str
 
 
 def enabled() -> bool:
@@ -113,12 +118,11 @@ def second_opinion(frames: list[str]) -> SecondOpinion:
     there is nothing a later frame can add, and the quota is the point.
     """
     if not enabled():
-        return SecondOpinion(None, "escalation is not configured")
+        return SecondOpinion(None, "azure-off")
 
     url = f"{ENDPOINT}/contentsafety/image:analyze?api-version={API_VERSION}"
     headers = {"Ocp-Apim-Subscription-Key": KEY, "Content-Type": "application/json"}
     worst = -1
-    checked = 0
 
     try:
         with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
@@ -137,21 +141,22 @@ def second_opinion(frames: list[str]) -> SecondOpinion:
                 # so a month of REVIEWs is not mistaken for a broken integration.
                 if response.status_code == 429:
                     log.warning("Azure content safety quota exhausted")
-                    return SecondOpinion(None, "Azure quota exhausted for this period")
+                    return SecondOpinion(None, "azure-quota")
                 response.raise_for_status()
 
                 severity = worst_severity(response.json())
                 if severity is None:
-                    return SecondOpinion(None, "Azure returned an answer in an unfamiliar shape")
-                checked += 1
+                    log.warning("Azure content safety answered in an unfamiliar shape: %s",
+                                response.text[:500])
+                    return SecondOpinion(None, "azure-shape")
                 worst = max(worst, severity)
                 if worst >= REJECT_SEVERITY:
                     break
     except httpx.HTTPError as error:
         log.warning("Azure content safety unreachable: %s", error)
-        return SecondOpinion(None, f"Azure could not be reached: {error}")
+        return SecondOpinion(None, "azure-error")
 
     if worst < 0:
-        return SecondOpinion(None, "no frames were sent for escalation")
+        return SecondOpinion(None, "azure-none")
 
-    return SecondOpinion(resolve(worst), f"azure severity {worst} over {checked} frame(s)")
+    return SecondOpinion(resolve(worst), f"azure-sev{worst}")
