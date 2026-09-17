@@ -25,6 +25,16 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
+admin:
+  retention:
+    # Off-peak and daily: the grace is measured in days, nothing here is urgent.
+    cron: "0 45 3 * * *"
+    batch-size: 1000
+    max-batches-per-run: 100
+    # Measured from publication, not creation. Long enough to still have the row when someone
+    # asks about a ban from last week, short enough that the table stops growing.
+    published-outbox-grace: 7d
+
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 
