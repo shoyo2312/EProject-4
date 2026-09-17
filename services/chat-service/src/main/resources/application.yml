@@ -15,6 +15,21 @@ spring:
       # DuplicateKeyException, two threads each happily save their own.
       auto-index-creation: true
 
+    # Only ever read, and only for the revocation blacklist: a socket authenticated at handshake
+    # outlives the check, so WebSocketSessionRegistry re-runs it for the life of the connection.
+    # A dead Redis fails open, same as every other read side.
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  task:
+    scheduling:
+      # One thread per @Scheduled component that can block on a downstream read (the two
+      # flushers) plus the session sweep. On the default pool of one they take turns, and a slow
+      # interaction-service stalls the profile stats as well as the video counters.
+      pool:
+        size: 3
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -39,6 +54,13 @@ downstream:
 
 realtime:
   flush-interval-millis: 500
+
+websocket:
+  # No wildcard: the access token travels in the handshake URL, so any origin allowed here is an
+  # origin that can open an authenticated socket for a logged-in visitor.
+  allowed-origins: ${WEBSOCKET_ALLOWED_ORIGINS:http://localhost:3000}
+  # How long a revoked or expired token can keep an already-open socket alive.
+  session-sweep-millis: 30000
 
 springdoc:
   api-docs:
