@@ -2,6 +2,7 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
+import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
 import com.tiktok.userservice.entity.UserProfile;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
@@ -71,6 +72,25 @@ public class UserProfileServiceImpl implements UserProfileService {
                 .map(byUserId::get)
                 .filter(Objects::nonNull)
                 .map(userProfileMapper::toResponse)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UserStatsCountsResponse> getStatsByUserIds(List<Long> userIds) {
+        // Against the raw list, like getByUserIds: the cap guards the query string being parsed
+        // and bound, and duplicates pay for that in full.
+        if (userIds.size() > MAX_BATCH_IDS) {
+            throw new TooManyProfileIdsException(MAX_BATCH_IDS);
+        }
+
+        List<Long> wanted = userIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (wanted.isEmpty()) {
+            return List.of();
+        }
+
+        return userProfileRepository.findByUserIdInAndDeletedAtIsNull(wanted).stream()
+                .map(p -> new UserStatsCountsResponse(p.getUserId(), p.getFollowerCount(), p.getFollowingCount()))
                 .toList();
     }
 
