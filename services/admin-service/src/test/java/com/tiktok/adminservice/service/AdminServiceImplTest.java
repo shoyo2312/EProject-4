@@ -11,6 +11,7 @@ import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.event.producer.AdminEventProducer;
 import com.tiktok.adminservice.exception.InvalidModerationTargetException;
 import com.tiktok.adminservice.exception.ReportAlreadyResolvedException;
+import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
 import com.tiktok.adminservice.mapper.AdminMapper;
 import com.tiktok.adminservice.repository.ModerationActionRepository;
@@ -21,6 +22,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Pageable;
 
 import java.util.Optional;
 
@@ -54,7 +57,9 @@ class AdminServiceImplTest {
     @Test
     void submitReport_savesPendingReport() {
         SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content");
-        when(reportRepository.save(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
                 new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "spam content", ReportStatus.PENDING, null, null, null));
 
@@ -62,7 +67,7 @@ class AdminServiceImplTest {
 
         assertThat(response.status()).isEqualTo(ReportStatus.PENDING);
         ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
-        verify(reportRepository).save(captor.capture());
+        verify(reportRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().getReporterId()).isEqualTo(10L);
         assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.PENDING);
     }
@@ -148,6 +153,40 @@ class AdminServiceImplTest {
         assertThatThrownBy(() -> adminService.submitReport(10L, request))
                 .isInstanceOf(InvalidModerationTargetException.class);
         verifyNoInteractions(reportRepository);
+    }
+
+    @Test
+    void submitReport_alreadyReportedByThisUser_returnsTheStandingReport() {
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content");
+        Report existing = Report.builder()
+                .id(3L)
+                .reporterId(10L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("v1")
+                .reason("spam content")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.of(existing));
+        when(adminMapper.toResponse(existing)).thenReturn(
+                new ReportResponse(3L, 10L, ReportTargetType.VIDEO, "v1", "spam content", ReportStatus.PENDING, null, null, null));
+
+        assertThat(adminService.submitReport(10L, request).id()).isEqualTo(3L);
+        // Never attempted: the insert would abort the transaction, and the SELECT that would
+        // recover from it cannot run afterwards.
+        verify(reportRepository, never()).saveAndFlush(any(Report.class));
+    }
+
+    @Test
+    void submitReport_losesRaceWithConcurrentSubmit_conflicts() {
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content");
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.saveAndFlush(any(Report.class)))
+                .thenThrow(new DataIntegrityViolationException("idx_reports_one_per_reporter_target"));
+
+        assertThatThrownBy(() -> adminService.submitReport(10L, request))
+                .isInstanceOf(ReportAlreadySubmittedException.class);
     }
 
     @Test
