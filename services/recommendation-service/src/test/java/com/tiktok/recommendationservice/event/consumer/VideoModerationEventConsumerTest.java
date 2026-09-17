@@ -2,7 +2,8 @@ package com.tiktok.recommendationservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.tiktok.event.video.VideoTranscodedEvent;
+import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.recommendationservice.service.InboxService;
 import com.tiktok.recommendationservice.service.RecommendationService;
 import org.junit.jupiter.api.Test;
@@ -16,10 +17,9 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
-class VideoTranscodedEventConsumerTest {
+class VideoModerationEventConsumerTest {
 
     @Mock
     private RecommendationService recommendationService;
@@ -29,8 +29,8 @@ class VideoTranscodedEventConsumerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
-    private VideoTranscodedEventConsumer consumer() {
-        return new VideoTranscodedEventConsumer(recommendationService, inboxService, objectMapper);
+    private VideoModerationEventConsumer consumer() {
+        return new VideoModerationEventConsumer(recommendationService, inboxService, objectMapper);
     }
 
     private void givenFirstDelivery(String eventId) {
@@ -40,27 +40,28 @@ class VideoTranscodedEventConsumerTest {
         }).when(inboxService).runOnce(eq(eventId), any());
     }
 
-    /**
-     * Playable is not screened. A successful transcode leaves the video at PENDING_MODERATION in
-     * video-service, so indexing it here would hand out ids that hydration drops — and burn them
-     * in the served set on the way. VideoModerationEventConsumer is what lets it in.
-     */
+    private VideoModerationCompletedEvent verdict(String videoId, ModerationVerdict verdict) {
+        return VideoModerationCompletedEvent.of(videoId, verdict, "nsfw", 0.42, 1, 10, 900L,
+                "model", "v1", null);
+    }
+
     @Test
-    void onMessage_success_leavesTheVideoOutUntilItHasBeenModerated() throws Exception {
-        VideoTranscodedEvent event = VideoTranscodedEvent.success("vid1", "thumb", "preview", "hls", 12);
+    void onMessage_approved_putsTheVideoInTheFeed() throws Exception {
+        VideoModerationCompletedEvent event = verdict("vid1", ModerationVerdict.APPROVED);
+        givenFirstDelivery(event.eventId());
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
-        verifyNoInteractions(recommendationService, inboxService);
+        verify(recommendationService).recordVideoReady("vid1");
     }
 
     /**
-     * A permanent transcode failure is the end of the video, and nothing else is coming: left
-     * indexed it would keep being handed out until its owner happened to delete it.
+     * The whole point: a rejected video must not be a candidate. It is also the only event that
+     * says so — no deletion follows an automatic rejection.
      */
     @Test
-    void onMessage_failure_dropsTheVideoInsteadOfIndexingIt() throws Exception {
-        VideoTranscodedEvent event = VideoTranscodedEvent.failure("vid2", "ffmpeg exit 1");
+    void onMessage_rejected_keepsTheVideoOut() throws Exception {
+        VideoModerationCompletedEvent event = verdict("vid2", ModerationVerdict.REJECTED);
         givenFirstDelivery(event.eventId());
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
@@ -69,13 +70,26 @@ class VideoTranscodedEventConsumerTest {
         verify(recommendationService, never()).recordVideoReady(anyString());
     }
 
+    /** An unfinished check is not a pass — REVIEW waits for a human, out of the feed. */
+    @Test
+    void onMessage_review_keepsTheVideoOut() throws Exception {
+        VideoModerationCompletedEvent event =
+                VideoModerationCompletedEvent.unavailable("vid3", "classifier unreachable");
+        givenFirstDelivery(event.eventId());
+
+        consumer().onMessage(objectMapper.writeValueAsString(event));
+
+        verify(recommendationService).recordVideoDeleted("vid3");
+        verify(recommendationService, never()).recordVideoReady(anyString());
+    }
+
     @Test
     void onMessage_duplicateEvent_isSkipped() throws Exception {
-        VideoTranscodedEvent event = VideoTranscodedEvent.failure("vid3", "ffmpeg exit 1");
+        VideoModerationCompletedEvent event = verdict("vid4", ModerationVerdict.APPROVED);
         // A mock InboxService runs nothing unless told to, which is the redelivery case itself.
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
-        verify(recommendationService, never()).recordVideoDeleted(anyString());
+        verify(recommendationService, never()).recordVideoReady(anyString());
     }
 }
