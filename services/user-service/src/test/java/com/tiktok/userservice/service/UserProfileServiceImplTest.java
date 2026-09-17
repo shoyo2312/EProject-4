@@ -2,6 +2,7 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
+import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.InboxEventRepository;
@@ -200,6 +201,35 @@ class UserProfileServiceImplTest {
                 userProfileService.getByUserIds(1L, List.of(3L, 1L, 2L, 3L));
 
         assertThat(profiles).extracting(UserProfileResponse::userId).containsExactly(3L, 1L, 2L);
+    }
+
+    /**
+     * The counts batch is viewer-less on purpose — a follower count is not PII — so a block must
+     * not hide a row here the way it does in getByUserIds. Unknown ids are still simply absent.
+     */
+    @Test
+    @Transactional
+    void getStatsByUserIds_ignoresBlocksAndDropsUnknownIds() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
+        blockService.block(1L, 2L);
+
+        List<UserStatsCountsResponse> counts =
+                userProfileService.getStatsByUserIds(List.of(1L, 2L, 2L, 999L));
+
+        assertThat(counts).extracting(UserStatsCountsResponse::userId).containsExactlyInAnyOrder(1L, 2L);
+    }
+
+    /** Over the cap is a rejection, not a silently shortened list — see getStatsByUserIds. */
+    @Test
+    @Transactional
+    void getStatsByUserIds_aboveTheCap_isRejected() {
+        List<Long> tooMany = LongStream.rangeClosed(1, UserProfileService.MAX_BATCH_IDS + 1)
+                .boxed()
+                .toList();
+
+        assertThatThrownBy(() -> userProfileService.getStatsByUserIds(tooMany))
+                .isInstanceOf(TooManyProfileIdsException.class);
     }
 
     @Test

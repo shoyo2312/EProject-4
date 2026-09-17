@@ -2,8 +2,9 @@ package com.tiktok.userservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
-import com.tiktok.userservice.entity.UserProfile;
-import com.tiktok.userservice.repository.UserProfileRepository;
+import com.tiktok.userservice.service.UserProfileService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -11,7 +12,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
-import java.util.Objects;
 
 /**
  * Counts for many users in one request, for chat-service's realtime fan-out — same shape and
@@ -26,19 +26,16 @@ import java.util.Objects;
 @RestController
 @RequestMapping("/api/v1/users/stats")
 @RequiredArgsConstructor
+@Tag(name = "User stats", description = "Follower/following counts for internal callers")
 public class UserStatsController {
 
-    /** Mirrors interaction-service's VideoCountsController cap — the ids come from a query string. */
-    private static final int MAX_BATCH_SIZE = 50;
-
-    private final UserProfileRepository userProfileRepository;
+    private final UserProfileService userProfileService;
 
     @GetMapping("/batch")
+    @Operation(summary = "Follower and following counts for up to 100 user ids",
+            description = "Ids with no profile are absent from the answer; duplicates collapse. "
+                    + "More ids than the cap is 400 TOO_MANY_PROFILE_IDS.")
     public ApiResponse<List<UserStatsCountsResponse>> batch(@RequestParam List<Long> ids) {
-        List<Long> capped = ids.stream().filter(Objects::nonNull).distinct().limit(MAX_BATCH_SIZE).toList();
-        List<UserProfile> profiles = userProfileRepository.findByUserIdInAndDeletedAtIsNull(capped);
-        return ApiResponse.success(profiles.stream()
-                .map(p -> new UserStatsCountsResponse(p.getUserId(), p.getFollowerCount(), p.getFollowingCount()))
-                .toList());
+        return ApiResponse.success(userProfileService.getStatsByUserIds(ids));
     }
 }
