@@ -59,6 +59,9 @@ auth:
     password-reset-expiry-millis: 900000
     # Admin-login second factor: entered right after it is sent, so 5 minutes is plenty.
     admin-login-expiry-millis: 300000
+    # Prints every OTP to the log. Local manual testing only — never set on a deployed
+    # environment; anyone who can read the logs can take over any account with it.
+    log-to-console: ${OTP_LOG_TO_CONSOLE:false}
   retention:
     # Off-peak, and daily: nothing here is urgent, and the graces are measured in days.
     cron: "0 30 3 * * *"
