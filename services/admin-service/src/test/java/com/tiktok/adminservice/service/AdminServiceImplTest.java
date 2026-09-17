@@ -209,4 +209,11 @@ class AdminServiceImplTest {
         verifyNoInteractions(moderationActionRepository, adminEventProducer);
         assertThat(pending.getStatus()).isEqualTo(ReportStatus.PENDING);
     }
+
+    @Test
+    void listActions_targetTypeWithoutTargetId_rejected() {
+        assertThatThrownBy(() -> adminService.listActions(ReportTargetType.USER, null, Pageable.unpaged()))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository);
+    }
 }

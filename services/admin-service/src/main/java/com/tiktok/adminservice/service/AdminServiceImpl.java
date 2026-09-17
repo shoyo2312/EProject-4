@@ -11,6 +11,7 @@ import com.tiktok.adminservice.entity.Report;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.event.producer.AdminEventProducer;
+import com.tiktok.adminservice.exception.InvalidModerationTargetException;
 import com.tiktok.adminservice.exception.ReportAlreadyResolvedException;
 import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
@@ -155,7 +156,14 @@ public class AdminServiceImpl implements AdminService {
 
     @Override
     public Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Pageable pageable) {
-        Page<ModerationAction> actions = targetType != null && targetId != null
+        // Both or neither. Silently ignoring a half-filled filter answers a narrow question with
+        // the whole platform's audit log, which reads as "no actions were taken against this one".
+        if (targetType == null ^ targetId == null) {
+            throw new InvalidModerationTargetException(
+                    "targetType and targetId must be given together, or both omitted");
+        }
+
+        Page<ModerationAction> actions = targetType != null
                 ? moderationActionRepository.findByTargetTypeAndTargetIdOrderByCreatedAtDesc(targetType, targetId, pageable)
                 : moderationActionRepository.findAllByOrderByCreatedAtDesc(pageable);
         return actions.map(adminMapper::toResponse);
