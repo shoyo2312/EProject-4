@@ -48,6 +48,10 @@ jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 
 downstream:
+  # Under the flush window: a read that has not answered by the next window has missed its frame,
+  # and holding the scheduler thread for it costs every other video's update.
+  connect-timeout-millis: 500
+  read-timeout-millis: 1000
   interaction-service-uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
   video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
