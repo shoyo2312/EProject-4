@@ -135,14 +135,15 @@ com.tiktok.{service}/
 - Frame lấy **rải đều toàn video**, không phải mấy giây đầu — xem `Ffmpeg.sampleFrames`
 - Chi tiết: `docs/moderation.md`
 
-### Dev-only affordances — PHẢI gỡ trước khi deploy production
-Những thứ dưới đây cố ý nằm trong repo để test thủ công (Postman) không cần đọc email thật. Chúng vi phạm rule "KHÔNG lưu sensitive data vào log" ở §6 và chỉ được chấp nhận ở local:
+### Dev-only affordances — tắt mặc định, KHÔNG bật trên production
+Test thủ công (Postman) cần đọc OTP mà không có mailbox thật. Trước đây in thẳng bằng
+`log.warn("[DEV ONLY ...]")`; giờ nằm sau một cờ tắt mặc định:
 
-| Cái gì | Ở đâu | Rủi ro nếu lên production |
-|---|---|---|
-| `log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] ... OTP ...")` | `auth-service/event/local/EmailNotificationListener.java` (4 chỗ: verify email + social link + reset password + admin login) | OTP hiện nguyên văn trong log — ai đọc được log là chiếm được tài khoản bất kỳ. Riêng mã social link còn tệ hơn một bậc: nó là nửa còn lại của việc gắn tài khoản provider vào tài khoản sẵn có, nên chỉ cần đọc log rồi tạo một tài khoản Facebook khai email nạn nhân là chiếm được. Mã admin login là factor thứ hai của console — đọc log + biết password là vào được admin |
+| Cái gì | Ở đâu | Bật thế nào | Rủi ro nếu bật trên production |
+|---|---|---|---|
+| In OTP ra log (verify email + social link + reset password + admin login) | `auth-service/event/local/EmailNotificationListener.logOtp` | `auth.otp.log-to-console`, env `OTP_LOG_TO_CONSOLE`, mặc định `false` | OTP hiện nguyên văn trong log — ai đọc được log là chiếm được tài khoản bất kỳ. Riêng mã social link còn tệ hơn một bậc: nó là nửa còn lại của việc gắn tài khoản provider vào tài khoản sẵn có, nên chỉ cần đọc log rồi tạo một tài khoản Facebook khai email nạn nhân là chiếm được. Mã admin login là factor thứ hai của console — đọc log + biết password là vào được admin |
 
-**Trước mỗi lần deploy thật**: `grep -rn "DEV ONLY" services/` phải trả về rỗng.
+**Trước mỗi lần deploy thật**: `grep -rn "DEV ONLY" services/` phải trả về rỗng, và `OTP_LOG_TO_CONSOLE` không được set ở bất kỳ env nào.
 
 ## 5. Common Commands
 ```bash
