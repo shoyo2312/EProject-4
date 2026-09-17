@@ -63,16 +63,26 @@ public class SearchIndexWriter {
             """;
 
     /**
-     * The mirror image: a transcode result that beats its publication here creates a stub holding
-     * {@code pendingStatus} and nothing else. The stub is deliberately not given a {@code status},
-     * so it cannot surface in a search that has no title to show — but the outcome is on disk, and
-     * the publication picks it up when it lands. Two topics with no ordering between them make
-     * that arrival order routine, and it is guaranteed on a cold start replaying both from
-     * {@code earliest}.
+     * One script for every step of a video's own lifecycle — the transcode result and then the
+     * moderation verdict — because they are the same write: a new outcome for a video, which the
+     * search index has to record whether or not the publication carrying the content has arrived.
+     *
+     * <p>A step that beats its publication here creates a stub holding {@code pendingStatus} and
+     * nothing else. The stub is deliberately not given a {@code status}, so it cannot surface in a
+     * search that has no title to show — but the outcome is on disk, and the publication picks it
+     * up when it lands. Two topics with no ordering between them make that arrival order routine,
+     * and it is guaranteed on a cold start replaying both from {@code earliest}.
+     *
+     * <p>TAKEN_DOWN is never overwritten, mirroring {@code Video.applyOutcome} in video-service:
+     * a moderator acting on a video whose transcode or moderation is still running is routinely
+     * overtaken by it, and the outcome belongs in {@code pendingStatus} for the restore to read,
+     * not in {@code status} where it would put the video back into search results.
      */
-    private static final String TRANSCODE_SCRIPT = """
+    private static final String OUTCOME_SCRIPT = """
             ctx._source.pendingStatus = params.status;
-            if (ctx._source.status != null) { ctx._source.status = params.status; }
+            if (ctx._source.status != null && ctx._source.status != 'TAKEN_DOWN') {
+              ctx._source.status = params.status;
+            }
             if (params.containsKey('thumbnailUrl')) { ctx._source.thumbnailUrl = params.thumbnailUrl; }
             if (params.containsKey('durationSeconds')) { ctx._source.durationSeconds = params.durationSeconds; }
             """;
@@ -131,7 +141,15 @@ public class SearchIndexWriter {
         update(VideoDocument.class, videoId, PUBLISH_SCRIPT, withoutNulls(params), Document.from(withoutNulls(upsert)));
     }
 
-    public void applyTranscode(String videoId, String status, String thumbnailUrl, Integer durationSeconds) {
+    /**
+     * A transcode result or a moderation verdict. The transcode passes the media it produced; the
+     * verdict passes nulls for both, since it only moves the status.
+     *
+     * <p>A transcode success is not PUBLISHED. video-service parks it at PENDING_MODERATION and
+     * only the verdict moves it on — indexing it as PUBLISHED here made every upload searchable
+     * before it had been screened, and left a rejected one searchable for good.
+     */
+    public void applyOutcome(String videoId, String status, String thumbnailUrl, Integer durationSeconds) {
         Map<String, Object> params = new HashMap<>();
         params.put("status", status);
         params.put("thumbnailUrl", thumbnailUrl);
@@ -146,7 +164,7 @@ public class SearchIndexWriter {
             upsert.put("durationSeconds", durationSeconds);
         }
 
-        update(VideoDocument.class, videoId, TRANSCODE_SCRIPT, withoutNulls(params), Document.from(withoutNulls(upsert)));
+        update(VideoDocument.class, videoId, OUTCOME_SCRIPT, withoutNulls(params), Document.from(withoutNulls(upsert)));
     }
 
     /**
