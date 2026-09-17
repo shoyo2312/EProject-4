@@ -242,9 +242,11 @@ rank-train:
 # The image does not carry the tests or pytest, so the source is mounted in. Running them in
 # the image rather than a host venv is not fussiness: LightGBM needs libgomp, which macOS does
 # not ship, and the Dockerfile is the only place that dependency is written down.
+# The repo root goes in, not just this service: test_feature_contract.py reads the serving
+# constants back out of recommendation-service's Java to check they still agree with features.py.
 rank-test:
-	docker compose run --rm --no-deps --entrypoint sh \
-		-v "$$(pwd)/services/rank-service:/app" rank-service -c \
+	docker compose run --rm --no-deps --entrypoint sh -w /repo/services/rank-service \
+		-v "$$(pwd):/repo" rank-service -c \
 		"pip install -q -r requirements-dev.txt && python -m pytest -q"
 
 # ──────────────────────────────────────────────
