@@ -5,7 +5,9 @@ import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
+import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.event.video.VideoDeletedEvent;
+import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
@@ -50,6 +52,9 @@ class VideoIndexingConsumerTest {
     private VideoTranscodedEventConsumer videoTranscodedEventConsumer;
 
     @Autowired
+    private VideoModerationEventConsumer videoModerationEventConsumer;
+
+    @Autowired
     private CommentEventConsumer commentEventConsumer;
 
     @Autowired
@@ -71,7 +76,7 @@ class VideoIndexingConsumerTest {
     }
 
     @Test
-    void onMessage_indexesVideoThenAppliesTranscoding() throws Exception {
+    void onMessage_indexesVideoThenAppliesTranscodingThenTheVerdict() throws Exception {
         publish("v1", "My first video", "caption #dance", List.of("dance"));
 
         VideoDocument indexed = video("v1").orElseThrow();
@@ -82,10 +87,75 @@ class VideoIndexingConsumerTest {
 
         transcode(VideoTranscodedEvent.success("v1", "http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42));
 
+        // Playable, not published: the media is on the document but the video has not been
+        // screened, and PENDING_MODERATION is not a status the search query matches.
         VideoDocument transcoded = video("v1").orElseThrow();
-        assertThat(transcoded.getStatus()).isEqualTo("PUBLISHED");
+        assertThat(transcoded.getStatus()).isEqualTo("PENDING_MODERATION");
         assertThat(transcoded.getThumbnailUrl()).isEqualTo("http://minio/thumb.jpg");
         assertThat(transcoded.getDurationSeconds()).isEqualTo(42);
+
+        moderate("v1", ModerationVerdict.APPROVED);
+
+        assertThat(video("v1").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /**
+     * The failure this whole listener exists for: a transcode success used to be indexed as
+     * PUBLISHED, so every upload was findable before anything screened it — and a video the
+     * classifier went on to reject stayed findable, because nothing else ever revisited its
+     * status.
+     */
+    @Test
+    void searchVideos_excludesAVideoUntilItHasBeenApproved() throws Exception {
+        publish("v11", "unscreened clip", null, List.of());
+        transcode(VideoTranscodedEvent.success("v11", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("unscreened", null, PageRequest.of(0, 10))).isEmpty();
+
+        moderate("v11", ModerationVerdict.APPROVED);
+
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("unscreened", null, PageRequest.of(0, 10)))
+                .extracting(response -> response.id())
+                .containsExactly("v11");
+    }
+
+    /** A rejected video is never searchable, and no later event is coming to remove it. */
+    @Test
+    void searchVideos_excludesARejectedVideo() throws Exception {
+        publish("v12", "rejected clip", null, List.of());
+        transcode(VideoTranscodedEvent.success("v12", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v12", ModerationVerdict.REJECTED);
+
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(video("v12").orElseThrow().getStatus()).isEqualTo("REJECTED");
+        assertThat(searchService.searchVideos("rejected", null, PageRequest.of(0, 10))).isEmpty();
+    }
+
+    /**
+     * A moderator acting on a video whose verdict is still in flight is routinely overtaken by
+     * it. The outcome goes to pendingStatus for the restore to read; it must not put the video
+     * back into search results.
+     */
+    @Test
+    void onMessage_verdictAfterTakedown_doesNotUndoTheTakedown() throws Exception {
+        publish("v13", "taken down early", null, List.of());
+        transcode(VideoTranscodedEvent.success("v13", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+
+        VideoTakenDownEvent takenDown = VideoTakenDownEvent.of("v13", 99L, "spam");
+        adminModerationEventConsumer.onMessage(
+                objectMapper.writeValueAsString(takenDown), header("VideoTakenDownEvent"));
+
+        moderate("v13", ModerationVerdict.APPROVED);
+
+        assertThat(video("v13").orElseThrow().getStatus()).isEqualTo("TAKEN_DOWN");
+
+        VideoRestoredEvent restored = VideoRestoredEvent.of("v13", 99L, "appeal upheld");
+        adminModerationEventConsumer.onMessage(
+                objectMapper.writeValueAsString(restored), header("VideoRestoredEvent"));
+
+        assertThat(video("v13").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
     }
 
     /**
@@ -96,7 +166,7 @@ class VideoIndexingConsumerTest {
      * no redelivery could repair it.
      */
     @Test
-    void onMessage_transcodeBeforePublication_stillEndsPublished() throws Exception {
+    void onMessage_transcodeBeforePublication_stillKeepsTheOutcome() throws Exception {
         transcode(VideoTranscodedEvent.success("v5", "http://minio/thumb.jpg", null, "http://minio/master.m3u8", 7));
 
         // Not searchable yet: the stub has no content to show, so it must not carry a status.
@@ -105,7 +175,7 @@ class VideoIndexingConsumerTest {
         publish("v5", "late title", null, List.of());
 
         VideoDocument document = video("v5").orElseThrow();
-        assertThat(document.getStatus()).isEqualTo("PUBLISHED");
+        assertThat(document.getStatus()).isEqualTo("PENDING_MODERATION");
         assertThat(document.getTitle()).isEqualTo("late title");
         assertThat(document.getThumbnailUrl()).isEqualTo("http://minio/thumb.jpg");
     }
@@ -120,7 +190,7 @@ class VideoIndexingConsumerTest {
         // Same videoId, a fresh event: the derived eventId is stable, so this is a genuine replay.
         videoEventConsumer.onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
-        assertThat(video("v6").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+        assertThat(video("v6").orElseThrow().getStatus()).isEqualTo("PENDING_MODERATION");
     }
 
     @Test
@@ -186,6 +256,7 @@ class VideoIndexingConsumerTest {
     void onMessage_takedownThenRestore_returnsTheTranscodedStatus() throws Exception {
         publish("v8", "title", null, List.of());
         transcode(VideoTranscodedEvent.success("v8", "http://minio/t.jpg", null, "http://minio/m.m3u8", 5));
+        moderate("v8", ModerationVerdict.APPROVED);
 
         VideoTakenDownEvent takenDown = VideoTakenDownEvent.of("v8", 99L, "spam");
         adminModerationEventConsumer.onMessage(
@@ -209,6 +280,7 @@ class VideoIndexingConsumerTest {
     void searchVideos_excludesPrivateVideosUntilTheirOwnerMakesThemPublic() throws Exception {
         publish("v9", "diary entry", "not for you", "PRIVATE", List.of());
         transcode(VideoTranscodedEvent.success("v9", "http://minio/t.jpg", null, "http://minio/m.m3u8", 3));
+        moderate("v9", ModerationVerdict.APPROVED);
         assertThat(video("v9").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
 
         elasticsearchOperations.indexOps(VideoDocument.class).refresh();
@@ -230,6 +302,7 @@ class VideoIndexingConsumerTest {
     void searchVideos_dropsAVideoItsOwnerMakesPrivate() throws Exception {
         publish("v10", "beach trip", null, List.of());
         transcode(VideoTranscodedEvent.success("v10", "http://minio/t.jpg", null, "http://minio/m.m3u8", 3));
+        moderate("v10", ModerationVerdict.APPROVED);
         elasticsearchOperations.indexOps(VideoDocument.class).refresh();
         assertThat(searchService.searchVideos("beach", null, PageRequest.of(0, 10))).hasSize(1);
 
@@ -255,6 +328,12 @@ class VideoIndexingConsumerTest {
 
     private void transcode(VideoTranscodedEvent event) throws Exception {
         videoTranscodedEventConsumer.onMessage(objectMapper.writeValueAsString(event));
+    }
+
+    private void moderate(String videoId, ModerationVerdict verdict) throws Exception {
+        VideoModerationCompletedEvent event = VideoModerationCompletedEvent.of(
+                videoId, verdict, "nsfw", 0.1, 0, 10, 900L, "model", "v1", null);
+        videoModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event));
     }
 
     private void comment(String eventType, Object event) throws Exception {
