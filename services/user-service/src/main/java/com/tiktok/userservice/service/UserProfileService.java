@@ -2,6 +2,7 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
+import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -30,6 +31,21 @@ public interface UserProfileService {
      * {@link com.tiktok.userservice.exception.TooManyProfileIdsException}.
      */
     List<UserProfileResponse> getByUserIds(Long viewerId, List<Long> userIds);
+
+    /**
+     * Follower and following counts for a page of ids, for chat-service's realtime fan-out.
+     *
+     * <p>No viewer: a count is neither PII nor a profile, so there is nothing a block would hide
+     * and nobody to hide it from — which is also why this is not {@link #getByUserIds} with a
+     * narrower response.
+     *
+     * <p>Same cap and same answer to breaking it as {@link #getByUserIds}: over
+     * {@code MAX_BATCH_IDS} ids is a
+     * {@link com.tiktok.userservice.exception.TooManyProfileIdsException}, not a silently
+     * shortened list — a caller that asked for 200 and got 50 back cannot tell the 150 missing
+     * from accounts that do not exist.
+     */
+    List<UserStatsCountsResponse> getStatsByUserIds(List<Long> userIds);
 
     /**
      * Profile search by handle or display name, newest-irrelevant and ordered by follower count.
