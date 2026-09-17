@@ -1,6 +1,7 @@
 package com.tiktok.common.exception;
 
 import com.tiktok.common.response.ApiResponse;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
@@ -60,6 +61,24 @@ public abstract class BaseExceptionHandler extends ResponseEntityExceptionHandle
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResponse.error("CONCURRENT_MODIFICATION",
                         "The resource was modified by another request. Re-read it and try again."));
+    }
+
+    /**
+     * A {@code @Min}/{@code @Max} violation on a request param or path variable, which
+     * {@code @Validated} on the controller raises. Unlike {@link MethodArgumentNotValidException}
+     * — a body failing validation — this one is not a Spring MVC exception, so
+     * {@link ResponseEntityExceptionHandler} does not cover it and without this it falls through
+     * to the catch-all below as a 500 for what is plainly a bad request.
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiResponse<Void>> handleConstraintViolation(ConstraintViolationException ex) {
+        String message = ex.getConstraintViolations().stream()
+                .findFirst()
+                .map(violation -> violation.getPropertyPath() + ": " + violation.getMessage())
+                .orElse("Validation failed");
+        log.warn("Rejected request: {}", message);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResponse.error("VALIDATION_ERROR", message));
     }
 
     /**

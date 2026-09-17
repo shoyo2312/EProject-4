@@ -1,24 +1,15 @@
 package com.tiktok.analyticsservice.exception;
 
-import com.tiktok.common.exception.DomainException;
-import com.tiktok.common.response.ApiResponse;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
+import com.tiktok.common.exception.BaseExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+/**
+ * Everything is inherited from {@link BaseExceptionHandler}: the DomainException mapping, the
+ * validation mapping, and — the reason this class no longer declares its own handlers — Spring
+ * MVC's own request exceptions. A local {@code @ExceptionHandler(Exception.class)} outranks
+ * {@code DefaultHandlerExceptionResolver}, so an unknown enum value in a query param or a
+ * non-numeric path variable came back as 500 instead of 400.
+ */
 @RestControllerAdvice
-public class GlobalExceptionHandler {
-
-    @ExceptionHandler(DomainException.class)
-    public ResponseEntity<ApiResponse<Void>> handleDomainException(DomainException ex) {
-        return ResponseEntity.status(ex.getStatus())
-                .body(ApiResponse.error(ex.getCode(), ex.getMessage()));
-    }
-
-    @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiResponse<Void>> handleUnexpectedException(Exception ex) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.error("INTERNAL_ERROR", "An unexpected error occurred"));
-    }
+public class GlobalExceptionHandler extends BaseExceptionHandler {
 }
