@@ -45,7 +45,12 @@ THRESHOLDS = Thresholds(
 )
 
 # A cap rather than a promise: the caller decides how many frames to send, this stops a malformed
-# or hostile request from turning into an unbounded batch on a CPU-only box.
+# or hostile request from turning into an unbounded batch on a CPU-only box. Frames past it are
+# dropped rather than refused — media-worker's frame count is a separate environment variable in a
+# separate container, and refusing meant raising that one past this one turned every upload on the
+# platform into a 400, three retries and a trip through the admin queue, with nothing in either
+# service's log naming the cause. "Use the first 32" is the honest answer to an internal caller
+# that sent 40.
 MAX_FRAMES = int(os.getenv("MODERATION_MAX_FRAMES", "32"))
 
 # What the classifier calls the class we act on. Renaming it here is how you point this at a
@@ -136,11 +141,13 @@ def moderate(request: ModerateRequest) -> ModerateResponse:
         # 503, not 500: the caller retries this, and a retry after the model finishes loading
         # succeeds. A 500 would be treated as permanent.
         raise HTTPException(status_code=503, detail="model is still loading")
-    if len(request.frames) > MAX_FRAMES:
-        raise HTTPException(status_code=400, detail=f"at most {MAX_FRAMES} frames per request")
+    frames = request.frames
+    if len(frames) > MAX_FRAMES:
+        log.warning("Asked about %d frames, scoring the first %d", len(frames), MAX_FRAMES)
+        frames = frames[:MAX_FRAMES]
 
     started = time.monotonic()
-    images = _decode(request.frames)
+    images = _decode(frames)
     scored = {label: scorer(images) for label, scorer in SCORERS.items()}
     decisions: dict[str, Decision] = {
         label: decide(scores, THRESHOLDS) for label, scores in scored.items()
@@ -155,15 +162,19 @@ def moderate(request: ModerateRequest) -> ModerateResponse:
     # month's allowance on the cases that never needed it.
     if verdict == "REVIEW" and escalation.enabled():
         opinion = escalation.second_opinion(
-            escalation.top_frames(request.frames, scored[label])
+            escalation.top_frames(frames, scored[label])
         )
         # A verdict of None means nothing usable came back, and the video stays where it was:
         # with a human. Failure is never a pass.
         if opinion.verdict is not None:
             verdict = opinion.verdict
         # Recorded either way — a month of REVIEWs caused by an exhausted quota should be
-        # readable off the videos themselves, not only off a log that has since rolled.
-        model_version = f"{MODEL_VERSION}+{opinion.detail}"
+        # readable off the videos themselves, not only off a log that has since rolled. A short
+        # code rather than the failure's own words: this lands on the video document and on the
+        # admin console, and a message carrying an endpoint URL and a socket error both leaks
+        # where the service lives and makes the field ungroupable — which is the one thing it is
+        # for. The words are in escalation's own log line.
+        model_version = f"{MODEL_VERSION}+{opinion.code}"
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
