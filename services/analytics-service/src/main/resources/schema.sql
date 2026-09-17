@@ -2,6 +2,14 @@
 -- rows are deduped by ClickHouse's background merges. Reads that need an exact count (not an
 -- eventually-consistent one) must query with the FINAL modifier.
 
+-- Ordered by video first, because the one query that filters this table filters on video_id
+-- (the per-video engagement summary). With event_id alone as the sort key there was no prefix to
+-- skip on, so every summary read the whole table and merged all of it under FINAL.
+-- Deduplication is unaffected: a redelivered event carries the same video_id as the original, so
+-- the sort key is still stable per event.
+--
+-- CREATE TABLE IF NOT EXISTS means an existing table keeps its old sort key — ClickHouse cannot
+-- reorder in place. Applying this to one already deployed takes a rebuild into a new table.
 CREATE TABLE IF NOT EXISTS engagement_events (
     event_id    String,
     event_type  LowCardinality(String), -- PUBLISHED, LIKED, UNLIKED, COMMENTED, SHARED
@@ -9,7 +17,7 @@ CREATE TABLE IF NOT EXISTS engagement_events (
     user_id     Int64,
     occurred_at DateTime64(3)
 ) ENGINE = ReplacingMergeTree
-ORDER BY event_id;
+ORDER BY (video_id, event_id);
 
 CREATE TABLE IF NOT EXISTS user_signup_events (
     event_id    String,
