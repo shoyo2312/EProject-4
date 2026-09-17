@@ -11,14 +11,17 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 /**
- * The moment a video becomes playable, which is the moment it may enter the feed. The publication
- * event cannot say this: it fires while the video is still PROCESSING because media-worker needs
- * it to start transcoding, so indexing on it offered viewers ids that hydration then dropped,
- * and suppressed them for the served-set's half hour just as they became playable.
+ * Cleanup only. A transcode that failed is a video nothing will ever publish — media-worker does
+ * not retry a permanent failure and no verdict is coming — so whatever the publication stashed
+ * about it is taken back here rather than left to expire with its TTL.
  *
- * <p>A failed transcode is treated as a removal. Without it a video whose transcode failed for
- * good sat in trending and in the tag indexes until its owner happened to delete it — and there
- * is nothing else coming: media-worker does not retry a permanent failure.
+ * <p>A transcode that succeeded deliberately does nothing. It used to be what put the video in
+ * front of viewers, but a playable video is not yet a screened one: video-service parks it at
+ * PENDING_MODERATION, so indexing here offered ids that hydration then dropped and burned them in
+ * the served-set's half-hour window as it did so — the same failure that moving off
+ * VideoPublishedEvent was meant to end. Worse, a video the classifier went on to reject stayed in
+ * trending and in the tag indexes with nothing left to remove it. {@link VideoModerationEventConsumer}
+ * is where a video now enters the feed.
  */
 @Slf4j
 @Component
@@ -34,14 +37,14 @@ public class VideoTranscodedEventConsumer {
     public void onMessage(String payload) {
         VideoTranscodedEvent event = objectMapper.readValue(payload, VideoTranscodedEvent.class);
 
+        if (event.success()) {
+            return;
+        }
+
         inboxService.runOnce(event.eventId(), () -> {
-            if (event.success()) {
-                recommendationService.recordVideoReady(event.videoId());
-            } else {
-                log.warn("Transcode failed for videoId={}, keeping it out of the feed: {}",
-                        event.videoId(), event.failureReason());
-                recommendationService.recordVideoDeleted(event.videoId());
-            }
+            log.warn("Transcode failed for videoId={}, keeping it out of the feed: {}",
+                    event.videoId(), event.failureReason());
+            recommendationService.recordVideoDeleted(event.videoId());
         });
     }
 }
