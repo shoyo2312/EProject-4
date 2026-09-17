@@ -9,6 +9,7 @@ import com.tiktok.adminservice.entity.Report;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.event.producer.AdminEventProducer;
+import com.tiktok.adminservice.exception.InvalidModerationTargetException;
 import com.tiktok.adminservice.exception.ReportAlreadyResolvedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
 import com.tiktok.adminservice.mapper.AdminMapper;
@@ -136,5 +137,37 @@ class AdminServiceImplTest {
         ReportResponse response = adminService.resolveReport(2L, 8L, new ResolveReportRequest(ModerationActionType.DISMISS_REPORT, "not a violation"));
 
         assertThat(response.status()).isEqualTo(ReportStatus.DISMISSED);
+    }
+
+    @Test
+    void submitReport_commentTargetIdWithoutVideoId_rejected() {
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.COMMENT, "42", "abuse");
+
+        // Accepting this would park an unresolvable report in the queue: it only fails days
+        // later, inside the transaction of the admin who tries to act on it.
+        assertThatThrownBy(() -> adminService.submitReport(10L, request))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(reportRepository);
+    }
+
+    @Test
+    void resolveReport_banUserOnVideoReport_rejected() {
+        Report pending = Report.builder()
+                .id(9L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("68c1fa3b9e4d2c0001a2b3c4")
+                .reason("nudity")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(9L)).thenReturn(Optional.of(pending));
+
+        // Otherwise this publishes a UserBannedEvent carrying a Mongo document id where a user id
+        // belongs — or, when the id happens to parse, a ban aimed at whoever owns that number.
+        assertThatThrownBy(() -> adminService.resolveReport(2L, 9L,
+                new ResolveReportRequest(ModerationActionType.BAN_USER, "ban")))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository, adminEventProducer);
+        assertThat(pending.getStatus()).isEqualTo(ReportStatus.PENDING);
     }
 }

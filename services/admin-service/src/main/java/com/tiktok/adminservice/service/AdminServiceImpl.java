@@ -37,6 +37,10 @@ public class AdminServiceImpl implements AdminService {
     @Override
     @Transactional
     public ReportResponse submitReport(Long reporterId, SubmitReportRequest request) {
+        // Checked here and not only at resolve time: an id nobody can act on is a report that
+        // cannot be closed, discovered days later by the admin who tries.
+        request.targetType().validateTargetId(request.targetId());
+
         Report report = Report.builder()
                 .reporterId(reporterId)
                 .targetType(request.targetType())
@@ -77,6 +81,12 @@ public class AdminServiceImpl implements AdminService {
             throw new ReportAlreadyResolvedException(reportId);
         }
 
+        // The request picks an action, the report supplies the target, and nothing else pairs
+        // them up — see ModerationActionType. Reports predating the submit-time check above can
+        // still carry an id this action cannot use, so both halves are verified.
+        request.actionType().requireApplicableTo(report.getTargetType());
+        report.getTargetType().validateTargetId(report.getTargetId());
+
         ModerationAction action = ModerationAction.builder()
                 .adminId(adminId)
                 .actionType(request.actionType())
@@ -100,6 +110,9 @@ public class AdminServiceImpl implements AdminService {
     @Transactional
     public ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
                                             ModerationActionType actionType, String reason) {
+        actionType.requireApplicableTo(targetType);
+        targetType.validateTargetId(targetId);
+
         // No existence check against the owning service: this one cannot read its database, and an
         // extra HTTP call would only move the failure. An action against an id that does not exist
         // is a no-op on the consumer side, and the audit row is still the honest record of the
