@@ -1,6 +1,8 @@
 package com.tiktok.chatservice.service;
 
+import com.tiktok.chatservice.client.BlockClient;
 import com.tiktok.chatservice.dto.request.SendMessageRequest;
+import com.tiktok.chatservice.exception.MessagingBlockedException;
 import com.tiktok.chatservice.dto.response.MessageResponse;
 import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.entity.Message;
@@ -21,6 +23,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -47,7 +53,25 @@ class MessageServiceImplTest {
     @BeforeEach
     void setUp() {
         messageService = new MessageServiceImpl(
-                conversationService, conversationRepository, messageRepository, messageMapper, messagingTemplate);
+                conversationService, conversationRepository, messageRepository, messageMapper, messagingTemplate,
+                blockClient);
+    }
+
+    @Mock
+    private BlockClient blockClient;
+
+    /** A conversation opened before the block is still there; the block has to stop what goes into it. */
+    @Test
+    void sendMessage_acrossABlock_isRefusedAndNothingIsStoredOrBroadcast() {
+        Conversation conversation = Conversation.builder().id("c1").participantIds(List.of(1L, 2L)).build();
+        when(conversationService.requireParticipant(1L, "c1")).thenReturn(conversation);
+        doThrow(new MessagingBlockedException()).when(blockClient).requireNotBlocked(1L, 2L);
+
+        assertThatThrownBy(() -> messageService.sendMessage("c1", 1L, new SendMessageRequest("hi")))
+                .isInstanceOf(MessagingBlockedException.class);
+
+        verify(messageRepository, never()).save(any());
+        verifyNoInteractions(messagingTemplate);
     }
 
     @Test

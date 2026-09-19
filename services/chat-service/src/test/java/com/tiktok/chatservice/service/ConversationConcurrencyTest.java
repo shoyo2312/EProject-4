@@ -1,5 +1,6 @@
 package com.tiktok.chatservice.service;
 
+import com.tiktok.chatservice.client.BlockClient;
 import com.tiktok.chatservice.dto.request.SendMessageRequest;
 import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.mapper.MessageMapperImpl;
@@ -56,7 +57,7 @@ class ConversationConcurrencyTest {
         conversationRepository.deleteAll();
         messageRepository.deleteAll();
         messageService = new MessageServiceImpl(conversationService, conversationRepository,
-                messageRepository, new MessageMapperImpl(), messagingTemplate);
+                messageRepository, new MessageMapperImpl(), messagingTemplate, mock(BlockClient.class));
     }
 
     @Test

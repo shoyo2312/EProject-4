@@ -78,6 +78,12 @@ public class BlockServiceImpl implements BlockService {
         return profileBatchAssembler.toResponses(blockedIds);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isBlockedBetween(Long userA, Long userB) {
+        return userBlockRepository.existsBlockBetween(userA, userB);
+    }
+
     private void removeFollowIfPresent(Long followerId, Long followingId) {
         userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(followerId, followingId)
                 .ifPresent(follow -> {

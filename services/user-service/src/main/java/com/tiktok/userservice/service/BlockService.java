@@ -12,4 +12,7 @@ public interface BlockService {
     void unblock(Long blockerId, Long blockedId);
 
     Page<UserProfileResponse> listBlocked(Long userId, Pageable pageable);
+
+    /** Whether either user has blocked the other. */
+    boolean isBlockedBetween(Long userA, Long userB);
 }

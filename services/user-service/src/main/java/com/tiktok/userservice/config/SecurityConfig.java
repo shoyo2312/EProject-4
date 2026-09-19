@@ -30,6 +30,8 @@ public class SecurityConfig {
                         // Counts only, no PII — same trust level as interaction-service's
                         // counts/batch endpoint that chat-service's realtime fan-out already calls.
                         .requestMatchers(HttpMethod.GET, "/api/v1/users/stats/batch").permitAll()
+                        // Service-to-service only; api-gateway denies this prefix outright.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/users/internal/**").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

@@ -1,6 +1,11 @@
 package com.tiktok.chatservice.websocket;
 
 import com.tiktok.chatservice.dto.request.SendMessageRequest;
+import com.tiktok.chatservice.exception.MessagingBlockedException;
+import com.tiktok.common.exception.DomainException;
+import com.tiktok.common.response.ApiResponse;
+import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
+import org.springframework.messaging.simp.annotation.SendToUser;
 import jakarta.validation.Valid;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -39,5 +44,20 @@ class ChatWebSocketControllerTest {
         assertThat(validator.validate(new SendMessageRequest("  "))).isNotEmpty();
         assertThat(validator.validate(new SendMessageRequest("x".repeat(2001)))).isNotEmpty();
         assertThat(validator.validate(new SendMessageRequest("hello"))).isEmpty();
+    }
+
+    /**
+     * A refusal from the service — a block, a conversation the sender is not in — used to die in
+     * the broker's log, and the sender's message simply never appeared with nothing saying why.
+     */
+    @Test
+    void domainRefusals_goBackToTheSendersErrorQueue() throws NoSuchMethodException {
+        Method handler = ChatWebSocketController.class.getMethod("handleRefusal", DomainException.class);
+
+        assertThat(handler.getAnnotation(MessageExceptionHandler.class)).isNotNull();
+        assertThat(handler.getAnnotation(SendToUser.class).value()).containsExactly("/queue/errors");
+
+        ApiResponse<Void> body = new ChatWebSocketController(null).handleRefusal(new MessagingBlockedException());
+        assertThat(body.code()).isEqualTo("MESSAGING_BLOCKED");
     }
 }

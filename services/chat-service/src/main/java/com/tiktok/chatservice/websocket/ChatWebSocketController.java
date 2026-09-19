@@ -2,6 +2,7 @@ package com.tiktok.chatservice.websocket;
 
 import com.tiktok.chatservice.dto.request.SendMessageRequest;
 import com.tiktok.chatservice.service.MessageService;
+import com.tiktok.common.exception.DomainException;
 import com.tiktok.common.response.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +44,18 @@ public class ChatWebSocketController {
      * Without a handler the rejection is logged server-side and nothing reaches the client, which
      * sees its message silently vanish. This sends the reason back on the sender's own queue.
      */
+    /**
+     * A refusal from the service — blocked, not a participant, no such conversation — goes back to
+     * the sender the way a REST caller would get it. Without this it only reached the broker's log,
+     * and the message silently never appeared.
+     */
+    @MessageExceptionHandler(DomainException.class)
+    @SendToUser("/queue/errors")
+    public ApiResponse<Void> handleRefusal(DomainException ex) {
+        log.debug("Refused STOMP message: {}", ex.getCode());
+        return ApiResponse.error(ex.getCode(), ex.getMessage());
+    }
+
     @MessageExceptionHandler(MethodArgumentNotValidException.class)
     @SendToUser("/queue/errors")
     public ApiResponse<Void> handleInvalidPayload(MethodArgumentNotValidException ex) {

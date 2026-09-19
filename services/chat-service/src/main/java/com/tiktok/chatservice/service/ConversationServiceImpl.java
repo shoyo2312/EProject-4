@@ -1,5 +1,6 @@
 package com.tiktok.chatservice.service;
 
+import com.tiktok.chatservice.client.BlockClient;
 import com.tiktok.chatservice.dto.response.ConversationResponse;
 import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.exception.CannotMessageSelfException;
@@ -19,12 +20,14 @@ public class ConversationServiceImpl implements ConversationService {
 
     private final ConversationRepository conversationRepository;
     private final ConversationMapper conversationMapper;
+    private final BlockClient blockClient;
 
     @Override
     public ConversationResponse getOrCreate(Long currentUserId, Long otherUserId) {
         if (currentUserId.equals(otherUserId)) {
             throw new CannotMessageSelfException();
         }
+        blockClient.requireNotBlocked(currentUserId, otherUserId);
 
         String participantKey = Conversation.buildParticipantKey(currentUserId, otherUserId);
 

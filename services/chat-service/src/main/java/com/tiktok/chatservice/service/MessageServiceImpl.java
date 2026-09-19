@@ -1,6 +1,8 @@
 package com.tiktok.chatservice.service;
 
+import com.tiktok.chatservice.client.BlockClient;
 import com.tiktok.chatservice.dto.request.SendMessageRequest;
+import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.dto.response.MessagePageResponse;
 import com.tiktok.chatservice.dto.response.MessageResponse;
 import com.tiktok.chatservice.entity.Message;
@@ -37,10 +39,18 @@ public class MessageServiceImpl implements MessageService {
     private final MessageRepository messageRepository;
     private final MessageMapper messageMapper;
     private final SimpMessagingTemplate messagingTemplate;
+    private final BlockClient blockClient;
 
     @Override
     public MessageResponse sendMessage(String conversationId, Long senderId, SendMessageRequest request) {
-        conversationService.requireParticipant(senderId, conversationId);
+        Conversation conversation = conversationService.requireParticipant(senderId, conversationId);
+        // Per message, not only when the conversation opens: a block placed later has to stop a
+        // thread that already exists.
+        for (Long participant : conversation.getParticipantIds()) {
+            if (!participant.equals(senderId)) {
+                blockClient.requireNotBlocked(senderId, participant);
+            }
+        }
 
         Instant now = Instant.now();
         Message message = Message.builder()
