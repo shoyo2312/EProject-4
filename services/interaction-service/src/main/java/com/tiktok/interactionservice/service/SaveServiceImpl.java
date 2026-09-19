@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
+import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.SaveStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
 import com.tiktok.interactionservice.entity.SaveByUser;
@@ -44,9 +45,11 @@ public class SaveServiceImpl implements SaveService {
     private final VideoCountersRepository videoCountersRepository;
     private final CounterCacheService counterCacheService;
     private final InteractionEventPublisher eventPublisher;
+    private final VideoOwnershipClient videoOwnershipClient;
 
     @Override
     public SaveStatusResponse save(Long videoId, Long currentUserId) {
+        videoOwnershipClient.requireVisible(videoId);
         rateLimiter.require("save-rate", videoId, currentUserId, SaveRateLimitedException::new);
 
         Instant savedAt = Instant.now();

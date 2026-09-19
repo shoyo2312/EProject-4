@@ -65,6 +65,7 @@ public class CommentServiceImpl implements CommentService {
 
     @Override
     public CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId) {
+        videoOwnershipClient.requireVisible(videoId);
         // Same reasoning as ShareServiceImpl: nothing about a comment is idempotent, so the row,
         // the counter and the +2 it puts into trending all repeat for as long as a client keeps
         // calling. A like is protected by its LWT and a view by its playId; this endpoint has
@@ -152,6 +153,7 @@ public class CommentServiceImpl implements CommentService {
 
     @Override
     public CommentPageResponse listComments(Long videoId, String cursor, int size, Long currentUserId) {
+        videoOwnershipClient.requireVisible(videoId);
         // Comments off => the owner hid the thread, not just new replies: no rows, no cursor.
         // ponytail: one video-service call per comment-list load. The client already has the
         // flag on the Video and skips this call; a raw API caller is the only one that pays it.
@@ -164,6 +166,7 @@ public class CommentServiceImpl implements CommentService {
     @Override
     public CommentPageResponse listReplies(Long videoId, Long parentId, String cursor, int size,
                                            Long currentUserId) {
+        videoOwnershipClient.requireVisible(videoId);
         if (videoOwnershipClient.areCommentsDisabled(videoId)) {
             return new CommentPageResponse(List.of(), null, false);
         }
@@ -401,6 +404,7 @@ public class CommentServiceImpl implements CommentService {
 
     @Override
     public CommentLikeResponse likeComment(Long videoId, Long commentId, Long currentUserId) {
+        videoOwnershipClient.requireVisible(videoId);
         // Keyed by comment, not by video: a viewer working through a busy comment section likes
         // many different comments, and one shared per-video budget would refuse them for reading.
         rateLimiter.require("comment-like-rate", commentId, currentUserId, CommentLikeRateLimitedException::new);

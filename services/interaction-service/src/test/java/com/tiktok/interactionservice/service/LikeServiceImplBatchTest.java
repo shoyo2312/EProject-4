@@ -48,7 +48,8 @@ class LikeServiceImplBatchTest {
     private LikeService likeService() {
         lenient().when(counterCacheService.getCounts(anyLong())).thenReturn(VideoCounts.ZERO);
         return new LikeServiceImpl(likeByVideoRepository, likeByUserRepository,
-                videoCountersRepository, counterCacheService, eventPublisher, rateLimiter);
+                videoCountersRepository, counterCacheService, eventPublisher, rateLimiter,
+                org.mockito.Mockito.mock(com.tiktok.interactionservice.client.VideoOwnershipClient.class));
     }
 
     /**
