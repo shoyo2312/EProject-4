@@ -17,6 +17,8 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class RecommendationServiceImpl implements RecommendationService {
 
+    private static final String PUBLIC = "PUBLIC";
+
     private static final double PUBLISH_SCORE = 1.0;
     private static final double LIKE_SCORE = 3.0;
     private static final double SHARE_SCORE = 5.0;
@@ -45,11 +47,16 @@ public class RecommendationServiceImpl implements RecommendationService {
     private final StringRedisTemplate redisTemplate;
 
     @Override
-    public void recordVideoUploaded(String videoId, Long ownerId, List<String> tags) {
+    public void recordVideoUploaded(String videoId, Long ownerId, String visibility, List<String> tags) {
         // Before the tag check: a mute is about who posted, and untagged videos still reach the
         // feed through trending.
         if (ownerId != null) {
             redisTemplate.opsForHash().put(RecoKeys.VIDEO_OWNER, videoId, ownerId.toString());
+        }
+        // Null is a producer older than the field, which only ever published PUBLIC videos.
+        if (visibility != null && !PUBLIC.equals(visibility)) {
+            redisTemplate.opsForSet().add(RecoKeys.VIDEO_PRIVATE, videoId);
+            withdraw(videoId);
         }
         if (tags.isEmpty()) {
             return;
@@ -63,18 +70,22 @@ public class RecommendationServiceImpl implements RecommendationService {
         // upload after the video is already live. Indexing the tags here in that case is what
         // keeps a ready video out of half the indexes it belongs in.
         Double publishedAt = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_PUBLISHED, videoId);
-        if (publishedAt != null) {
+        if (publishedAt != null && !isHidden(videoId)) {
             indexTags(videoId, tags, publishedAt);
         }
     }
 
     @Override
     public void recordVideoReady(String videoId) {
-        addEngagement(videoId, PUBLISH_SCORE);
         double publishedAt = Instant.now().getEpochSecond();
         // Recorded for every video, not only tagged ones: the ranking model asks how old a video
-        // is whether or not this viewer has any interest in its tags.
+        // is whether or not this viewer has any interest in its tags. Hidden ones too, so that
+        // making one public later indexes it at its real age.
         redisTemplate.opsForZSet().add(RecoKeys.VIDEO_PUBLISHED, videoId, publishedAt);
+        if (isHidden(videoId)) {
+            return;
+        }
+        addEngagement(videoId, PUBLISH_SCORE);
 
         Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
         if (tags == null || tags.isEmpty()) {
@@ -91,6 +102,66 @@ public class RecommendationServiceImpl implements RecommendationService {
             // needs to answer "what is new under this tag", so the old tail is dead weight.
             redisTemplate.opsForZSet().removeRange(index, 0, -RecoKeys.TRIM_TO - 1);
             redisTemplate.expire(index, RecoKeys.PROFILE_TTL);
+        }
+    }
+
+    @Override
+    public void recordVisibilityChanged(String videoId, String visibility) {
+        if (PUBLIC.equals(visibility)) {
+            redisTemplate.opsForSet().remove(RecoKeys.VIDEO_PRIVATE, videoId);
+            reindexIfVisible(videoId);
+        } else {
+            redisTemplate.opsForSet().add(RecoKeys.VIDEO_PRIVATE, videoId);
+            withdraw(videoId);
+        }
+    }
+
+    @Override
+    public void recordTakenDown(String videoId) {
+        redisTemplate.opsForSet().add(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
+        withdraw(videoId);
+    }
+
+    @Override
+    public void recordRestored(String videoId) {
+        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
+        reindexIfVisible(videoId);
+    }
+
+    private boolean isHidden(String videoId) {
+        return Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_PRIVATE, videoId))
+                || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_TAKEN_DOWN, videoId));
+    }
+
+    /**
+     * Out of everything candidate generation reads — the tag indexes, trending and the buckets it
+     * is rebuilt from — while the stashed tags, owner and publish time stay for a later reindex.
+     */
+    private void withdraw(String videoId) {
+        Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
+        if (tags != null) {
+            for (String tag : tags) {
+                redisTemplate.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+            }
+        }
+        RecoKeys.trendingWindow(Instant.now())
+                .forEach(bucket -> redisTemplate.opsForZSet().remove(bucket, videoId));
+        redisTemplate.opsForZSet().remove(RecoKeys.TRENDING, videoId);
+    }
+
+    /**
+     * Back under its tags at its original publish time, and only if it had become ready — a
+     * video still in moderation is indexed by {@link #recordVideoReady} instead. Its trending
+     * score is not restored: the buckets were cleared, and new engagement earns it back.
+     */
+    private void reindexIfVisible(String videoId) {
+        if (isHidden(videoId)) {
+            return;
+        }
+        Double publishedAt = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_PUBLISHED, videoId);
+        Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
+        if (publishedAt != null && tags != null && !tags.isEmpty()) {
+            indexTags(videoId, tags, publishedAt);
         }
     }
 
@@ -122,6 +193,8 @@ public class RecommendationServiceImpl implements RecommendationService {
         redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_WATCHES, videoId);
         redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_COMPLETIONS, videoId);
         redisTemplate.opsForHash().delete(RecoKeys.VIDEO_OWNER, videoId);
+        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_PRIVATE, videoId);
+        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
     }
 
     @Override
@@ -203,6 +276,11 @@ public class RecommendationServiceImpl implements RecommendationService {
     }
 
     private void addEngagement(String videoId, double score) {
+        // The owner can still like and watch a private video, and that alone would walk it back
+        // into trending within the minute.
+        if (isHidden(videoId)) {
+            return;
+        }
         String bucket = RecoKeys.trendBucket(Instant.now());
         redisTemplate.opsForZSet().incrementScore(bucket, videoId, score);
         redisTemplate.expire(bucket, RecoKeys.BUCKET_TTL);

@@ -17,7 +17,18 @@ public interface RecommendationService {
      * batch hydration drops them again, silently shortening the page, and the served-set marks
      * them suppressed for the next half hour, which is exactly when they become playable.
      */
-    void recordVideoUploaded(String videoId, Long ownerId, List<String> tags);
+    void recordVideoUploaded(String videoId, Long ownerId, String visibility, List<String> tags);
+
+    /**
+     * PUBLIC puts the video back into candidate generation; FRIENDS or PRIVATE takes it out. The
+     * public feed is for everyone, so a video only some viewers may see has no place in it.
+     */
+    void recordVisibilityChanged(String videoId, String visibility);
+
+    /** Takes a video out of candidate generation while keeping what a restore needs to undo it. */
+    void recordTakenDown(String videoId);
+
+    void recordRestored(String videoId);
 
     /**
      * Puts a video into everything candidate generation reads — trending, the per-tag indexes,

@@ -117,4 +117,12 @@ public final class RecoKeys {
      * viewer muted, and a hash answers it for the whole candidate pool in one HMGET.
      */
     public static final String VIDEO_OWNER = "reco:video:owner";
+
+    /**
+     * Videos that exist but must not be recommended, one set per reason, because the reasons lift
+     * independently: restoring a takedown must not undo the owner making the video private, and
+     * making it public again must not undo a takedown. Visible means in neither.
+     */
+    public static final String VIDEO_PRIVATE = "reco:video:private";
+    public static final String VIDEO_TAKEN_DOWN = "reco:video:taken-down";
 }

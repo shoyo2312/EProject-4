@@ -3,6 +3,7 @@ package com.tiktok.recommendationservice.event.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
+import com.tiktok.event.video.VideoVisibilityChangedEvent;
 import com.tiktok.recommendationservice.service.InboxService;
 import com.tiktok.recommendationservice.service.RecommendationService;
 import lombok.RequiredArgsConstructor;
@@ -30,6 +31,7 @@ public class VideoEventConsumer {
 
     private static final String VIDEO_PUBLISHED = "VideoPublishedEvent";
     private static final String VIDEO_DELETED = "VideoDeletedEvent";
+    private static final String VIDEO_VISIBILITY_CHANGED = "VideoVisibilityChangedEvent";
 
     private final RecommendationService recommendationService;
     private final InboxService inboxService;
@@ -48,11 +50,15 @@ public class VideoEventConsumer {
         if (VIDEO_PUBLISHED.equals(eventType)) {
             VideoPublishedEvent event = objectMapper.readValue(payload, VideoPublishedEvent.class);
             inboxService.runOnce(event.eventId(), () ->
-                    recommendationService.recordVideoUploaded(event.videoId(), event.userId(), event.tags()));
+                    recommendationService.recordVideoUploaded(event.videoId(), event.userId(), event.visibility(), event.tags()));
         } else if (VIDEO_DELETED.equals(eventType)) {
             VideoDeletedEvent event = objectMapper.readValue(payload, VideoDeletedEvent.class);
             inboxService.runOnce(event.eventId(), () ->
                     recommendationService.recordVideoDeleted(event.videoId()));
+        } else if (VIDEO_VISIBILITY_CHANGED.equals(eventType)) {
+            VideoVisibilityChangedEvent event = objectMapper.readValue(payload, VideoVisibilityChangedEvent.class);
+            inboxService.runOnce(event.eventId(), () ->
+                    recommendationService.recordVisibilityChanged(event.videoId(), event.visibility()));
         } else {
             log.debug("Ignoring video eventType={}", eventType);
         }

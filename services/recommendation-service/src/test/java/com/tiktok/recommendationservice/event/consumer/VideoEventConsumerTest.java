@@ -4,6 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
+import com.tiktok.event.video.VideoVisibilityChangedEvent;
+
+import java.time.Instant;
 import com.tiktok.recommendationservice.service.InboxService;
 import com.tiktok.recommendationservice.service.RecommendationService;
 import org.junit.jupiter.api.Test;
@@ -54,7 +57,7 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
 
-        verify(recommendationService).recordVideoUploaded("vid1", 1L, List.of("dance"));
+        verify(recommendationService).recordVideoUploaded("vid1", 1L, "PUBLIC", List.of("dance"));
     }
 
     @Test
@@ -64,7 +67,7 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
 
-        verify(recommendationService, never()).recordVideoUploaded("vid1", 1L, List.of("dance"));
+        verify(recommendationService, never()).recordVideoUploaded("vid1", 1L, "PUBLIC", List.of("dance"));
     }
 
     /**
@@ -78,7 +81,7 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), null);
 
-        verify(recommendationService).recordVideoUploaded("vid2", 1L, List.of());
+        verify(recommendationService).recordVideoUploaded("vid2", 1L, "PUBLIC", List.of());
     }
 
     @Test
@@ -103,6 +106,16 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoDeletedEvent"));
 
-        verify(recommendationService, never()).recordVideoUploaded(eq("vid4"), any(), any());
+        verify(recommendationService, never()).recordVideoUploaded(eq("vid4"), any(), any(), any());
+    }
+
+    @Test
+    void onMessage_visibilityChange_isApplied() throws Exception {
+        VideoVisibilityChangedEvent event = VideoVisibilityChangedEvent.of("vid5", 1L, "PRIVATE", Instant.now());
+        givenFirstDelivery(event.eventId());
+
+        consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoVisibilityChangedEvent"));
+
+        verify(recommendationService).recordVisibilityChanged("vid5", "PRIVATE");
     }
 }
