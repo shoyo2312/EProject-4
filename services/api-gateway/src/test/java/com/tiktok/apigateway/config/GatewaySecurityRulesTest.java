@@ -62,10 +62,34 @@ class GatewaySecurityRulesTest {
                 .expectStatus().isOk();
     }
 
+    /**
+     * /policy answers for every video regardless of visibility — who owns it, whether comments are
+     * off — because interaction-service needs that for PRIVATE videos too. Reachable from the
+     * internet it told anyone the owner of any private video id, which getById exists to hide.
+     */
+    @Test
+    void videoPolicy_isRefusedAtTheEdge() {
+        client.get().uri("/api/v1/videos/123/policy")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                .exchange()
+                .expectStatus().isForbidden();
+        client.get().uri("/api/v1/videos/123/policy")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void anOrdinaryVideo_isStillPublic() {
+        client.get().uri("/api/v1/videos/123")
+                .exchange()
+                .expectStatus().isOk();
+    }
+
     @RestController
     static class Stub {
 
-        @GetMapping({"/api/v1/users/internal/blocks", "/api/v1/users/42"})
+        @GetMapping({"/api/v1/users/internal/blocks", "/api/v1/users/42",
+                "/api/v1/videos/123/policy", "/api/v1/videos/123"})
         Mono<String> ok() {
             return Mono.just("ok");
         }
