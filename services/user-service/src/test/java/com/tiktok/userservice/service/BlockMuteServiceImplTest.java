@@ -1,6 +1,8 @@
 package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
+import com.tiktok.userservice.entity.OutboxEvent;
+import com.tiktok.userservice.repository.OutboxEventRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserMuteRepository;
@@ -100,5 +102,31 @@ class BlockMuteServiceImplTest {
         muteService.unmute(1L, 3L);
 
         assertThat(muteService.mutedIds(1L)).containsExactly(2L);
+    }
+
+    @Autowired
+    private FollowService followService;
+
+    @Autowired
+    private OutboxEventRepository outboxEventRepository;
+
+    /**
+     * A block severs follows in both directions and moves both counters, but announced neither:
+     * unfollow publishes UserFollowChangedEvent and this path did not, so any consumer of that
+     * event saw two follows that never ended.
+     */
+    @Test
+    void block_announcesTheFollowsItSevers() {
+        followService.follow(1L, 2L);
+        followService.follow(2L, 1L);
+        outboxEventRepository.deleteAll();
+
+        blockService.block(1L, 2L);
+
+        assertThat(outboxEventRepository.findAll())
+                .filteredOn(e -> "UserFollowChangedEvent".equals(e.getEventType()))
+                .extracting(OutboxEvent::getPayload)
+                .hasSize(2)
+                .allSatisfy(payload -> assertThat(payload).contains("\"followed\":false"));
     }
 }
