@@ -39,7 +39,18 @@ public class SecurityConfig {
                         .authenticationEntryPoint(restAuthenticationEntryPoint)
                         .accessDeniedHandler(restAccessDeniedHandler))
                 .authorizeExchange(exchanges -> exchanges
+                        // Ahead of the permitAll below, which would otherwise swallow it: the
+                        // admin console's user directory shares auth-service's public prefix but
+                        // is not a sign-in endpoint. auth-service still enforces ROLE_ADMIN — this
+                        // only stops the whole platform's account list from sitting behind the one
+                        // prefix that lets anonymous traffic through.
+                        .pathMatchers("/api/v1/auth/admin/**").authenticated()
                         .pathMatchers("/api/v1/auth/**", "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        // Same shape as the auth rule above: video-service pins this path to
+                        // ROLE_ADMIN itself, and the gateway saying "public" for an admin path
+                        // means the platform's whole video list — every owner, every status,
+                        // including taken-down ones — rides on that one rule staying correct.
+                        .pathMatchers("/api/v1/videos/admin", "/api/v1/videos/admin/**").authenticated()
                         .pathMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .pathMatchers(HttpMethod.GET, "/api/v1/recommendations/trending").permitAll()
                         .pathMatchers(HttpMethod.GET, "/api/v1/search/**").permitAll()

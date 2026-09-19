@@ -77,4 +77,21 @@ class TrainingSinkConsumerTest {
 
         verifyNoInteractions(engagementEventRepository, trainingDataRepository);
     }
+
+    @Test
+    void publishedEvent_withoutTagsField_doesNotPoisonThePartition() throws Exception {
+        // A producer older than the tags field. Jackson uses the canonical record constructor,
+        // not VideoPublishedEvent.of, so the list arrives null — and with no error handler in
+        // front of it an NPE here retried forever and stopped all ingestion behind it.
+        String payload = """
+                {"eventId":"evt-2","occurredAt":"2026-08-20T10:00:00Z","videoId":"vid2",
+                 "userId":7,"title":"A title","rawFileUrl":"raw.mp4"}
+                """;
+
+        new VideoEventConsumer(engagementEventRepository, trainingDataRepository, objectMapper)
+                .onMessage(payload, "VideoPublishedEvent".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        verify(engagementEventRepository).insert(
+                "evt-2", "PUBLISHED", "vid2", 7L, Instant.parse("2026-08-20T10:00:00Z"));
+    }
 }

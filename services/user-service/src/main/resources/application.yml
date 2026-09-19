@@ -60,6 +60,10 @@ user:
     # still replay an offset, the claim is the only thing standing between a redelivery and a
     # double count. 30d matches video-service's TTL on processed_events.
     processed-event-grace: 30d
+    # Outbox rows the broker already acknowledged. Measured from publication, not creation: long
+    # enough to still have the row when someone asks why a follower count moved last week, short
+    # enough that the table stops growing.
+    published-outbox-grace: 7d
 
 app:
   media:
