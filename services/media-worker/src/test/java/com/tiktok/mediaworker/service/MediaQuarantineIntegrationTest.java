@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.utility.DockerImageName;
 
 import java.io.ByteArrayInputStream;
 import java.net.URI;
@@ -34,7 +35,9 @@ class MediaQuarantineIntegrationTest {
     private static final String BUCKET = "video-media";
 
     @Container
-    static MinIOContainer MINIO = new MinIOContainer("minio/minio:latest");
+    // minio/minio:latest 404s on Docker Hub — MinIO stopped publishing new tags there and moved to quay.io.
+    static MinIOContainer MINIO = new MinIOContainer(
+            DockerImageName.parse("quay.io/minio/minio:latest").asCompatibleSubstituteFor("minio/minio"));
 
     private final HttpClient http = HttpClient.newHttpClient();
     private MinioClient minioClient;
