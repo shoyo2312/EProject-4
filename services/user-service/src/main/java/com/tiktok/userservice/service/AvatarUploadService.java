@@ -45,7 +45,7 @@ public class AvatarUploadService {
 
     /** Matches the client-side check and the multipart limit in application.yml. */
     @Value("${app.avatar.max-bytes:5242880}")
-    private long maxBytes;
+    private final long maxBytes;
 
     @SneakyThrows
     public UserProfileResponse replaceOwnAvatar(Long userId, MultipartFile file) {

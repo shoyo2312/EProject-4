@@ -9,7 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -40,8 +39,8 @@ class AvatarUploadServiceTest {
         service = new AvatarUploadService(
                 minioClient,
                 new MinioProperties("http://localhost:9000", "key", "secret", "video-media"),
-                userProfileService);
-        ReflectionTestUtils.setField(service, "maxBytes", 1_000L);
+                userProfileService,
+                1_000L);
     }
 
     @Test

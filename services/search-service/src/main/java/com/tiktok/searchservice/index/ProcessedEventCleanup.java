@@ -30,7 +30,7 @@ public class ProcessedEventCleanup {
     private final ElasticsearchOperations elasticsearchOperations;
 
     @Value("${search.processed-events.retention-days:30}")
-    private long retentionDays;
+    private final long retentionDays;
 
     @Scheduled(cron = "${search.processed-events.cleanup-cron:0 30 3 * * *}")
     public void deleteExpired() {

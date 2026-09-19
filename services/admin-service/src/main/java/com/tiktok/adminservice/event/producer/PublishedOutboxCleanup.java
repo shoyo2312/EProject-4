@@ -33,13 +33,13 @@ public class PublishedOutboxCleanup {
     private final TransactionTemplate transactionTemplate;
 
     @Value("${admin.retention.published-outbox-grace}")
-    private Duration publishedOutboxGrace;
+    private final Duration publishedOutboxGrace;
 
     @Value("${admin.retention.batch-size}")
-    private int batchSize;
+    private final int batchSize;
 
     @Value("${admin.retention.max-batches-per-run}")
-    private int maxBatchesPerRun;
+    private final int maxBatchesPerRun;
 
     @Scheduled(cron = "${admin.retention.cron}")
     public void purgePublishedEvents() {
