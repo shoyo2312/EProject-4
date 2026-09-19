@@ -3,6 +3,8 @@ package com.tiktok.mediaworker.service;
 import com.tiktok.mediaworker.config.MediaVideoProperties;
 import com.tiktok.mediaworker.config.MinioProperties;
 import io.minio.DownloadObjectArgs;
+import io.minio.PutObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import io.minio.MinioClient;
 import io.minio.StatObjectArgs;
 import io.minio.UploadObjectArgs;
@@ -15,6 +17,7 @@ import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
 import javax.imageio.stream.ImageInputStream;
 import java.awt.Dimension;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -63,6 +66,30 @@ public class TranscodeServiceImpl implements TranscodeService {
     private final MediaVideoProperties videoLimits;
     private final VideoProbe videoProbe;
     private final Ffmpeg ffmpeg;
+
+    @Override
+    @SneakyThrows
+    public boolean alreadyTranscoded(String videoId) {
+        try {
+            minioClient.statObject(StatObjectArgs.builder()
+                    .bucket(minioProperties.bucket()).object(MediaKeys.transcodedMarker(videoId)).build());
+            return true;
+        } catch (ErrorResponseException e) {
+            if ("NoSuchKey".equals(e.errorResponse().code())) {
+                return false;
+            }
+            throw e;
+        }
+    }
+
+    @Override
+    @SneakyThrows
+    public void recordTranscoded(String videoId) {
+        minioClient.putObject(PutObjectArgs.builder()
+                .bucket(minioProperties.bucket()).object(MediaKeys.transcodedMarker(videoId))
+                .stream(new ByteArrayInputStream(new byte[0]), 0, -1)
+                .build());
+    }
 
     @Override
     @SneakyThrows

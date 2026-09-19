@@ -141,4 +141,17 @@ class MediaQuarantineIntegrationTest {
         HttpRequest request = HttpRequest.newBuilder(URI.create(MINIO.getS3URL() + "/" + BUCKET + "/" + key)).GET().build();
         return http.send(request, HttpResponse.BodyHandlers.discarding()).statusCode();
     }
+
+    /** The redelivery guard against a real bucket: absent until recorded, private once it is. */
+    @Test
+    void transcodeMarker_isAbsentUntilRecordedAndNeverPublic() throws Exception {
+        TranscodeServiceImpl transcoder = new TranscodeServiceImpl(minioClient,
+                new MinioProperties(MINIO.getS3URL(), MINIO.getUserName(), MINIO.getPassword(), BUCKET),
+                null, null, null);
+
+        assertThat(transcoder.alreadyTranscoded("v5")).isFalse();
+        transcoder.recordTranscoded("v5");
+        assertThat(transcoder.alreadyTranscoded("v5")).isTrue();
+        assertThat(anonymousStatus(MediaKeys.transcodedMarker("v5"))).isEqualTo(403);
+    }
 }

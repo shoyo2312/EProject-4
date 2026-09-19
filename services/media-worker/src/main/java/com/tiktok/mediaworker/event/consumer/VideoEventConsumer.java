@@ -87,6 +87,12 @@ public class VideoEventConsumer {
      * media was sitting in the bucket, finished and correct.
      */
     private void handlePublished(VideoPublishedEvent event) {
+        // ponytail: check-then-act. Same-key events share a partition, so the only overlap is a
+        // rebalance mid-transcode, and video-service ignores the duplicate result that produces.
+        if (transcodeService.alreadyTranscoded(event.videoId())) {
+            log.info("Video {} was already transcoded, skipping the redelivered publication", event.videoId());
+            return;
+        }
         VideoTranscodedEvent result = transcodeWithRetries(event);
         // A takedown that landed while this was encoding had nothing to move yet, and the output
         // was just written to the public prefixes. Its marker is still there, so finish its job.
@@ -94,6 +100,7 @@ public class VideoEventConsumer {
             quarantine.quarantine(event.videoId());
         }
         eventProducer.publish(result);
+        transcodeService.recordTranscoded(event.videoId());
     }
 
     /**

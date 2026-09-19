@@ -257,6 +257,9 @@ public class Video {
      */
     public void markTranscoded(String thumbnailUrl, String previewUrl, String hlsUrl, Integer durationSeconds,
                                Integer width, Integer height) {
+        if (!awaitingTranscode()) {
+            return;
+        }
         this.thumbnailUrl = thumbnailUrl;
         this.previewUrl = previewUrl;
         this.hlsUrl = hlsUrl;
@@ -274,6 +277,11 @@ public class Video {
      * admin's. An admin overturning either goes through {@link #markRestored()}.
      */
     public void applyModeration(VideoModeration moderation) {
+        // A second verdict for the same video is a duplicate event, not a re-review: applying it
+        // would overrule the first one, or an admin's decision taken since.
+        if (pipelineStatus() != null && pipelineStatus() != VideoStatus.PENDING_MODERATION) {
+            return;
+        }
         this.moderation = moderation;
         applyOutcome(switch (moderation.getVerdict()) {
             case APPROVED -> VideoStatus.PUBLISHED;
@@ -284,6 +292,9 @@ public class Video {
     }
 
     public void markFailed(String reason) {
+        if (!awaitingTranscode()) {
+            return;
+        }
         this.failureReason = reason;
         applyOutcome(VideoStatus.FAILED);
     }
@@ -304,6 +315,25 @@ public class Video {
      * decision the classifier was about to make, and an APPROVED landing afterwards must not undo
      * it.
      */
+    /**
+     * Where the upload pipeline has got to, looking through a takedown: a takedown pauses what a
+     * viewer sees, not the pipeline. Null only for a video taken down before statusBeforeTakedown
+     * existed, which is let through as before.
+     */
+    private VideoStatus pipelineStatus() {
+        return status == VideoStatus.TAKEN_DOWN ? statusBeforeTakedown : status;
+    }
+
+    /**
+     * A transcode result only applies to a video still waiting for one. FAILED stays open so a
+     * redelivered publish that succeeds this time can still rescue the upload; anything past
+     * PENDING_MODERATION already has its result, and a second one is a duplicate event.
+     */
+    private boolean awaitingTranscode() {
+        VideoStatus pipeline = pipelineStatus();
+        return pipeline == null || pipeline == VideoStatus.PROCESSING || pipeline == VideoStatus.FAILED;
+    }
+
     private void applyOutcome(VideoStatus outcome) {
         if (this.status == VideoStatus.TAKEN_DOWN) {
             this.statusBeforeTakedown = outcome;

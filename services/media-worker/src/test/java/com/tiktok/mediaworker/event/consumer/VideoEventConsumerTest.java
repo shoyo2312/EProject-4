@@ -84,6 +84,39 @@ class VideoEventConsumerTest {
         verify(quarantine, never()).quarantine(anyString());
     }
 
+    /**
+     * The same VideoPublishedEvent arrives again whenever the outbox resends it or a rebalance
+     * replays the partition. Each copy re-encoded the whole video and published a second result
+     * with a fresh eventId, which video-service could not tell from the first.
+     */
+    @Test
+    void onMessage_publicationAlreadyTranscoded_isNotTranscodedAgain() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid7", 1L, "t", null, "s3://raw/vid7.mp4", "PUBLIC", List.of());
+        when(transcodeService.alreadyTranscoded("vid7")).thenReturn(true);
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        verify(transcodeService, never()).transcode(anyString(), anyString());
+        verifyNoInteractions(eventProducer);
+    }
+
+    /**
+     * Recorded only after the result is out: a crash in between must redo the transcode rather
+     * than leave a video that nothing will ever report on.
+     */
+    @Test
+    void onMessage_transcodeReported_isRememberedAfterThePublish() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid6", 1L, "t", null, "s3://raw/vid6.mp4", "PUBLIC", List.of());
+        when(transcodeService.transcode("vid6", "s3://raw/vid6.mp4"))
+                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(eventProducer, transcodeService);
+        order.verify(eventProducer).publish(org.mockito.ArgumentMatchers.any());
+        order.verify(transcodeService).recordTranscoded("vid6");
+    }
+
     private byte[] header(String eventType) {
         return eventType.getBytes(StandardCharsets.UTF_8);
     }
