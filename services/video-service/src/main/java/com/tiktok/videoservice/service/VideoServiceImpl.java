@@ -454,10 +454,21 @@ public class VideoServiceImpl implements VideoService {
      * query shape from {@link #getUserStats}.
      * ponytail: $group by owner across ids in one query if a flush window ever spans hundreds of
      * accounts.
+     *
+     * <p>Capped at the same page maximum as {@link #getByIds}, and for the same reason: the ids
+     * arrive in a query string and every one of them costs its own Mongo aggregation, so without
+     * this one request is as many aggregations as a caller cares to name. Distinct first, so a
+     * list padded with one repeated id cannot use up the cap.
      */
     @Override
     public List<UserVideoStatsResponse> getUserStatsBatch(List<Long> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return List.of();
+        }
         return userIds.stream()
+                .filter(Objects::nonNull)
+                .distinct()
+                .limit(maxBatchSize())
                 .map(userId -> getUserStats(null, userId))
                 .toList();
     }

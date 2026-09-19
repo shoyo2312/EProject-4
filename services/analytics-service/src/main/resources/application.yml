@@ -22,6 +22,12 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    # Stated rather than left to the defaults: this service produces nothing of its own, but
+    # kafka-lib's recoverer needs a template to write the dead-letter copy of a record it gave up
+    # on, and that record's key and value are the strings the consumer below deserialized.
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
       group-id: analytics-service
       auto-offset-reset: earliest
