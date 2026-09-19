@@ -105,6 +105,33 @@ class VideoIndexingConsumerTest {
      * classifier went on to reject stayed findable, because nothing else ever revisited its
      * status.
      */
+    /**
+     * The text query used to vanish from the request: the title/description matches were chained
+     * into the status filter in a way that left only an optional tag clause behind, so every
+     * search answered with every public video.
+     */
+    @Test
+    void searchVideos_matchesTheQueryAgainstTitleDescriptionOrTag() throws Exception {
+        publishApproved("t1", "funny cats compilation", "nothing else here", List.of());
+        publishApproved("t2", "morning routine", "my cats wake me up", List.of());
+        publishApproved("t3", "weekend vlog", "no animals", List.of("cats"));
+        publishApproved("t4", "dog tricks", "a very good boy", List.of("dogs"));
+
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+
+        assertThat(searchService.searchVideos("cats", null, PageRequest.of(0, 10)))
+                .extracting(response -> response.id())
+                .containsExactlyInAnyOrder("t1", "t2", "t3");
+        assertThat(searchService.searchVideos("elephant", null, PageRequest.of(0, 10))).isEmpty();
+    }
+
+    private void publishApproved(String videoId, String title, String description, List<String> tags)
+            throws Exception {
+        publish(videoId, title, description, tags);
+        transcode(VideoTranscodedEvent.success(videoId, "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate(videoId, ModerationVerdict.APPROVED);
+    }
+
     @Test
     void searchVideos_excludesAVideoUntilItHasBeenApproved() throws Exception {
         publish("v11", "unscreened clip", null, List.of());

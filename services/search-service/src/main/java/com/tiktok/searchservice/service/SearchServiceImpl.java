@@ -65,9 +65,16 @@ public class SearchServiceImpl implements SearchService {
             // Title outranks a body mention of the same word: both are analysed text, so without
             // the boost a caption that happens to say "dance" scores level with a video called
             // "Dance tutorial".
-            criteria = criteria.and(Criteria.where("title").matches(query).boost(3f)
-                    .or("description").matches(query)
-                    .or("tags").is(normalizeHashtag(query)));
+            //
+            // Built as its own criteria and attached with subCriteria, so it becomes one nested
+            // bool whose should-arms must match at least once. The fluent `.or("description")`
+            // form returns the *last* criteria of the chain, so passing it to `and(...)` dropped
+            // title and description and left a lone optional tag clause — every search answered
+            // with every public video.
+            Criteria text = new Criteria("title").matches(query).boost(3f)
+                    .or(new Criteria("description").matches(query))
+                    .or(new Criteria("tags").is(normalizeHashtag(query)));
+            criteria = criteria.subCriteria(text);
         }
         if (StringUtils.hasText(hashtag)) {
             String normalized = normalizeHashtag(hashtag);
