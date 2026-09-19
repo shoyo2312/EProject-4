@@ -284,7 +284,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.logout(new RefreshTokenRequest(initial.refreshToken()), null);
+        authService.logout(initial.refreshToken(), null);
 
         assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(initial.refreshToken())))
                 .isInstanceOf(InvalidRefreshTokenException.class);
@@ -293,7 +293,7 @@ class AuthServiceImplTest {
     @Test
     @Transactional
     void logout_withUnknownToken_doesNotThrow() {
-        authService.logout(new RefreshTokenRequest("unknown-token"), null);
+        authService.logout("unknown-token", null);
     }
 
     @Test
@@ -302,7 +302,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.logout(new RefreshTokenRequest(initial.refreshToken()), initial.accessToken());
+        authService.logout(initial.refreshToken(), initial.accessToken());
 
         String jti = jwtProvider.extractClaims(initial.accessToken()).get("jti", String.class);
         assertThat(jti).isNotBlank();
@@ -315,7 +315,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse initial = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.logout(new RefreshTokenRequest(initial.refreshToken()), null);
+        authService.logout(initial.refreshToken(), null);
 
         String jti = jwtProvider.extractClaims(initial.accessToken()).get("jti", String.class);
         assertThat(redisTemplate.hasKey(RevocationKeys.forJti(jti))).isFalse();
@@ -332,7 +332,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.logout(new RefreshTokenRequest(tokens.refreshToken()), tokens.refreshToken());
+        authService.logout(tokens.refreshToken(), tokens.refreshToken());
 
         String refreshJti = jwtProvider.extractClaims(tokens.refreshToken()).get("jti", String.class);
         assertThat(redisTemplate.hasKey(RevocationKeys.forJti(refreshJti))).isFalse();
@@ -353,7 +353,7 @@ class AuthServiceImplTest {
         markVerified(authService.register(new RegisterRequest("janedoe", "jane@example.com", "password123", "test-turnstile-token")));
         TokenResponse caller = authService.login(new LoginRequest("janedoe", "password123"));
 
-        authService.logout(new RefreshTokenRequest(victim.refreshToken()), caller.accessToken());
+        authService.logout(victim.refreshToken(), caller.accessToken());
 
         assertThat(authService.refresh(new RefreshTokenRequest(victim.refreshToken())).accessToken())
                 .as("the victim's session survives a logout it never asked for")
@@ -371,7 +371,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.logout(new RefreshTokenRequest(tokens.refreshToken()), null);
+        authService.logout(tokens.refreshToken(), null);
 
         assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(tokens.refreshToken())))
                 .isInstanceOf(InvalidRefreshTokenException.class);
@@ -599,7 +599,7 @@ class AuthServiceImplTest {
         TokenResponse phone = authService.login(new LoginRequest("johndoe", "password123"));
         TokenResponse laptop = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.logout(new RefreshTokenRequest(phone.refreshToken()), null);
+        authService.logout(phone.refreshToken(), null);
 
         assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(phone.refreshToken())))
                 .isInstanceOf(InvalidRefreshTokenException.class);
