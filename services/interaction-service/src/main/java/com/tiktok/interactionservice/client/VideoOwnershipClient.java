@@ -2,12 +2,17 @@ package com.tiktok.interactionservice.client;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.tiktok.common.response.ApiResponse;
+import com.tiktok.interactionservice.exception.VideoNotFoundException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 /**
  * Answers "does this account own that video", "are comments off" and "how long is it really", for
@@ -29,6 +34,44 @@ public class VideoOwnershipClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record VideoPolicyView(Long userId, boolean commentsDisabled, Integer durationSeconds) {
+    }
+
+    /**
+     * Refuses an interaction with a video the caller may not see, or one that does not exist.
+     *
+     * <p>Unlike the questions below this one is about the viewer, so it is asked of
+     * {@code GET /videos/{id}} with the caller's own token: that is where video-service decides
+     * PRIVATE, FRIENDS and not-yet-PUBLISHED. Without it any id was accepted — a private video's
+     * comment thread was readable by anyone holding the id, and a made-up id could be shared into
+     * trending.
+     *
+     * <p>Only a 404 refuses. Anything else — video-service down, a timeout — lets the interaction
+     * through, the same way the comments switch fails open: an outage there should not stop every
+     * like on the platform, and video-service still refuses to serve a hidden video itself.
+     */
+    public void requireVisible(Long videoId) {
+        try {
+            videoServiceRestClient.get()
+                    .uri("/api/v1/videos/{videoId}", videoId)
+                    .headers(headers -> {
+                        String token = callerAuthorization();
+                        if (token != null) {
+                            headers.set(HttpHeaders.AUTHORIZATION, token);
+                        }
+                    })
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (HttpClientErrorException.NotFound e) {
+            throw new VideoNotFoundException(videoId);
+        } catch (RestClientException e) {
+            log.warn("Could not confirm video {} is visible, letting the interaction through", videoId, e);
+        }
+    }
+
+    private static String callerAuthorization() {
+        return RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes
+                ? attributes.getRequest().getHeader(HttpHeaders.AUTHORIZATION)
+                : null;
     }
 
     /**

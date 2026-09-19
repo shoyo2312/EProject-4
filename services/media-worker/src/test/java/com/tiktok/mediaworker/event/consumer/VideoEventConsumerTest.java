@@ -7,6 +7,7 @@ import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoTranscodedEventProducer;
 import com.tiktok.mediaworker.service.MediaCleanupService;
+import com.tiktok.mediaworker.service.MediaQuarantineService;
 import com.tiktok.mediaworker.service.TranscodeResult;
 import com.tiktok.mediaworker.service.TranscodeService;
 import org.junit.jupiter.api.Test;
@@ -49,7 +50,71 @@ class VideoEventConsumerTest {
     /** No backoff in tests: the pause is real time and proves nothing the attempt count doesn't. */
     private VideoEventConsumer consumer() {
         return new VideoEventConsumer(
-                transcodeService, mediaCleanupService, eventProducer, objectMapper, ATTEMPTS, 0L);
+                transcodeService, mediaCleanupService, eventProducer, quarantine, objectMapper, ATTEMPTS, 0L);
+    }
+
+    @Mock
+    private MediaQuarantineService quarantine;
+
+    /**
+     * Transcoding takes minutes, and a moderator acting on a fresh upload is routinely overtaken
+     * by it: the takedown quarantines nothing because nothing exists yet, and then the transcode
+     * writes its output to the public prefixes.
+     */
+    @Test
+    void onMessage_transcodeFinishingAfterATakedown_quarantinesWhatItJustWrote() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid9", 1L, "t", null, "s3://raw/vid9.mp4", "PUBLIC", List.of());
+        when(transcodeService.transcode("vid9", "s3://raw/vid9.mp4"))
+                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
+        when(quarantine.isQuarantined("vid9")).thenReturn(true);
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        verify(quarantine).quarantine("vid9");
+    }
+
+    @Test
+    void onMessage_ordinaryTranscode_leavesTheMediaPublic() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid8", 1L, "t", null, "s3://raw/vid8.mp4", "PUBLIC", List.of());
+        when(transcodeService.transcode("vid8", "s3://raw/vid8.mp4"))
+                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        verify(quarantine, never()).quarantine(anyString());
+    }
+
+    /**
+     * The same VideoPublishedEvent arrives again whenever the outbox resends it or a rebalance
+     * replays the partition. Each copy re-encoded the whole video and published a second result
+     * with a fresh eventId, which video-service could not tell from the first.
+     */
+    @Test
+    void onMessage_publicationAlreadyTranscoded_isNotTranscodedAgain() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid7", 1L, "t", null, "s3://raw/vid7.mp4", "PUBLIC", List.of());
+        when(transcodeService.alreadyTranscoded("vid7")).thenReturn(true);
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        verify(transcodeService, never()).transcode(anyString(), anyString());
+        verifyNoInteractions(eventProducer);
+    }
+
+    /**
+     * Recorded only after the result is out: a crash in between must redo the transcode rather
+     * than leave a video that nothing will ever report on.
+     */
+    @Test
+    void onMessage_transcodeReported_isRememberedAfterThePublish() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid6", 1L, "t", null, "s3://raw/vid6.mp4", "PUBLIC", List.of());
+        when(transcodeService.transcode("vid6", "s3://raw/vid6.mp4"))
+                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(eventProducer, transcodeService);
+        order.verify(eventProducer).publish(org.mockito.ArgumentMatchers.any());
+        order.verify(transcodeService).recordTranscoded("vid6");
     }
 
     private byte[] header(String eventType) {

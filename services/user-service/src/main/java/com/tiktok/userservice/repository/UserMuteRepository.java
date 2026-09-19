@@ -4,6 +4,9 @@ import com.tiktok.userservice.entity.UserMute;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+
+import java.util.List;
 
 import java.util.Optional;
 
@@ -21,4 +24,7 @@ public interface UserMuteRepository extends JpaRepository<UserMute, Long> {
     Optional<UserMute> findByMuterIdAndMutedIdAndDeletedAtIsNull(Long muterId, Long mutedId);
 
     Page<UserMute> findByMuterIdAndDeletedAtIsNull(Long muterId, Pageable pageable);
+
+    @Query("select m.mutedId from UserMute m where m.muterId = :muterId and m.deletedAt is null")
+    List<Long> findMutedIds(Long muterId);
 }

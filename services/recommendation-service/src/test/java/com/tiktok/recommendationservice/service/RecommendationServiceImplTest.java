@@ -11,6 +11,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.connection.zset.Aggregate;
 import org.springframework.data.redis.connection.zset.Weights;
+import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -42,6 +43,9 @@ class RecommendationServiceImplTest {
     @Mock
     private SetOperations<String, String> setOperations;
 
+    @Mock
+    private HashOperations<String, Object, Object> hashOperations;
+
     private RecommendationServiceImpl recommendationService;
 
     @BeforeEach
@@ -49,6 +53,25 @@ class RecommendationServiceImplTest {
         recommendationService = new RecommendationServiceImpl(redisTemplate);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(redisTemplate.<Object, Object>opsForHash()).thenReturn(hashOperations);
+    }
+
+    /**
+     * The feed drops videos by muted accounts, and the owner is the one thing it cannot learn
+     * anywhere else. Recorded for untagged videos too — a mute is about who, not what.
+     */
+    @Test
+    void recordVideoUploaded_remembersWhoOwnsTheVideo_evenWithoutTags() {
+        recommendationService.recordVideoUploaded("vid1", 9L, "PUBLIC", List.of());
+
+        verify(hashOperations).put("reco:video:owner", "vid1", "9");
+    }
+
+    @Test
+    void recordVideoDeleted_forgetsTheOwner() {
+        recommendationService.recordVideoDeleted("vid1");
+
+        verify(hashOperations).delete("reco:video:owner", "vid1");
     }
 
     /**
@@ -62,7 +85,7 @@ class RecommendationServiceImplTest {
         // video that is already ready.
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(null);
 
-        recommendationService.recordVideoUploaded("vid1", List.of("dance", "food"));
+        recommendationService.recordVideoUploaded("vid1", 9L, "PUBLIC", List.of("dance", "food"));
 
         verify(setOperations).add("reco:video:tags:vid1", "dance", "food");
         verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
@@ -79,7 +102,7 @@ class RecommendationServiceImplTest {
     void recordVideoUploaded_whenTheVideoIsAlreadyReady_indexesTheTagsAtItsPublishTime() {
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
 
-        recommendationService.recordVideoUploaded("vid1", List.of("dance"));
+        recommendationService.recordVideoUploaded("vid1", 9L, "PUBLIC", List.of("dance"));
 
         verify(zSetOperations).add("reco:tag:dance", "vid1", 1700.0);
     }
@@ -119,6 +142,99 @@ class RecommendationServiceImplTest {
         verify(zSetOperations).remove("reco:video:published", (Object) "vid1");
         verify(zSetOperations).remove("reco:video:watches", (Object) "vid1");
         verify(zSetOperations).remove("reco:video:completions", (Object) "vid1");
+    }
+
+    /**
+     * A takedown hid the video everywhere except here: it stayed in trending and the tag indexes,
+     * so the feed kept handing out an id that hydrates to nothing and costs the viewer a slot.
+     */
+    @Test
+    void recordTakenDown_withdrawsTheVideoFromEverythingCandidateGenerationReads() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordTakenDown("vid1");
+
+        verify(setOperations).add("reco:video:taken-down", "vid1");
+        verify(zSetOperations).remove("reco:tag:dance", (Object) "vid1");
+        verify(zSetOperations).remove("reco:trending", (Object) "vid1");
+        verify(zSetOperations, times(RecoKeys.TRENDING_WINDOW_HOURS))
+                .remove(startsWith("reco:trend:"), eq((Object) "vid1"));
+        // Kept, unlike a deletion: a restore has to be able to put the video back.
+        verify(redisTemplate, never()).delete("reco:video:tags:vid1");
+    }
+
+    /** Otherwise the owner's own likes on a hidden video walk it back into trending. */
+    @Test
+    void engagementOnAHiddenVideo_doesNotPutItBackIntoTrending() {
+        when(setOperations.isMember("reco:video:taken-down", "vid1")).thenReturn(true);
+
+        recommendationService.recordLike("vid1", true);
+
+        verify(zSetOperations, never()).incrementScore(startsWith("reco:trend:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    @Test
+    void recordRestored_putsTheVideoBackUnderItsTagsAtItsOriginalPublishTime() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+        when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
+
+        recommendationService.recordRestored("vid1");
+
+        verify(setOperations).remove("reco:video:taken-down", "vid1");
+        verify(zSetOperations).add("reco:tag:dance", "vid1", 1700.0);
+    }
+
+    /** Restoring a takedown must not undo the owner making the video private. */
+    @Test
+    void recordRestored_ofAPrivateVideo_keepsItOutOfTheFeed() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+        when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
+        when(setOperations.isMember("reco:video:private", "vid1")).thenReturn(true);
+
+        recommendationService.recordRestored("vid1");
+
+        verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * Visibility rode only on the publication, so a video made PRIVATE or FRIENDS afterwards kept
+     * being recommended to everyone.
+     */
+    @Test
+    void recordVisibilityChanged_toPrivate_withdrawsTheVideo() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordVisibilityChanged("vid1", "FRIENDS");
+
+        verify(setOperations).add("reco:video:private", "vid1");
+        verify(zSetOperations).remove("reco:tag:dance", (Object) "vid1");
+        verify(zSetOperations).remove("reco:trending", (Object) "vid1");
+    }
+
+    @Test
+    void recordVisibilityChanged_backToPublic_reindexesTheVideo() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+        when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
+
+        recommendationService.recordVisibilityChanged("vid1", "PUBLIC");
+
+        verify(setOperations).remove("reco:video:private", "vid1");
+        verify(zSetOperations).add("reco:tag:dance", "vid1", 1700.0);
+    }
+
+    /** A video uploaded PRIVATE was recommended the moment moderation approved it. */
+    @Test
+    void aVideoUploadedPrivate_isNotIndexedWhenItBecomesReady() {
+        // What the SADD in recordVideoUploaded leaves behind in real Redis.
+        when(setOperations.isMember("reco:video:private", "vid1")).thenReturn(true);
+        recommendationService.recordVideoUploaded("vid1", 9L, "PRIVATE", List.of("dance"));
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordVideoReady("vid1");
+
+        verify(setOperations).add("reco:video:private", "vid1");
+        verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations, never()).incrementScore(startsWith("reco:trend:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
     }
 
     /**

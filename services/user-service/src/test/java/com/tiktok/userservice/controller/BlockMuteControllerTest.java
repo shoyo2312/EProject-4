@@ -185,4 +185,32 @@ class BlockMuteControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.content[0].userId").value(11));
     }
+
+    /**
+     * Service-to-service: chat-service has to refuse a conversation across a block, and it asks
+     * from a WebSocket frame as often as from an HTTP request, so there is no caller token to
+     * forward. The gateway denies this prefix, so only the internal network reaches it.
+     */
+    @Test
+    void blockBetween_answersWithoutATokenForInternalCallers() throws Exception {
+        when(blockService.isBlockedBetween(1L, 2L)).thenReturn(true);
+
+        mockMvc.perform(get("/api/v1/users/internal/blocks").param("userA", "1").param("userB", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.blocked").value(true));
+    }
+
+    /**
+     * recommendation-service drops muted accounts out of the feed and has no read path into this
+     * database. Same internal prefix as the block check, so the gateway keeps it off the internet.
+     */
+    @Test
+    void mutedIds_answersWithoutATokenForInternalCallers() throws Exception {
+        when(muteService.mutedIds(1L)).thenReturn(List.of(2L, 3L));
+
+        mockMvc.perform(get("/api/v1/users/internal/1/muted-ids"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0]").value(2))
+                .andExpect(jsonPath("$.data[1]").value(3));
+    }
 }

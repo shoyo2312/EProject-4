@@ -39,6 +39,13 @@ public class SecurityConfig {
                         .authenticationEntryPoint(restAuthenticationEntryPoint)
                         .accessDeniedHandler(restAccessDeniedHandler))
                 .authorizeExchange(exchanges -> exchanges
+                        // Service-to-service endpoints the owning service leaves open because only
+                        // other services should reach them. First, so no later rule can open them.
+                        .pathMatchers("/api/v1/users/internal/**").denyAll()
+                        // Unfiltered by visibility on purpose (interaction-service needs the owner
+                        // of PRIVATE videos too), so from outside it would name the owner of any
+                        // private video id.
+                        .pathMatchers("/api/v1/videos/*/policy").denyAll()
                         // Ahead of the permitAll below, which would otherwise swallow it: the
                         // admin console's user directory shares auth-service's public prefix but
                         // is not a sign-in endpoint. auth-service still enforces ROLE_ADMIN — this

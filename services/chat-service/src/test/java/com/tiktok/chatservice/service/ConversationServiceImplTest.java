@@ -1,6 +1,8 @@
 package com.tiktok.chatservice.service;
 
+import com.tiktok.chatservice.client.BlockClient;
 import com.tiktok.chatservice.dto.response.ConversationResponse;
+import com.tiktok.chatservice.exception.MessagingBlockedException;
 import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.exception.CannotMessageSelfException;
 import com.tiktok.chatservice.exception.ConversationNotFoundException;
@@ -20,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -37,7 +40,19 @@ class ConversationServiceImplTest {
 
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
-        conversationService = new ConversationServiceImpl(conversationRepository, conversationMapper);
+        conversationService = new ConversationServiceImpl(conversationRepository, conversationMapper, blockClient);
+    }
+
+    @Mock
+    private BlockClient blockClient;
+
+    @Test
+    void getOrCreate_acrossABlock_isRefusedAndNothingIsCreated() {
+        doThrow(new MessagingBlockedException()).when(blockClient).requireNotBlocked(1L, 2L);
+
+        assertThatThrownBy(() -> conversationService.getOrCreate(1L, 2L))
+                .isInstanceOf(MessagingBlockedException.class);
+        verify(conversationRepository, never()).save(any());
     }
 
     @Test

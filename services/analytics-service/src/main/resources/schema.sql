@@ -12,7 +12,7 @@
 -- reorder in place. Applying this to one already deployed takes a rebuild into a new table.
 CREATE TABLE IF NOT EXISTS engagement_events (
     event_id    String,
-    event_type  LowCardinality(String), -- PUBLISHED, LIKED, UNLIKED, COMMENTED, SHARED
+    event_type  LowCardinality(String), -- PUBLISHED, LIKED, UNLIKED, COMMENTED, UNCOMMENTED, SHARED
     video_id    String,
     user_id     Int64,
     occurred_at DateTime64(3)

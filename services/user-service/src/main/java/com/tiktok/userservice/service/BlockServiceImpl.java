@@ -3,6 +3,7 @@ package com.tiktok.userservice.service;
 import com.tiktok.userservice.dto.response.BlockResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.entity.UserBlock;
+import com.tiktok.userservice.event.producer.UserEventPublisher;
 import com.tiktok.userservice.exception.AlreadyBlockedException;
 import com.tiktok.userservice.exception.CannotBlockSelfException;
 import com.tiktok.userservice.exception.NotBlockedException;
@@ -25,6 +26,7 @@ public class BlockServiceImpl implements BlockService {
     private final UserFollowRepository userFollowRepository;
     private final UserProfileRepository userProfileRepository;
     private final UserProfileBatchAssembler profileBatchAssembler;
+    private final UserEventPublisher userEventPublisher;
 
     @Override
     @Transactional
@@ -78,12 +80,20 @@ public class BlockServiceImpl implements BlockService {
         return profileBatchAssembler.toResponses(blockedIds);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isBlockedBetween(Long userA, Long userB) {
+        return userBlockRepository.existsBlockBetween(userA, userB);
+    }
+
     private void removeFollowIfPresent(Long followerId, Long followingId) {
         userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(followerId, followingId)
                 .ifPresent(follow -> {
                     follow.markDeleted();
                     userProfileRepository.decrementFollowingCount(followerId);
                     userProfileRepository.decrementFollowerCount(followingId);
+                    // Same announcement unfollow makes: a follow ended, whichever path ended it.
+                    userEventPublisher.publishFollowChanged(followerId, followingId, false);
                 });
     }
 }

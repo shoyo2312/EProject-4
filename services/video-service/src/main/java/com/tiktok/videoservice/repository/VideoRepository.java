@@ -7,6 +7,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -71,4 +72,8 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      * the one that removes it from a read path the deletion would otherwise race.
      */
     List<Video> findTop100ByVisibilityEventPendingAtIsNotNullOrderByVisibilityEventPendingAtAsc();
+
+    /** For StuckVideoSweeper. A handful of rows at most, so feed_idx's status prefix is enough. */
+    List<Video> findTop100ByStatusAndCreatedAtBeforeAndDeletedAtIsNullOrderByCreatedAtAsc(
+            VideoStatus status, Instant createdBefore);
 }

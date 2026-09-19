@@ -31,7 +31,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
      * visits open an authenticated connection with a token it can read out of the URL.
      */
     @Value("${websocket.allowed-origins}")
-    private String[] allowedOrigins;
+    private final String[] allowedOrigins;
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {

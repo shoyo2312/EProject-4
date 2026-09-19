@@ -1,9 +1,10 @@
 package com.tiktok.chatservice.service;
 
+import com.tiktok.chatservice.client.BlockClient;
 import com.tiktok.chatservice.dto.request.SendMessageRequest;
+import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.dto.response.MessagePageResponse;
 import com.tiktok.chatservice.dto.response.MessageResponse;
-import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.entity.Message;
 import com.tiktok.chatservice.exception.InvalidCursorException;
 import com.tiktok.chatservice.mapper.MessageMapper;
@@ -38,10 +39,18 @@ public class MessageServiceImpl implements MessageService {
     private final MessageRepository messageRepository;
     private final MessageMapper messageMapper;
     private final SimpMessagingTemplate messagingTemplate;
+    private final BlockClient blockClient;
 
     @Override
     public MessageResponse sendMessage(String conversationId, Long senderId, SendMessageRequest request) {
         Conversation conversation = conversationService.requireParticipant(senderId, conversationId);
+        // Per message, not only when the conversation opens: a block placed later has to stop a
+        // thread that already exists.
+        for (Long participant : conversation.getParticipantIds()) {
+            if (!participant.equals(senderId)) {
+                blockClient.requireNotBlocked(senderId, participant);
+            }
+        }
 
         Instant now = Instant.now();
         Message message = Message.builder()
@@ -53,8 +62,10 @@ public class MessageServiceImpl implements MessageService {
                 .build();
         messageRepository.save(message);
 
-        conversation.recordMessage(senderId, request.content(), now);
-        conversationRepository.save(conversation);
+        // A field-level update rather than save(conversation): the other participant writes this
+        // same document on every send and read, and a whole-document save under @Version lost
+        // that race after the message was already stored. See ConversationRepositoryCustom.
+        conversationRepository.recordMessage(conversationId, senderId, request.content(), now);
 
         MessageResponse response = messageMapper.toResponse(message);
         messagingTemplate.convertAndSend(TOPIC_PREFIX + conversationId, response);
@@ -82,9 +93,8 @@ public class MessageServiceImpl implements MessageService {
 
     @Override
     public void markRead(String conversationId, Long currentUserId) {
-        Conversation conversation = conversationService.requireParticipant(currentUserId, conversationId);
-        conversation.markRead(currentUserId, Instant.now());
-        conversationRepository.save(conversation);
+        conversationService.requireParticipant(currentUserId, conversationId);
+        conversationRepository.markRead(conversationId, currentUserId, Instant.now());
     }
 
     /**

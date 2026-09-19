@@ -2,6 +2,7 @@ package com.tiktok.userservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.userservice.dto.response.BlockResponse;
+import com.tiktok.userservice.dto.response.BlockStatusResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.service.BlockService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -39,6 +40,17 @@ public class BlockController {
             @PathVariable Long userId) {
         blockService.unblock(currentUserId, userId);
         return ApiResponse.success(null);
+    }
+
+    /**
+     * Service-to-service, for chat-service: a conversation must not open, or carry a message,
+     * across a block. No token — chat asks from WebSocket frames too, where there is none to
+     * forward — so this prefix is permitted here and denied at the gateway.
+     */
+    @Operation(summary = "Internal: whether either user has blocked the other")
+    @GetMapping("/api/v1/users/internal/blocks")
+    public ApiResponse<BlockStatusResponse> blockBetween(@RequestParam Long userA, @RequestParam Long userB) {
+        return ApiResponse.success(new BlockStatusResponse(blockService.isBlockedBetween(userA, userB)));
     }
 
     @Operation(summary = "Accounts the caller has blocked")

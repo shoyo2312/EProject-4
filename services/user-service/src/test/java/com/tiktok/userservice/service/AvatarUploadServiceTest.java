@@ -9,7 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockMultipartFile;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -40,8 +39,8 @@ class AvatarUploadServiceTest {
         service = new AvatarUploadService(
                 minioClient,
                 new MinioProperties("http://localhost:9000", "key", "secret", "video-media"),
-                userProfileService);
-        ReflectionTestUtils.setField(service, "maxBytes", 1_000L);
+                userProfileService,
+                1_000L);
     }
 
     @Test
@@ -87,8 +86,55 @@ class AvatarUploadServiceTest {
         verify(minioClient, never()).putObject(any());
     }
 
+    /**
+     * The declared type the caller sent, over bytes that really are that format (or zeros for a
+     * type with no signature here), so the tests about size and declared type stay about that.
+     */
     private static MockMultipartFile image(String contentType, int bytes) {
-        return new MockMultipartFile("file", "photo", contentType, new byte[bytes]);
+        byte[] body = new byte[bytes];
+        byte[] magic = switch (contentType) {
+            case "image/png" -> PNG;
+            case "image/jpeg" -> JPEG;
+            case "image/webp" -> WEBP;
+            default -> new byte[0];
+        };
+        System.arraycopy(magic, 0, body, 0, Math.min(magic.length, bytes));
+        return new MockMultipartFile("file", "photo", contentType, body);
+    }
+
+    private static final byte[] PNG = {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    private static final byte[] JPEG = {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0};
+    private static final byte[] WEBP = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'E', 'B', 'P'};
+
+    /**
+     * The declared type is the one part of an upload the sender picks freely. An HTML page sent as
+     * image/png was stored, and served from the public avatars/ prefix under that type — whatever
+     * a browser or an intermediary sniffs it as, it is not a picture.
+     */
+    @Test
+    void rejectsBytesThatAreNotAnImageWhateverTheDeclaredType() throws Exception {
+        byte[] html = "<html><script>alert(1)</script></html>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+        assertThatThrownBy(() -> service.replaceOwnAvatar(USER_ID,
+                new MockMultipartFile("file", "photo", "image/png", html)))
+                .isInstanceOf(InvalidAvatarException.class);
+
+        verify(minioClient, never()).putObject(any());
+    }
+
+    /** Stored as what the bytes are, so the Content-Type served never contradicts the file. */
+    @Test
+    void storesTheTypeTheBytesActuallyAre() throws Exception {
+        when(userProfileService.replaceOwnAvatarUrl(eq(USER_ID), anyString()))
+                .thenAnswer(invocation -> profileWith(invocation.getArgument(1)));
+        MockMultipartFile pngLabelledJpeg = new MockMultipartFile("file", "photo", "image/jpeg",
+                image("image/png", 100).getBytes());
+
+        service.replaceOwnAvatar(USER_ID, pngLabelledJpeg);
+
+        ArgumentCaptor<PutObjectArgs> put = ArgumentCaptor.forClass(PutObjectArgs.class);
+        verify(minioClient).putObject(put.capture());
+        assertThat(put.getValue().contentType()).isEqualTo("image/png");
     }
 
     private static UserProfileResponse profileWith(String avatarUrl) {

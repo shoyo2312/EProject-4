@@ -40,7 +40,7 @@ public class EngagementEventRepository {
                 """
                 SELECT
                     countIf(event_type = 'LIKED') - countIf(event_type = 'UNLIKED') AS likes,
-                    countIf(event_type = 'COMMENTED') AS comments,
+                    countIf(event_type = 'COMMENTED') - countIf(event_type = 'UNCOMMENTED') AS comments,
                     countIf(event_type = 'SHARED') AS shares
                 FROM engagement_events FINAL
                 WHERE video_id = ?

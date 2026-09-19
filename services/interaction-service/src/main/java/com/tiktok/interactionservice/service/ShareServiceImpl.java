@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.common.id.SnowflakeIdGenerator;
+import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.ShareResponse;
 import com.tiktok.interactionservice.entity.ShareByVideo;
 import com.tiktok.interactionservice.entity.ShareByVideoKey;
@@ -24,9 +25,11 @@ public class ShareServiceImpl implements ShareService {
     private final CounterCacheService counterCacheService;
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
+    private final VideoOwnershipClient videoOwnershipClient;
 
     @Override
     public ShareResponse share(Long videoId, Long currentUserId) {
+        videoOwnershipClient.requireVisible(videoId);
         // Read before the write, and add the delta here rather than reading again afterwards. A
         // Cassandra counter read is not guaranteed to see the increment that just happened, and
         // the read after an invalidate is the one that repopulates the cache — so a stale value

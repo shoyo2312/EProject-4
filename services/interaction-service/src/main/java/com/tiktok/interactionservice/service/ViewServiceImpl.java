@@ -64,6 +64,7 @@ public class ViewServiceImpl implements ViewService {
 
     @Override
     public ViewResponse recordView(Long videoId, Long currentUserId, ViewRequest request) {
+        videoOwnershipClient.requireVisible(videoId);
         // Read before the write, and add the delta here rather than reading again afterwards. A
         // Cassandra counter read is not guaranteed to see the increment that just happened, and
         // the read after an invalidate is the one that repopulates the cache — so a stale value
@@ -107,6 +108,7 @@ public class ViewServiceImpl implements ViewService {
 
     @Override
     public WatchResponse recordWatch(Long videoId, Long currentUserId, WatchRequest request) {
+        videoOwnershipClient.requireVisible(videoId);
         // The denominator comes from video-service when it knows it, and only falls back to the
         // client's own claim when it does not. Both numbers arriving from the client is not merely
         // a wrong row, it is the most attractive row in the training set — the label is a ratio,

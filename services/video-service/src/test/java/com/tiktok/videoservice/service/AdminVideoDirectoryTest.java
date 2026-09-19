@@ -1,6 +1,9 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import io.minio.MinioClient;
+import java.time.Duration;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -27,8 +30,56 @@ class AdminVideoDirectoryTest {
     private static final Instant DELETED_AT = Instant.parse("2026-09-01T00:00:00Z");
 
     private final VideoRepository videoRepository = mock(VideoRepository.class);
-    private final AdminVideoDirectory directory =
-            new AdminVideoDirectory(videoRepository, new VideoMapperImpl());
+    private static final MinioProperties MINIO = new MinioProperties(
+            "http://localhost:9000", "key", "secret", "video-media", "us-east-1", Duration.ofMinutes(15));
+
+    // Real client: presigning is local signing arithmetic, no request leaves the test.
+    private final AdminVideoDirectory directory = new AdminVideoDirectory(videoRepository, new VideoMapperImpl(),
+            new QuarantinedMediaUrls(MinioClient.builder().endpoint(MINIO.endpoint())
+                    .credentials(MINIO.accessKey(), MINIO.secretKey()).region(MINIO.region()).build(), MINIO));
+
+    private Video withMedia(VideoStatus status) {
+        return Video.builder()
+                .id("1")
+                .userId(7L)
+                .status(status)
+                .visibility(VideoVisibility.PUBLIC)
+                .hlsUrl("http://localhost:9000/video-media/hls/1/source.mp4")
+                .thumbnailUrl("http://localhost:9000/video-media/thumbnails/1.jpg")
+                .build();
+    }
+
+    /**
+     * media-worker moves a rejected or taken-down video's media under quarantine/, which is not
+     * publicly readable, so the stored URLs 404 for everyone — including the moderator deciding
+     * whether to restore it. The console gets short-lived signed URLs to the quarantined copies.
+     */
+    @Test
+    void quarantinedVideo_isServedToTheConsoleThroughSignedQuarantineUrls() {
+        when(videoRepository.findById("1")).thenReturn(Optional.of(withMedia(VideoStatus.TAKEN_DOWN)));
+
+        VideoResponse response = directory.getById("1");
+
+        assertThat(response.hlsUrl())
+                .startsWith("http://localhost:9000/video-media/quarantine/hls/1/source.mp4?")
+                .contains("X-Amz-Signature=");
+        assertThat(response.thumbnailUrl()).startsWith("http://localhost:9000/video-media/quarantine/thumbnails/1.jpg?");
+        assertThat(response.previewUrl()).isNull();
+    }
+
+    @Test
+    void rejectedVideo_isQuarantinedToo() {
+        when(videoRepository.findById("1")).thenReturn(Optional.of(withMedia(VideoStatus.REJECTED)));
+
+        assertThat(directory.getById("1").hlsUrl()).contains("/quarantine/hls/1/source.mp4?");
+    }
+
+    @Test
+    void publishedVideo_keepsItsPublicUrls() {
+        when(videoRepository.findById("1")).thenReturn(Optional.of(withMedia(VideoStatus.PUBLISHED)));
+
+        assertThat(directory.getById("1").hlsUrl()).isEqualTo("http://localhost:9000/video-media/hls/1/source.mp4");
+    }
 
     private Video video(VideoStatus status, VideoVisibility visibility, Instant deletedAt) {
         return Video.builder()

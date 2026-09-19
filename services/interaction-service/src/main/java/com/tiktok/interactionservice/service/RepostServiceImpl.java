@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
+import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.RepostContextResponse;
 import com.tiktok.interactionservice.dto.response.RepostStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
@@ -57,9 +58,11 @@ public class RepostServiceImpl implements RepostService {
     private final CounterCacheService counterCacheService;
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
+    private final VideoOwnershipClient videoOwnershipClient;
 
     @Override
     public RepostStatusResponse repost(Long videoId, Long currentUserId) {
+        videoOwnershipClient.requireVisible(videoId);
         rateLimiter.require("repost-rate", videoId, currentUserId, RepostRateLimitedException::new);
 
         long repostCount = counterCacheService.getCounts(videoId).repostCount();

@@ -23,7 +23,7 @@ public class EmailNotificationListener {
      * an existing one, and the admin-login code, which is the console's second factor.
      */
     @Value("${auth.otp.log-to-console}")
-    private boolean logOtpToConsole;
+    private final boolean logOtpToConsole;
 
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
