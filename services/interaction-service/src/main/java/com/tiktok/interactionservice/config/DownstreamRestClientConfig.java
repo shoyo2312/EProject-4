@@ -3,7 +3,10 @@ package com.tiktok.interactionservice.config;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+
+import java.time.Duration;
 
 @Configuration
 public class DownstreamRestClientConfig {
@@ -16,7 +19,13 @@ public class DownstreamRestClientConfig {
      * video that is not already PUBLIC and PUBLISHED.
      */
     @Bean
-    public RestClient videoServiceRestClient(@Value("${downstream.video-service-uri}") String videoServiceUri) {
-        return RestClient.builder().baseUrl(videoServiceUri).build();
+    public RestClient videoServiceRestClient(@Value("${downstream.video-service-uri}") String videoServiceUri,
+                                             @Value("${downstream.timeout-millis:1000}") long timeoutMillis) {
+        // Without a timeout the JDK waits forever, so a downstream that accepts the connection
+        // and never answers holds a request thread per call until the pool runs dry.
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofMillis(timeoutMillis));
+        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
+        return RestClient.builder().baseUrl(videoServiceUri).requestFactory(requestFactory).build();
     }
 }
