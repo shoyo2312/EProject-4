@@ -11,9 +11,10 @@ import java.util.List;
 import java.util.function.Supplier;
 
 /**
- * A per-(viewer, video, hour) counter, shared by every endpoint that lets one viewer move one
- * video's counter more than once: views, watch sessions, and shares. Each bucket is a separate
- * key so no endpoint eats another's budget.
+ * A per-(viewer, target, hour) counter, shared by every endpoint that lets one viewer move one
+ * counter more than once: views, watch sessions, shares, saves, reposts and comment likes. The
+ * target is usually a video; comment likes key by comment id instead, so one busy thread cannot
+ * spend the whole video's budget. Each bucket is a separate key so no endpoint eats another's.
  *
  * <p>Deliberately loud rather than a silent no-op: a client being throttled has a bug or is being
  * replayed, and both are worth surfacing to whoever wrote it, at the cost of telling a viewer who
@@ -60,11 +61,12 @@ public class InteractionRateLimiter {
      * limit exists to keep a counter honest, not to be a dependency of the endpoints it guards.
      *
      * @param bucket     which budget, e.g. {@code "view-rate"} — part of the key
+     * @param targetId   what the counter belongs to: a video id, or a comment id for comment likes
      * @param onExceeded thrown when the caller is past the limit; supplied by the caller so each
      *                   endpoint reports its own code
      */
-    public void require(String bucket, Long videoId, Long userId, Supplier<RuntimeException> onExceeded) {
-        String key = "interaction:%s:%d:%d".formatted(bucket, userId, videoId);
+    public void require(String bucket, Long targetId, Long userId, Supplier<RuntimeException> onExceeded) {
+        String key = "interaction:%s:%d:%d".formatted(bucket, userId, targetId);
 
         Long hits;
         try {
