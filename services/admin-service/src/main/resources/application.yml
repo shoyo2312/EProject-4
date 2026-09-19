@@ -6,7 +6,7 @@ spring:
     name: admin-service
 
   datasource:
-    url: jdbc:postgresql://localhost:5439/admin_db
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5439}/admin_db
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
 
