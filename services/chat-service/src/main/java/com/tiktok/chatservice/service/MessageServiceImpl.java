@@ -5,6 +5,7 @@ import com.tiktok.chatservice.dto.response.MessagePageResponse;
 import com.tiktok.chatservice.dto.response.MessageResponse;
 import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.entity.Message;
+import com.tiktok.chatservice.exception.InvalidCursorException;
 import com.tiktok.chatservice.mapper.MessageMapper;
 import com.tiktok.chatservice.repository.ConversationRepository;
 import com.tiktok.chatservice.repository.MessageRepository;
@@ -17,6 +18,7 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.Base64;
 import java.util.List;
 
@@ -85,11 +87,19 @@ public class MessageServiceImpl implements MessageService {
         conversationRepository.save(conversation);
     }
 
+    /**
+     * The cursor is client input and comes back on every page request, so a mangled one is a
+     * routine 400 rather than the 500 an unguarded decode produces.
+     */
     private Instant decodeCursor(String cursor) {
         if (cursor == null) {
             return Instant.now().plusSeconds(60);
         }
-        return Instant.parse(new String(Base64.getDecoder().decode(cursor), StandardCharsets.UTF_8));
+        try {
+            return Instant.parse(new String(Base64.getDecoder().decode(cursor), StandardCharsets.UTF_8));
+        } catch (IllegalArgumentException | DateTimeParseException e) {
+            throw new InvalidCursorException(cursor);
+        }
     }
 
     private String encodeCursor(Instant instant) {
