@@ -13,6 +13,10 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
 
     Optional<Report> findByIdAndDeletedAtIsNull(Long id);
 
+    /** The reporter's standing report against this target, if they already filed one. */
+    Optional<Report> findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+            Long reporterId, ReportTargetType targetType, String targetId);
+
     Page<Report> findByStatusAndDeletedAtIsNull(ReportStatus status, Pageable pageable);
 
     Page<Report> findByTargetTypeAndDeletedAtIsNull(ReportTargetType targetType, Pageable pageable);
