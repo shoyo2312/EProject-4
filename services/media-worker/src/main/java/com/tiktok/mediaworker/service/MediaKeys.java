@@ -53,6 +53,11 @@ public final class MediaKeys {
         return hlsPrefix(videoId) + "source.mp4";
     }
 
+    /** Present while the video's media is quarantined. See MediaQuarantineService. */
+    public static String quarantineMarker(String videoId) {
+        return "quarantine/markers/%s".formatted(videoId);
+    }
+
     public static String hlsPlaylist(String videoId) {
         return hlsPrefix(videoId) + "master.m3u8";
     }

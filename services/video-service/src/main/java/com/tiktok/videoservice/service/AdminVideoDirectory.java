@@ -25,10 +25,13 @@ public class AdminVideoDirectory {
 
     private final VideoRepository videoRepository;
     private final VideoMapper videoMapper;
+    private final QuarantinedMediaUrls quarantinedMediaUrls;
 
     public Page<VideoResponse> search(String query, VideoStatus status, Pageable pageable) {
         String term = (query == null || query.isBlank()) ? null : query.trim();
-        return videoRepository.findForAdmin(status, term, pageable).map(videoMapper::toAdminResponse);
+        return videoRepository.findForAdmin(status, term, pageable)
+                .map(videoMapper::toAdminResponse)
+                .map(quarantinedMediaUrls::forAdmin);
     }
 
     /**
@@ -43,6 +46,7 @@ public class AdminVideoDirectory {
     public VideoResponse getById(String videoId) {
         return videoRepository.findById(videoId)
                 .map(videoMapper::toAdminResponse)
+                .map(quarantinedMediaUrls::forAdmin)
                 .orElseThrow(() -> new VideoNotFoundException(videoId));
     }
 }

@@ -7,6 +7,7 @@ import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoTranscodedEventProducer;
 import com.tiktok.mediaworker.service.MediaCleanupService;
+import com.tiktok.mediaworker.service.MediaQuarantineService;
 import com.tiktok.mediaworker.service.TranscodeResult;
 import com.tiktok.mediaworker.service.TranscodeService;
 import org.junit.jupiter.api.Test;
@@ -49,7 +50,38 @@ class VideoEventConsumerTest {
     /** No backoff in tests: the pause is real time and proves nothing the attempt count doesn't. */
     private VideoEventConsumer consumer() {
         return new VideoEventConsumer(
-                transcodeService, mediaCleanupService, eventProducer, objectMapper, ATTEMPTS, 0L);
+                transcodeService, mediaCleanupService, eventProducer, quarantine, objectMapper, ATTEMPTS, 0L);
+    }
+
+    @Mock
+    private MediaQuarantineService quarantine;
+
+    /**
+     * Transcoding takes minutes, and a moderator acting on a fresh upload is routinely overtaken
+     * by it: the takedown quarantines nothing because nothing exists yet, and then the transcode
+     * writes its output to the public prefixes.
+     */
+    @Test
+    void onMessage_transcodeFinishingAfterATakedown_quarantinesWhatItJustWrote() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid9", 1L, "t", null, "s3://raw/vid9.mp4", "PUBLIC", List.of());
+        when(transcodeService.transcode("vid9", "s3://raw/vid9.mp4"))
+                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
+        when(quarantine.isQuarantined("vid9")).thenReturn(true);
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        verify(quarantine).quarantine("vid9");
+    }
+
+    @Test
+    void onMessage_ordinaryTranscode_leavesTheMediaPublic() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid8", 1L, "t", null, "s3://raw/vid8.mp4", "PUBLIC", List.of());
+        when(transcodeService.transcode("vid8", "s3://raw/vid8.mp4"))
+                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        verify(quarantine, never()).quarantine(anyString());
     }
 
     private byte[] header(String eventType) {

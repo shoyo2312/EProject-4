@@ -40,6 +40,10 @@ public class BucketInitializer implements ApplicationRunner {
      * behind a CDN and does not expose the origin. Visibility is not enforced here: a video
      * turned PRIVATE after transcoding keeps readable media, and only its metadata stops being
      * served. Signed CDN URLs are the fix when that matters.
+     *
+     * <p>Moderation is enforced here, by moving rather than by policy: a REJECTED or TAKEN_DOWN
+     * video's objects are moved under {@code quarantine/}, which this policy does not cover — see
+     * MediaQuarantineService.
      */
     private static final String READABLE_OUTPUT_POLICY = """
             {

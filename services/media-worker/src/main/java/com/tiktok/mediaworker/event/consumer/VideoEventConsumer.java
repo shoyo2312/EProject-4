@@ -6,6 +6,7 @@ import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoTranscodedEventProducer;
 import com.tiktok.mediaworker.service.MediaCleanupService;
+import com.tiktok.mediaworker.service.MediaQuarantineService;
 import com.tiktok.mediaworker.service.MediaRejectedException;
 import com.tiktok.mediaworker.service.TranscodeResult;
 import com.tiktok.mediaworker.service.TranscodeService;
@@ -38,6 +39,7 @@ public class VideoEventConsumer {
     private final TranscodeService transcodeService;
     private final MediaCleanupService mediaCleanupService;
     private final VideoTranscodedEventProducer eventProducer;
+    private final MediaQuarantineService quarantine;
     private final ObjectMapper objectMapper;
     private final int transcodeAttempts;
     private final long retryBackoffMillis;
@@ -45,12 +47,14 @@ public class VideoEventConsumer {
     public VideoEventConsumer(TranscodeService transcodeService,
                               MediaCleanupService mediaCleanupService,
                               VideoTranscodedEventProducer eventProducer,
+                              MediaQuarantineService quarantine,
                               ObjectMapper objectMapper,
                               @Value("${media.transcode.attempts:3}") int transcodeAttempts,
                               @Value("${media.transcode.retry-backoff-millis:2000}") long retryBackoffMillis) {
         this.transcodeService = transcodeService;
         this.mediaCleanupService = mediaCleanupService;
         this.eventProducer = eventProducer;
+        this.quarantine = quarantine;
         this.objectMapper = objectMapper;
         this.transcodeAttempts = transcodeAttempts;
         this.retryBackoffMillis = retryBackoffMillis;
@@ -83,7 +87,13 @@ public class VideoEventConsumer {
      * media was sitting in the bucket, finished and correct.
      */
     private void handlePublished(VideoPublishedEvent event) {
-        eventProducer.publish(transcodeWithRetries(event));
+        VideoTranscodedEvent result = transcodeWithRetries(event);
+        // A takedown that landed while this was encoding had nothing to move yet, and the output
+        // was just written to the public prefixes. Its marker is still there, so finish its job.
+        if (result.success() && quarantine.isQuarantined(event.videoId())) {
+            quarantine.quarantine(event.videoId());
+        }
+        eventProducer.publish(result);
     }
 
     /**

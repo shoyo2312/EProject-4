@@ -87,7 +87,18 @@ class MediaCleanupServiceImplTest {
 
         service().deleteMediaFor("vid1", "https://elsewhere.example.test/other-bucket/raw/7/vid1.mp4");
 
-        assertThat(removedKeys()).containsExactly("thumbnails/vid1.jpg", "previews/vid1.webp");
+        assertThat(removedKeys()).noneMatch(key -> key.contains("raw/"));
+    }
+
+    /** A taken-down video deleted by its owner has its media under quarantine/, not where it started. */
+    @Test
+    void deleteMediaFor_removesQuarantinedCopiesAndTheMarker() throws Exception {
+        stubListing();
+
+        service().deleteMediaFor("vid1", "s3://video-media/raw/7/vid1.mp4");
+
+        assertThat(removedKeys()).contains(
+                "quarantine/thumbnails/vid1.jpg", "quarantine/previews/vid1.webp", "quarantine/markers/vid1");
     }
 
     /** One object that will not go must not take the rest of the cleanup with it. */
@@ -100,7 +111,8 @@ class MediaCleanupServiceImplTest {
 
         service().deleteMediaFor("vid1", "s3://video-media/raw/7/vid1.mp4");
 
-        assertThat(removedKeys()).hasSize(4);
+        // The first removal throws; the source upload is the last key and still gets its turn.
+        assertThat(removedKeys()).contains("raw/7/vid1.mp4");
     }
 
     /**

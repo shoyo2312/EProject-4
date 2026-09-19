@@ -1,8 +1,11 @@
 package com.tiktok.mediaworker.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoModerationEventProducer;
+import com.tiktok.mediaworker.service.MediaQuarantineService;
 import com.tiktok.mediaworker.service.ModerationService;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -30,6 +33,7 @@ public class VideoModerationConsumer {
 
     private final ModerationService moderationService;
     private final VideoModerationEventProducer eventProducer;
+    private final MediaQuarantineService quarantine;
     private final ObjectMapper objectMapper;
 
     @KafkaListener(topics = "media.video-transcoded-events", groupId = "media-worker-moderation")
@@ -47,6 +51,13 @@ public class VideoModerationConsumer {
         // moderate() never throws: an unreachable classifier comes back as a REVIEW verdict, not
         // as an exception, because a video with no verdict at all would sit at PENDING_MODERATION
         // with nothing left to move it.
-        eventProducer.publish(moderationService.moderate(event.videoId(), event.durationSeconds()));
+        VideoModerationCompletedEvent verdict = moderationService.moderate(event.videoId(), event.durationSeconds());
+        // Before the verdict goes out, so a failed move is redelivered and retried rather than
+        // leaving a rejected video's media public behind a published REJECTED. REVIEW stays
+        // readable on purpose: the admin deciding it has to be able to watch it.
+        if (verdict.verdict() == ModerationVerdict.REJECTED) {
+            quarantine.quarantine(event.videoId());
+        }
+        eventProducer.publish(verdict);
     }
 }
