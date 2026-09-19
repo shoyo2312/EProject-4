@@ -62,24 +62,25 @@ public class SaveServiceImpl implements SaveService {
             // stored against a counter that is short by one for good — the same compensation
             // LikeServiceImpl does around its claim.
             boolean countered = false;
+            boolean listed = false;
             try {
                 videoCountersRepository.incrementSaveCount(videoId, 1);
                 countered = true;
-                saveByUserTimeRepository.save(SaveByUserTime.builder()
-                        .key(SaveByUserTimeKey.builder()
-                                .userId(currentUserId)
-                                .createdAt(savedAt)
-                                .videoId(videoId)
-                                .build())
-                        .build());
+                saveByUserTimeRepository.save(listingRow(videoId, currentUserId, savedAt));
+                listed = true;
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishSave(videoId, currentUserId, true);
             } catch (RuntimeException ex) {
-                // Counter first, then the claim, each only if it actually landed. Giving the
-                // claim back alone would leave the increment behind, so the client's retry takes
-                // a fresh claim and adds a second one for the same save.
+                // Counter first, then the listing row, then the claim, each only if it actually
+                // landed. Giving the claim back alone would leave the increment behind, so the
+                // client's retry takes a fresh claim and adds a second one for the same save; and
+                // a listing row left behind keeps the video in the saved list with no claim.
                 if (countered) {
                     undo(() -> videoCountersRepository.incrementSaveCount(videoId, -1),
+                            videoId, currentUserId, ex);
+                }
+                if (listed) {
+                    undo(() -> saveByUserTimeRepository.deleteById(listingKey(videoId, currentUserId, savedAt)),
                             videoId, currentUserId, ex);
                 }
                 undo(() -> saveByUserRepository.deleteIfExists(currentUserId, videoId),
@@ -109,19 +110,21 @@ public class SaveServiceImpl implements SaveService {
         boolean wasSaved = executeLwtWithRetry(() -> saveByUserRepository.deleteIfExists(currentUserId, videoId));
         if (wasSaved) {
             boolean countered = false;
+            boolean delisted = false;
             try {
                 videoCountersRepository.incrementSaveCount(videoId, -1);
                 countered = true;
-                saveByUserTimeRepository.deleteById(SaveByUserTimeKey.builder()
-                        .userId(currentUserId)
-                        .createdAt(savedAt)
-                        .videoId(videoId)
-                        .build());
+                saveByUserTimeRepository.deleteById(listingKey(videoId, currentUserId, savedAt));
+                delisted = true;
                 counterCacheService.invalidate(videoId);
                 eventPublisher.publishSave(videoId, currentUserId, false);
             } catch (RuntimeException ex) {
                 if (countered) {
                     undo(() -> videoCountersRepository.incrementSaveCount(videoId, 1),
+                            videoId, currentUserId, ex);
+                }
+                if (delisted) {
+                    undo(() -> saveByUserTimeRepository.save(listingRow(videoId, currentUserId, savedAt)),
                             videoId, currentUserId, ex);
                 }
                 // The original timestamp, not a fresh one: the restored claim has to keep
@@ -171,6 +174,14 @@ public class SaveServiceImpl implements SaveService {
                 "Save/unsave could not be confirmed after retries, please try again");
         failure.initCause(lastError);
         throw failure;
+    }
+
+    private static SaveByUserTimeKey listingKey(Long videoId, Long userId, Instant savedAt) {
+        return SaveByUserTimeKey.builder().userId(userId).createdAt(savedAt).videoId(videoId).build();
+    }
+
+    private static SaveByUserTime listingRow(Long videoId, Long userId, Instant savedAt) {
+        return SaveByUserTime.builder().key(listingKey(videoId, userId, savedAt)).build();
     }
 
     /** Swallowed and logged: an exception is already on its way to the caller and it is the one worth reporting. */

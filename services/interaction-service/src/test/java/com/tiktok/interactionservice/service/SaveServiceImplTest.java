@@ -15,6 +15,7 @@ import org.springframework.boot.test.mock.mockito.SpyBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 
@@ -180,5 +181,31 @@ class SaveServiceImplTest extends AbstractInteractionServiceIT {
         saveService.unsave(42L, 1L);
 
         verify(eventPublisher).publishSave(42L, 1L, false);
+    }
+
+    /**
+     * The compensation gave the claim and the counter back but left the listing row, so a save
+     * that failed still showed up in the user's saved list with getStatus saying it was not saved.
+     */
+    @Test
+    void save_whoseEventCannotBePublished_leavesNothingInTheListing() {
+        doThrow(new IllegalStateException("broker down")).when(eventPublisher).publishSave(50L, 1L, true);
+
+        assertThatThrownBy(() -> saveService.save(50L, 1L)).isInstanceOf(IllegalStateException.class);
+
+        assertThat(saveService.getStatus(50L, 1L).saved()).isFalse();
+        assertThat(saveService.listSavedVideos(1L, null, 20).videoIds()).isEmpty();
+    }
+
+    /** The mirror: a failed unsave restored the claim over a listing row that was already gone. */
+    @Test
+    void unsave_whoseEventCannotBePublished_keepsTheVideoInTheListing() {
+        saveService.save(51L, 1L);
+        doThrow(new IllegalStateException("broker down")).when(eventPublisher).publishSave(51L, 1L, false);
+
+        assertThatThrownBy(() -> saveService.unsave(51L, 1L)).isInstanceOf(IllegalStateException.class);
+
+        assertThat(saveService.getStatus(51L, 1L).saved()).isTrue();
+        assertThat(saveService.listSavedVideos(1L, null, 20).videoIds()).containsExactly(51L);
     }
 }
