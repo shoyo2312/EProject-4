@@ -55,6 +55,7 @@ public class BucketInitializer implements ApplicationRunner {
                 "Resource": [
                   "arn:aws:s3:::%1$s/hls/*",
                   "arn:aws:s3:::%1$s/thumbnails/*",
+                "arn:aws:s3:::%1$s/previews/*",
                   "arn:aws:s3:::%1$s/avatars/*"
                 ]
               }]

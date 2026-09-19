@@ -52,6 +52,30 @@ class MediaQuarantineIntegrationTest {
         quarantine = new MediaQuarantineService(minioClient, properties);
     }
 
+    /**
+     * The hover preview is written next to the thumbnail and its URL is stored on the video, but
+     * the policy was written before previews existed and never listed their prefix: every preview
+     * answered 403 and the client fell back to the still frame without saying why.
+     */
+    @Test
+    void everyTranscodeOutputTheClientIsGiven_isReadableWithoutCredentials() throws Exception {
+        put("hls/v0/source.mp4");
+        put("thumbnails/v0.jpg");
+        put("previews/v0.webp");
+
+        assertThat(anonymousStatus("hls/v0/source.mp4")).isEqualTo(200);
+        assertThat(anonymousStatus("thumbnails/v0.jpg")).isEqualTo(200);
+        assertThat(anonymousStatus("previews/v0.webp")).isEqualTo(200);
+    }
+
+    /** raw/ holds the users' originals, reached only through a presigned upload. */
+    @Test
+    void rawUploads_stayPrivate() throws Exception {
+        put("raw/7/v0.mp4");
+
+        assertThat(anonymousStatus("raw/7/v0.mp4")).isNotEqualTo(200);
+    }
+
     @Test
     void quarantine_takesEveryTranscodedObjectOffTheAnonymousPath() throws Exception {
         put("hls/v1/source.mp4");
