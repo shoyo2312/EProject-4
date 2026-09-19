@@ -12,10 +12,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
-import java.util.List;
-import java.util.Locale;
+import java.util.Optional;
 
 /**
  * Receives the picture a user picked in the client and stores it as their avatar.
@@ -36,12 +36,8 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class AvatarUploadService {
 
-    /**
-     * What a browser will actually render, and nothing that renders as markup. An SVG is an image
-     * to a picker and a script host to a browser, so it is not on this list.
-     */
-    private static final List<String> ALLOWED_CONTENT_TYPES =
-            List.of("image/jpeg", "image/png", "image/webp");
+    /** Enough of the file to read every signature below; WebP's is the longest at 12 bytes. */
+    private static final int SIGNATURE_BYTES = 12;
 
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
@@ -99,14 +95,44 @@ public class AvatarUploadService {
             throw new InvalidAvatarException("The image must be %d bytes or smaller".formatted(maxBytes));
         }
 
-        String contentType = file.getContentType() == null
-                ? ""
-                : file.getContentType().split(";")[0].trim().toLowerCase(Locale.ROOT);
-        if (!ALLOWED_CONTENT_TYPES.contains(contentType)) {
-            throw new InvalidAvatarException("The image must be a JPEG, PNG, or WebP");
+        // Decided by the bytes, never by the declared type or the file name: both are chosen by the
+        // sender, and the object is served straight to browsers from a public prefix under the
+        // type stored here. An HTML page declared as image/png used to go through.
+        byte[] head;
+        try (InputStream body = file.getInputStream()) {
+            head = body.readNBytes(SIGNATURE_BYTES);
+        } catch (IOException e) {
+            throw new InvalidAvatarException("The image could not be read");
         }
-        // Stored as the type declared here, never as one guessed from the file name: the object is
-        // served straight to browsers, and a name is the one part of an upload the sender chooses.
-        return contentType;
+        return sniff(head).orElseThrow(() -> new InvalidAvatarException("The image must be a JPEG, PNG, or WebP"));
+    }
+
+    /**
+     * JPEG, PNG and WebP only: what a browser will render, and nothing that renders as markup. An
+     * SVG is an image to a picker and a script host to a browser, so it has no signature here.
+     */
+    private static Optional<String> sniff(byte[] head) {
+        if (startsWith(head, 0, 0xFF, 0xD8, 0xFF)) {
+            return Optional.of("image/jpeg");
+        }
+        if (startsWith(head, 0, 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n')) {
+            return Optional.of("image/png");
+        }
+        if (startsWith(head, 0, 'R', 'I', 'F', 'F') && startsWith(head, 8, 'W', 'E', 'B', 'P')) {
+            return Optional.of("image/webp");
+        }
+        return Optional.empty();
+    }
+
+    private static boolean startsWith(byte[] bytes, int offset, int... signature) {
+        if (bytes.length < offset + signature.length) {
+            return false;
+        }
+        for (int i = 0; i < signature.length; i++) {
+            if ((bytes[offset + i] & 0xFF) != signature[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 }
