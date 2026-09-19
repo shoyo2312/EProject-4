@@ -14,6 +14,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -73,6 +74,23 @@ class VideoControllerPageSizeTest {
                 .andExpect(jsonPath("$.data.items.length()").value(50))
                 // 60 seeded, 50 served, so there is a next page and a cursor that reaches it.
                 .andExpect(jsonPath("$.data.nextCursor").isNotEmpty());
+    }
+
+    /**
+     * Every id here costs its own Mongo aggregation and they arrive in a query string, so nothing
+     * but this cap stands between one request and as many aggregations as a caller cares to name.
+     * The sibling batch endpoint, /videos/batch, has always had it.
+     */
+    @Test
+    void getUserStatsBatch_moreIdsThanMax_isClampedTo50() throws Exception {
+        MockHttpServletRequestBuilder request = get("/api/v1/videos/users/stats/batch");
+        for (long userId = 1; userId <= 60; userId++) {
+            request = request.param("ids", String.valueOf(userId));
+        }
+
+        mockMvc.perform(request)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(50));
     }
 
     /** The profile listing still pages by offset, so the resolver's cap must still hold there. */

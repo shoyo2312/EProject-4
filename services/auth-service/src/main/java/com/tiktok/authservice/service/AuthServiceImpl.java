@@ -265,8 +265,8 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
-    public void logout(RefreshTokenRequest request, String accessToken) {
-        revokeRefreshToken(request.refreshToken(), accessToken);
+    public void logout(String refreshToken, String accessToken) {
+        revokeRefreshToken(refreshToken, accessToken);
         blacklistAccessToken(accessToken);
     }
 
