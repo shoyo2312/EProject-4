@@ -1,6 +1,7 @@
 package com.tiktok.recommendationservice.service;
 
 import com.tiktok.recommendationservice.client.RankClient;
+import com.tiktok.recommendationservice.client.UserMuteClient;
 import com.tiktok.recommendationservice.dto.rank.CandidateFeatures;
 import com.tiktok.recommendationservice.dto.response.FeedItemResponse;
 import lombok.RequiredArgsConstructor;
@@ -70,6 +71,7 @@ public class FeedServiceImpl implements FeedService {
 
     private final StringRedisTemplate redisTemplate;
     private final RankClient rankClient;
+    private final UserMuteClient userMuteClient;
 
     @Override
     public List<FeedItemResponse> getFeed(Long userId, int limit) {
@@ -101,6 +103,7 @@ public class FeedServiceImpl implements FeedService {
         pool.addAll(trending.keySet());
 
         Set<String> excluded = alreadyDelivered(userId);
+        excluded.addAll(byMutedAccounts(userId, pool));
         List<String> candidates = pool.stream()
                 .filter(videoId -> !excluded.contains(videoId))
                 .limit(CANDIDATE_POOL)
@@ -229,6 +232,28 @@ public class FeedServiceImpl implements FeedService {
             excluded.addAll(served);
         }
         return excluded;
+    }
+
+    /**
+     * Videos in the pool posted by an account the viewer muted. Filtered before the pool cap, so
+     * a muted account cannot use up the viewer's five hundred slots either. A video published
+     * before owners were recorded has no entry and is let through.
+     */
+    private Set<String> byMutedAccounts(Long userId, Set<String> pool) {
+        Set<Long> muted = userMuteClient.mutedIds(userId);
+        if (muted.isEmpty() || pool.isEmpty()) {
+            return Set.of();
+        }
+        List<Object> videoIds = List.copyOf(pool);
+        List<Object> owners = redisTemplate.opsForHash().multiGet(RecoKeys.VIDEO_OWNER, videoIds);
+        Set<String> hidden = new HashSet<>();
+        for (int i = 0; i < videoIds.size(); i++) {
+            Object owner = owners == null ? null : owners.get(i);
+            if (owner != null && muted.contains(Long.valueOf(owner.toString()))) {
+                hidden.add((String) videoIds.get(i));
+            }
+        }
+        return hidden;
     }
 
     /**

@@ -17,7 +17,7 @@ public interface RecommendationService {
      * batch hydration drops them again, silently shortening the page, and the served-set marks
      * them suppressed for the next half hour, which is exactly when they become playable.
      */
-    void recordVideoUploaded(String videoId, List<String> tags);
+    void recordVideoUploaded(String videoId, Long ownerId, List<String> tags);
 
     /**
      * Puts a video into everything candidate generation reads — trending, the per-tag indexes,

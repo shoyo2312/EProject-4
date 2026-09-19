@@ -45,7 +45,12 @@ public class RecommendationServiceImpl implements RecommendationService {
     private final StringRedisTemplate redisTemplate;
 
     @Override
-    public void recordVideoUploaded(String videoId, List<String> tags) {
+    public void recordVideoUploaded(String videoId, Long ownerId, List<String> tags) {
+        // Before the tag check: a mute is about who posted, and untagged videos still reach the
+        // feed through trending.
+        if (ownerId != null) {
+            redisTemplate.opsForHash().put(RecoKeys.VIDEO_OWNER, videoId, ownerId.toString());
+        }
         if (tags.isEmpty()) {
             return;
         }
@@ -116,6 +121,7 @@ public class RecommendationServiceImpl implements RecommendationService {
         redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_PUBLISHED, videoId);
         redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_WATCHES, videoId);
         redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_COMPLETIONS, videoId);
+        redisTemplate.opsForHash().delete(RecoKeys.VIDEO_OWNER, videoId);
     }
 
     @Override

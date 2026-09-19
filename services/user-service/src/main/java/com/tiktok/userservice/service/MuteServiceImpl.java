@@ -16,6 +16,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
+
 /**
  * Deliberately has no block check, unlike FollowServiceImpl.follow. Follow is a mutually visible
  * relationship, so a block must reject it; mute is a one-sided, silent flag that only filters the
@@ -76,5 +78,11 @@ public class MuteServiceImpl implements MuteService {
         Page<Long> mutedIds = userMuteRepository.findByMuterIdAndDeletedAtIsNull(userId, pageable)
                 .map(UserMute::getMutedId);
         return profileBatchAssembler.toResponses(mutedIds);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<Long> mutedIds(Long userId) {
+        return userMuteRepository.findMutedIds(userId);
     }
 }

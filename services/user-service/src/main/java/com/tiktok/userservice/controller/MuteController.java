@@ -13,6 +13,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequiredArgsConstructor
 @Tag(name = "Mutes", description = "Dropping an account out of the caller's feed without blocking it")
@@ -46,5 +48,16 @@ public class MuteController {
             @AuthenticationPrincipal Long currentUserId,
             Pageable pageable) {
         return ApiResponse.success(muteService.listMuted(currentUserId, pageable));
+    }
+
+    /**
+     * Service-to-service: recommendation-service drops muted accounts out of the feed and has no
+     * read path into this database. No token — the gateway denies the internal prefix, so only
+     * the internal network reaches it, same as the block check.
+     */
+    @Operation(summary = "Internal: accounts a user currently mutes")
+    @GetMapping("/api/v1/users/internal/{userId}/muted-ids")
+    public ApiResponse<List<Long>> mutedIds(@PathVariable Long userId) {
+        return ApiResponse.success(muteService.mutedIds(userId));
     }
 }

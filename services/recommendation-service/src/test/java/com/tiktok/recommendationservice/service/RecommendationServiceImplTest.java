@@ -11,6 +11,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.connection.zset.Aggregate;
 import org.springframework.data.redis.connection.zset.Weights;
+import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
@@ -42,6 +43,9 @@ class RecommendationServiceImplTest {
     @Mock
     private SetOperations<String, String> setOperations;
 
+    @Mock
+    private HashOperations<String, Object, Object> hashOperations;
+
     private RecommendationServiceImpl recommendationService;
 
     @BeforeEach
@@ -49,6 +53,25 @@ class RecommendationServiceImplTest {
         recommendationService = new RecommendationServiceImpl(redisTemplate);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(redisTemplate.<Object, Object>opsForHash()).thenReturn(hashOperations);
+    }
+
+    /**
+     * The feed drops videos by muted accounts, and the owner is the one thing it cannot learn
+     * anywhere else. Recorded for untagged videos too — a mute is about who, not what.
+     */
+    @Test
+    void recordVideoUploaded_remembersWhoOwnsTheVideo_evenWithoutTags() {
+        recommendationService.recordVideoUploaded("vid1", 9L, List.of());
+
+        verify(hashOperations).put("reco:video:owner", "vid1", "9");
+    }
+
+    @Test
+    void recordVideoDeleted_forgetsTheOwner() {
+        recommendationService.recordVideoDeleted("vid1");
+
+        verify(hashOperations).delete("reco:video:owner", "vid1");
     }
 
     /**
@@ -62,7 +85,7 @@ class RecommendationServiceImplTest {
         // video that is already ready.
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(null);
 
-        recommendationService.recordVideoUploaded("vid1", List.of("dance", "food"));
+        recommendationService.recordVideoUploaded("vid1", 9L, List.of("dance", "food"));
 
         verify(setOperations).add("reco:video:tags:vid1", "dance", "food");
         verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
@@ -79,7 +102,7 @@ class RecommendationServiceImplTest {
     void recordVideoUploaded_whenTheVideoIsAlreadyReady_indexesTheTagsAtItsPublishTime() {
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
 
-        recommendationService.recordVideoUploaded("vid1", List.of("dance"));
+        recommendationService.recordVideoUploaded("vid1", 9L, List.of("dance"));
 
         verify(zSetOperations).add("reco:tag:dance", "vid1", 1700.0);
     }

@@ -199,4 +199,18 @@ class BlockMuteControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.blocked").value(true));
     }
+
+    /**
+     * recommendation-service drops muted accounts out of the feed and has no read path into this
+     * database. Same internal prefix as the block check, so the gateway keeps it off the internet.
+     */
+    @Test
+    void mutedIds_answersWithoutATokenForInternalCallers() throws Exception {
+        when(muteService.mutedIds(1L)).thenReturn(List.of(2L, 3L));
+
+        mockMvc.perform(get("/api/v1/users/internal/1/muted-ids"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0]").value(2))
+                .andExpect(jsonPath("$.data[1]").value(3));
+    }
 }

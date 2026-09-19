@@ -1,6 +1,7 @@
 package com.tiktok.recommendationservice.service;
 
 import com.tiktok.recommendationservice.client.RankClient;
+import com.tiktok.recommendationservice.client.UserMuteClient;
 import com.tiktok.recommendationservice.dto.rank.CandidateFeatures;
 import com.tiktok.recommendationservice.dto.response.FeedItemResponse;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +12,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 
@@ -41,12 +43,19 @@ class FeedServiceImplTest {
     @Mock
     private RankClient rankClient;
 
+    @Mock
+    private UserMuteClient userMuteClient;
+
+    @Mock
+    private HashOperations<String, Object, Object> hashOperations;
+
     private FeedServiceImpl feedService;
 
     @BeforeEach
     void setUp() {
-        feedService = new FeedServiceImpl(redisTemplate, rankClient);
+        feedService = new FeedServiceImpl(redisTemplate, rankClient, userMuteClient);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        when(redisTemplate.<Object, Object>opsForHash()).thenReturn(hashOperations);
         givenTrending();
         givenTags();
         givenSeen();
@@ -256,6 +265,22 @@ class FeedServiceImplTest {
         feedService.getFeed(VIEWER, 20);
 
         verify(redisTemplate).expire("reco:user:served:7", RecoKeys.SERVED_TTL);
+    }
+
+    /**
+     * Muting an account is a promise that its videos stop showing up. The mute used to be stored
+     * in user-service and read by nothing, so the muted account went on filling the feed.
+     */
+    @Test
+    void getFeed_dropsVideosByAccountsTheViewerMuted() {
+        givenTrending(tuple("fromMuted", 10.0), tuple("fromOther", 5.0));
+        when(userMuteClient.mutedIds(VIEWER)).thenReturn(Set.of(9L));
+        when(hashOperations.multiGet("reco:video:owner", List.of("fromMuted", "fromOther")))
+                .thenReturn(List.of("9", "8"));
+
+        assertThat(feedService.getFeed(VIEWER, 20))
+                .extracting(FeedItemResponse::videoId)
+                .containsExactly("fromOther");
     }
 
     @SafeVarargs

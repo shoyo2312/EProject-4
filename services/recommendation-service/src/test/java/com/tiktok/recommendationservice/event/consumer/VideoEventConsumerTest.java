@@ -54,7 +54,7 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
 
-        verify(recommendationService).recordVideoUploaded("vid1", List.of("dance"));
+        verify(recommendationService).recordVideoUploaded("vid1", 1L, List.of("dance"));
     }
 
     @Test
@@ -64,7 +64,7 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
 
-        verify(recommendationService, never()).recordVideoUploaded("vid1", List.of("dance"));
+        verify(recommendationService, never()).recordVideoUploaded("vid1", 1L, List.of("dance"));
     }
 
     /**
@@ -78,7 +78,7 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), null);
 
-        verify(recommendationService).recordVideoUploaded("vid2", List.of());
+        verify(recommendationService).recordVideoUploaded("vid2", 1L, List.of());
     }
 
     @Test
@@ -103,6 +103,6 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoDeletedEvent"));
 
-        verify(recommendationService, never()).recordVideoUploaded("vid4", null);
+        verify(recommendationService, never()).recordVideoUploaded(eq("vid4"), any(), any());
     }
 }

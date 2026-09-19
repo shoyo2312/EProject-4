@@ -111,4 +111,10 @@ public final class RecoKeys {
      * and reading it out of one of those indexes would mean knowing which tag to look under.
      */
     public static final String VIDEO_PUBLISHED = "reco:video:published";
+
+    /**
+     * Owner per video, as a user id string. The feed needs it to drop videos by accounts the
+     * viewer muted, and a hash answers it for the whole candidate pool in one HMGET.
+     */
+    public static final String VIDEO_OWNER = "reco:video:owner";
 }

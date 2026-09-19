@@ -89,4 +89,16 @@ class BlockMuteServiceImplTest {
         assertThat(blockService.block(1L, 2L).blockedId()).isEqualTo(2L);
         assertThat(muteService.mute(2L, 1L).mutedId()).isEqualTo(1L);
     }
+
+    /** What the feed filters on: current mutes only, so an unmute brings the account back. */
+    @Test
+    @Transactional
+    void mutedIds_listsOnlyTheMutesStillInForce() {
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        muteService.mute(1L, 2L);
+        muteService.mute(1L, 3L);
+        muteService.unmute(1L, 3L);
+
+        assertThat(muteService.mutedIds(1L)).containsExactly(2L);
+    }
 }
