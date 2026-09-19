@@ -17,7 +17,7 @@ endif
 	build-admin \
 	clean \
 	test test-auth test-user \
-	infra-up infra-down infra-reset infra-logs infra-status \
+	infra-up infra-down infra-reset infra-logs infra-status infra-check \
 	run-gateway run-auth run-user run-video run-interaction run-story \
 	run-recommendation run-chat run-media run-notification \
 	run-admin run-analytics run-search \
@@ -51,6 +51,7 @@ help:
 	@echo ""
 	@echo "  Infrastructure:"
 	@echo "    make infra-up           Start tất cả Docker containers"
+	@echo "    make infra-check        Kiểm tra mọi port infra chỉ bind 127.0.0.1"
 	@echo "    make infra-down         Stop containers (giữ data)"
 	@echo "    make infra-reset        Stop containers + xoá data (volumes)"
 	@echo "    make infra-logs         Xem logs tất cả containers"
@@ -139,6 +140,11 @@ test-user:
 # ──────────────────────────────────────────────
 # Infrastructure (Docker)
 # ──────────────────────────────────────────────
+
+# Redis không password, Elasticsearch/Kafka không auth, DB dùng password mặc định: publish ra
+# 0.0.0.0 là mở cho cả mạng LAN. Mọi port phải bind 127.0.0.1.
+infra-check:
+	@docker compose config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin); bad=[n+":"+str(p.get("published")) for n,s in c["services"].items() for p in s.get("ports",[]) if p.get("host_ip")!="127.0.0.1"]; print("exposed beyond loopback: "+", ".join(bad)) if bad else print("✓ every port is bound to 127.0.0.1"); sys.exit(1 if bad else 0)'
 
 infra-up:
 	docker-compose up -d
