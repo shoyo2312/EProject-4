@@ -24,7 +24,11 @@ public interface AuthService {
 
     TokenResponse refresh(RefreshTokenRequest request);
 
-    void logout(RefreshTokenRequest request, String accessToken);
+    /**
+     * Ends a session. Both tokens are optional and either may be unknown: logout is idempotent,
+     * and a client that has lost one of the two still has the other worth spending.
+     */
+    void logout(String refreshToken, String accessToken);
 
     UserResponse getCurrentUser(Long userId);
 

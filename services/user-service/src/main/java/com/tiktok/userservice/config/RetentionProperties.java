@@ -5,8 +5,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.time.Duration;
 
 /**
- * How long user-service keeps processed-event claims, and how aggressively the cleanup is allowed
- * to delete them.
+ * How long user-service keeps its infrastructure rows — processed-event claims and published
+ * outbox events — and how aggressively the cleanups are allowed to delete them.
  */
 @ConfigurationProperties(prefix = "user.retention")
 public record RetentionProperties(
@@ -27,6 +27,14 @@ public record RetentionProperties(
          * while the broker can still replay that offset — a consumer group reset, a topic replay —
          * and the claim is gone, the event looks new, and the counter it increments moves twice.
          */
-        Duration processedEventGrace
+        Duration processedEventGrace,
+
+        /**
+         * How long a published outbox row is kept. No correctness floor: the row has already
+         * reached Kafka, and the unpublished ones the retention query refuses to touch are the
+         * only ones that still matter. Kept for a week so a follower count that moved can still
+         * be traced back to the event that moved it.
+         */
+        Duration publishedOutboxGrace
 ) {
 }

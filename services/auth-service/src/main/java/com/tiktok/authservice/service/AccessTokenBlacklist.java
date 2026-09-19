@@ -30,7 +30,7 @@ public class AccessTokenBlacklist {
         if (ttl.isNegative() || ttl.isZero()) {
             return;
         }
-        redisTemplate.opsForValue().set(RevocationKeys.forJti(jti), "1", ttl);
+        write(RevocationKeys.forJti(jti), "1", ttl);
     }
 
     /**
@@ -45,8 +45,27 @@ public class AccessTokenBlacklist {
         if (ttl.isNegative() || ttl.isZero()) {
             return;
         }
-        redisTemplate.opsForValue()
-                .set(RevocationKeys.forUser(userId), String.valueOf(Instant.now().toEpochMilli()), ttl);
+        write(RevocationKeys.forUser(userId), String.valueOf(Instant.now().toEpochMilli()), ttl);
+    }
+
+    /**
+     * Fails open, like the read side, and for a sharper reason: every caller has already done the
+     * thing the revocation accompanies — the password is changed, the account is banned, the
+     * replayed refresh chain is revoked in the database. Letting Redis throw here would propagate
+     * out and roll that work back, so an unreachable Redis would turn "change my password" into a
+     * 500 with the old password still working, and a detected token replay into no revocation at
+     * all. Losing early access-token cutoff is the smaller failure: refresh tokens are already
+     * dead in the database, so the window is one access-token lifetime rather than forever.
+     *
+     * <p>Logged at error, not warn: unlike a missed read this leaves a real session alive, and
+     * whoever is on call should see it.
+     */
+    private void write(String key, String value, Duration ttl) {
+        try {
+            redisTemplate.opsForValue().set(key, value, ttl);
+        } catch (RuntimeException e) {
+            log.error("Redis unavailable, access tokens stay valid until they expire (key {})", key, e);
+        }
     }
 
     /**
