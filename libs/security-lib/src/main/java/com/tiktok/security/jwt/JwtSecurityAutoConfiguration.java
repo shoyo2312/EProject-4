@@ -66,6 +66,10 @@ public class JwtSecurityAutoConfiguration {
         if (environment.matchesProfiles("local", "test")) {
             return;
         }
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException(
+                    "JWT_SECRET is not set. Set it via the JWT_SECRET env var.");
+        }
         if (INSECURE_DEFAULT_SECRET.equals(secret)) {
             throw new IllegalStateException(
                     "JWT_SECRET is set to the insecure default value. Set a real secret via the JWT_SECRET env var.");

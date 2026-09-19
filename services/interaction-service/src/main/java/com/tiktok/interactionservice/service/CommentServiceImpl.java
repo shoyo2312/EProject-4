@@ -12,6 +12,7 @@ import com.tiktok.interactionservice.entity.CommentIndex;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.CommentsDisabledException;
+import com.tiktok.interactionservice.exception.CommentLikeRateLimitedException;
 import com.tiktok.interactionservice.exception.CommentRateLimitedException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
@@ -400,6 +401,9 @@ public class CommentServiceImpl implements CommentService {
 
     @Override
     public CommentLikeResponse likeComment(Long videoId, Long commentId, Long currentUserId) {
+        // Keyed by comment, not by video: a viewer working through a busy comment section likes
+        // many different comments, and one shared per-video budget would refuse them for reading.
+        rateLimiter.require("comment-like-rate", commentId, currentUserId, CommentLikeRateLimitedException::new);
         CommentByVideo comment = liveComment(videoId, commentId);
 
         // The membership LWT is what grants the right to move the count, and it grants it once:
@@ -417,6 +421,9 @@ public class CommentServiceImpl implements CommentService {
 
     @Override
     public CommentLikeResponse unlikeComment(Long videoId, Long commentId, Long currentUserId) {
+        // Same bucket as the like above, so a like/unlike cycle spends two of one budget rather
+        // than one of each and never runs out.
+        rateLimiter.require("comment-like-rate", commentId, currentUserId, CommentLikeRateLimitedException::new);
         CommentByVideo comment = liveComment(videoId, commentId);
 
         boolean wasLiked = commentLikeRepository.deleteIfExists(commentId, currentUserId);

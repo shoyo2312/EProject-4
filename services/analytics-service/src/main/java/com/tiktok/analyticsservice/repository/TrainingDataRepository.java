@@ -37,6 +37,12 @@ public class TrainingDataRepository {
      * one fewer special case.
      */
     public void insertTags(String videoId, List<String> tags, Instant publishedAt) {
+        if (tags == null) {
+            // VideoPublishedEvent.of never produces null, but Jackson bypasses that factory and
+            // uses the canonical constructor, so an event from a producer older than the tags
+            // field deserializes to null here — the same case the visibility field documents.
+            return;
+        }
         for (String tag : tags) {
             jdbcTemplate.update(
                     "INSERT INTO video_tags (video_id, tag, published_at) VALUES (?, ?, ?)",

@@ -5,6 +5,8 @@ import com.tiktok.userservice.exception.AlreadyFollowingException;
 import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.NotFollowingException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
+import com.tiktok.userservice.entity.OutboxEvent;
+import com.tiktok.userservice.repository.OutboxEventRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
@@ -29,6 +31,7 @@ import java.util.concurrent.CompletableFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.assertj.core.api.Assertions.as;
 import static org.mockito.Mockito.when;
 
 @SpringBootTest
@@ -61,13 +64,17 @@ class FollowServiceImplTest {
     @Autowired
     private BlockService blockService;
 
+    @Autowired
+    private OutboxEventRepository outboxEventRepository;
+
     @BeforeEach
     void setUp() {
+        outboxEventRepository.deleteAll();
         userFollowRepository.deleteAll();
         userBlockRepository.deleteAll();
         userProfileRepository.deleteAll();
-        // The follow-changed realtime publish (confirmed send) needs a non-null future to
-        // .get() on, same as every other confirmed-send test in this codebase.
+        // OutboxPublisher drains the table on a schedule and needs a non-null future to wait on,
+        // same as every other outbox test in this codebase.
         when(kafkaTemplate.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(null));
 
         userProfileService.createFromRegisteredEvent(1L, "alice", null);
@@ -209,5 +216,40 @@ class FollowServiceImplTest {
         assertThat(asBob.getContent()).extracting(UserProfileResponse::userId).containsExactly(2L);
         // The total counts what this viewer can reach, so a client paging towards it terminates.
         assertThat(asBob.getTotalElements()).isEqualTo(1);
+    }
+
+    /**
+     * The follow edge and its announcement are one write. Sending to Kafka inline instead — which
+     * is what this replaced — held a pooled connection for the broker round trip and failed the
+     * whole follow when the broker was down, after the database had already accepted it.
+     */
+    @Test
+    @Transactional
+    void follow_writesTheEventToTheOutboxInsteadOfSendingItInline() {
+        followService.follow(1L, 2L);
+
+        assertThat(outboxEventRepository.findAll())
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.getEventType()).isEqualTo("UserFollowChangedEvent");
+                    // Keyed by the followed user, so every change to one follower count keeps its
+                    // order on one partition.
+                    assertThat(event.getAggregateId()).isEqualTo("2");
+                    assertThat(event.getPublishedAt()).isNull();
+                    assertThat(event.getPayload()).contains("\"followerId\":1", "\"followed\":true");
+                });
+    }
+
+    @Test
+    @Transactional
+    void unfollow_alsoGoesThroughTheOutbox() {
+        followService.follow(1L, 2L);
+        followService.unfollow(1L, 2L);
+
+        assertThat(outboxEventRepository.findAll())
+                .hasSize(2)
+                .last()
+                .extracting(OutboxEvent::getPayload, as(org.assertj.core.api.InstanceOfAssertFactories.STRING))
+                .contains("\"followed\":false");
     }
 }
