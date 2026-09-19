@@ -100,9 +100,9 @@ com.tiktok.{service}/
 - Event class lấy từ `libs/event-schema`
 - **Topic trộn nhiều event type** (`admin.moderation-events`, `video.video-events`): payload JSON không có field phân biệt loại — dùng Kafka header `eventType` (đọc qua `@Header(name = "eventType")`) để route, KHÔNG suy đoán từ shape JSON. Thiếu route thì Jackson **vẫn parse được** sang class sai với mọi field vắng mặt là null, không exception, không log — service chỉ âm thầm làm sai việc. `video.video-events` mang `VideoPublishedEvent` + `VideoDeletedEvent` cùng key `videoId`, nên Kafka đảm bảo thứ tự. Ngoại lệ: video bị xoá trước khi publication kịp announce vẫn phát `VideoDeletedEvent` — file raw đã nằm trong MinIO và event này là thứ duy nhất còn nhắc tới key đó. Mọi consumer của `VideoDeletedEvent` phải no-op với `videoId` lạ. Consumer coi **header vắng mặt = `VideoPublishedEvent`** (producer đời cũ chỉ gửi loại đó)
 - **kafka-lib usage**: dependency `<artifactId>kafka-lib</artifactId>`, auto-config qua Spring Boot — không cần `@Configuration` cục bộ. Hai thứ độc lập nhau:
-  - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `auth-service`, `user-service`, `video-service`, `recommendation-service`, `media-worker`, `search-service`, `interaction-service`
-  - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`
-  - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (analytics, notification) — vẫn dùng default retry-vô-hạn của Spring Kafka
+  - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `auth-service`, `user-service`, `video-service`, `recommendation-service`, `media-worker`, `search-service`, `interaction-service`, `analytics-service`, `chat-service`
+  - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`, `user-service`
+  - CÓ `@KafkaListener` nhưng CHƯA migrate error handler (notification) — vẫn dùng default retry-vô-hạn của Spring Kafka
   - story không có consumer lẫn outbox — không cần `kafka-lib`. interaction có consumer (`AdminModerationEventConsumer`) nhưng không có outbox: Cassandra không có transaction đa bảng để ghép outbox vào, nên `InteractionEventPublisher` chờ broker ack rồi mới coi là xong
 
 ### JWT Authentication & security-lib
@@ -135,14 +135,15 @@ com.tiktok.{service}/
 - Frame lấy **rải đều toàn video**, không phải mấy giây đầu — xem `Ffmpeg.sampleFrames`
 - Chi tiết: `docs/moderation.md`
 
-### Dev-only affordances — PHẢI gỡ trước khi deploy production
-Những thứ dưới đây cố ý nằm trong repo để test thủ công (Postman) không cần đọc email thật. Chúng vi phạm rule "KHÔNG lưu sensitive data vào log" ở §6 và chỉ được chấp nhận ở local:
+### Dev-only affordances — tắt mặc định, KHÔNG bật trên production
+Test thủ công (Postman) cần đọc OTP mà không có mailbox thật. Trước đây in thẳng bằng
+`log.warn("[DEV ONLY ...]")`; giờ nằm sau một cờ tắt mặc định:
 
-| Cái gì | Ở đâu | Rủi ro nếu lên production |
-|---|---|---|
-| `log.warn("[DEV ONLY - REMOVE BEFORE COMMIT] ... OTP ...")` | `auth-service/event/local/EmailNotificationListener.java` (4 chỗ: verify email + social link + reset password + admin login) | OTP hiện nguyên văn trong log — ai đọc được log là chiếm được tài khoản bất kỳ. Riêng mã social link còn tệ hơn một bậc: nó là nửa còn lại của việc gắn tài khoản provider vào tài khoản sẵn có, nên chỉ cần đọc log rồi tạo một tài khoản Facebook khai email nạn nhân là chiếm được. Mã admin login là factor thứ hai của console — đọc log + biết password là vào được admin |
+| Cái gì | Ở đâu | Bật thế nào | Rủi ro nếu bật trên production |
+|---|---|---|---|
+| In OTP ra log (verify email + social link + reset password + admin login) | `auth-service/event/local/EmailNotificationListener.logOtp` | `auth.otp.log-to-console`, env `OTP_LOG_TO_CONSOLE`, mặc định `false` | OTP hiện nguyên văn trong log — ai đọc được log là chiếm được tài khoản bất kỳ. Riêng mã social link còn tệ hơn một bậc: nó là nửa còn lại của việc gắn tài khoản provider vào tài khoản sẵn có, nên chỉ cần đọc log rồi tạo một tài khoản Facebook khai email nạn nhân là chiếm được. Mã admin login là factor thứ hai của console — đọc log + biết password là vào được admin |
 
-**Trước mỗi lần deploy thật**: `grep -rn "DEV ONLY" services/` phải trả về rỗng.
+**Trước mỗi lần deploy thật**: `grep -rn "DEV ONLY" services/` phải trả về rỗng, và `OTP_LOG_TO_CONSOLE` không được set ở bất kỳ env nào.
 
 ## 5. Common Commands
 ```bash
