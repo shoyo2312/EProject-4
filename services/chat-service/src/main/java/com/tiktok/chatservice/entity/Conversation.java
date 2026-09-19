@@ -77,17 +77,4 @@ public class Conversation {
         return deletedAt != null;
     }
 
-    public void recordMessage(Long senderId, String content, Instant sentAt) {
-        this.lastMessageContent = content;
-        this.lastMessageSenderId = senderId;
-        this.lastMessageAt = sentAt;
-        markRead(senderId, sentAt);
-    }
-
-    public void markRead(Long userId, Instant readAt) {
-        if (this.lastReadAt == null) {
-            this.lastReadAt = new HashMap<>();
-        }
-        this.lastReadAt.put(String.valueOf(userId), readAt);
-    }
 }

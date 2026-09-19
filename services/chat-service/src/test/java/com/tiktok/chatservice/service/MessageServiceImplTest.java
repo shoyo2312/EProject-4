@@ -20,6 +20,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -63,9 +64,7 @@ class MessageServiceImplTest {
         assertThat(messageCaptor.getValue().getSenderId()).isEqualTo(1L);
         assertThat(messageCaptor.getValue().getContent()).isEqualTo("hi");
 
-        assertThat(conversation.getLastMessageContent()).isEqualTo("hi");
-        assertThat(conversation.getLastMessageSenderId()).isEqualTo(1L);
-        verify(conversationRepository).save(conversation);
+        verify(conversationRepository).recordMessage(eq("c1"), eq(1L), eq("hi"), any());
 
         verify(messagingTemplate).convertAndSend("/topic/conversations/c1", response);
     }
@@ -77,8 +76,7 @@ class MessageServiceImplTest {
 
         messageService.markRead("c1", 2L);
 
-        assertThat(conversation.getLastReadAt()).containsKey("2");
-        verify(conversationRepository).save(conversation);
+        verify(conversationRepository).markRead(eq("c1"), eq(2L), any());
     }
 
     @Test
