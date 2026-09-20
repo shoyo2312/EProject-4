@@ -103,6 +103,7 @@ com.tiktok.{service}/
   - `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` cho mọi `@KafkaListener` (retry 3 lần rồi đẩy sang `<topic>.DLT` thay vì kẹt consumer vô hạn) — đang dùng: `auth-service`, `user-service`, `video-service`, `recommendation-service`, `media-worker`, `search-service`, `interaction-service`, `analytics-service`, `chat-service`, `notification-service`
   - `OutboxDispatcher` (mark sau ack, xem §Publish outbox) — đang dùng: `auth-service`, `admin-service`, `video-service`, `user-service`
   - story không có consumer lẫn outbox — không cần `kafka-lib`. interaction có consumer (`AdminModerationEventConsumer`) nhưng không có outbox: Cassandra không có transaction đa bảng để ghép outbox vào, nên `InteractionEventPublisher` chờ broker ack rồi mới coi là xong
+  - notification cũng không có outbox: `NotificationEventPublisher` chỉ announce (`notification.created`) bản ghi inbox vừa lưu để chat-service đẩy xuống socket. Mất event = mất badge realtime, lần fetch inbox kế tiếp sửa lại; còn throw ở đây sẽ bắt consumer redeliver và ghi bản ghi lần hai
 
 ### JWT Authentication & security-lib
 - **security-lib usage**: 8 services (admin, chat, interaction, notification, recommendation, story, user, video) dùng centralized `security-lib` để validate JWT token

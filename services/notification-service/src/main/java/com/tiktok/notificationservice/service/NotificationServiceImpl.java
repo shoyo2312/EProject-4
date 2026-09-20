@@ -5,6 +5,7 @@ import com.tiktok.notificationservice.entity.DeviceToken;
 import com.tiktok.notificationservice.entity.Notification;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.exception.NotNotificationOwnerException;
+import com.tiktok.notificationservice.event.producer.NotificationEventPublisher;
 import com.tiktok.notificationservice.exception.NotificationNotFoundException;
 import com.tiktok.notificationservice.mapper.NotificationMapper;
 import com.tiktok.notificationservice.repository.DeviceTokenRepository;
@@ -24,6 +25,7 @@ public class NotificationServiceImpl implements NotificationService {
     private final NotificationMapper notificationMapper;
     private final DeviceTokenRepository deviceTokenRepository;
     private final PushNotificationService pushNotificationService;
+    private final NotificationEventPublisher notificationEventPublisher;
 
     @Override
     public NotificationResponse create(Long recipientId, NotificationType type, String title, String body, String referenceId) {
@@ -38,6 +40,7 @@ public class NotificationServiceImpl implements NotificationService {
                 .build();
 
         Notification saved = notificationRepository.save(notification);
+        notificationEventPublisher.publishCreated(saved);
         push(saved);
         return notificationMapper.toResponse(saved);
     }

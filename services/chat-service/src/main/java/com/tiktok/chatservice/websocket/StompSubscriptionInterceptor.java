@@ -41,9 +41,10 @@ public class StompSubscriptionInterceptor implements ChannelInterceptor {
     private static final List<Pattern> PUBLIC_DESTINATIONS = List.of(
             Pattern.compile("^/topic/videos\\.[0-9A-Za-z_-]+(\\.comments)?$"),
             Pattern.compile("^/topic/users\\.[0-9A-Za-z_-]+$"),
-            // Rewritten per session by the user-destination resolver, so it only ever reaches the
+            // Rewritten per session by the user-destination resolver, so they only ever reach the
             // subscriber's own queue.
-            Pattern.compile("^/user/queue/errors$"));
+            Pattern.compile("^/user/queue/errors$"),
+            Pattern.compile("^/user/queue/notifications$"));
 
     private final ConversationService conversationService;
 
