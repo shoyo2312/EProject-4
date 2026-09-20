@@ -16,6 +16,14 @@ public interface UserProfileService {
     UserProfileResponse getByUserId(Long viewerId, Long userId);
 
     /**
+     * The same profile, addressed by handle instead of id — what a {@code /@name} URL carries.
+     *
+     * <p>Answers exactly as {@link #getByUserId} does once the handle resolves, blocks included:
+     * a handle is not a way around the visibility guard.
+     */
+    UserProfileResponse getByUsername(Long viewerId, String username);
+
+    /**
      * The same lookup for a page of ids in two queries flat, for callers rendering a list that
      * carries user ids and nothing else — a video feed, a comment thread.
      *

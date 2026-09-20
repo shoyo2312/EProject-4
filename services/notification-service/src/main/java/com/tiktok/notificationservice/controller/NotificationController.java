@@ -1,9 +1,11 @@
 package com.tiktok.notificationservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
+import com.tiktok.notificationservice.dto.request.RegisterDeviceRequest;
 import com.tiktok.notificationservice.dto.response.NotificationResponse;
 import com.tiktok.notificationservice.dto.response.UnreadCountResponse;
 import com.tiktok.notificationservice.service.NotificationService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -40,5 +42,23 @@ public class NotificationController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void markAllAsRead(@AuthenticationPrincipal Long currentUserId) {
         notificationService.markAllAsRead(currentUserId);
+    }
+
+    /** Called on launch and whenever FCM hands the client a new token. */
+    @PostMapping("/devices")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void registerDevice(
+            @AuthenticationPrincipal Long currentUserId,
+            @Valid @RequestBody RegisterDeviceRequest request) {
+        notificationService.registerDevice(currentUserId, request.token());
+    }
+
+    /** Called on logout, so the device stops receiving pushes meant for the account signed out. */
+    @DeleteMapping("/devices/{token}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unregisterDevice(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable String token) {
+        notificationService.unregisterDevice(currentUserId, token);
     }
 }

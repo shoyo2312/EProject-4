@@ -99,6 +99,27 @@ class UserProfileServiceImplTest {
         assertThat(profile.followingCount()).isZero();
     }
 
+    /**
+     * The handle lookup a `/@name` URL needs. Case-insensitive because the handle is typed by
+     * hand, and a block hides the account here exactly as it does for the id lookup — otherwise
+     * the handle would be a way around the guard.
+     */
+    @Test
+    @Transactional
+    void getByUsername_findsTheProfileIgnoringCase_andHidesBlockedAccounts() {
+        userProfileService.createFromRegisteredEvent(1L, "JohnDoe", null);
+        userProfileService.createFromRegisteredEvent(2L, "janedoe", null);
+
+        assertThat(userProfileService.getByUsername(2L, "johndoe").userId()).isEqualTo(1L);
+
+        blockService.block(1L, 2L);
+
+        assertThatThrownBy(() -> userProfileService.getByUsername(2L, "johndoe"))
+                .isInstanceOf(UserProfileNotFoundException.class);
+        assertThatThrownBy(() -> userProfileService.getByUsername(2L, "nobody"))
+                .isInstanceOf(UserProfileNotFoundException.class);
+    }
+
     @Test
     @Transactional
     void createFromRegisteredEvent_socialSignup_keepsProviderAvatar() {

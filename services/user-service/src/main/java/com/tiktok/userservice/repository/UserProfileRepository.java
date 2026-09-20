@@ -17,6 +17,19 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
 
     boolean existsByUserIdAndDeletedAtIsNull(Long userId);
 
+    /**
+     * Handle lookup, for URLs that address an account by name rather than by id.
+     *
+     * <p>{@code findFirst} because the column carries no unique constraint — it is a copy of
+     * auth-service's handle, which owns uniqueness — and case-insensitive because a handle in a
+     * URL is typed by hand.
+     *
+     * <p>ponytail: sequential scan. The only index on username is the GIN trigram one V8 built
+     * for search, which does not serve equality; add a {@code lower(username)} btree if the
+     * profile table ever grows past "a class project".
+     */
+    Optional<UserProfile> findFirstByUsernameIgnoreCaseAndDeletedAtIsNull(String username);
+
     List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<Long> userIds);
 
     /**

@@ -1,5 +1,3 @@
-version: '3.9'
-
 # =====================================================================
 # TikTok Backend — Local Development Infrastructure
 # =====================================================================
@@ -362,7 +360,7 @@ services:
   # ilm import replaces the whole config rather than appending, which is what makes re-running
   # this container a no-op instead of a duplicate-rule error.
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: tt-minio-init
     depends_on:
       minio:

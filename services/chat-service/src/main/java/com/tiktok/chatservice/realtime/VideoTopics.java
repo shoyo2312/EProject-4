@@ -8,6 +8,13 @@ package com.tiktok.chatservice.realtime;
 public final class VideoTopics {
 
     private static final String PREFIX = "/topic/videos.";
+    /**
+     * Broadcast destination for "a video just became visible". Deliberately not under
+     * {@link #PREFIX}: {@link SubscriptionTracker} reads a videoId out of every destination that
+     * starts with it, and would count a literal "feed" as a watched video and have the flusher
+     * fetch counters for it every window.
+     */
+    public static final String FEED = "/topic/feed";
     private static final String COMMENTS_SUFFIX = ".comments";
 
     private VideoTopics() {
