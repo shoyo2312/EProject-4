@@ -84,6 +84,30 @@ public class VideoStateFanout {
         publish(videoId, frame, eventType);
     }
 
+    /**
+     * A moderation verdict is the moment a video actually becomes visible: the transcode leaves it
+     * PENDING_MODERATION and only APPROVED moves it to PUBLISHED (CLAUDE.md, §Kiểm duyệt video tự
+     * động). VideoPublishedEvent fires at upload time, long before that, so it is the wrong signal
+     * to tell an open feed a new video exists.
+     *
+     * <p>Broadcast to one destination rather than per-video, because the point is reaching clients
+     * that have never heard of this videoId and so cannot have subscribed to it. Only the id is
+     * sent: the client hydrates it through the normal read path, which is where the PUBLISHED +
+     * PUBLIC check lives, so a PRIVATE video approved here never reaches anyone but its owner.
+     */
+    @KafkaListener(topics = "media.video-moderation-events")
+    public void onModerationVerdict(String payload) {
+        JsonNode node = parse(payload);
+        if (node == null) {
+            return;
+        }
+        String videoId = text(node, "videoId");
+        if (videoId == null || !"APPROVED".equals(text(node, "verdict"))) {
+            return;
+        }
+        messaging.convertAndSend(VideoTopics.FEED, VideoFrame.status(videoId, "PUBLISHED"));
+    }
+
     private void publish(String videoId, VideoFrame frame, String eventType) {
         if (frame == null) {
             log.debug("State eventType={} not forwarded", eventType);

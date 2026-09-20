@@ -46,6 +46,22 @@ class VideoStateFanoutTest {
     }
 
     @Test
+    void anApprovedVerdictIsBroadcastToTheFeed() {
+        fanout.onModerationVerdict("""
+                {"eventId":"e3","videoId":"103","verdict":"APPROVED"}""");
+
+        verify(messaging).convertAndSend(eq("/topic/feed"), any(VideoFrame.class));
+    }
+
+    @Test
+    void aVerdictThatIsNotApprovedStaysOffTheFeed() {
+        fanout.onModerationVerdict("""
+                {"eventId":"e4","videoId":"104","verdict":"REVIEW"}""");
+
+        verify(messaging, never()).convertAndSend(any(String.class), any(VideoFrame.class));
+    }
+
+    @Test
     void anUnknownEventTypeIsIgnoredWithoutThrowing() {
         fanout.onVideoEvent("{\"videoId\":\"102\"}",
                 "SomethingElseEvent".getBytes(StandardCharsets.UTF_8));

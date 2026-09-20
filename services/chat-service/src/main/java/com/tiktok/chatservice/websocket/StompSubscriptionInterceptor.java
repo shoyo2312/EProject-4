@@ -41,6 +41,10 @@ public class StompSubscriptionInterceptor implements ChannelInterceptor {
     private static final List<Pattern> PUBLIC_DESTINATIONS = List.of(
             Pattern.compile("^/topic/videos\\.[0-9A-Za-z_-]+(\\.comments)?$"),
             Pattern.compile("^/topic/users\\.[0-9A-Za-z_-]+$"),
+            // "a video just became visible", broadcast to every open feed. Carries an id and
+            // nothing else; the client hydrates it through the REST read path, which is where the
+            // PUBLISHED + PUBLIC check lives.
+            Pattern.compile("^/topic/feed$"),
             // Rewritten per session by the user-destination resolver, so they only ever reach the
             // subscriber's own queue.
             Pattern.compile("^/user/queue/errors$"),
