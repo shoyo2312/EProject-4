@@ -6,7 +6,6 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
-import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
@@ -51,8 +50,15 @@ public class Notification {
     @Builder.Default
     private boolean read = false;
 
-    @CreatedDate
-    private Instant createdAt;
+    /**
+     * Stamped by the builder, not by {@code @CreatedDate}: this document assigns its own
+     * {@code _id}, so Spring Data's auditing sees the entity as already-persisted and only ever
+     * fills a last-modified field. The annotation silently left this null, which reached the
+     * client as an epoch-0 timestamp ("690mo ago") and made the newest-first sort meaningless —
+     * Mongo orders a missing field below every value.
+     */
+    @Builder.Default
+    private Instant createdAt = Instant.now();
 
     public static String newId() {
         return String.valueOf(SnowflakeIdGenerator.nextId());

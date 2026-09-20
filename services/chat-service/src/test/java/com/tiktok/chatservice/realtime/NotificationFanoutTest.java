@@ -31,17 +31,25 @@ class NotificationFanoutTest {
         return new NotificationFanout(messaging, objectMapper);
     }
 
+    /**
+     * The actor id matters as much as the destination: it leaves as a String, because a Snowflake
+     * sent as a JSON number loses its last digits in the browser and the client then looks up an
+     * account that does not exist — which is how a notification ended up with no name or avatar.
+     */
     @Test
-    void onNotificationCreated_sendsToTheRecipientsOwnQueue() throws Exception {
+    void onNotificationCreated_sendsToTheRecipientsOwnQueue_withStringIds() throws Exception {
         NotificationCreatedEvent event = NotificationCreatedEvent.of(
-                100L, "n1", 9L, "LIKE", "Lượt thích mới", "body", "7", Instant.now());
+                100L, "n1", 360038794325352448L, "LIKE", "New like", "body", "7", Instant.now());
 
         fanout().onNotificationCreated(objectMapper.writeValueAsString(event));
 
         ArgumentCaptor<Object> frame = ArgumentCaptor.forClass(Object.class);
         verify(messaging).convertAndSendToUser(
                 eq("100"), eq(NotificationFanout.DESTINATION), frame.capture());
-        assertThat(((NotificationCreatedEvent) frame.getValue()).notificationId()).isEqualTo("n1");
+        NotificationFrame sent = (NotificationFrame) frame.getValue();
+        assertThat(sent.notificationId()).isEqualTo("n1");
+        assertThat(sent.actorId()).isEqualTo("360038794325352448");
+        assertThat(objectMapper.writeValueAsString(sent)).contains("\"actorId\":\"360038794325352448\"");
     }
 
     @Test

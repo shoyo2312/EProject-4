@@ -42,6 +42,7 @@ public class NotificationFanout {
         if (event.recipientId() == null) {
             return;
         }
-        messaging.convertAndSendToUser(String.valueOf(event.recipientId()), DESTINATION, event);
+        messaging.convertAndSendToUser(
+                String.valueOf(event.recipientId()), DESTINATION, NotificationFrame.of(event));
     }
 }

@@ -36,8 +36,8 @@ public class FollowEventConsumer {
                         event.followingId(),
                         event.followerId(),
                         NotificationType.NEW_FOLLOWER,
-                        "Người theo dõi mới",
-                        "Bạn vừa có thêm một người theo dõi.",
+                        "New follower",
+                        "Someone started following you.",
                         // The follower, not a video: this is the one type whose deep link goes to
                         // a profile.
                         String.valueOf(event.followerId())));

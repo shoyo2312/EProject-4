@@ -49,6 +49,22 @@ public class UserProfileServiceImpl implements UserProfileService {
 
     @Override
     @Transactional(readOnly = true)
+    public UserProfileResponse getByUsername(Long viewerId, String username) {
+        if (username == null || username.isBlank()) {
+            throw new UserProfileNotFoundException(username);
+        }
+
+        UserProfile profile = userProfileRepository
+                .findFirstByUsernameIgnoreCaseAndDeletedAtIsNull(username.strip())
+                .orElseThrow(() -> new UserProfileNotFoundException(username));
+
+        // After the lookup, not before: the guard needs the id the handle resolved to.
+        profileVisibilityGuard.requireVisible(viewerId, profile.getUserId());
+        return userProfileMapper.toResponse(profile);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<UserProfileResponse> getByUserIds(Long viewerId, List<Long> userIds) {
         // Checked against the raw list, before the distinct below: what the cap guards is the query
         // string being parsed and bound, and duplicates pay for that in full.

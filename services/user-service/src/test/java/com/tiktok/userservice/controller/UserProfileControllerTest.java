@@ -138,6 +138,21 @@ class UserProfileControllerTest {
         verify(userProfileService).getByUserId(42L, 42L);
     }
 
+    /** Also pins the routing: /by-username/{handle} must not be swallowed by /{userId}. */
+    @Test
+    void getProfileByUsername_resolvesTheHandleForTheCaller() throws Exception {
+        UserProfileResponse response = new UserProfileResponse(42L, "alice", "Alice", "bio", null, 3, 5);
+        when(userProfileService.getByUsername(7L, "alice")).thenReturn(response);
+
+        mockMvc.perform(get("/api/v1/users/by-username/alice")
+                        .header("Authorization", "Bearer " + tokenFor(7L)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.userId").value(42))
+                .andExpect(jsonPath("$.data.username").value("alice"));
+
+        verify(userProfileService).getByUsername(7L, "alice");
+    }
+
     @Test
     void getOwnProfile_withInvalidToken_isRejected() throws Exception {
         mockMvc.perform(get("/api/v1/users/me")

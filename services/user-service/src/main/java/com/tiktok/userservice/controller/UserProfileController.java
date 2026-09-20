@@ -95,6 +95,20 @@ public class UserProfileController {
         return ApiResponse.success(userProfileService.getByUserIds(currentUserId, ids));
     }
 
+    /**
+     * Two segments, so it never competes with {@code /{userId}} below — and it has to exist
+     * separately, because a handle is not a Long and would not bind there.
+     */
+    @Operation(summary = "One user's profile, by handle",
+            description = "For /@handle URLs. Case-insensitive. Same 404 USER_PROFILE_NOT_FOUND "
+                    + "as the id lookup, for an unknown handle and for a blocked account alike.")
+    @GetMapping("/by-username/{username}")
+    public ApiResponse<UserProfileResponse> getProfileByUsername(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable String username) {
+        return ApiResponse.success(userProfileService.getByUsername(currentUserId, username));
+    }
+
     @Operation(summary = "One user's profile",
             description = "404 USER_PROFILE_NOT_FOUND, which is also the answer when a block "
                     + "hides the account — a distinct status would confirm the block.")

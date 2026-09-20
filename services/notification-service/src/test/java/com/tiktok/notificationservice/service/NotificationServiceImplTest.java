@@ -69,6 +69,24 @@ class NotificationServiceImplTest {
         assertThat(captor.getValue().getRecipientId()).isEqualTo(100L);
     }
 
+    /**
+     * Guards the bug this replaced: {@code @CreatedDate} never fired on a document that assigns
+     * its own id, so every entry was stored without a timestamp — the client read it as epoch 0
+     * ("690mo ago") and the newest-first sort had nothing to sort on.
+     */
+    @Test
+    void create_stampsCreatedAt() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
+        when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        Instant before = Instant.now();
+
+        notificationService.create(100L, 9L, NotificationType.LIKE, "t", "b", "ref1");
+
+        ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
+        verify(notificationRepository).save(captor.capture());
+        assertThat(captor.getValue().getCreatedAt()).isNotNull().isAfterOrEqualTo(before);
+    }
+
     @Test
     void create_buildsNotificationWithGivenFieldsAndReturnsMappedResponse() {
         notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);

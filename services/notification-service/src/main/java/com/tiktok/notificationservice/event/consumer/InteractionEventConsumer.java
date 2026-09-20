@@ -48,7 +48,7 @@ public class InteractionEventConsumer {
 
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
                 notifyVideoOwner(event.videoId(), event.userId(), NotificationType.LIKE,
-                        "Lượt thích mới", "Video của bạn vừa nhận được một lượt thích."));
+                        "New like", "Someone liked your video."));
     }
 
     /**
@@ -80,13 +80,13 @@ public class InteractionEventConsumer {
             // interaction-service for it would add a second lookup to every comment.
             if (event.replyToUserId() != null) {
                 notify(event.replyToUserId(), event.userId(), NotificationType.COMMENT,
-                        "Phản hồi mới", event.content(),
+                        "New reply", event.content(),
                         String.valueOf(event.videoId()));
                 return;
             }
 
             notifyVideoOwner(event.videoId(), event.userId(), NotificationType.COMMENT,
-                    "Bình luận mới", event.content());
+                    "New comment", event.content());
         });
     }
 
@@ -97,7 +97,7 @@ public class InteractionEventConsumer {
 
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
                 notifyVideoOwner(event.videoId(), event.userId(), NotificationType.SHARE,
-                        "Lượt chia sẻ mới", "Video của bạn vừa được chia sẻ."));
+                        "New share", "Someone shared your video."));
     }
 
     private void notifyVideoOwner(Long videoId, Long actorId, NotificationType type,
