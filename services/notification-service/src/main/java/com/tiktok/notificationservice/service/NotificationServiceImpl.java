@@ -14,7 +14,10 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 @Slf4j
 @Service
@@ -27,8 +30,23 @@ public class NotificationServiceImpl implements NotificationService {
     private final PushNotificationService pushNotificationService;
     private final NotificationEventPublisher notificationEventPublisher;
 
+    /**
+     * How long a like/share/follow from the same person on the same thing counts as already
+     * announced. Long enough to cover a session of somebody toggling a button, short enough that
+     * the same person coming back tomorrow is news again.
+     */
+    private static final Duration COLLAPSE_WINDOW = Duration.ofHours(24);
+
     @Override
     public NotificationResponse create(Long recipientId, Long actorId, NotificationType type, String title, String body, String referenceId) {
+        Optional<Notification> alreadyAnnounced = findRecentDuplicate(recipientId, actorId, type, referenceId);
+        if (alreadyAnnounced.isPresent()) {
+            // Returned rather than null: the caller asked for this notification to exist, and it
+            // does. Nothing is published or pushed — the recipient was already nudged once.
+            log.debug("Collapsing repeat {} from actor {} to {} on {}", type, actorId, recipientId, referenceId);
+            return notificationMapper.toResponse(alreadyAnnounced.get());
+        }
+
         Notification notification = Notification.builder()
                 .id(Notification.newId())
                 .recipientId(recipientId)
@@ -44,6 +62,27 @@ public class NotificationServiceImpl implements NotificationService {
         notificationEventPublisher.publishCreated(saved);
         push(saved);
         return notificationMapper.toResponse(saved);
+    }
+
+    /**
+     * A second like from the same account on the same video is the same piece of news, so it
+     * does not get a second inbox entry. Unlike-then-like is not rate limiting or abuse
+     * handling — it is one person's single opinion arriving repeatedly.
+     *
+     * <p>ponytail: read-then-write, so two deliveries landing in the same instant can both pass
+     * and write two entries. Redelivery of one event is already blocked upstream by
+     * IdempotentEventProcessor; what is left for this to stop is a human tapping a button, which
+     * is never that fast. A unique index would close it properly, at the cost of a second
+     * collection and a TTL to expire the window.
+     */
+    private Optional<Notification> findRecentDuplicate(Long recipientId, Long actorId,
+                                                       NotificationType type, String referenceId) {
+        if (!type.collapsesRepeats() || actorId == null || referenceId == null) {
+            return Optional.empty();
+        }
+        return notificationRepository
+                .findFirstByRecipientIdAndActorIdAndTypeAndReferenceIdAndCreatedAtAfter(
+                        recipientId, actorId, type, referenceId, Instant.now().minus(COLLAPSE_WINDOW));
     }
 
     /**

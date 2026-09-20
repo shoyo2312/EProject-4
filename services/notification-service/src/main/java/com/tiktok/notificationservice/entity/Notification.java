@@ -19,7 +19,11 @@ import java.time.Instant;
 @AllArgsConstructor
 @Document(collection = "notifications")
 @CompoundIndexes({
-        @CompoundIndex(name = "recipient_feed_idx", def = "{'recipientId': 1, 'createdAt': -1}")
+        @CompoundIndex(name = "recipient_feed_idx", def = "{'recipientId': 1, 'createdAt': -1}"),
+        // Serves the duplicate lookup NotificationServiceImpl runs before every collapsible
+        // create — without it that check scans the recipient's whole inbox on every like.
+        @CompoundIndex(name = "collapse_idx",
+                def = "{'recipientId': 1, 'actorId': 1, 'type': 1, 'referenceId': 1, 'createdAt': -1}")
 })
 public class Notification {
 

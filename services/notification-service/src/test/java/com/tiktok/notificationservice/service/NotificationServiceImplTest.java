@@ -23,6 +23,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -74,6 +75,39 @@ class NotificationServiceImplTest {
      * its own id, so every entry was stored without a timestamp — the client read it as epoch 0
      * ("690mo ago") and the newest-first sort had nothing to sort on.
      */
+    /**
+     * Guards the spam an unlike-then-like loop used to produce: every toggle emits a new event
+     * with a new eventId, so idempotency lets them all through and the owner got one "someone
+     * liked your video" per tap.
+     */
+    @Test
+    void create_collapsesARepeatLikeFromTheSameActorWithinTheWindow() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
+        Notification announced = unreadNotification("1", 100L);
+        when(notificationRepository.findFirstByRecipientIdAndActorIdAndTypeAndReferenceIdAndCreatedAtAfter(
+                eq(100L), eq(9L), eq(NotificationType.LIKE), eq("ref1"), any(Instant.class)))
+                .thenReturn(Optional.of(announced));
+
+        notificationService.create(100L, 9L, NotificationType.LIKE, "t", "b", "ref1");
+
+        verify(notificationRepository, never()).save(any(Notification.class));
+        verify(notificationEventPublisher, never()).publishCreated(any());
+        verify(pushNotificationService, never()).send(any(), any(), any());
+    }
+
+    /** A comment is content, not a flag: two by the same person are two real things to hear about. */
+    @Test
+    void create_doesNotCollapseComments() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
+        when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        notificationService.create(100L, 9L, NotificationType.COMMENT, "t", "b", "ref1");
+
+        verify(notificationRepository).save(any(Notification.class));
+        verify(notificationRepository, never()).findFirstByRecipientIdAndActorIdAndTypeAndReferenceIdAndCreatedAtAfter(
+                any(), any(), any(), any(), any());
+    }
+
     @Test
     void create_stampsCreatedAt() {
         notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
