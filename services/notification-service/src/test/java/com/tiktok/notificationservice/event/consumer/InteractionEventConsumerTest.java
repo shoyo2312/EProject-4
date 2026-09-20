@@ -65,7 +65,7 @@ class InteractionEventConsumerTest {
 
         consumer.onLike(json(VideoLikeEvent.of(7L, 9L, true)));
 
-        verify(notificationService).create(eq(50L), eq(NotificationType.LIKE), any(), any(), eq("7"));
+        verify(notificationService).create(eq(50L), eq(9L), eq(NotificationType.LIKE), any(), any(), eq("7"));
     }
 
     @Test
@@ -73,7 +73,7 @@ class InteractionEventConsumerTest {
         consumer.onLike(json(VideoLikeEvent.of(7L, 9L, false)));
 
         verify(videoOwnerClient, never()).ownerOf(any());
-        verify(notificationService, never()).create(any(), any(), any(), any(), any());
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -82,7 +82,7 @@ class InteractionEventConsumerTest {
 
         consumer.onLike(json(VideoLikeEvent.of(7L, 9L, true)));
 
-        verify(notificationService, never()).create(any(), any(), any(), any(), any());
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -91,7 +91,7 @@ class InteractionEventConsumerTest {
 
         consumer.onLike(json(VideoLikeEvent.of(7L, 9L, true)));
 
-        verify(notificationService, never()).create(any(), any(), any(), any(), any());
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -100,7 +100,7 @@ class InteractionEventConsumerTest {
 
         consumer.onLike(json(VideoLikeEvent.of(7L, 9L, true)));
 
-        verify(notificationService, never()).create(any(), any(), any(), any(), any());
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -109,14 +109,14 @@ class InteractionEventConsumerTest {
 
         consumer.onComment(json(CommentCreatedEvent.of(1L, 7L, 9L, "nice")), CREATED);
 
-        verify(notificationService).create(eq(50L), eq(NotificationType.COMMENT), any(), any(), eq("7"));
+        verify(notificationService).create(eq(50L), any(), eq(NotificationType.COMMENT), any(), any(), eq("7"));
     }
 
     @Test
     void onComment_notifiesTheAuthorBeingRepliedToInsteadOfTheOwner() throws Exception {
         consumer.onComment(json(CommentCreatedEvent.of(2L, 7L, 9L, "agreed", 1L, 33L)), CREATED);
 
-        verify(notificationService).create(eq(33L), eq(NotificationType.COMMENT), any(), any(), eq("7"));
+        verify(notificationService).create(eq(33L), any(), eq(NotificationType.COMMENT), any(), any(), eq("7"));
         verify(videoOwnerClient, never()).ownerOf(any());
     }
 
@@ -128,7 +128,7 @@ class InteractionEventConsumerTest {
     void onComment_ignoresADeletionOnTheSharedTopic() throws Exception {
         consumer.onComment(json(CommentDeletedEvent.of(1L, 7L, 9L)), DELETED);
 
-        verify(notificationService, never()).create(any(), any(), any(), any(), any());
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -137,7 +137,7 @@ class InteractionEventConsumerTest {
 
         consumer.onComment(json(CommentCreatedEvent.of(1L, 7L, 9L, "nice")), null);
 
-        verify(notificationService).create(eq(50L), eq(NotificationType.COMMENT), any(), any(), eq("7"));
+        verify(notificationService).create(eq(50L), any(), eq(NotificationType.COMMENT), any(), any(), eq("7"));
     }
 
     @Test
@@ -146,6 +146,6 @@ class InteractionEventConsumerTest {
 
         consumer.onShare(json(VideoSharedEvent.of(3L, 7L, 9L)));
 
-        verify(notificationService).create(eq(50L), eq(NotificationType.SHARE), any(), any(), eq("7"));
+        verify(notificationService).create(eq(50L), any(), eq(NotificationType.SHARE), any(), any(), eq("7"));
     }
 }

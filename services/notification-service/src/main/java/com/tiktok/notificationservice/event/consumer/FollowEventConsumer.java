@@ -34,6 +34,7 @@ public class FollowEventConsumer {
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
                 notificationService.create(
                         event.followingId(),
+                        event.followerId(),
                         NotificationType.NEW_FOLLOWER,
                         "Người theo dõi mới",
                         "Bạn vừa có thêm một người theo dõi.",

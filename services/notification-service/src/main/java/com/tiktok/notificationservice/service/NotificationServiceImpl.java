@@ -28,10 +28,11 @@ public class NotificationServiceImpl implements NotificationService {
     private final NotificationEventPublisher notificationEventPublisher;
 
     @Override
-    public NotificationResponse create(Long recipientId, NotificationType type, String title, String body, String referenceId) {
+    public NotificationResponse create(Long recipientId, Long actorId, NotificationType type, String title, String body, String referenceId) {
         Notification notification = Notification.builder()
                 .id(Notification.newId())
                 .recipientId(recipientId)
+                .actorId(actorId)
                 .type(type)
                 .title(title)
                 .body(body)

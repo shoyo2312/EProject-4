@@ -80,13 +80,13 @@ public class InteractionEventConsumer {
             // interaction-service for it would add a second lookup to every comment.
             if (event.replyToUserId() != null) {
                 notify(event.replyToUserId(), event.userId(), NotificationType.COMMENT,
-                        "Phản hồi mới", "Có người vừa trả lời bình luận của bạn.",
+                        "Phản hồi mới", event.content(),
                         String.valueOf(event.videoId()));
                 return;
             }
 
             notifyVideoOwner(event.videoId(), event.userId(), NotificationType.COMMENT,
-                    "Bình luận mới", "Video của bạn vừa có bình luận mới.");
+                    "Bình luận mới", event.content());
         });
     }
 
@@ -117,6 +117,6 @@ public class InteractionEventConsumer {
         if (recipientId.equals(actorId)) {
             return;
         }
-        notificationService.create(recipientId, type, title, body, referenceId);
+        notificationService.create(recipientId, actorId, type, title, body, referenceId);
     }
 }

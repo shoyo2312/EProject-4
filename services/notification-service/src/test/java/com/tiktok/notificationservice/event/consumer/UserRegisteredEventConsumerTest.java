@@ -41,7 +41,7 @@ class UserRegisteredEventConsumerTest {
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).create(eq(1L), eq(NotificationType.SYSTEM), any(), bodyCaptor.capture(), isNull());
+        verify(notificationService).create(eq(1L), isNull(), eq(NotificationType.SYSTEM), any(), bodyCaptor.capture(), isNull());
         assertThat(bodyCaptor.getValue()).contains("alice");
     }
 
@@ -52,14 +52,14 @@ class UserRegisteredEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
-        verify(notificationService, never()).create(any(), any(), any(), any(), any());
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     @Test
     void onMessage_failureReleasesTheClaimSoTheEventCanBeRedelivered() throws Exception {
         UserRegisteredEvent event = UserRegisteredEvent.of(1L, "alice", "alice@example.com");
         when(processedEventRepository.tryClaim(eq(event.eventId()), anyString())).thenReturn(true);
-        when(notificationService.create(any(), any(), any(), any(), any()))
+        when(notificationService.create(any(), any(), any(), any(), any(), any()))
                 .thenThrow(new IllegalStateException("mongo down"));
 
         String payload = objectMapper.writeValueAsString(event);

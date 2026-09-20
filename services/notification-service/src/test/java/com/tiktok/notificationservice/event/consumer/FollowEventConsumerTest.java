@@ -41,13 +41,13 @@ class FollowEventConsumerTest {
         consumer().onMessage(objectMapper.writeValueAsString(UserFollowChangedEvent.of(9L, 50L, true)));
 
         verify(notificationService).create(
-                eq(50L), eq(NotificationType.NEW_FOLLOWER), any(), any(), eq("9"));
+                eq(50L), eq(9L), eq(NotificationType.NEW_FOLLOWER), any(), any(), eq("9"));
     }
 
     @Test
     void onMessage_ignoresAnUnfollow() throws Exception {
         consumer().onMessage(objectMapper.writeValueAsString(UserFollowChangedEvent.of(9L, 50L, false)));
 
-        verify(notificationService, never()).create(any(), any(), any(), any(), any());
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 }

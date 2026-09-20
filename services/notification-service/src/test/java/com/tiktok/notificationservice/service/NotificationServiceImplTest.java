@@ -62,7 +62,7 @@ class NotificationServiceImplTest {
         notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
         when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        notificationService.create(100L, NotificationType.LIKE, "t", "b", "ref1");
+        notificationService.create(100L, 9L, NotificationType.LIKE, "t", "b", "ref1");
 
         ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
         verify(notificationEventPublisher).publishCreated(captor.capture());
@@ -73,10 +73,10 @@ class NotificationServiceImplTest {
     void create_buildsNotificationWithGivenFieldsAndReturnsMappedResponse() {
         notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
         when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        NotificationResponse expected = new NotificationResponse("1", NotificationType.LIKE, "t", "b", "ref1", false, Instant.now());
+        NotificationResponse expected = new NotificationResponse("1", 9L, NotificationType.LIKE, "t", "b", "ref1", false, Instant.now());
         when(notificationMapper.toResponse(any(Notification.class))).thenReturn(expected);
 
-        NotificationResponse response = notificationService.create(100L, NotificationType.LIKE, "t", "b", "ref1");
+        NotificationResponse response = notificationService.create(100L, 9L, NotificationType.LIKE, "t", "b", "ref1");
 
         ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
         verify(notificationRepository).save(captor.capture());
@@ -97,8 +97,8 @@ class NotificationServiceImplTest {
         notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
         Notification n1 = unreadNotification("n1", 1L);
         Notification n2 = unreadNotification("n2", 1L);
-        NotificationResponse r1 = new NotificationResponse("n1", NotificationType.SYSTEM, "t", "b", null, false, n1.getCreatedAt());
-        NotificationResponse r2 = new NotificationResponse("n2", NotificationType.SYSTEM, "t", "b", null, false, n2.getCreatedAt());
+        NotificationResponse r1 = new NotificationResponse("n1", null, NotificationType.SYSTEM, "t", "b", null, false, n1.getCreatedAt());
+        NotificationResponse r2 = new NotificationResponse("n2", null, NotificationType.SYSTEM, "t", "b", null, false, n2.getCreatedAt());
         when(notificationRepository.findByRecipientIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(n1, n2));
         when(notificationMapper.toResponse(n1)).thenReturn(r1);
         when(notificationMapper.toResponse(n2)).thenReturn(r2);
@@ -181,7 +181,7 @@ class NotificationServiceImplTest {
                 DeviceToken.builder().token("phone").userId(100L).build(),
                 DeviceToken.builder().token("tablet").userId(100L).build()));
 
-        notificationService.create(100L, NotificationType.LIKE, "t", "b", "ref1");
+        notificationService.create(100L, 9L, NotificationType.LIKE, "t", "b", "ref1");
 
         verify(pushNotificationService).send("phone", "t", "b");
         verify(pushNotificationService).send("tablet", "t", "b");
@@ -193,7 +193,7 @@ class NotificationServiceImplTest {
         when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(deviceTokenRepository.findByUserId(100L)).thenThrow(new IllegalStateException("mongo down"));
 
-        notificationService.create(100L, NotificationType.LIKE, "t", "b", "ref1");
+        notificationService.create(100L, 9L, NotificationType.LIKE, "t", "b", "ref1");
 
         verify(notificationRepository).save(any(Notification.class));
     }

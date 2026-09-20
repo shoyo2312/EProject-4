@@ -30,6 +30,7 @@ public class NotificationEventPublisher {
         NotificationCreatedEvent event = NotificationCreatedEvent.of(
                 notification.getRecipientId(),
                 notification.getId(),
+                notification.getActorId(),
                 notification.getType().name(),
                 notification.getTitle(),
                 notification.getBody(),

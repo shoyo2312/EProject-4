@@ -19,6 +19,7 @@ public record NotificationCreatedEvent(
         Instant occurredAt,
         Long recipientId,
         String notificationId,
+        Long actorId,
         String type,
         String title,
         String body,
@@ -27,10 +28,10 @@ public record NotificationCreatedEvent(
 ) implements DomainEvent {
 
     public static NotificationCreatedEvent of(
-            Long recipientId, String notificationId, String type,
+            Long recipientId, String notificationId, Long actorId, String type,
             String title, String body, String referenceId, Instant createdAt) {
         return new NotificationCreatedEvent(
                 UUID.randomUUID().toString(), Instant.now(),
-                recipientId, notificationId, type, title, body, referenceId, createdAt);
+                recipientId, notificationId, actorId, type, title, body, referenceId, createdAt);
     }
 }

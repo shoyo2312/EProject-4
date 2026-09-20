@@ -27,6 +27,7 @@ public class UserRegisteredEventConsumer {
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
                 notificationService.create(
                         event.userId(),
+                        null,
                         NotificationType.SYSTEM,
                         "Welcome to TikTok!",
                         "Hi " + event.username() + ", thanks for joining us.",

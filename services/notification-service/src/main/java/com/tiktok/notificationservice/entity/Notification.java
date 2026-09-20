@@ -29,6 +29,13 @@ public class Notification {
 
     private Long recipientId;
 
+    /**
+     * Who did the thing (liked/commented/shared/followed) — null for SYSTEM, where there is no
+     * actor. The client resolves this to an avatar and handle itself; this service never reads
+     * user-service, same reasoning as {@link #referenceId}.
+     */
+    private Long actorId;
+
     private NotificationType type;
 
     private String title;

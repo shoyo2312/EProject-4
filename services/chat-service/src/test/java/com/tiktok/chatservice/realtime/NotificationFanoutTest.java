@@ -34,7 +34,7 @@ class NotificationFanoutTest {
     @Test
     void onNotificationCreated_sendsToTheRecipientsOwnQueue() throws Exception {
         NotificationCreatedEvent event = NotificationCreatedEvent.of(
-                100L, "n1", "LIKE", "Lượt thích mới", "body", "7", Instant.now());
+                100L, "n1", 9L, "LIKE", "Lượt thích mới", "body", "7", Instant.now());
 
         fanout().onNotificationCreated(objectMapper.writeValueAsString(event));
 
