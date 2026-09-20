@@ -14,6 +14,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -27,31 +28,47 @@ class UserRegisteredEventConsumerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
+    private UserRegisteredEventConsumer consumer() {
+        return new UserRegisteredEventConsumer(
+                new IdempotentEventProcessor(processedEventRepository), notificationService, objectMapper);
+    }
+
     @Test
-    void onMessage_newEvent_createsWelcomeNotificationAndMarksProcessed() throws Exception {
-        UserRegisteredEventConsumer consumer = new UserRegisteredEventConsumer(notificationService, processedEventRepository, objectMapper);
+    void onMessage_newEvent_createsWelcomeNotification() throws Exception {
         UserRegisteredEvent event = UserRegisteredEvent.of(1L, "alice", "alice@example.com");
-        when(processedEventRepository.existsByEventId(event.eventId())).thenReturn(false);
+        when(processedEventRepository.tryClaim(eq(event.eventId()), anyString())).thenReturn(true);
 
-        consumer.onMessage(objectMapper.writeValueAsString(event));
+        consumer().onMessage(objectMapper.writeValueAsString(event));
 
-        ArgumentCaptor<String> titleCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).create(eq(1L), eq(NotificationType.SYSTEM), titleCaptor.capture(), bodyCaptor.capture(), isNull());
+        verify(notificationService).create(eq(1L), eq(NotificationType.SYSTEM), any(), bodyCaptor.capture(), isNull());
         assertThat(bodyCaptor.getValue()).contains("alice");
-
-        verify(processedEventRepository).save(argThat(saved -> saved.getEventId().equals(event.eventId())));
     }
 
     @Test
     void onMessage_duplicateEvent_isSkipped() throws Exception {
-        UserRegisteredEventConsumer consumer = new UserRegisteredEventConsumer(notificationService, processedEventRepository, objectMapper);
         UserRegisteredEvent event = UserRegisteredEvent.of(1L, "alice", "alice@example.com");
-        when(processedEventRepository.existsByEventId(event.eventId())).thenReturn(true);
+        when(processedEventRepository.tryClaim(eq(event.eventId()), anyString())).thenReturn(false);
 
-        consumer.onMessage(objectMapper.writeValueAsString(event));
+        consumer().onMessage(objectMapper.writeValueAsString(event));
 
         verify(notificationService, never()).create(any(), any(), any(), any(), any());
-        verify(processedEventRepository, never()).save(any());
+    }
+
+    @Test
+    void onMessage_failureReleasesTheClaimSoTheEventCanBeRedelivered() throws Exception {
+        UserRegisteredEvent event = UserRegisteredEvent.of(1L, "alice", "alice@example.com");
+        when(processedEventRepository.tryClaim(eq(event.eventId()), anyString())).thenReturn(true);
+        when(notificationService.create(any(), any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("mongo down"));
+
+        String payload = objectMapper.writeValueAsString(event);
+        try {
+            consumer().onMessage(payload);
+        } catch (IllegalStateException expected) {
+            // rethrown so kafka-lib's error handler retries, then routes to the DLT
+        }
+
+        verify(processedEventRepository).releaseClaim(event.eventId());
     }
 }

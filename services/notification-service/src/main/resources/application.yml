@@ -19,6 +19,16 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    # Only ever used by kafka-lib's DeadLetterPublishingRecoverer — this service produces
+    # nothing of its own, but without a serializer the DLT send fails and the poison message
+    # goes back to blocking its partition, which is the whole point of having a DLT.
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+downstream:
+  video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+  timeout-millis: ${DOWNSTREAM_TIMEOUT_MILLIS:1000}
 
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}

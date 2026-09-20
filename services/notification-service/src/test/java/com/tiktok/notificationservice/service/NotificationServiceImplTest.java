@@ -6,6 +6,8 @@ import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.exception.NotNotificationOwnerException;
 import com.tiktok.notificationservice.exception.NotificationNotFoundException;
 import com.tiktok.notificationservice.mapper.NotificationMapper;
+import com.tiktok.notificationservice.entity.DeviceToken;
+import com.tiktok.notificationservice.repository.DeviceTokenRepository;
 import com.tiktok.notificationservice.repository.NotificationRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,6 +33,12 @@ class NotificationServiceImplTest {
     @Mock
     private NotificationMapper notificationMapper;
 
+    @Mock
+    private DeviceTokenRepository deviceTokenRepository;
+
+    @Mock
+    private PushNotificationService pushNotificationService;
+
     private NotificationServiceImpl notificationService;
 
     private Notification unreadNotification(String id, Long recipientId) {
@@ -47,7 +55,7 @@ class NotificationServiceImplTest {
 
     @Test
     void create_buildsNotificationWithGivenFieldsAndReturnsMappedResponse() {
-        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper);
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
         when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> invocation.getArgument(0));
         NotificationResponse expected = new NotificationResponse("1", NotificationType.LIKE, "t", "b", "ref1", false, Instant.now());
         when(notificationMapper.toResponse(any(Notification.class))).thenReturn(expected);
@@ -70,7 +78,7 @@ class NotificationServiceImplTest {
 
     @Test
     void listByUser_mapsAllNotificationsForRecipient() {
-        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper);
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
         Notification n1 = unreadNotification("n1", 1L);
         Notification n2 = unreadNotification("n2", 1L);
         NotificationResponse r1 = new NotificationResponse("n1", NotificationType.SYSTEM, "t", "b", null, false, n1.getCreatedAt());
@@ -86,7 +94,7 @@ class NotificationServiceImplTest {
 
     @Test
     void unreadCount_delegatesToRepositoryCount() {
-        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper);
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
         when(notificationRepository.countByRecipientIdAndReadFalse(1L)).thenReturn(3L);
 
         assertThat(notificationService.unreadCount(1L)).isEqualTo(3L);
@@ -94,7 +102,7 @@ class NotificationServiceImplTest {
 
     @Test
     void markAsRead_calledByOwner_marksNotificationRead() {
-        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper);
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
         Notification notification = unreadNotification("n1", 1L);
         when(notificationRepository.findById("n1")).thenReturn(Optional.of(notification));
 
@@ -107,7 +115,7 @@ class NotificationServiceImplTest {
 
     @Test
     void markAsRead_calledByNonOwner_throwsNotNotificationOwnerAndDoesNotSave() {
-        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper);
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
         Notification notification = unreadNotification("n1", 1L);
         when(notificationRepository.findById("n1")).thenReturn(Optional.of(notification));
 
@@ -118,7 +126,7 @@ class NotificationServiceImplTest {
 
     @Test
     void markAsRead_missingNotification_throwsNotificationNotFound() {
-        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper);
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
         when(notificationRepository.findById("missing")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> notificationService.markAsRead(1L, "missing"))
@@ -127,7 +135,7 @@ class NotificationServiceImplTest {
 
     @Test
     void markAllAsRead_marksEveryUnreadNotificationForRecipient() {
-        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper);
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
         Notification n1 = unreadNotification("n1", 1L);
         Notification n2 = unreadNotification("n2", 1L);
         when(notificationRepository.findByRecipientIdAndReadFalse(1L)).thenReturn(List.of(n1, n2));
@@ -141,11 +149,70 @@ class NotificationServiceImplTest {
 
     @Test
     void markAllAsRead_noUnreadNotifications_savesEmptyListWithoutError() {
-        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper);
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
         when(notificationRepository.findByRecipientIdAndReadFalse(1L)).thenReturn(List.of());
 
         notificationService.markAllAsRead(1L);
 
         verify(notificationRepository).saveAll(List.of());
+    }
+
+    @Test
+    void create_pushesToEveryDeviceTheRecipientRegistered() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
+        when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(deviceTokenRepository.findByUserId(100L)).thenReturn(List.of(
+                DeviceToken.builder().token("phone").userId(100L).build(),
+                DeviceToken.builder().token("tablet").userId(100L).build()));
+
+        notificationService.create(100L, NotificationType.LIKE, "t", "b", "ref1");
+
+        verify(pushNotificationService).send("phone", "t", "b");
+        verify(pushNotificationService).send("tablet", "t", "b");
+    }
+
+    @Test
+    void create_storesTheNotificationEvenWhenPushingBlowsUp() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
+        when(notificationRepository.save(any(Notification.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(deviceTokenRepository.findByUserId(100L)).thenThrow(new IllegalStateException("mongo down"));
+
+        notificationService.create(100L, NotificationType.LIKE, "t", "b", "ref1");
+
+        verify(notificationRepository).save(any(Notification.class));
+    }
+
+    @Test
+    void registerDevice_savesTokenKeyedDocumentSoReRegistrationOverwrites() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
+
+        notificationService.registerDevice(100L, "phone");
+
+        ArgumentCaptor<DeviceToken> captor = ArgumentCaptor.forClass(DeviceToken.class);
+        verify(deviceTokenRepository).save(captor.capture());
+        assertThat(captor.getValue().getToken()).isEqualTo("phone");
+        assertThat(captor.getValue().getUserId()).isEqualTo(100L);
+    }
+
+    @Test
+    void unregisterDevice_removesOwnToken() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
+        DeviceToken device = DeviceToken.builder().token("phone").userId(100L).build();
+        when(deviceTokenRepository.findById("phone")).thenReturn(Optional.of(device));
+
+        notificationService.unregisterDevice(100L, "phone");
+
+        verify(deviceTokenRepository).delete(device);
+    }
+
+    @Test
+    void unregisterDevice_leavesSomeoneElsesTokenAlone() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService);
+        when(deviceTokenRepository.findById("phone")).thenReturn(
+                Optional.of(DeviceToken.builder().token("phone").userId(999L).build()));
+
+        notificationService.unregisterDevice(100L, "phone");
+
+        verify(deviceTokenRepository, never()).delete(any());
     }
 }
