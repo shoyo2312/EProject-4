@@ -10,6 +10,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
+
 /**
  * The admin console's video listing.
  *
@@ -27,9 +29,15 @@ public class AdminVideoDirectory {
     private final VideoMapper videoMapper;
     private final QuarantinedMediaUrls quarantinedMediaUrls;
 
-    public Page<VideoResponse> search(String query, VideoStatus status, Pageable pageable) {
+    /**
+     * @param ownerIds the owners a handle search resolved to — see
+     *                 {@link com.tiktok.videoservice.repository.VideoRepositoryCustom#findForAdmin}
+     *                 for why they widen the search rather than narrowing it
+     */
+    public Page<VideoResponse> search(String query, VideoStatus status, Collection<Long> ownerIds,
+                                      Pageable pageable) {
         String term = (query == null || query.isBlank()) ? null : query.trim();
-        return videoRepository.findForAdmin(status, term, pageable)
+        return videoRepository.findForAdmin(status, term, ownerIds, pageable)
                 .map(videoMapper::toAdminResponse)
                 .map(quarantinedMediaUrls::forAdmin);
     }

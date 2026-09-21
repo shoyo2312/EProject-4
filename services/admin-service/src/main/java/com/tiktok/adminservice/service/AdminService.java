@@ -34,8 +34,27 @@ public interface AdminService {
      * {@code targetId} is a string because target ids are not one type: a user is a Snowflake
      * long, a video is a Mongo document id.
      */
+    default ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
+                                              ModerationActionType actionType, String reason) {
+        return moderate(adminId, targetType, targetId, actionType, reason, null);
+    }
+
+    /**
+     * @param banDays how long a BAN_USER lasts, or null for a ban that does not lapse. Ignored
+     *                for every other action type.
+     */
     ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
-                                      ModerationActionType actionType, String reason);
+                                      ModerationActionType actionType, String reason, Integer banDays);
+
+    /**
+     * How many times this target has been banned, taken down or had a comment removed — what the
+     * console calls strikes.
+     *
+     * <p>Counts enforcement only. A reversal does not subtract: an unban is a decision about
+     * whether the account is usable today, not a finding that the ban never happened, and a
+     * count that quietly forgets last month's takedown is the one an admin would be misled by.
+     */
+    long countStrikes(ReportTargetType targetType, String targetId);
 
     Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Pageable pageable);
 

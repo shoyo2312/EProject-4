@@ -35,7 +35,7 @@ public class AdminModerationEventConsumer {
 
         if (USER_BANNED.equals(eventType)) {
             UserBannedEvent event = objectMapper.readValue(payload, UserBannedEvent.class);
-            userModerationService.ban(event.userId(), event.adminId(), event.reason());
+            userModerationService.ban(event.userId(), event.adminId(), event.reason(), event.bannedUntil());
         } else if (USER_UNBANNED.equals(eventType)) {
             UserUnbannedEvent event = objectMapper.readValue(payload, UserUnbannedEvent.class);
             userModerationService.unban(event.userId(), event.adminId());

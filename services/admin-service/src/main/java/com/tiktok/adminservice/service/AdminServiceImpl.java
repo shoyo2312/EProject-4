@@ -159,11 +159,17 @@ public class AdminServiceImpl implements AdminService {
     @Override
     @Transactional
     public ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
-                                            ModerationActionType actionType, String reason) {
+                                            ModerationActionType actionType, String reason, Integer banDays) {
         actionType.requireApplicableTo(targetType);
         targetType.validateTargetId(targetId);
 
-        ModerationAction action = record(adminId, targetType, targetId, actionType, reason, null);
+        // Only a ban has a duration, and only here is it turned into an instant: computing it at
+        // the consumer would date the ban from whenever the event happened to be delivered.
+        Instant bannedUntil = banDays != null && actionType == ModerationActionType.BAN_USER
+                ? Instant.now().plus(banDays, ChronoUnit.DAYS)
+                : null;
+
+        ModerationAction action = record(adminId, targetType, targetId, actionType, reason, null, bannedUntil);
 
         // The console resolves a whole queue row through this path — one decision, every
         // standing report against that target closed. It is also what a takedown taken straight
@@ -189,6 +195,12 @@ public class AdminServiceImpl implements AdminService {
                 ? moderationActionRepository.findByTargetTypeAndTargetIdOrderByCreatedAtDesc(targetType, targetId, pageable)
                 : moderationActionRepository.findAllByOrderByCreatedAtDesc(pageable);
         return actions.map(adminMapper::toResponse);
+    }
+
+    @Override
+    public long countStrikes(ReportTargetType targetType, String targetId) {
+        return moderationActionRepository.countByTargetTypeAndTargetIdAndActionTypeIn(
+                targetType, targetId, ModerationActionType.ENFORCING);
     }
 
     @Override
@@ -225,6 +237,12 @@ public class AdminServiceImpl implements AdminService {
     /** Writes the audit row and the outbox event for one decision. */
     private ModerationAction record(Long adminId, ReportTargetType targetType, String targetId,
                                     ModerationActionType actionType, String reason, Long reportId) {
+        return record(adminId, targetType, targetId, actionType, reason, reportId, null);
+    }
+
+    private ModerationAction record(Long adminId, ReportTargetType targetType, String targetId,
+                                    ModerationActionType actionType, String reason, Long reportId,
+                                    Instant bannedUntil) {
         // No existence check against the owning service: this one cannot read its database, and an
         // extra HTTP call would only move the failure. An action against an id that does not exist
         // is a no-op on the consumer side, and the audit row is still the honest record of the
@@ -236,6 +254,7 @@ public class AdminServiceImpl implements AdminService {
                 .targetId(targetId)
                 .reason(reason)
                 .reportId(reportId)
+                .bannedUntil(bannedUntil)
                 .build();
         moderationActionRepository.save(action);
         adminEventProducer.publishFor(action);

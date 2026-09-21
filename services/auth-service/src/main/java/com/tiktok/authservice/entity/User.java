@@ -62,6 +62,14 @@ public class User extends BaseEntity {
     private Instant bannedAt;
 
     /**
+     * When the current ban lapses; null for a permanent one. A lapsed ban is lifted by
+     * {@code ExpiredBanSweep} rather than by whoever next reads this row — the account's standing
+     * has to be the same answer for the directory, the sign-in path and the profile.
+     */
+    @Column(name = "banned_until")
+    private Instant bannedUntil;
+
+    /**
      * Reason carried on the {@code UserBannedEvent} that banned this account, kept here so the
      * admin console shows it without reading admin-service's audit log. Cleared on unban.
      */
@@ -88,9 +96,11 @@ public class User extends BaseEntity {
         this.status = UserStatus.LOCKED;
     }
 
-    public void ban(String reason) {
+    /** @param bannedUntil when the ban lapses, or null for one that does not. */
+    public void ban(String reason, Instant bannedUntil) {
         this.status = UserStatus.BANNED;
         this.bannedAt = Instant.now();
+        this.bannedUntil = bannedUntil;
         this.banReason = reason;
     }
 
@@ -102,6 +112,7 @@ public class User extends BaseEntity {
         if (this.status == UserStatus.BANNED) {
             this.status = UserStatus.ACTIVE;
             this.bannedAt = null;
+            this.bannedUntil = null;
             this.banReason = null;
         }
     }

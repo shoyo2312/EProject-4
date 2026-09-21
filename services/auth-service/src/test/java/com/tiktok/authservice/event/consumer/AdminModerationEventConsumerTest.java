@@ -15,9 +15,13 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -61,9 +65,27 @@ class AdminModerationEventConsumerTest {
         verify(sessionRevoker).revokeAllSessions(USER_ID);
     }
 
+    /** The field is new and nullable, so an event written without it must still ban permanently. */
+    @Test
+    void aBanWithADeadlineCarriesItOntoTheAccount() throws Exception {
+        Instant until = Instant.now().plus(Duration.ofDays(3));
+
+        consumer.onMessage(json(UserBannedEvent.of(USER_ID, ADMIN_ID, "spam", until)),
+                header("UserBannedEvent"));
+
+        assertThat(saved().getBannedUntil()).isCloseTo(until, within(1, ChronoUnit.SECONDS));
+    }
+
+    @Test
+    void aBanWithoutADeadlineIsPermanent() throws Exception {
+        consumer.onMessage(json(UserBannedEvent.of(USER_ID, ADMIN_ID, "spam")), header("UserBannedEvent"));
+
+        assertThat(saved().getBannedUntil()).isNull();
+    }
+
     @Test
     void unbanRestoresTheAccount() throws Exception {
-        user.ban("spam");
+        user.ban("spam", null);
 
         consumer.onMessage(json(UserUnbannedEvent.of(USER_ID, ADMIN_ID, "appeal upheld")),
                 header("UserUnbannedEvent"));

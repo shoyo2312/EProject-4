@@ -30,11 +30,13 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -58,6 +60,66 @@ class AdminServiceImplTest {
     @BeforeEach
     void setUp() {
         adminService = new AdminServiceImpl(reportRepository, moderationActionRepository, adminMapper, adminEventProducer);
+    }
+
+    /**
+     * What counts as a strike. WARN_USER and DISMISS_REPORT are decisions about a report, not
+     * about the account, and a count that included them would call an admin who dismissed four
+     * reports in someone's favour a four-strike offender.
+     */
+    @Test
+    void countStrikes_countsEnforcementOnly() {
+        assertThat(ModerationActionType.ENFORCING)
+                .containsExactlyInAnyOrder(ModerationActionType.BAN_USER,
+                        ModerationActionType.TAKEDOWN_VIDEO, ModerationActionType.REMOVE_COMMENT);
+
+        when(moderationActionRepository.countByTargetTypeAndTargetIdAndActionTypeIn(
+                ReportTargetType.USER, "7", ModerationActionType.ENFORCING)).thenReturn(3L);
+
+        assertThat(adminService.countStrikes(ReportTargetType.USER, "7")).isEqualTo(3L);
+    }
+
+    /** A banned account's strikes must survive the unban — see countStrikes' contract. */
+    @Test
+    void countStrikes_doesNotSubtractReversals() {
+        assertThat(ModerationActionType.ENFORCING)
+                .doesNotContain(ModerationActionType.UNBAN_USER, ModerationActionType.RESTORE_VIDEO);
+    }
+
+    @Test
+    void moderate_turnsBanDaysIntoADeadlineOnTheAuditRow() {
+        when(moderationActionRepository.save(any(ModerationAction.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.moderate(1L, ReportTargetType.USER, "7", ModerationActionType.BAN_USER, "spam", 7);
+
+        ArgumentCaptor<ModerationAction> saved = ArgumentCaptor.forClass(ModerationAction.class);
+        verify(moderationActionRepository).save(saved.capture());
+        assertThat(saved.getValue().getBannedUntil())
+                .isCloseTo(Instant.now().plus(7, ChronoUnit.DAYS), within(1, ChronoUnit.MINUTES));
+    }
+
+    /** No duration is a ban that does not lapse, which is what every ban was before this. */
+    @Test
+    void moderate_leavesTheDeadlineUnsetWhenNoDurationIsGiven() {
+        when(moderationActionRepository.save(any(ModerationAction.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.moderate(1L, ReportTargetType.USER, "7", ModerationActionType.BAN_USER, "spam");
+
+        ArgumentCaptor<ModerationAction> saved = ArgumentCaptor.forClass(ModerationAction.class);
+        verify(moderationActionRepository).save(saved.capture());
+        assertThat(saved.getValue().getBannedUntil()).isNull();
+    }
+
+    /** A takedown has no duration, and nothing reverses one on a timer. */
+    @Test
+    void moderate_ignoresADurationOnAnythingButABan() {
+        when(moderationActionRepository.save(any(ModerationAction.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.moderate(1L, ReportTargetType.VIDEO, "v1", ModerationActionType.TAKEDOWN_VIDEO, "nudity", 7);
+
+        ArgumentCaptor<ModerationAction> saved = ArgumentCaptor.forClass(ModerationAction.class);
+        verify(moderationActionRepository).save(saved.capture());
+        assertThat(saved.getValue().getBannedUntil()).isNull();
     }
 
     @Test

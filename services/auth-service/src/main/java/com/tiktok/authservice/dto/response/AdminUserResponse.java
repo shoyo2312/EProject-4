@@ -29,6 +29,7 @@ public record AdminUserResponse(
         Instant updatedAt,
         Instant lastLoginAt,
         Instant bannedAt,
+        Instant bannedUntil,
         String banReason,
         AuthProvider provider,
         List<AuthProvider> linkedProviders

@@ -19,6 +19,9 @@ public interface ModerationActionRepository extends JpaRepository<ModerationActi
 
     long countByCreatedAtAfter(Instant since);
 
+    long countByTargetTypeAndTargetIdAndActionTypeIn(
+            ReportTargetType targetType, String targetId, Collection<ModerationActionType> actionTypes);
+
     /**
      * The last decision that moved this target in or out of enforcement — what the console means
      * by "is this already dealt with". Callers pass

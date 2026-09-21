@@ -102,7 +102,7 @@ public class InteractionEventConsumer {
 
     private void notifyVideoOwner(Long videoId, Long actorId, NotificationType type,
                                   String title, String body) {
-        Long ownerId = videoOwnerClient.ownerOf(videoId);
+        Long ownerId = videoOwnerClient.ownerOf(String.valueOf(videoId));
         if (ownerId == null) {
             return;
         }

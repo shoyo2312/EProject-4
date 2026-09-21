@@ -75,11 +75,18 @@ public interface VideoRepositoryCustom {
      * not the sort. Acceptable only because this is one screen with one admin behind it — do not
      * reuse it on a user-facing path.
      *
-     * @param status null for every status
-     * @param term   case-insensitive substring of the title, or null for no title filter
+     * <p>{@code term} and {@code ownerIds} are one search expressed two ways, so they are OR'd:
+     * this collection stores the owner's id and never their handle, which means a search for a
+     * handle can only arrive here as the ids it resolved to. AND-ing them would ask for a video
+     * whose title also contains the handle, which is nothing.
+     *
+     * @param status   null for every status
+     * @param term     case-insensitive substring of the title, or null for no title filter
+     * @param ownerIds videos by these owners match too, or null/empty for no owner filter
      */
     org.springframework.data.domain.Page<Video> findForAdmin(
-            VideoStatus status, String term, org.springframework.data.domain.Pageable pageable);
+            VideoStatus status, String term, java.util.Collection<Long> ownerIds,
+            org.springframework.data.domain.Pageable pageable);
 
     /**
      * Transcode succeeded: the media fields it produced, plus where the outcome was recorded.
