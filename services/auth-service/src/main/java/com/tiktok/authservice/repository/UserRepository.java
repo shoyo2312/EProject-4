@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -16,6 +18,9 @@ import java.util.Optional;
  * unique indexes are on lower(email)/lower(username) — see V6 — so these stay index-backed.
  */
 public interface UserRepository extends JpaRepository<User, Long> {
+
+    /** Bans that have run out, for the sweep that lifts them. */
+    List<User> findByStatusAndBannedUntilBefore(UserStatus status, Instant cutoff);
 
     Optional<User> findByUsernameIgnoreCaseAndDeletedAtIsNull(String username);
 

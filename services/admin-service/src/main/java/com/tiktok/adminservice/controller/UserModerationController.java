@@ -32,7 +32,7 @@ public class UserModerationController {
             @PathVariable Long userId,
             @Valid @RequestBody ModerationRequest request) {
         return ApiResponse.success(adminService.moderate(currentAdminId, ReportTargetType.USER,
-                String.valueOf(userId), ModerationActionType.BAN_USER, request.reason()));
+                String.valueOf(userId), ModerationActionType.BAN_USER, request.reason(), request.banDays()));
     }
 
     @PostMapping("/{userId}/unban")

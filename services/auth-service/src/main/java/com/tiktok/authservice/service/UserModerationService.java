@@ -7,6 +7,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+
 /**
  * Applies an admin-service moderation decision to the account itself. Ban is what makes the
  * decision real: every sign-in path here already refuses anything but {@code ACTIVE}, so flipping
@@ -26,16 +28,16 @@ public class UserModerationService {
     private final SessionRevoker sessionRevoker;
 
     @Transactional
-    public void ban(Long userId, Long adminId, String reason) {
+    public void ban(Long userId, Long adminId, String reason, Instant bannedUntil) {
         User user = userRepository.findById(userId).orElse(null);
         if (user == null) {
             log.warn("Ban for unknown userId={} ignored", userId);
             return;
         }
-        user.ban(reason);
+        user.ban(reason, bannedUntil);
         userRepository.save(user);
         sessionRevoker.revokeAllSessions(userId);
-        log.info("Banned userId={} by adminId={}", userId, adminId);
+        log.info("Banned userId={} by adminId={} until={}", userId, adminId, bannedUntil);
     }
 
     @Transactional

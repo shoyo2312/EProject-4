@@ -44,7 +44,7 @@ public class AdminEventProducer {
         String targetId = action.getTargetId();
 
         return switch (action.getActionType()) {
-            case BAN_USER -> UserBannedEvent.of(Long.valueOf(targetId), adminId, reason);
+            case BAN_USER -> UserBannedEvent.of(Long.valueOf(targetId), adminId, reason, action.getBannedUntil());
             case UNBAN_USER -> UserUnbannedEvent.of(Long.valueOf(targetId), adminId, reason);
             case TAKEDOWN_VIDEO -> VideoTakenDownEvent.of(targetId, adminId, reason);
             case RESTORE_VIDEO -> VideoRestoredEvent.of(targetId, adminId, reason);

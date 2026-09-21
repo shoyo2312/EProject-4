@@ -28,6 +28,17 @@ public class ModerationActionController {
         return ApiResponse.success(adminService.listActions(targetType, targetId, pageable));
     }
 
+    /**
+     * How many times this target has been enforced against. The console reads it before a ban so
+     * whoever is deciding can see it is the account's fourth offence and not its first.
+     */
+    @GetMapping("/actions/strikes")
+    public ApiResponse<Long> countStrikes(
+            @RequestParam ReportTargetType targetType,
+            @RequestParam String targetId) {
+        return ApiResponse.success(adminService.countStrikes(targetType, targetId));
+    }
+
     @GetMapping("/stats/summary")
     public ApiResponse<StatsSummaryResponse> getStatsSummary() {
         return ApiResponse.success(adminService.getStatsSummary());

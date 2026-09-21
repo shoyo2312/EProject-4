@@ -48,6 +48,11 @@ public enum ModerationActionType {
             .filter(type -> type.effect != Effect.NONE)
             .toList();
 
+    /** The decisions that put a target under enforcement — one strike each. */
+    public static final List<ModerationActionType> ENFORCING = Arrays.stream(values())
+            .filter(type -> type.effect == Effect.ENFORCE)
+            .toList();
+
     private final ReportTargetType appliesTo;
     private final Effect effect;
 

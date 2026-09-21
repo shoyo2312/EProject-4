@@ -11,6 +11,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
 
+import java.time.Instant;
+
 /**
  * Append-only audit log of every moderation decision — the source of truth for "what was
  * decided", independent of whether the target service ever consumes the resulting event.
@@ -42,4 +44,8 @@ public class ModerationAction extends BaseEntity {
 
     @Column(name = "report_id")
     private Long reportId;
+
+    /** When a BAN_USER lapses; null on a permanent ban and on every other action type. */
+    @Column(name = "banned_until")
+    private Instant bannedUntil;
 }
