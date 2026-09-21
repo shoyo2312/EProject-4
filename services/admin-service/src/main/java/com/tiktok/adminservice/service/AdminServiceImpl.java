@@ -59,12 +59,21 @@ public class AdminServiceImpl implements AdminService {
             return adminMapper.toResponse(existing.get());
         }
 
+        // Reports that arrive after the target was already banned, taken down or removed are the
+        // bulk of a busy queue: the video is gone, everyone who saw it before reports it, and an
+        // admin opens fifty rows to decide nothing. They are recorded — the report is still the
+        // record that someone objected — and closed on arrival.
+        boolean alreadyEnforced = standingEnforcement(request.targetType(), request.targetId()).isPresent();
+
         Report report = Report.builder()
                 .reporterId(reporterId)
                 .targetType(request.targetType())
                 .targetId(request.targetId())
                 .reason(request.reason())
-                .status(ReportStatus.PENDING)
+                .status(alreadyEnforced ? ReportStatus.RESOLVED : ReportStatus.PENDING)
+                // resolvedBy stays null, which is how the console tells a decision the service
+                // made from one an admin made.
+                .resolvedAt(alreadyEnforced ? Instant.now() : null)
                 .build();
 
         try {
@@ -194,6 +203,23 @@ public class AdminServiceImpl implements AdminService {
                 reportRepository.countByStatusAndDeletedAtIsNull(ReportStatus.RESOLVED),
                 reportRepository.countByStatusAndDeletedAtIsNull(ReportStatus.DISMISSED),
                 moderationActionRepository.countByCreatedAtAfter(Instant.now().minus(24, ChronoUnit.HOURS)));
+    }
+
+    /**
+     * The enforcement currently standing against a target, if any — the newest ban, takedown or
+     * removal that has not since been undone. Empty means nothing has been done to it, or the
+     * last word was a restore or an unban.
+     *
+     * <p>Read from this service's own audit log rather than asked of video-service or
+     * auth-service: §6 forbids reaching into another service's database, and an HTTP call per
+     * submitted report would put the report path behind another service's availability for an
+     * answer this one already holds.
+     */
+    private Optional<ModerationAction> standingEnforcement(ReportTargetType targetType, String targetId) {
+        return moderationActionRepository
+                .findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
+                        targetType, targetId, ModerationActionType.STATE_CHANGING)
+                .filter(action -> action.getActionType().effect() == ModerationActionType.Effect.ENFORCE);
     }
 
     /** Writes the audit row and the outbox event for one decision. */

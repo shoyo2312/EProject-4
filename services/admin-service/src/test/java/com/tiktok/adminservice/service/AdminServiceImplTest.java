@@ -224,6 +224,47 @@ class AdminServiceImplTest {
     }
 
     @Test
+    void submitReport_targetAlreadyTakenDown_closesTheReportOnArrival() {
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "Nudity and sexual content");
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        standingAction(ModerationActionType.TAKEDOWN_VIDEO);
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(adminMapper.toResponse(any(Report.class))).thenReturn(
+                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "Nudity and sexual content", ReportStatus.RESOLVED, null, null, null));
+
+        adminService.submitReport(10L, request);
+
+        // The report is kept — someone objected, and that is the record — but an admin never sees
+        // it: the video is already gone, and the queue would fill with rows deciding nothing.
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.RESOLVED);
+        assertThat(captor.getValue().getResolvedAt()).isNotNull();
+        // Null resolvedBy is what distinguishes this from a decision an admin made.
+        assertThat(captor.getValue().getResolvedBy()).isNull();
+    }
+
+    @Test
+    void submitReport_targetRestoredAfterTakedown_staysPending() {
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "Hate and harassment");
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        // The newest state-changing action undid the takedown, so the video is up and this report
+        // is about what is on the platform right now.
+        standingAction(ModerationActionType.RESTORE_VIDEO);
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(adminMapper.toResponse(any(Report.class))).thenReturn(
+                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "Hate and harassment", ReportStatus.PENDING, null, null, null));
+
+        adminService.submitReport(10L, request);
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.PENDING);
+    }
+
+    @Test
     void resolveReport_closesEveryOtherReportAgainstTheSameTarget() {
         Report pending = Report.builder()
                 .id(7L)
@@ -297,5 +338,12 @@ class AdminServiceImplTest {
         assertThat(group.targetType()).isEqualTo(ReportTargetType.VIDEO);
         assertThat(group.reportCount()).isEqualTo(12L);
         assertThat(group.priority()).isEqualTo(120L);
+    }
+
+    /** The newest decision that moved this target in or out of enforcement. */
+    private void standingAction(ModerationActionType actionType) {
+        when(moderationActionRepository.findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
+                any(ReportTargetType.class), anyString(), any()))
+                .thenReturn(Optional.of(ModerationAction.builder().actionType(actionType).build()));
     }
 }
