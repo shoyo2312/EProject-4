@@ -224,6 +224,49 @@ class AdminServiceImplTest {
     }
 
     @Test
+    void resolveReport_closesEveryOtherReportAgainstTheSameTarget() {
+        Report pending = Report.builder()
+                .id(7L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("v1")
+                .reason("Nudity and sexual content")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(7L)).thenReturn(Optional.of(pending));
+        when(adminMapper.toResponse(any(Report.class))).thenReturn(
+                new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "x", ReportStatus.RESOLVED, 2L, null, null));
+
+        adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation"));
+
+        // Everyone else who flagged the same video is answered by the same decision; leaving them
+        // PENDING is how the video comes back up the queue with an admin about to decide it twice.
+        // The report resolved through JPA is excluded, or the bulk update overwrites it.
+        verify(reportRepository).closePendingFor(eq(ReportTargetType.VIDEO), eq("v1"),
+                eq(ReportStatus.RESOLVED), eq(2L), eq(7L), any(Instant.class));
+    }
+
+    @Test
+    void moderate_closesStandingReportsAgainstThatTarget() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.TAKEDOWN_VIDEO, "policy violation");
+
+        // A takedown taken straight from the video listing, with no report behind it, still
+        // answers the reports that were filed about it.
+        verify(reportRepository).closePendingFor(eq(ReportTargetType.VIDEO), eq("v1"),
+                eq(ReportStatus.RESOLVED), eq(2L), isNull(), any(Instant.class));
+    }
+
+    @Test
+    void moderate_restoringAVideoDismissesTheReportsRatherThanResolvingThem() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.RESTORE_VIDEO, "appeal upheld");
+
+        // RESOLVED would record in the audit log that the reports were upheld, which is the
+        // opposite of what restoring the video decided.
+        verify(reportRepository).closePendingFor(eq(ReportTargetType.VIDEO), eq("v1"),
+                eq(ReportStatus.DISMISSED), eq(2L), isNull(), any(Instant.class));
+    }
+
+    @Test
     void listReportQueue_dropsAnySortTheCallerAsksFor() {
         when(reportRepository.findPendingQueue(any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of()));

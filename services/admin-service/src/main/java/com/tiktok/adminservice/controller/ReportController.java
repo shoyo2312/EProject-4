@@ -1,7 +1,9 @@
 package com.tiktok.adminservice.controller;
 
+import com.tiktok.adminservice.dto.request.ResolveQueueRequest;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
+import com.tiktok.adminservice.dto.response.ModerationActionResponse;
 import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
 import com.tiktok.adminservice.entity.ReportStatus;
@@ -66,6 +68,20 @@ public class ReportController {
     @GetMapping("/{reportId}")
     public ApiResponse<ReportResponse> getById(@PathVariable Long reportId) {
         return ApiResponse.success(adminService.getReport(reportId));
+    }
+
+    /**
+     * Closes a whole queue row — the decision, plus every report standing against that target.
+     * The per-report route below stays for the report ledger, where an admin opens one report by
+     * id; this is the one the queue uses, and the literal path is matched ahead of
+     * {@code /{reportId}/resolve}.
+     */
+    @PostMapping("/queue/resolve")
+    public ApiResponse<ModerationActionResponse> resolveQueueRow(
+            @AuthenticationPrincipal Long currentAdminId,
+            @Valid @RequestBody ResolveQueueRequest request) {
+        return ApiResponse.success(adminService.moderate(currentAdminId, request.targetType(),
+                request.targetId(), request.actionType(), request.reason()));
     }
 
     @PostMapping("/{reportId}/resolve")

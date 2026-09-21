@@ -6,8 +6,11 @@ import com.tiktok.adminservice.entity.ReportTargetType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.Optional;
 
 public interface ReportRepository extends JpaRepository<Report, Long> {
@@ -74,4 +77,34 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
                     """,
             nativeQuery = true)
     Page<ReportQueueRow> findPendingQueue(Pageable pageable);
+
+    /**
+     * Closes every standing report against one target, because one decision answers all of them.
+     * {@code exceptId} is the report the caller has already resolved through JPA — updating it
+     * again here would write over the entity's own pending change.
+     *
+     * <p>A bulk update rather than loading each report: a target can carry hundreds, and none of
+     * their state matters beyond the columns being set. {@code update versioned} so the rows
+     * still take a version bump — a bulk update goes round the entity, so Hibernate would
+     * otherwise leave stale copies in other transactions passing their optimistic-lock check.
+     */
+    @Modifying
+    @Query("""
+            update versioned Report r
+            set r.status = :status,
+                r.resolvedBy = :adminId,
+                r.resolvedAt = :now,
+                r.updatedAt = :now
+            where r.deletedAt is null
+              and r.status = com.tiktok.adminservice.entity.ReportStatus.PENDING
+              and r.targetType = :targetType
+              and r.targetId = :targetId
+              and (:exceptId is null or r.id <> :exceptId)
+            """)
+    int closePendingFor(@Param("targetType") ReportTargetType targetType,
+                        @Param("targetId") String targetId,
+                        @Param("status") ReportStatus status,
+                        @Param("adminId") Long adminId,
+                        @Param("exceptId") Long exceptId,
+                        @Param("now") Instant now);
 }

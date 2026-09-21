@@ -118,6 +118,21 @@ class ReportQueueRepositoryTest {
                 .containsOnly(2);
     }
 
+    @Test
+    void closingATargetSpareTheReportTheCallerAlreadyResolved() {
+        Report resolvedByHand = report("v1", SPAM, hoursAgo(3));
+        Report sibling = report("v1", SPAM, hoursAgo(2));
+        Report elsewhere = report("v2", SPAM, hoursAgo(1));
+
+        int closed = reportRepository.closePendingFor(ReportTargetType.VIDEO, "v1",
+                ReportStatus.RESOLVED, 77L, resolvedByHand.getId(), Instant.now());
+
+        assertThat(closed).isEqualTo(1);
+        assertThat(statusOf(sibling)).isEqualTo(ReportStatus.RESOLVED);
+        assertThat(statusOf(resolvedByHand)).isEqualTo(ReportStatus.PENDING);
+        assertThat(statusOf(elsewhere)).isEqualTo(ReportStatus.PENDING);
+    }
+
     /**
      * Read back from the database, not from the persistence context: every write under test is a
      * bulk update, which goes round the entities and leaves the cached copies saying PENDING.
