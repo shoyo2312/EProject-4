@@ -2,6 +2,7 @@ package com.tiktok.adminservice.service;
 
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
+import com.tiktok.adminservice.dto.response.DailyAdminStatsResponse;
 import com.tiktok.adminservice.dto.response.ModerationActionResponse;
 import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
@@ -29,8 +30,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 
 @Service
 @RequiredArgsConstructor
@@ -215,6 +220,21 @@ public class AdminServiceImpl implements AdminService {
                 reportRepository.countByStatusAndDeletedAtIsNull(ReportStatus.RESOLVED),
                 reportRepository.countByStatusAndDeletedAtIsNull(ReportStatus.DISMISSED),
                 moderationActionRepository.countByCreatedAtAfter(Instant.now().minus(24, ChronoUnit.HOURS)));
+    }
+
+    @Override
+    public List<DailyAdminStatsResponse> getDailyStats(int days) {
+        Instant since = Instant.now().minus(days, ChronoUnit.DAYS);
+        Map<LocalDate, long[]> byDay = new TreeMap<>();
+        for (var row : reportRepository.findDailyCreated(since)) {
+            byDay.computeIfAbsent(row.getDay(), d -> new long[2])[0] = row.getCnt();
+        }
+        for (var row : moderationActionRepository.findDailyTaken(since)) {
+            byDay.computeIfAbsent(row.getDay(), d -> new long[2])[1] = row.getCnt();
+        }
+        return byDay.entrySet().stream()
+                .map(e -> new DailyAdminStatsResponse(e.getKey(), e.getValue()[0], e.getValue()[1]))
+                .toList();
     }
 
     /**

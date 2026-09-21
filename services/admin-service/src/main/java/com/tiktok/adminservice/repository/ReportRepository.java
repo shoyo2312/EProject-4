@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 public interface ReportRepository extends JpaRepository<Report, Long> {
@@ -30,6 +31,16 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     Page<Report> findByDeletedAtIsNull(Pageable pageable);
 
     long countByStatusAndDeletedAtIsNull(ReportStatus status);
+
+    /** Reports filed per day since the cutoff — the flow the dashboard's delta compares. */
+    @Query(value = """
+            SELECT date_trunc('day', created_at)::date AS "day", COUNT(*) AS "cnt"
+            FROM reports
+            WHERE deleted_at IS NULL AND created_at >= :since
+            GROUP BY "day"
+            ORDER BY "day"
+            """, nativeQuery = true)
+    List<DailyCountRow> findDailyCreated(@Param("since") Instant since);
 
     /** How many reports have been filed against one target — shown on its console row. */
     long countByTargetTypeAndTargetIdAndDeletedAtIsNull(ReportTargetType targetType, String targetId);
