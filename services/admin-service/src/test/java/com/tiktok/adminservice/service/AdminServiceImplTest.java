@@ -2,7 +2,9 @@ package com.tiktok.adminservice.service;
 
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
+import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
+import com.tiktok.adminservice.repository.ReportQueueRow;
 import com.tiktok.adminservice.entity.ModerationAction;
 import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.Report;
@@ -24,7 +26,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -215,5 +221,129 @@ class AdminServiceImplTest {
         assertThatThrownBy(() -> adminService.listActions(ReportTargetType.USER, null, Pageable.unpaged()))
                 .isInstanceOf(InvalidModerationTargetException.class);
         verifyNoInteractions(moderationActionRepository);
+    }
+
+    @Test
+    void submitReport_targetAlreadyTakenDown_closesTheReportOnArrival() {
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "Nudity and sexual content");
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        standingAction(ModerationActionType.TAKEDOWN_VIDEO);
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(adminMapper.toResponse(any(Report.class))).thenReturn(
+                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "Nudity and sexual content", ReportStatus.RESOLVED, null, null, null));
+
+        adminService.submitReport(10L, request);
+
+        // The report is kept — someone objected, and that is the record — but an admin never sees
+        // it: the video is already gone, and the queue would fill with rows deciding nothing.
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.RESOLVED);
+        assertThat(captor.getValue().getResolvedAt()).isNotNull();
+        // Null resolvedBy is what distinguishes this from a decision an admin made.
+        assertThat(captor.getValue().getResolvedBy()).isNull();
+    }
+
+    @Test
+    void submitReport_targetRestoredAfterTakedown_staysPending() {
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "Hate and harassment");
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        // The newest state-changing action undid the takedown, so the video is up and this report
+        // is about what is on the platform right now.
+        standingAction(ModerationActionType.RESTORE_VIDEO);
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(adminMapper.toResponse(any(Report.class))).thenReturn(
+                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "Hate and harassment", ReportStatus.PENDING, null, null, null));
+
+        adminService.submitReport(10L, request);
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.PENDING);
+    }
+
+    @Test
+    void resolveReport_closesEveryOtherReportAgainstTheSameTarget() {
+        Report pending = Report.builder()
+                .id(7L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("v1")
+                .reason("Nudity and sexual content")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(7L)).thenReturn(Optional.of(pending));
+        when(adminMapper.toResponse(any(Report.class))).thenReturn(
+                new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "x", ReportStatus.RESOLVED, 2L, null, null));
+
+        adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation"));
+
+        // Everyone else who flagged the same video is answered by the same decision; leaving them
+        // PENDING is how the video comes back up the queue with an admin about to decide it twice.
+        // The report resolved through JPA is excluded, or the bulk update overwrites it.
+        verify(reportRepository).closePendingFor(eq(ReportTargetType.VIDEO), eq("v1"),
+                eq(ReportStatus.RESOLVED), eq(2L), eq(7L), any(Instant.class));
+    }
+
+    @Test
+    void moderate_closesStandingReportsAgainstThatTarget() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.TAKEDOWN_VIDEO, "policy violation");
+
+        // A takedown taken straight from the video listing, with no report behind it, still
+        // answers the reports that were filed about it.
+        verify(reportRepository).closePendingFor(eq(ReportTargetType.VIDEO), eq("v1"),
+                eq(ReportStatus.RESOLVED), eq(2L), isNull(), any(Instant.class));
+    }
+
+    @Test
+    void moderate_restoringAVideoDismissesTheReportsRatherThanResolvingThem() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.RESTORE_VIDEO, "appeal upheld");
+
+        // RESOLVED would record in the audit log that the reports were upheld, which is the
+        // opposite of what restoring the video decided.
+        verify(reportRepository).closePendingFor(eq(ReportTargetType.VIDEO), eq("v1"),
+                eq(ReportStatus.DISMISSED), eq(2L), isNull(), any(Instant.class));
+    }
+
+    @Test
+    void listReportQueue_dropsAnySortTheCallerAsksFor() {
+        when(reportRepository.findPendingQueue(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        adminService.listReportQueue(PageRequest.of(1, 20, org.springframework.data.domain.Sort.by("createdAt")));
+
+        // The query carries its own ORDER BY; a sort from the query string is appended to it as a
+        // second one that never applies, and ordering the worklist is not the caller's call.
+        ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+        verify(reportRepository).findPendingQueue(captor.capture());
+        assertThat(captor.getValue().getSort().isSorted()).isFalse();
+        assertThat(captor.getValue().getPageNumber()).isEqualTo(1);
+    }
+
+    @Test
+    void listReportQueue_mapsOneRowPerTarget() {
+        ReportQueueRow row = mock(ReportQueueRow.class);
+        when(row.getTargetType()).thenReturn("VIDEO");
+        when(row.getTargetId()).thenReturn("v1");
+        when(row.getReportCount()).thenReturn(12L);
+        when(row.getSeverity()).thenReturn(10);
+        when(row.getPriority()).thenReturn(120L);
+        when(reportRepository.findPendingQueue(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(row)));
+
+        ReportGroupResponse group = adminService.listReportQueue(PageRequest.of(0, 20)).getContent().get(0);
+
+        assertThat(group.targetType()).isEqualTo(ReportTargetType.VIDEO);
+        assertThat(group.reportCount()).isEqualTo(12L);
+        assertThat(group.priority()).isEqualTo(120L);
+    }
+
+    /** The newest decision that moved this target in or out of enforcement. */
+    private void standingAction(ModerationActionType actionType) {
+        when(moderationActionRepository.findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
+                any(ReportTargetType.class), anyString(), any()))
+                .thenReturn(Optional.of(ModerationAction.builder().actionType(actionType).build()));
     }
 }

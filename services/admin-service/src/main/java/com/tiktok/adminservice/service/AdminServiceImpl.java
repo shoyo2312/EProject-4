@@ -3,6 +3,7 @@ package com.tiktok.adminservice.service;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.ModerationActionResponse;
+import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
 import com.tiktok.adminservice.dto.response.StatsSummaryResponse;
 import com.tiktok.adminservice.entity.ModerationAction;
@@ -17,10 +18,12 @@ import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
 import com.tiktok.adminservice.mapper.AdminMapper;
 import com.tiktok.adminservice.repository.ModerationActionRepository;
+import com.tiktok.adminservice.repository.ReportQueueRow;
 import com.tiktok.adminservice.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,12 +59,21 @@ public class AdminServiceImpl implements AdminService {
             return adminMapper.toResponse(existing.get());
         }
 
+        // Reports that arrive after the target was already banned, taken down or removed are the
+        // bulk of a busy queue: the video is gone, everyone who saw it before reports it, and an
+        // admin opens fifty rows to decide nothing. They are recorded — the report is still the
+        // record that someone objected — and closed on arrival.
+        boolean alreadyEnforced = standingEnforcement(request.targetType(), request.targetId()).isPresent();
+
         Report report = Report.builder()
                 .reporterId(reporterId)
                 .targetType(request.targetType())
                 .targetId(request.targetId())
                 .reason(request.reason())
-                .status(ReportStatus.PENDING)
+                .status(alreadyEnforced ? ReportStatus.RESOLVED : ReportStatus.PENDING)
+                // resolvedBy stays null, which is how the console tells a decision the service
+                // made from one an admin made.
+                .resolvedAt(alreadyEnforced ? Instant.now() : null)
                 .build();
 
         try {
@@ -92,6 +104,24 @@ public class AdminServiceImpl implements AdminService {
     }
 
     @Override
+    public Page<ReportGroupResponse> listReportQueue(Pageable pageable) {
+        // Page and size only: the query carries its own ORDER BY, and a sort from the query
+        // string would be appended to it as a second one that never gets a chance to apply.
+        // Ordering the worklist is the queue's job, not the caller's.
+        Page<ReportQueueRow> rows = reportRepository.findPendingQueue(
+                PageRequest.of(pageable.getPageNumber(), pageable.getPageSize()));
+        return rows.map(row -> new ReportGroupResponse(
+                ReportTargetType.valueOf(row.getTargetType()),
+                row.getTargetId(),
+                row.getReportCount(),
+                row.getFirstReportedAt(),
+                row.getLastReportedAt(),
+                row.getLatestReason(),
+                row.getSeverity(),
+                row.getPriority()));
+    }
+
+    @Override
     public ReportResponse getReport(Long reportId) {
         return adminMapper.toResponse(findVisible(reportId));
     }
@@ -111,21 +141,17 @@ public class AdminServiceImpl implements AdminService {
         request.actionType().requireApplicableTo(report.getTargetType());
         report.getTargetType().validateTargetId(report.getTargetId());
 
-        ModerationAction action = ModerationAction.builder()
-                .adminId(adminId)
-                .actionType(request.actionType())
-                .targetType(report.getTargetType())
-                .targetId(report.getTargetId())
-                .reason(request.reason())
-                .reportId(report.getId())
-                .build();
-        moderationActionRepository.save(action);
-        adminEventProducer.publishFor(action);
+        record(adminId, report.getTargetType(), report.getTargetId(),
+                request.actionType(), request.reason(), report.getId());
 
-        ReportStatus finalStatus = request.actionType() == ModerationActionType.DISMISS_REPORT
-                ? ReportStatus.DISMISSED
-                : ReportStatus.RESOLVED;
+        ReportStatus finalStatus = request.actionType().resolutionStatus();
         report.resolve(adminId, finalStatus);
+
+        // Everyone else who reported the same thing is answered by the same decision. Without
+        // this their reports stay PENDING and come back up the queue as a target with no
+        // history — the admin who takes it next sees a video already down and decides it again.
+        reportRepository.closePendingFor(report.getTargetType(), report.getTargetId(),
+                finalStatus, adminId, report.getId(), Instant.now());
 
         return adminMapper.toResponse(report);
     }
@@ -137,19 +163,15 @@ public class AdminServiceImpl implements AdminService {
         actionType.requireApplicableTo(targetType);
         targetType.validateTargetId(targetId);
 
-        // No existence check against the owning service: this one cannot read its database, and an
-        // extra HTTP call would only move the failure. An action against an id that does not exist
-        // is a no-op on the consumer side, and the audit row is still the honest record of the
-        // decision. Consumers are required to ignore unknown ids for exactly this reason.
-        ModerationAction action = ModerationAction.builder()
-                .adminId(adminId)
-                .actionType(actionType)
-                .targetType(targetType)
-                .targetId(targetId)
-                .reason(reason)
-                .build();
-        moderationActionRepository.save(action);
-        adminEventProducer.publishFor(action);
+        ModerationAction action = record(adminId, targetType, targetId, actionType, reason, null);
+
+        // The console resolves a whole queue row through this path — one decision, every
+        // standing report against that target closed. It is also what a takedown taken straight
+        // from the video listing does, which is the point: an action nobody tied to a report
+        // still answers the reports, and leaving them PENDING is how the same video comes back
+        // to the top of the queue an hour after it was dealt with.
+        reportRepository.closePendingFor(targetType, targetId, actionType.resolutionStatus(),
+                adminId, null, Instant.now());
 
         return adminMapper.toResponse(action);
     }
@@ -181,6 +203,43 @@ public class AdminServiceImpl implements AdminService {
                 reportRepository.countByStatusAndDeletedAtIsNull(ReportStatus.RESOLVED),
                 reportRepository.countByStatusAndDeletedAtIsNull(ReportStatus.DISMISSED),
                 moderationActionRepository.countByCreatedAtAfter(Instant.now().minus(24, ChronoUnit.HOURS)));
+    }
+
+    /**
+     * The enforcement currently standing against a target, if any — the newest ban, takedown or
+     * removal that has not since been undone. Empty means nothing has been done to it, or the
+     * last word was a restore or an unban.
+     *
+     * <p>Read from this service's own audit log rather than asked of video-service or
+     * auth-service: §6 forbids reaching into another service's database, and an HTTP call per
+     * submitted report would put the report path behind another service's availability for an
+     * answer this one already holds.
+     */
+    private Optional<ModerationAction> standingEnforcement(ReportTargetType targetType, String targetId) {
+        return moderationActionRepository
+                .findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
+                        targetType, targetId, ModerationActionType.STATE_CHANGING)
+                .filter(action -> action.getActionType().effect() == ModerationActionType.Effect.ENFORCE);
+    }
+
+    /** Writes the audit row and the outbox event for one decision. */
+    private ModerationAction record(Long adminId, ReportTargetType targetType, String targetId,
+                                    ModerationActionType actionType, String reason, Long reportId) {
+        // No existence check against the owning service: this one cannot read its database, and an
+        // extra HTTP call would only move the failure. An action against an id that does not exist
+        // is a no-op on the consumer side, and the audit row is still the honest record of the
+        // decision. Consumers are required to ignore unknown ids for exactly this reason.
+        ModerationAction action = ModerationAction.builder()
+                .adminId(adminId)
+                .actionType(actionType)
+                .targetType(targetType)
+                .targetId(targetId)
+                .reason(reason)
+                .reportId(reportId)
+                .build();
+        moderationActionRepository.save(action);
+        adminEventProducer.publishFor(action);
+        return action;
     }
 
     private Report findVisible(Long reportId) {

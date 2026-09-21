@@ -1,7 +1,10 @@
 package com.tiktok.adminservice.controller;
 
+import com.tiktok.adminservice.dto.request.ResolveQueueRequest;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
+import com.tiktok.adminservice.dto.response.ModerationActionResponse;
+import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
@@ -39,6 +42,18 @@ public class ReportController {
     }
 
     /**
+     * The worklist: one row per reported target, heaviest first. {@code /reports} stays the
+     * report ledger — every row, filterable by status — because the two answer different
+     * questions and collapsing them would leave no way to look a single report up.
+     *
+     * <p>Literal {@code /queue} is matched ahead of {@code /{reportId}}.
+     */
+    @GetMapping("/queue")
+    public ApiResponse<Page<ReportGroupResponse>> queue(Pageable pageable) {
+        return ApiResponse.success(adminService.listReportQueue(pageable));
+    }
+
+    /**
      * How many reports stand against one target. Its own endpoint rather than a field on the
      * listing because the console asks per expanded row, not per page. Literal {@code /count} is
      * matched ahead of {@code /{reportId}}.
@@ -53,6 +68,20 @@ public class ReportController {
     @GetMapping("/{reportId}")
     public ApiResponse<ReportResponse> getById(@PathVariable Long reportId) {
         return ApiResponse.success(adminService.getReport(reportId));
+    }
+
+    /**
+     * Closes a whole queue row — the decision, plus every report standing against that target.
+     * The per-report route below stays for the report ledger, where an admin opens one report by
+     * id; this is the one the queue uses, and the literal path is matched ahead of
+     * {@code /{reportId}/resolve}.
+     */
+    @PostMapping("/queue/resolve")
+    public ApiResponse<ModerationActionResponse> resolveQueueRow(
+            @AuthenticationPrincipal Long currentAdminId,
+            @Valid @RequestBody ResolveQueueRequest request) {
+        return ApiResponse.success(adminService.moderate(currentAdminId, request.targetType(),
+                request.targetId(), request.actionType(), request.reason()));
     }
 
     @PostMapping("/{reportId}/resolve")

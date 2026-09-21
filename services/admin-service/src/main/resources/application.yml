@@ -44,6 +44,18 @@ admin:
     # asks about a ban from last week, short enough that the table stops growing.
     published-outbox-grace: 7d
 
+  stale-reports:
+    # After the outbox sweep, same off-peak window.
+    cron: "0 55 3 * * *"
+    # How long a report gets to be looked at by a person before the service closes it. Long
+    # enough that a quiet week does not eat the queue, short enough that the backlog has an end.
+    grace: 30d
+    # Targets above this many standing reports are never swept, however old the reports are:
+    # a crowd flagging the same thing is a signal, not a backlog.
+    max-reports-per-target: 2
+    batch-size: 500
+    max-batches-per-run: 20
+
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 
