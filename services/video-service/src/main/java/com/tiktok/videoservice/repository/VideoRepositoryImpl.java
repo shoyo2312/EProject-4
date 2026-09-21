@@ -17,6 +17,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -70,15 +71,27 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
-    public Page<Video> findForAdmin(VideoStatus status, String term, Pageable pageable) {
+    public Page<Video> findForAdmin(VideoStatus status, String term, Collection<Long> ownerIds,
+                                    Pageable pageable) {
         Criteria criteria = where("deletedAt").is(null);
         if (status != null) {
             criteria = criteria.and("status").is(status);
         }
+
+        List<Criteria> matches = new ArrayList<>(2);
         if (term != null && !term.isBlank()) {
             // Quoted, so a title search for "c++" or "(2026)" is a search and not a regex the
             // user accidentally wrote — an unescaped one throws or matches the wrong rows.
-            criteria = criteria.and("title").regex(Pattern.quote(term), "i");
+            matches.add(where("title").regex(Pattern.quote(term), "i"));
+        }
+        if (ownerIds != null && !ownerIds.isEmpty()) {
+            matches.add(where("userId").in(ownerIds));
+        }
+        // OR, not AND: the caller resolved a handle to these ids because this collection has no
+        // handle to match on, so an owner hit is a hit on the same search the title is matched
+        // against. orOperator with one branch is that branch, so both-null needs no special case.
+        if (!matches.isEmpty()) {
+            criteria = criteria.andOperator(new Criteria().orOperator(matches.toArray(new Criteria[0])));
         }
 
         Query query = Query.query(criteria).with(pageable);
