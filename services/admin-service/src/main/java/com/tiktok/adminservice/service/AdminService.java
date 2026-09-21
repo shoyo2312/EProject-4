@@ -2,6 +2,7 @@ package com.tiktok.adminservice.service;
 
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
+import com.tiktok.adminservice.dto.response.DailyAdminStatsResponse;
 import com.tiktok.adminservice.dto.response.ModerationActionResponse;
 import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
@@ -11,6 +12,8 @@ import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+
+import java.util.List;
 
 public interface AdminService {
 
@@ -62,4 +65,7 @@ public interface AdminService {
     long countReports(ReportTargetType targetType, String targetId);
 
     StatsSummaryResponse getStatsSummary();
+
+    /** Reports filed and actions taken, bucketed by day, so the dashboard can compare periods. */
+    List<DailyAdminStatsResponse> getDailyStats(int days);
 }

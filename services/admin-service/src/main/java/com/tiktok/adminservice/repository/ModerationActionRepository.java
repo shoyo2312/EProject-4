@@ -6,9 +6,12 @@ import com.tiktok.adminservice.entity.ReportTargetType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 public interface ModerationActionRepository extends JpaRepository<ModerationAction, Long> {
@@ -18,6 +21,16 @@ public interface ModerationActionRepository extends JpaRepository<ModerationActi
     Page<ModerationAction> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
     long countByCreatedAtAfter(Instant since);
+
+    /** Actions taken per day since the cutoff — the flow the dashboard's delta compares. */
+    @Query(value = """
+            SELECT date_trunc('day', created_at)::date AS "day", COUNT(*) AS "cnt"
+            FROM moderation_actions
+            WHERE created_at >= :since
+            GROUP BY "day"
+            ORDER BY "day"
+            """, nativeQuery = true)
+    List<DailyCountRow> findDailyTaken(@Param("since") Instant since);
 
     long countByTargetTypeAndTargetIdAndActionTypeIn(
             ReportTargetType targetType, String targetId, Collection<ModerationActionType> actionTypes);
