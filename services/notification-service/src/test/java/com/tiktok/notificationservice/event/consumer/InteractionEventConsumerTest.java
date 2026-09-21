@@ -61,7 +61,7 @@ class InteractionEventConsumerTest {
 
     @Test
     void onLike_notifiesTheVideoOwner() throws Exception {
-        when(videoOwnerClient.ownerOf(7L)).thenReturn(50L);
+        when(videoOwnerClient.ownerOf("7")).thenReturn(50L);
 
         consumer.onLike(json(VideoLikeEvent.of(7L, 9L, true)));
 
@@ -78,7 +78,7 @@ class InteractionEventConsumerTest {
 
     @Test
     void onLike_doesNotNotifyTheOwnerAboutTheirOwnLike() throws Exception {
-        when(videoOwnerClient.ownerOf(7L)).thenReturn(9L);
+        when(videoOwnerClient.ownerOf("7")).thenReturn(9L);
 
         consumer.onLike(json(VideoLikeEvent.of(7L, 9L, true)));
 
@@ -87,7 +87,7 @@ class InteractionEventConsumerTest {
 
     @Test
     void onLike_dropsTheNotificationWhenTheOwnerCannotBeResolved() throws Exception {
-        when(videoOwnerClient.ownerOf(7L)).thenReturn(null);
+        when(videoOwnerClient.ownerOf("7")).thenReturn(null);
 
         consumer.onLike(json(VideoLikeEvent.of(7L, 9L, true)));
 
@@ -105,7 +105,7 @@ class InteractionEventConsumerTest {
 
     @Test
     void onComment_notifiesTheVideoOwnerForATopLevelComment() throws Exception {
-        when(videoOwnerClient.ownerOf(7L)).thenReturn(50L);
+        when(videoOwnerClient.ownerOf("7")).thenReturn(50L);
 
         consumer.onComment(json(CommentCreatedEvent.of(1L, 7L, 9L, "nice")), CREATED);
 
@@ -133,7 +133,7 @@ class InteractionEventConsumerTest {
 
     @Test
     void onComment_treatsAMissingHeaderAsACreation() throws Exception {
-        when(videoOwnerClient.ownerOf(7L)).thenReturn(50L);
+        when(videoOwnerClient.ownerOf("7")).thenReturn(50L);
 
         consumer.onComment(json(CommentCreatedEvent.of(1L, 7L, 9L, "nice")), null);
 
@@ -142,7 +142,7 @@ class InteractionEventConsumerTest {
 
     @Test
     void onShare_notifiesTheVideoOwner() throws Exception {
-        when(videoOwnerClient.ownerOf(7L)).thenReturn(50L);
+        when(videoOwnerClient.ownerOf("7")).thenReturn(50L);
 
         consumer.onShare(json(VideoSharedEvent.of(3L, 7L, 9L)));
 

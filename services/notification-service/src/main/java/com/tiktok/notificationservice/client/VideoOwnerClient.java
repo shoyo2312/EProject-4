@@ -31,7 +31,7 @@ public class VideoOwnerClient {
      * "someone liked your video" costs a badge, while retrying against an unreachable
      * video-service wedges the listener and costs every other notification behind it too.
      */
-    public Long ownerOf(Long videoId) {
+    public Long ownerOf(String videoId) {
         try {
             ApiResponse<VideoPolicyView> response = videoServiceRestClient.get()
                     .uri("/api/v1/videos/{videoId}/policy", videoId)

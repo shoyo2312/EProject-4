@@ -10,6 +10,7 @@ import com.tiktok.event.DomainEvent;
 import com.tiktok.event.admin.CommentRemovedEvent;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
+import com.tiktok.event.admin.UserWarnedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import lombok.RequiredArgsConstructor;
@@ -18,8 +19,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * Translates a moderation decision into the matching admin.* domain event and writes it to
- * the outbox. DISMISS_REPORT and WARN_USER have no downstream event — they're recorded in
- * the audit log only, since no other service needs to react to them.
+ * the outbox. DISMISS_REPORT has no downstream event — nothing happened, so there is nothing to
+ * tell anyone. A warning does: it changes no state anywhere, and telling the person is the only
+ * effect it can have.
  */
 @Component
 @RequiredArgsConstructor
@@ -52,7 +54,10 @@ public class AdminEventProducer {
                 CommentTarget target = CommentTarget.parse(targetId);
                 yield CommentRemovedEvent.of(target.videoId(), target.commentId(), adminId, reason);
             }
-            case WARN_USER, DISMISS_REPORT -> null;
+            // A warning changes nothing about the platform, so it carries the report's target
+            // rather than a user id: notification-service resolves a video to its owner.
+            case WARN_USER -> UserWarnedEvent.of(action.getTargetType().name(), targetId, adminId, reason);
+            case DISMISS_REPORT -> null;
         };
     }
 
