@@ -3,6 +3,7 @@ package com.tiktok.adminservice.service;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.ModerationActionResponse;
+import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
 import com.tiktok.adminservice.dto.response.StatsSummaryResponse;
 import com.tiktok.adminservice.entity.ModerationAction;
@@ -17,10 +18,12 @@ import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
 import com.tiktok.adminservice.mapper.AdminMapper;
 import com.tiktok.adminservice.repository.ModerationActionRepository;
+import com.tiktok.adminservice.repository.ReportQueueRow;
 import com.tiktok.adminservice.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -89,6 +92,24 @@ public class AdminServiceImpl implements AdminService {
             reports = reportRepository.findByDeletedAtIsNull(pageable);
         }
         return reports.map(adminMapper::toResponse);
+    }
+
+    @Override
+    public Page<ReportGroupResponse> listReportQueue(Pageable pageable) {
+        // Page and size only: the query carries its own ORDER BY, and a sort from the query
+        // string would be appended to it as a second one that never gets a chance to apply.
+        // Ordering the worklist is the queue's job, not the caller's.
+        Page<ReportQueueRow> rows = reportRepository.findPendingQueue(
+                PageRequest.of(pageable.getPageNumber(), pageable.getPageSize()));
+        return rows.map(row -> new ReportGroupResponse(
+                ReportTargetType.valueOf(row.getTargetType()),
+                row.getTargetId(),
+                row.getReportCount(),
+                row.getFirstReportedAt(),
+                row.getLastReportedAt(),
+                row.getLatestReason(),
+                row.getSeverity(),
+                row.getPriority()));
     }
 
     @Override

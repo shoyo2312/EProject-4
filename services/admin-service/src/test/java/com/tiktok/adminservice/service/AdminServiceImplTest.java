@@ -2,7 +2,9 @@ package com.tiktok.adminservice.service;
 
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
+import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
+import com.tiktok.adminservice.repository.ReportQueueRow;
 import com.tiktok.adminservice.entity.ModerationAction;
 import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.Report;
@@ -24,7 +26,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -215,5 +221,38 @@ class AdminServiceImplTest {
         assertThatThrownBy(() -> adminService.listActions(ReportTargetType.USER, null, Pageable.unpaged()))
                 .isInstanceOf(InvalidModerationTargetException.class);
         verifyNoInteractions(moderationActionRepository);
+    }
+
+    @Test
+    void listReportQueue_dropsAnySortTheCallerAsksFor() {
+        when(reportRepository.findPendingQueue(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        adminService.listReportQueue(PageRequest.of(1, 20, org.springframework.data.domain.Sort.by("createdAt")));
+
+        // The query carries its own ORDER BY; a sort from the query string is appended to it as a
+        // second one that never applies, and ordering the worklist is not the caller's call.
+        ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+        verify(reportRepository).findPendingQueue(captor.capture());
+        assertThat(captor.getValue().getSort().isSorted()).isFalse();
+        assertThat(captor.getValue().getPageNumber()).isEqualTo(1);
+    }
+
+    @Test
+    void listReportQueue_mapsOneRowPerTarget() {
+        ReportQueueRow row = mock(ReportQueueRow.class);
+        when(row.getTargetType()).thenReturn("VIDEO");
+        when(row.getTargetId()).thenReturn("v1");
+        when(row.getReportCount()).thenReturn(12L);
+        when(row.getSeverity()).thenReturn(10);
+        when(row.getPriority()).thenReturn(120L);
+        when(reportRepository.findPendingQueue(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(row)));
+
+        ReportGroupResponse group = adminService.listReportQueue(PageRequest.of(0, 20)).getContent().get(0);
+
+        assertThat(group.targetType()).isEqualTo(ReportTargetType.VIDEO);
+        assertThat(group.reportCount()).isEqualTo(12L);
+        assertThat(group.priority()).isEqualTo(120L);
     }
 }

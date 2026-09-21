@@ -2,6 +2,7 @@ package com.tiktok.adminservice.controller;
 
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
+import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
@@ -36,6 +37,18 @@ public class ReportController {
             @RequestParam(required = false) ReportTargetType targetType,
             Pageable pageable) {
         return ApiResponse.success(adminService.listReports(status, targetType, pageable));
+    }
+
+    /**
+     * The worklist: one row per reported target, heaviest first. {@code /reports} stays the
+     * report ledger — every row, filterable by status — because the two answer different
+     * questions and collapsing them would leave no way to look a single report up.
+     *
+     * <p>Literal {@code /queue} is matched ahead of {@code /{reportId}}.
+     */
+    @GetMapping("/queue")
+    public ApiResponse<Page<ReportGroupResponse>> queue(Pageable pageable) {
+        return ApiResponse.success(adminService.listReportQueue(pageable));
     }
 
     /**
