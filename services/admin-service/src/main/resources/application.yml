@@ -34,6 +34,12 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
 
+downstream:
+  # moderation-service: internal network only, no auth, not routed at the gateway. Read for the
+  # console's settings screen — the thresholds live in that service's environment, not here.
+  moderation-service-uri: ${MODERATION_SERVICE_URL:http://localhost:8099}
+  timeout-millis: ${DOWNSTREAM_TIMEOUT_MS:2000}
+
 admin:
   retention:
     # Off-peak and daily: the grace is measured in days, nothing here is urgent.

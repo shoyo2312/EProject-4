@@ -196,6 +196,31 @@ def moderate(request: ModerateRequest) -> ModerateResponse:
     )
 
 
+@app.get("/config")
+def config() -> dict:
+    """What this service is currently deciding with, for the admin console to show.
+
+    Read-only on purpose. Every value here comes from an environment variable read once at
+    startup, so there is nothing to write back to: changing a threshold is a deploy, and an
+    endpoint that accepted one would either lie until the next restart or drift away from the
+    variable that is still the source of truth. The console says as much next to the numbers.
+    """
+    return {
+        "model": MODEL,
+        "modelVersion": MODEL_VERSION,
+        "nsfwLabel": NSFW_LABEL,
+        "maxFrames": MAX_FRAMES,
+        "reviewAt": THRESHOLDS.review_at,
+        "rejectAt": THRESHOLDS.reject_at,
+        "minRejectFrames": THRESHOLDS.min_reject_frames,
+        "escalationEnabled": escalation.enabled(),
+        "escalationFrames": escalation.ESCALATE_FRAMES,
+        "escalationCategories": list(escalation.CATEGORIES),
+        "escalationRejectSeverity": escalation.REJECT_SEVERITY,
+        "escalationApproveSeverity": escalation.APPROVE_SEVERITY,
+    }
+
+
 @app.get("/health")
 def health() -> dict:
     """Unhealthy until the model is in memory, so nothing is routed here mid-load."""
