@@ -5,6 +5,7 @@ import com.tiktok.analyticsservice.dto.response.DailySignupResponse;
 import com.tiktok.analyticsservice.dto.response.VideoEngagementSummaryResponse;
 import com.tiktok.analyticsservice.repository.EngagementEventRepository;
 import com.tiktok.analyticsservice.repository.UserSignupEventRepository;
+import com.tiktok.analyticsservice.repository.WatchEventRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -25,9 +26,12 @@ class AnalyticsServiceImplTest {
     @Mock
     private UserSignupEventRepository userSignupEventRepository;
 
+    @Mock
+    private WatchEventRepository watchEventRepository;
+
     @Test
     void getDailyEngagement_delegatesToRepository() {
-        AnalyticsServiceImpl service = new AnalyticsServiceImpl(engagementEventRepository, userSignupEventRepository);
+        AnalyticsServiceImpl service = new AnalyticsServiceImpl(engagementEventRepository, userSignupEventRepository, watchEventRepository);
         List<DailyCountResponse> expected = List.of(new DailyCountResponse(LocalDate.of(2026, 7, 24), "LIKED", 5));
         when(engagementEventRepository.findDailyCounts(7)).thenReturn(expected);
 
@@ -38,7 +42,7 @@ class AnalyticsServiceImplTest {
 
     @Test
     void getVideoEngagementSummary_delegatesToRepository() {
-        AnalyticsServiceImpl service = new AnalyticsServiceImpl(engagementEventRepository, userSignupEventRepository);
+        AnalyticsServiceImpl service = new AnalyticsServiceImpl(engagementEventRepository, userSignupEventRepository, watchEventRepository);
         VideoEngagementSummaryResponse expected = new VideoEngagementSummaryResponse("v1", 10, 2, 1);
         when(engagementEventRepository.findSummaryByVideoId("v1")).thenReturn(expected);
 
@@ -49,7 +53,7 @@ class AnalyticsServiceImplTest {
 
     @Test
     void getDailySignups_delegatesToRepository() {
-        AnalyticsServiceImpl service = new AnalyticsServiceImpl(engagementEventRepository, userSignupEventRepository);
+        AnalyticsServiceImpl service = new AnalyticsServiceImpl(engagementEventRepository, userSignupEventRepository, watchEventRepository);
         List<DailySignupResponse> expected = List.of(new DailySignupResponse(LocalDate.of(2026, 7, 24), 4));
         when(userSignupEventRepository.findDailySignups(1)).thenReturn(expected);
 
