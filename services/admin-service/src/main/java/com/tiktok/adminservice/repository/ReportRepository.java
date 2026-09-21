@@ -107,4 +107,41 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
                         @Param("adminId") Long adminId,
                         @Param("exceptId") Long exceptId,
                         @Param("now") Instant now);
+
+    /**
+     * Auto-dismisses one batch of reports nobody got to: older than the cutoff, on a scenario
+     * marked {@code auto_expire}, and against a target too lightly reported to be worth a
+     * moderator's time. {@code resolved_by} stays NULL, which is how the console tells a decision
+     * the service made from one an admin made.
+     *
+     * <p>The count is taken over the target's whole standing group, not the batch, so a target
+     * that crossed the threshold last week is never swept on the strength of its oldest report
+     * alone. Batched by id so a backlog cannot turn into one transaction holding every lock.
+     */
+    @Modifying
+    @Query(value = """
+            UPDATE reports
+            SET status      = 'DISMISSED',
+                resolved_at = NOW(),
+                updated_at  = NOW(),
+                version     = version + 1
+            WHERE id IN (
+                SELECT rp.id
+                FROM reports rp
+                LEFT JOIN report_reason_weights w ON w.reason = rp.reason
+                JOIN (SELECT target_type, target_id
+                      FROM reports
+                      WHERE deleted_at IS NULL AND status = 'PENDING'
+                      GROUP BY target_type, target_id
+                      HAVING COUNT(*) <= :maxReportsPerTarget) q
+                  ON q.target_type = rp.target_type AND q.target_id = rp.target_id
+                WHERE rp.deleted_at IS NULL
+                  AND rp.status = 'PENDING'
+                  AND rp.created_at < :cutoff
+                  AND COALESCE(w.auto_expire, TRUE)
+                LIMIT :batchSize)
+            """, nativeQuery = true)
+    int dismissStale(@Param("cutoff") Instant cutoff,
+                     @Param("maxReportsPerTarget") int maxReportsPerTarget,
+                     @Param("batchSize") int batchSize);
 }

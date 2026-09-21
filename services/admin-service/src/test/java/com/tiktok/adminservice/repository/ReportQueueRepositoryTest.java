@@ -119,6 +119,32 @@ class ReportQueueRepositoryTest {
     }
 
     @Test
+    void theSweepClosesOldLightReportsAndLeavesSeriousOnesAlone() {
+        Report oldSpam = report("v-stale", SPAM, daysAgo(40));
+        Report oldSelfHarm = report("v-untouchable", SELF_HARM, daysAgo(40));
+        Report recentSpam = report("v-recent", SPAM, daysAgo(2));
+
+        int dismissed = reportRepository.dismissStale(Instant.now().minus(30, ChronoUnit.DAYS), 2, 500);
+
+        assertThat(dismissed).isEqualTo(1);
+        assertThat(statusOf(oldSpam)).isEqualTo(ReportStatus.DISMISSED);
+        assertThat(statusOf(oldSelfHarm)).isEqualTo(ReportStatus.PENDING);
+        assertThat(statusOf(recentSpam)).isEqualTo(ReportStatus.PENDING);
+    }
+
+    @Test
+    void theSweepLeavesATargetManyPeopleReported() {
+        Report first = report("v-crowd", SPAM, daysAgo(40));
+        report("v-crowd", SPAM, daysAgo(39));
+        report("v-crowd", SPAM, daysAgo(38));
+
+        int dismissed = reportRepository.dismissStale(Instant.now().minus(30, ChronoUnit.DAYS), 2, 500);
+
+        assertThat(dismissed).isZero();
+        assertThat(statusOf(first)).isEqualTo(ReportStatus.PENDING);
+    }
+
+    @Test
     void closingATargetSpareTheReportTheCallerAlreadyResolved() {
         Report resolvedByHand = report("v1", SPAM, hoursAgo(3));
         Report sibling = report("v1", SPAM, hoursAgo(2));
