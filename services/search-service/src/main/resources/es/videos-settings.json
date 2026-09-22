@@ -1,0 +1,27 @@
+{
+  "analysis": {
+    "filter": {
+      "split_words": {
+        "type": "word_delimiter_graph",
+        "preserve_original": true
+      },
+      "edge_prefix": {
+        "type": "edge_ngram",
+        "min_gram": 1,
+        "max_gram": 20
+      }
+    },
+    "analyzer": {
+      "prefix_index": {
+        "type": "custom",
+        "tokenizer": "whitespace",
+        "filter": ["split_words", "lowercase", "asciifolding", "edge_prefix"]
+      },
+      "prefix_search": {
+        "type": "custom",
+        "tokenizer": "whitespace",
+        "filter": ["word_delimiter_graph", "lowercase", "asciifolding"]
+      }
+    }
+  }
+}
