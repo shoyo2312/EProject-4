@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.repository;
 
+import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -12,11 +13,14 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.AggregationResults;
+import org.springframework.data.mongodb.core.aggregation.ConditionalOperators;
+import org.springframework.data.mongodb.core.aggregation.DateOperators;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -72,10 +76,17 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
 
     @Override
     public Page<Video> findForAdmin(VideoStatus status, String term, Collection<Long> ownerIds,
-                                    Pageable pageable) {
-        Criteria criteria = where("deletedAt").is(null);
+                                    Boolean deleted, Pageable pageable) {
+        // Owner-deleted videos are included by default, unlike every other read path here: the
+        // admin console is the one place that has to account for a video after its owner removed
+        // it. `deleted` narrows to just the one side when a moderator wants only deleted rows, or
+        // (mirroring every other listing) only live ones.
+        Criteria criteria = new Criteria();
         if (status != null) {
             criteria = criteria.and("status").is(status);
+        }
+        if (deleted != null) {
+            criteria = deleted ? criteria.and("deletedAt").ne(null) : criteria.and("deletedAt").is(null);
         }
 
         List<Criteria> matches = new ArrayList<>(2);
@@ -130,6 +141,40 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 asLong(totals.get("totalViews")));
     }
 
+    @Override
+    public List<DailyVideoStatsResponse> countDailyUploads(Instant since) {
+        // The day is derived in the pipeline rather than by reading createdAt back and
+        // truncating here: grouping in Mongo is one row per day over the wire, grouping in Java
+        // is every video uploaded in the window over the wire. UTC is pinned for the same reason
+        // the console pins it — a bucket must mean one calendar day whoever is looking.
+        // No deletedAt filter, matching the admin listing: the console's total counts deleted
+        // rows, so a series that left them out would be a percentage of a different denominator.
+        Aggregation aggregation = Aggregation.newAggregation(
+                Aggregation.match(where("createdAt").gte(since)),
+                Aggregation.project()
+                        .and(DateOperators.DateToString.dateOf("createdAt")
+                                .toString("%Y-%m-%d").withTimezone(DateOperators.Timezone.valueOf("UTC")))
+                        .as("day")
+                        .and("status").as("status"),
+                Aggregation.group("day")
+                        .count().as("uploads")
+                        .sum(ConditionalOperators.when(where("status").is(VideoStatus.PENDING_REVIEW.name()))
+                                .then(1).otherwise(0)).as("pendingReview")
+                        .sum(ConditionalOperators.when(where("status").in(
+                                        VideoStatus.PROCESSING.name(), VideoStatus.FAILED.name()))
+                                .then(1).otherwise(0)).as("notPlayable"),
+                Aggregation.sort(Sort.Direction.ASC, "_id"));
+
+        return mongoTemplate.aggregate(aggregation, Video.class, Document.class)
+                .getMappedResults().stream()
+                .map(row -> new DailyVideoStatsResponse(
+                        LocalDate.parse(row.getString("_id")),
+                        asLong(row.get("uploads")),
+                        asLong(row.get("pendingReview")),
+                        asLong(row.get("notPlayable"))))
+                .toList();
+    }
+
     /**
      * $sum answers with whatever type its inputs were — Integer for counts and for sums that fit
      * one, Long once they do not — so neither cast is safe on its own.
@@ -161,7 +206,10 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 // Written on both sides of the pair: a takedown sets it, a restore clears it.
-                .set("takedownReason", video.getTakedownReason()));
+                .set("takedownReason", video.getTakedownReason())
+                // A restore back to PUBLISHED stamps this in memory (Video.markRestored ->
+                // stampPublishedAtIfLive) — write it or it never reaches Mongo.
+                .set("publishedAt", video.getPublishedAt()));
     }
 
     @Override
@@ -177,7 +225,11 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         return compareAndSet(video.getId(), expectedStatus, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
-                .set("moderation", video.getModeration()));
+                .set("moderation", video.getModeration())
+                // An APPROVED verdict stamps this in memory (Video.applyModeration ->
+                // stampPublishedAtIfLive) — write it or it never reaches Mongo, which is why
+                // every video published through normal moderation had a null publishedAt.
+                .set("publishedAt", video.getPublishedAt()));
     }
 
     @Override
@@ -188,6 +240,19 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     @Override
     public void updateDeleteEventPublished(Video video) {
         update(video.getId(), new Update().set("deleteEventPublishedAt", video.getDeleteEventPublishedAt()));
+    }
+
+    @Override
+    public void updatePurgeEventPublished(Video video) {
+        update(video.getId(), new Update().set("purgeEventPublishedAt", video.getPurgeEventPublishedAt()));
+    }
+
+    @Override
+    public List<Video> findPendingPurge(Instant purgeBefore, int limit) {
+        Query query = Query.query(where("deletedAt").ne(null).lt(purgeBefore).and("purgeEventPublishedAt").is(null))
+                .with(Sort.by(Sort.Direction.ASC, "deletedAt"))
+                .limit(limit);
+        return mongoTemplate.find(query, Video.class);
     }
 
     @Override

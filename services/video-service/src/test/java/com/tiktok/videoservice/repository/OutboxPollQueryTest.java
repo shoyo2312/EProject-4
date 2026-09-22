@@ -17,6 +17,8 @@ import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -127,8 +129,9 @@ class OutboxPollQueryTest {
                 .containsExactly(live.getId());
     }
 
+    /** No retention cutoff on the deletion itself: it is what takes the video out of search. */
     @Test
-    void deletedVideoIsPickedByTheDeletionPoll() {
+    void deletedVideoIsPickedByTheDeletionPollImmediately() {
         Video video = save(true);
 
         assertThat(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
@@ -167,6 +170,78 @@ class OutboxPollQueryTest {
                 .as("the deletion poll must read an index, not walk the collection")
                 .contains("IXSCAN")
                 .contains("delete_outbox_idx")
+                .doesNotContain("SORT_KEY_GENERATOR");
+    }
+
+    @Test
+    void deletedVideoIsPickedByThePurgePollOnceRetentionExpires() {
+        Video video = save(true);
+
+        assertThat(videoRepository.findPendingPurge(
+                        Instant.now().plusSeconds(60), 100))
+                .extracting(Video::getId)
+                .containsExactly(video.getId());
+    }
+
+    /**
+     * The trash window: a video stays out of this poll — and its media stays in MinIO — until
+     * {@code purgeBefore} catches up to its deletedAt, which is what lets an admin still watch it.
+     */
+    @Test
+    void deletedVideoStillInsideRetentionIsNotPickedByThePurgePoll() {
+        save(true);
+
+        assertThat(videoRepository.findPendingPurge(
+                        Instant.now().minusSeconds(60), 100))
+                .isEmpty();
+    }
+
+    @Test
+    void liveVideoIsNotPickedByThePurgePoll() {
+        save(false);
+
+        assertThat(videoRepository.findPendingPurge(
+                        Instant.now().plusSeconds(60), 100))
+                .isEmpty();
+    }
+
+    /** The two slots are independent: an announced deletion is still waiting on its purge. */
+    @Test
+    void announcedDeletionIsStillPickedByThePurgePoll() {
+        Video video = save(true);
+        video.markDeleteEventPublished();
+        videoRepository.save(video);
+
+        assertThat(videoRepository.findPendingPurge(
+                        Instant.now().plusSeconds(60), 100))
+                .extracting(Video::getId)
+                .containsExactly(video.getId());
+    }
+
+    @Test
+    void alreadyAnnouncedPurgeIsSkipped() {
+        Video video = save(true);
+        video.markPurgeEventPublished();
+        videoRepository.save(video);
+
+        assertThat(videoRepository.findPendingPurge(
+                        Instant.now().plusSeconds(60), 100))
+                .isEmpty();
+    }
+
+    @Test
+    void thePurgePollIsIndexed() {
+        Document explain = mongoTemplate.getDb().runCommand(new Document("explain",
+                new Document("find", "videos")
+                        .append("filter", new Document("deletedAt",
+                                        new Document("$ne", null).append("$lt", Instant.now()))
+                                .append("purgeEventPublishedAt", null))
+                        .append("sort", new Document("deletedAt", 1))));
+
+        assertThat(explain.toJson())
+                .as("the purge poll must read an index, not walk the collection")
+                .contains("IXSCAN")
+                .contains("purge_outbox_idx")
                 .doesNotContain("SORT_KEY_GENERATOR");
     }
 

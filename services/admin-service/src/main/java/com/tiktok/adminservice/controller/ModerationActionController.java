@@ -51,10 +51,17 @@ public class ModerationActionController {
         return ApiResponse.success(adminService.getStatsSummary());
     }
 
-    /** Reports filed and actions taken per day — what the dashboard's deltas are computed from. */
+    /**
+     * The moderation flow per day — reports filed and closed, actions taken by kind. Every
+     * period-over-period percentage in the console is computed from this series.
+     *
+     * <p>The window runs to three years because a year-over-year delta needs the year before the
+     * one on screen; capping at 365 would hand the console a single year and the comparison
+     * would come out as "no history".
+     */
     @GetMapping("/stats/daily")
     public ApiResponse<List<DailyAdminStatsResponse>> getDailyStats(
-            @RequestParam(defaultValue = "7") @Min(1) @Max(365) int days) {
+            @RequestParam(defaultValue = "7") @Min(1) @Max(1095) int days) {
         return ApiResponse.success(adminService.getDailyStats(days));
     }
 }

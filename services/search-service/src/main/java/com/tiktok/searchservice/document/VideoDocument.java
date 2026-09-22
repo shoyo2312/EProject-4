@@ -8,6 +8,9 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.elasticsearch.annotations.Document;
 import org.springframework.data.elasticsearch.annotations.Field;
 import org.springframework.data.elasticsearch.annotations.FieldType;
+import org.springframework.data.elasticsearch.annotations.InnerField;
+import org.springframework.data.elasticsearch.annotations.MultiField;
+import org.springframework.data.elasticsearch.annotations.Setting;
 
 import java.time.Instant;
 import java.util.List;
@@ -21,7 +24,15 @@ import java.util.List;
 @NoArgsConstructor
 @AllArgsConstructor
 @Document(indexName = "videos")
+@Setting(settingPath = "es/videos-settings.json")
 public class VideoDocument {
+
+    /**
+     * Name of the sub-field that holds the prefix-analysed copy of {@code title} and
+     * {@code description}. Also what IndexBootstrap looks for to tell an index built with this
+     * mapping from one built before it.
+     */
+    public static final String PREFIX_SUBFIELD = "prefix";
 
     @Id
     private String id;
@@ -29,10 +40,23 @@ public class VideoDocument {
     @Field(type = FieldType.Long)
     private Long userId;
 
-    @Field(type = FieldType.Text)
+    /**
+     * Two analyses of the same text. The main field is standard-analysed: whole words, for the
+     * exact hits that should rank first. {@code prefix} is edge-n-grammed and split on
+     * punctuation, case and letter/digit boundaries, so "video_" (or "vid", or "Video1") still
+     * reaches a video called "video_1" — the standard tokenizer keeps "video_1" as one token,
+     * which is why a search for anything short of the full title used to find nothing.
+     */
+    @MultiField(
+            mainField = @Field(type = FieldType.Text),
+            otherFields = @InnerField(suffix = PREFIX_SUBFIELD, type = FieldType.Text,
+                    analyzer = "prefix_index", searchAnalyzer = "prefix_search"))
     private String title;
 
-    @Field(type = FieldType.Text)
+    @MultiField(
+            mainField = @Field(type = FieldType.Text),
+            otherFields = @InnerField(suffix = PREFIX_SUBFIELD, type = FieldType.Text,
+                    analyzer = "prefix_index", searchAnalyzer = "prefix_search"))
     private String description;
 
     @Field(type = FieldType.Keyword)

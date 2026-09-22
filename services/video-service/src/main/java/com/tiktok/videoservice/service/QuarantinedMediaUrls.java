@@ -45,7 +45,8 @@ public class QuarantinedMediaUrls {
                 video.durationSeconds(), video.width(), video.height(), video.status(), video.visibility(),
                 video.viewCount(), video.likeCount(), video.commentCount(), video.commentsDisabled(),
                 video.tags(), video.createdAt(), video.updatedAt(), video.publishedAt(), video.rawFileUrl(),
-                video.failureReason(), video.takedownReason(), video.deletedAt(), video.moderation());
+                video.failureReason(), video.takedownReason(), video.deletedAt(),
+                video.purgeEventPublishedAt(), video.moderation());
     }
 
     /** The URL is {@code {endpoint}/{bucket}/{key}}, as media-worker writes it; anything else is left alone. */

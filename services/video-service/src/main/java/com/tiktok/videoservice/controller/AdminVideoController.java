@@ -1,14 +1,18 @@
 package com.tiktok.videoservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
+import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.service.AdminVideoDirectory;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -26,6 +30,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/videos/admin")
 @RequiredArgsConstructor
+@Validated
 public class AdminVideoController {
 
     private final AdminVideoDirectory adminVideoDirectory;
@@ -36,14 +41,32 @@ public class AdminVideoController {
      *                @someone" can only arrive already resolved. Widens {@code q} — see
      *                {@link com.tiktok.videoservice.repository.VideoRepositoryCustom#findForAdmin}.
      */
+    /**
+     * @param deleted null for no filter (the default — both live and deleted rows match);
+     *                {@code true} for deleted rows only; {@code false} for live rows only
+     */
     @GetMapping
     public ApiResponse<Page<VideoResponse>> list(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) VideoStatus status,
             @RequestParam(required = false) List<Long> ownerId,
+            @RequestParam(required = false) Boolean deleted,
             @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC)
             Pageable pageable) {
-        return ApiResponse.success(adminVideoDirectory.search(q, status, ownerId, pageable));
+        return ApiResponse.success(adminVideoDirectory.search(q, status, ownerId, deleted, pageable));
+    }
+
+    /**
+     * Uploads per day — what the console's video growth percentages are computed from.
+     *
+     * <p>Bounded at three years because a year-over-year delta needs the year before the one on
+     * screen; the lower bound keeps a hand-edited zero or a negative from asking Mongo for a
+     * window in the future, which comes back empty and reads as lost data.
+     */
+    @GetMapping("/stats/daily")
+    public ApiResponse<List<DailyVideoStatsResponse>> dailyStats(
+            @RequestParam(defaultValue = "7") @Min(1) @Max(1095) int days) {
+        return ApiResponse.success(adminVideoDirectory.dailyStats(days));
     }
 
     /**

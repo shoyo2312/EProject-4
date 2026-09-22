@@ -22,15 +22,27 @@ public interface ModerationActionRepository extends JpaRepository<ModerationActi
 
     long countByCreatedAtAfter(Instant since);
 
-    /** Actions taken per day since the cutoff — the flow the dashboard's delta compares. */
+    /**
+     * Actions taken per day since the cutoff, split by decision — the flows every delta in the
+     * console compares. Aliases are quoted because Postgres folds unquoted ones to lower case
+     * and the projection would then bind nothing.
+     *
+     * <p>FILTER rather than four separate queries: the same index scan answers all of them, and
+     * a day on which nobody banned anyone still has to come back as a zero inside its row rather
+     * than as a missing row in one of four lists.
+     */
     @Query(value = """
-            SELECT date_trunc('day', created_at)::date AS "day", COUNT(*) AS "cnt"
+            SELECT date_trunc('day', created_at)::date                         AS "day",
+                   COUNT(*)                                                    AS "taken",
+                   COUNT(*) FILTER (WHERE action_type = 'BAN_USER')            AS "usersBanned",
+                   COUNT(*) FILTER (WHERE action_type = 'TAKEDOWN_VIDEO')      AS "videosTakenDown",
+                   COUNT(*) FILTER (WHERE action_type = 'REMOVE_COMMENT')      AS "commentsRemoved"
             FROM moderation_actions
             WHERE created_at >= :since
             GROUP BY "day"
             ORDER BY "day"
             """, nativeQuery = true)
-    List<DailyCountRow> findDailyTaken(@Param("since") Instant since);
+    List<DailyActionRow> findDailyActions(@Param("since") Instant since);
 
     long countByTargetTypeAndTargetIdAndActionTypeIn(
             ReportTargetType targetType, String targetId, Collection<ModerationActionType> actionTypes);
