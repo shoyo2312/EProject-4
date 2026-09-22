@@ -42,6 +42,25 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
             """, nativeQuery = true)
     List<DailyCountRow> findDailyCreated(@Param("since") Instant since);
 
+    /**
+     * Reports closed per day since the cutoff, by outcome.
+     *
+     * <p>Grouped on {@code resolved_at}, not {@code created_at}: this series answers "how much
+     * did the queue get cleared this week", and a report filed long before the window still
+     * counts as this week's work. Rows with a null {@code resolved_at} are still pending and
+     * drop out of the range test on their own.
+     */
+    @Query(value = """
+            SELECT date_trunc('day', resolved_at)::date                AS "day",
+                   COUNT(*) FILTER (WHERE status = 'RESOLVED')         AS "resolved",
+                   COUNT(*) FILTER (WHERE status = 'DISMISSED')        AS "dismissed"
+            FROM reports
+            WHERE deleted_at IS NULL AND resolved_at >= :since
+            GROUP BY "day"
+            ORDER BY "day"
+            """, nativeQuery = true)
+    List<DailyResolutionRow> findDailyResolutions(@Param("since") Instant since);
+
     /** How many reports have been filed against one target — shown on its console row. */
     long countByTargetTypeAndTargetIdAndDeletedAtIsNull(ReportTargetType targetType, String targetId);
 

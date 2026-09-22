@@ -222,18 +222,47 @@ public class AdminServiceImpl implements AdminService {
                 moderationActionRepository.countByCreatedAtAfter(Instant.now().minus(24, ChronoUnit.HOURS)));
     }
 
+    /**
+     * Column offsets into the per-day accumulator in {@link #getDailyStats}. Three queries each
+     * fill in part of the same row, so the row cannot be built in one pass.
+     */
+    private static final int CREATED = 0;
+    private static final int TAKEN = 1;
+    private static final int RESOLVED = 2;
+    private static final int DISMISSED = 3;
+    private static final int BANNED = 4;
+    private static final int TAKEN_DOWN = 5;
+    private static final int REMOVED = 6;
+    private static final int COLUMNS = 7;
+
     @Override
     public List<DailyAdminStatsResponse> getDailyStats(int days) {
         Instant since = Instant.now().minus(days, ChronoUnit.DAYS);
+        // Sorted, and keyed by day rather than indexed by offset: a day on which nothing at all
+        // happened has no row in any of the three queries, and the console reads this as a
+        // series — a missing day is a gap it can see, an invented zero-filled one is not.
         Map<LocalDate, long[]> byDay = new TreeMap<>();
         for (var row : reportRepository.findDailyCreated(since)) {
-            byDay.computeIfAbsent(row.getDay(), d -> new long[2])[0] = row.getCnt();
+            byDay.computeIfAbsent(row.getDay(), d -> new long[COLUMNS])[CREATED] = row.getCnt();
         }
-        for (var row : moderationActionRepository.findDailyTaken(since)) {
-            byDay.computeIfAbsent(row.getDay(), d -> new long[2])[1] = row.getCnt();
+        for (var row : reportRepository.findDailyResolutions(since)) {
+            long[] day = byDay.computeIfAbsent(row.getDay(), d -> new long[COLUMNS]);
+            day[RESOLVED] = row.getResolved();
+            day[DISMISSED] = row.getDismissed();
+        }
+        for (var row : moderationActionRepository.findDailyActions(since)) {
+            long[] day = byDay.computeIfAbsent(row.getDay(), d -> new long[COLUMNS]);
+            day[TAKEN] = row.getTaken();
+            day[BANNED] = row.getUsersBanned();
+            day[TAKEN_DOWN] = row.getVideosTakenDown();
+            day[REMOVED] = row.getCommentsRemoved();
         }
         return byDay.entrySet().stream()
-                .map(e -> new DailyAdminStatsResponse(e.getKey(), e.getValue()[0], e.getValue()[1]))
+                .map(e -> {
+                    long[] d = e.getValue();
+                    return new DailyAdminStatsResponse(e.getKey(), d[CREATED], d[TAKEN],
+                            d[RESOLVED], d[DISMISSED], d[BANNED], d[TAKEN_DOWN], d[REMOVED]);
+                })
                 .toList();
     }
 
