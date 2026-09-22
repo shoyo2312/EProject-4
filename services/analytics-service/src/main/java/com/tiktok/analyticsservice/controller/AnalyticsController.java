@@ -38,10 +38,15 @@ public class AnalyticsController {
         return ApiResponse.success(analyticsService.getVideoEngagementSummary(videoId));
     }
 
-    /** Distinct viewers per day — the one number that says whether anyone is still here. */
+    /**
+     * Distinct viewers per day — the one number that says whether anyone is still here.
+     *
+     * <p>Bounded at three years rather than one: the console compares a window against the same
+     * window a period earlier, and a year-over-year delta needs two years of it.
+     */
     @GetMapping("/active-users/daily")
     public ApiResponse<List<DailyActiveUsersResponse>> getDailyActiveUsers(
-            @RequestParam(defaultValue = "7") @Min(1) @Max(365) int days) {
+            @RequestParam(defaultValue = "7") @Min(1) @Max(1095) int days) {
         return ApiResponse.success(analyticsService.getDailyActiveUsers(days));
     }
 
@@ -63,7 +68,7 @@ public class AnalyticsController {
      * with FINAL over every row the platform has ever written.
      */
     public ApiResponse<List<DailySignupResponse>> getDailySignups(
-            @RequestParam(defaultValue = "7") @Min(1) @Max(365) int days) {
+            @RequestParam(defaultValue = "7") @Min(1) @Max(1095) int days) {
         return ApiResponse.success(analyticsService.getDailySignups(days));
     }
 }
