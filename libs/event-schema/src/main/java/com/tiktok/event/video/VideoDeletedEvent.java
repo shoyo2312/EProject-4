@@ -11,19 +11,20 @@ import java.util.UUID;
  * {@link VideoPublishedEvent}, so Kafka orders the pair per video: a consumer can never be handed
  * the removal of a video it has not been told about yet.
  *
- * <p>Only ever emitted for a video whose VideoPublishedEvent actually went out. A video deleted
- * inside the five-second window before the outbox poll picked it up was never announced to
- * anyone, and announcing its removal would ask every consumer to delete something it does not
- * have.
+ * <p>Sent as soon as the owner deletes: this is what takes the video out of search results and
+ * the recommendation feed. Its media is not erased on this event — that is
+ * {@link VideoPurgedEvent}, which follows once the trash window has run out.
+ *
+ * <p>Emitted for a video deleted before its VideoPublishedEvent ever went out as well, so every
+ * consumer must treat an unknown videoId as a no-op.
  */
 public record VideoDeletedEvent(
         String eventId,
         Instant occurredAt,
         String videoId,
         Long userId,
-        // Carried so media-worker can remove the source object along with the derived ones. It is
-        // the only party that knows the bucket, and the only thing that knows the raw key is this
-        // event — once the document is gone there is nothing left to look it up from.
+        // Kept for consumers that already read it; the purge itself is driven by
+        // VideoPurgedEvent, which carries the same key.
         String rawFileUrl
 ) implements DomainEvent {
 

@@ -20,11 +20,14 @@ import org.springframework.kafka.support.SendResult;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -54,7 +57,8 @@ class VideoEventPublisherTest {
         publisher = new VideoEventPublisher(
                 videoRepository,
                 new OutboxDispatcher(kafkaOperations, Duration.ofSeconds(5)),
-                objectMapper);
+                objectMapper,
+                Duration.ofDays(30));
     }
 
     @Test
@@ -188,7 +192,8 @@ class VideoEventPublisherTest {
         when(broken.writeValueAsString(any())).thenThrow(new JsonProcessingException("no") {
         });
         VideoEventPublisher brokenPublisher = new VideoEventPublisher(
-                videoRepository, new OutboxDispatcher(kafkaOperations, Duration.ofSeconds(5)), broken);
+                videoRepository, new OutboxDispatcher(kafkaOperations, Duration.ofSeconds(5)), broken,
+                Duration.ofDays(30));
 
         brokenPublisher.publishPending();
 
@@ -214,22 +219,38 @@ class VideoEventPublisherTest {
         // removal of a video it has not been told about.
         assertThat(record.key()).isEqualTo(video.getId());
         assertThat(eventTypeOf(record)).isEqualTo("VideoDeletedEvent");
-        // media-worker is the only party that can reclaim the source object, and this event is
-        // the last thing that knows where it is.
-        assertThat(record.value()).contains(video.getRawFileUrl());
 
         assertThat(video.getDeleteEventPublishedAt()).isNotNull();
         verify(videoRepository).updateDeleteEventPublished(video);
     }
 
     /**
-     * publishPending skips soft-deleted rows, so a video deleted within five seconds of upload was
-     * never announced to anyone — and its removal is announced anyway. The indexing consumers get
-     * a no-op, but the raw upload is already in MinIO and this event carries the only key anything
-     * still holds for it; staying quiet leaks the object with nothing left that could find it.
+     * The deletion is what takes a video out of search and the feed, so it must not wait for the
+     * trash window: the poll reads every unannounced deletion, with no retention cutoff. Only the
+     * purge that follows is delayed.
      */
     @Test
-    void publishPendingDeletions_neverAnnouncedVideo_isStillAnnouncedSoTheUploadIsReclaimed() {
+    void publishPendingDeletions_doesNotWaitForTheTrashWindow() {
+        Video video = deletedVideo(true);
+        when(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
+                .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPendingDeletions();
+
+        verify(videoRepository, never()).findPendingPurge(any(Instant.class), anyInt());
+        assertThat(eventTypeOf(captureRecord())).isEqualTo("VideoDeletedEvent");
+    }
+
+    /**
+     * publishPending skips soft-deleted rows, so a video deleted within five seconds of upload was
+     * never announced to anyone — and its removal is announced anyway, so the purge that follows
+     * is never the first thing a consumer hears about the video. Every consumer treats the
+     * unknown id as a no-op.
+     */
+    @Test
+    void publishPendingDeletions_neverAnnouncedVideo_isStillAnnounced() {
         Video video = deletedVideo(false);
         when(videoRepository.findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc())
                 .thenReturn(List.of(video));
@@ -240,7 +261,6 @@ class VideoEventPublisherTest {
 
         ProducerRecord<String, String> record = captureRecord();
         assertThat(eventTypeOf(record)).isEqualTo("VideoDeletedEvent");
-        assertThat(record.value()).contains(video.getRawFileUrl());
         assertThat(video.getDeleteEventPublishedAt()).isNotNull();
         verify(videoRepository).updateDeleteEventPublished(video);
     }
@@ -258,6 +278,72 @@ class VideoEventPublisherTest {
 
         assertThat(video.getDeleteEventPublishedAt()).isNull();
         verify(videoRepository, never()).updateDeleteEventPublished(any(Video.class));
+    }
+
+    @Test
+    void publishPendingPurges_announcesThePurgeOnceRetentionExpiredAndMarksIt() {
+        Video video = deletedVideo(true);
+        when(videoRepository.findPendingPurge(any(Instant.class), eq(100)))
+                .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPendingPurges();
+
+        // The cutoff handed to the poll is now minus the retention: a video deleted inside the
+        // window stays out of it, and its media stays in MinIO for the console to play.
+        ArgumentCaptor<Instant> cutoff = ArgumentCaptor.forClass(Instant.class);
+        verify(videoRepository).findPendingPurge(cutoff.capture(), eq(100));
+        assertThat(cutoff.getValue()).isBefore(Instant.now().minus(Duration.ofDays(29)));
+
+        ProducerRecord<String, String> record = captureRecord();
+        assertThat(record.topic()).isEqualTo("video.video-events");
+        assertThat(record.key()).isEqualTo(video.getId());
+        assertThat(eventTypeOf(record)).isEqualTo("VideoPurgedEvent");
+        // media-worker is the only party that can reclaim the source object, and this event is
+        // the last thing that knows where it is.
+        assertThat(record.value()).contains(video.getRawFileUrl());
+
+        assertThat(video.getPurgeEventPublishedAt()).isNotNull();
+        verify(videoRepository).updatePurgeEventPublished(video);
+        verify(videoRepository, never()).updateDeleteEventPublished(any(Video.class));
+    }
+
+    /**
+     * The raw upload of a never-announced video is already in MinIO and this event carries the
+     * only key anything still holds for it; staying quiet leaks the object with nothing left that
+     * could find it.
+     */
+    @Test
+    void publishPendingPurges_neverAnnouncedVideo_isStillPurgedSoTheUploadIsReclaimed() {
+        Video video = deletedVideo(false);
+        when(videoRepository.findPendingPurge(any(Instant.class), eq(100)))
+                .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPendingPurges();
+
+        ProducerRecord<String, String> record = captureRecord();
+        assertThat(eventTypeOf(record)).isEqualTo("VideoPurgedEvent");
+        assertThat(record.value()).contains(video.getRawFileUrl());
+        assertThat(video.getPurgeEventPublishedAt()).isNotNull();
+        verify(videoRepository).updatePurgeEventPublished(video);
+    }
+
+    @Test
+    void publishPendingPurges_sendFailure_leavesThePurgePendingForNextPoll() {
+        Video video = deletedVideo(true);
+        when(videoRepository.findPendingPurge(any(Instant.class), eq(100)))
+                .thenReturn(List.of(video));
+        CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
+        failed.completeExceptionally(new RuntimeException("broker unreachable"));
+        when(kafkaOperations.send(any(ProducerRecord.class))).thenReturn(failed);
+
+        publisher.publishPendingPurges();
+
+        assertThat(video.getPurgeEventPublishedAt()).isNull();
+        verify(videoRepository, never()).updatePurgeEventPublished(any(Video.class));
     }
 
     private ProducerRecord<String, String> captureRecord() {

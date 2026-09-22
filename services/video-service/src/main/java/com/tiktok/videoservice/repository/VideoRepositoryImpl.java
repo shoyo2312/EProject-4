@@ -191,6 +191,19 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
+    public void updatePurgeEventPublished(Video video) {
+        update(video.getId(), new Update().set("purgeEventPublishedAt", video.getPurgeEventPublishedAt()));
+    }
+
+    @Override
+    public List<Video> findPendingPurge(Instant purgeBefore, int limit) {
+        Query query = Query.query(where("deletedAt").ne(null).lt(purgeBefore).and("purgeEventPublishedAt").is(null))
+                .with(Sort.by(Sort.Direction.ASC, "deletedAt"))
+                .limit(limit);
+        return mongoTemplate.find(query, Video.class);
+    }
+
+    @Override
     public void updateEventFailed(Video video) {
         update(video.getId(), new Update().set("eventFailedAt", video.getEventFailedAt()));
     }

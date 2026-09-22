@@ -59,6 +59,11 @@ import java.util.List;
         // See VideoEventPublisher.publishPendingDeletions.
         @CompoundIndex(name = "delete_outbox_idx",
                 def = "{'deleteEventPublishedAt': 1, 'deletedAt': 1}"),
+        // The purge poll, same shape: equality on the slot, then deletedAt, which it both bounds
+        // (deleted before the retention cutoff) and sorts on.
+        // See VideoEventPublisher.publishPendingPurges.
+        @CompoundIndex(name = "purge_outbox_idx",
+                def = "{'purgeEventPublishedAt': 1, 'deletedAt': 1}"),
         // The visibility-change poll. Only ever a handful of rows carry a non-null value at any
         // moment, but the collection it scans without this index is the largest one here.
         @CompoundIndex(name = "visibility_outbox_idx", def = "{'visibilityEventPendingAt': 1}"),
@@ -184,6 +189,16 @@ public class Video {
      * to anyone who never received it.
      */
     private Instant deleteEventPublishedAt;
+
+    /**
+     * Outbox slot for this video's VideoPurgedEvent — the one that makes media-worker erase the
+     * objects in MinIO. Separate from {@code deleteEventPublishedAt} because the two events are
+     * sent at different times: the deletion right away, so the video leaves search and the feed;
+     * the purge only once {@code video.trash.retention} has run out, so a moderator can still
+     * review what the owner removed. Null until the purge is announced, which for a live video
+     * is forever.
+     */
+    private Instant purgeEventPublishedAt;
 
     /**
      * The third outbox slot, for VideoVisibilityChangedEvent. Unlike the other two this one is
@@ -380,5 +395,9 @@ public class Video {
 
     public void markDeleteEventPublished() {
         this.deleteEventPublishedAt = Instant.now();
+    }
+
+    public void markPurgeEventPublished() {
+        this.purgeEventPublishedAt = Instant.now();
     }
 }

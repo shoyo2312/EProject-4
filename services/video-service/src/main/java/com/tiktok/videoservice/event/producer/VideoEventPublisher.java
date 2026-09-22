@@ -4,19 +4,22 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
+import com.tiktok.event.video.VideoPurgedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.repository.VideoRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -27,7 +30,7 @@ import java.util.List;
  * <p>Marking is delegated to {@link OutboxDispatcher} so a video is only marked published once
  * the broker acknowledges it — see that class for why doing it inline loses events.
  *
- * <p>All three event types go to one topic under the video's own id as the key, so Kafka orders
+ * <p>All four event types go to one topic under the video's own id as the key, so Kafka orders
  * them per video: no consumer is handed a deletion, or a visibility change, for a video it has not
  * been told about. Because the topic carries several shapes, every record leaves here with an
  * {@code eventType} header, which is what consumers route on — the payloads are all flat JSON
@@ -35,7 +38,6 @@ import java.util.List;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class VideoEventPublisher {
 
     private static final String TOPIC = "video.video-events";
@@ -44,6 +46,17 @@ public class VideoEventPublisher {
     private final VideoRepository videoRepository;
     private final OutboxDispatcher outboxDispatcher;
     private final ObjectMapper objectMapper;
+    private final Duration trashRetention;
+
+    public VideoEventPublisher(VideoRepository videoRepository,
+                               OutboxDispatcher outboxDispatcher,
+                               ObjectMapper objectMapper,
+                               @Value("${video.trash.retention:P30D}") Duration trashRetention) {
+        this.videoRepository = videoRepository;
+        this.outboxDispatcher = outboxDispatcher;
+        this.objectMapper = objectMapper;
+        this.trashRetention = trashRetention;
+    }
 
     @Scheduled(fixedDelay = 5000)
     public void publishPending() {
@@ -62,16 +75,17 @@ public class VideoEventPublisher {
     }
 
     /**
-     * A deleted video has to be announced too, or it stays in search results and in the
-     * recommendation feed for as long as those stores exist, and its transcoded output sits in
-     * MinIO with nothing left that refers to it.
+     * A deleted video has to be announced too, and right away: this event is the only thing
+     * that takes it out of search results and the recommendation feed, and those stores serve
+     * their own copy without ever asking this service again. Delaying it by the trash window
+     * left owner-deleted videos searchable for a month.
      *
      * <p>Videos deleted before their publication ever went out are announced too. That looks like
      * telling consumers to remove something they never received, and for the two that keep an
-     * index it is exactly that — a no-op ZREM and a no-op Elasticsearch delete. But media-worker
-     * is not an index: the raw upload is already in MinIO by then, and this event is the only
-     * thing that ever refers to it again. Skipping it leaks the object for good, since nothing
-     * else knows the key.
+     * index it is exactly that — a no-op ZREM and a no-op Elasticsearch delete — which is why
+     * every consumer of this event treats an unknown videoId as a no-op.
+     *
+     * <p>The media is not erased on this event; that is {@link #publishPendingPurges}.
      */
     @Scheduled(fixedDelay = 5000)
     public void publishPendingDeletions() {
@@ -87,6 +101,36 @@ public class VideoEventPublisher {
         if (published < deleted.size()) {
             log.warn("Published {}/{} video deletion events, the rest stay pending for the next poll",
                     published, deleted.size());
+        }
+    }
+
+    /**
+     * The other half of a deletion: erase the media. {@code video.trash.retention} (30 days by
+     * default) is a trash window, not an instant purge — a video an owner deletes keeps its
+     * media in MinIO and stays watchable from the admin console until this poll's cutoff catches
+     * up to it, so a moderator can still review what was removed before it is gone for good.
+     * Only media-worker acts on the event; the index consumers already dropped the video on the
+     * VideoDeletedEvent that preceded it.
+     *
+     * <p>Videos deleted before their publication ever went out are purged too. media-worker is
+     * not an index: the raw upload is already in MinIO by then, and this event is the only thing
+     * that ever refers to it again. Skipping it leaks the object for good, since nothing else
+     * knows the key.
+     */
+    @Scheduled(fixedDelay = 5000)
+    public void publishPendingPurges() {
+        Instant purgeBefore = Instant.now().minus(trashRetention);
+        List<Video> expired = videoRepository.findPendingPurge(purgeBefore, 100);
+
+        if (expired.isEmpty()) {
+            return;
+        }
+
+        int published = outboxDispatcher.dispatch(expired, this::toPurgedRecord, this::markPurgePublished);
+
+        if (published < expired.size()) {
+            log.warn("Published {}/{} video purge events, the rest stay pending for the next poll",
+                    published, expired.size());
         }
     }
 
@@ -149,6 +193,16 @@ public class VideoEventPublisher {
         }
     }
 
+    /** No parking either, for the same reason as {@link #toDeletedRecord}: same fields. */
+    private ProducerRecord<String, String> toPurgedRecord(Video video) {
+        VideoPurgedEvent event = VideoPurgedEvent.of(video.getId(), video.getUserId(), video.getRawFileUrl());
+        try {
+            return record(video.getId(), "VideoPurgedEvent", objectMapper.writeValueAsString(event));
+        } catch (JsonProcessingException ex) {
+            throw new UncheckedIOException(ex);
+        }
+    }
+
     private ProducerRecord<String, String> toVisibilityRecord(Video video) {
         VideoVisibilityChangedEvent event = VideoVisibilityChangedEvent.of(
                 video.getId(), video.getUserId(), visibilityName(video),
@@ -187,6 +241,11 @@ public class VideoEventPublisher {
     private void markDeletePublished(Video video) {
         video.markDeleteEventPublished();
         videoRepository.updateDeleteEventPublished(video);
+    }
+
+    private void markPurgePublished(Video video) {
+        video.markPurgeEventPublished();
+        videoRepository.updatePurgeEventPublished(video);
     }
 
     /**

@@ -1,8 +1,8 @@
 package com.tiktok.mediaworker.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
+import com.tiktok.event.video.VideoPurgedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoTranscodedEventProducer;
 import com.tiktok.mediaworker.service.MediaCleanupService;
@@ -20,12 +20,18 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 
 /**
- * video.video-events carries a publication and a deletion, both flat JSON objects with no type
- * field, so routing is on the eventType header video-service sets — see its VideoEventPublisher.
+ * video.video-events carries several flat JSON objects with no type field, so routing is on the
+ * eventType header video-service sets — see its VideoEventPublisher.
+ *
+ * <p>Media is erased on VideoPurgedEvent, not VideoDeletedEvent. The deletion goes out the moment
+ * the owner deletes and is for the index consumers; the purge follows once the trash window
+ * (video-service's {@code video.trash.retention}) has run out, so a moderator can still play the
+ * video from the console in between. Acting on the deletion here would empty the trash on the
+ * spot.
  *
  * <p>No inbox/idempotency table here: media-worker keeps no state of its own. Re-processing
  * the same VideoPublishedEvent just overwrites the same MinIO keys with the same content
- * (safe no-op), re-processing a deletion removes objects that are already gone, and the durable
+ * (safe no-op), re-processing a purge removes objects that are already gone, and the durable
  * mutation the transcode triggers happens in video-service's own inbox-guarded consumer of
  * VideoTranscodedEvent — that's where duplicate delivery actually needs to be rejected.
  */
@@ -34,7 +40,7 @@ import java.nio.charset.StandardCharsets;
 public class VideoEventConsumer {
 
     private static final String VIDEO_PUBLISHED = "VideoPublishedEvent";
-    private static final String VIDEO_DELETED = "VideoDeletedEvent";
+    private static final String VIDEO_PURGED = "VideoPurgedEvent";
 
     private final TranscodeService transcodeService;
     private final MediaCleanupService mediaCleanupService;
@@ -72,10 +78,11 @@ public class VideoEventConsumer {
 
         if (VIDEO_PUBLISHED.equals(eventType)) {
             handlePublished(objectMapper.readValue(payload, VideoPublishedEvent.class));
-        } else if (VIDEO_DELETED.equals(eventType)) {
-            VideoDeletedEvent event = objectMapper.readValue(payload, VideoDeletedEvent.class);
+        } else if (VIDEO_PURGED.equals(eventType)) {
+            VideoPurgedEvent event = objectMapper.readValue(payload, VideoPurgedEvent.class);
             mediaCleanupService.deleteMediaFor(event.videoId(), event.rawFileUrl());
         } else {
+            // VideoDeletedEvent lands here too, on purpose — see the class comment.
             log.debug("Ignoring video eventType={}", eventType);
         }
     }

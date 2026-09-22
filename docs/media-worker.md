@@ -7,7 +7,7 @@ Tài liệu cho người **vận hành**, không phải client. `media-worker` (
 | Việc | Nghe topic | Phát topic | Ghi vào MinIO |
 |---|---|---|---|
 | Transcode video | `video.video-events` (`VideoPublishedEvent`) | `media.video-transcoded-events` (`VideoTranscodedEvent`) | `hls/{videoId}/source.mp4` + `thumbnails/{videoId}.jpg` + `previews/{videoId}.webp` |
-| Dọn media khi xoá video | `video.video-events` (`VideoDeletedEvent`) | — | xoá `thumbnails/{id}.jpg`, `previews/{id}.webp`, mọi object dưới `hls/{id}/`, và file raw |
+| Dọn media khi hết hạn thùng rác | `video.video-events` (`VideoPurgedEvent`) | — | xoá `thumbnails/{id}.jpg`, `previews/{id}.webp`, mọi object dưới `hls/{id}/`, và file raw |
 | Sao ảnh đại diện social | `auth.social-avatar-events` (`SocialAvatarDiscoveredEvent`) | `media.avatar-events` (`AvatarMirroredEvent`) | `avatars/{userId}.jpg` |
 
 Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi đè cùng key với cùng nội dung (no-op an toàn khi redeliver). Việc idempotent thật nằm ở consumer phía sau (`video-service` / `user-service`), nơi có bảng inbox.
@@ -93,13 +93,13 @@ Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file t�
 
 ## 3. Cleanup khi xoá video
 
-`VideoDeletedEvent` → `MediaCleanupServiceImpl.deleteMediaFor(videoId, rawFileUrl)`:
+`VideoPurgedEvent` → `MediaCleanupServiceImpl.deleteMediaFor(videoId, rawFileUrl)`. **Không phải** `VideoDeletedEvent`: event đó phát ngay khi owner xoá và là tín hiệu cho search/recommendation gỡ video; media thì giữ nguyên trong thùng rác (`video.trash.retention`, mặc định 30 ngày) để admin còn xem lại được, và chỉ `VideoPurgedEvent` — video-service phát khi hết hạn — mới xoá. Consumer bỏ qua `VideoDeletedEvent`; xoá theo nó là đổ thùng rác ngay lập tức.
 - Xoá `thumbnails/{id}.jpg`.
 - List đệ quy `hls/{id}/` và xoá từng object (HLS thật = 1 playlist + nhiều segment, nên phải list chứ không đoán key).
 - Xoá file raw — chỉ khi `rawFileUrl` nằm trong bucket cấu hình; không thì **bỏ qua + log warn** (đoán key = xoá nhầm object). Khi bỏ qua, lifecycle rule prefix `raw/` (7 ngày, khai ở `minio-init`) là thứ dọn hộ.
 - Lỗi xoá từng object → **log + nuốt**, không ném. Object sót lại là hoá đơn, không phải bug hệ thống thấy được; ném ra chỉ khiến `kafka-lib` retry cả lượt xoá 3 lần rồi park DLT, mất luôn các xoá đã thành công.
 
-`video-service` phát `VideoDeletedEvent` cả cho video **xoá trước khi kịp publish** (file raw đã trong MinIO, event này là thứ duy nhất còn nhắc key đó). Vì vậy cleanup phải no-op êm với `videoId` lạ.
+`video-service` phát `VideoPurgedEvent` cả cho video **xoá trước khi kịp publish** (file raw đã trong MinIO, event này là thứ duy nhất còn nhắc key đó). Vì vậy cleanup phải no-op êm với `videoId` lạ.
 
 ## 4. Sao ảnh đại diện (avatar mirror)
 

@@ -151,6 +151,24 @@ public interface VideoRepositoryCustom {
     /** Outbox flag, set once the broker acknowledges the VideoDeletedEvent. */
     void updateDeleteEventPublished(Video video);
 
+    /** Outbox flag, set once the broker acknowledges the VideoPurgedEvent. */
+    void updatePurgeEventPublished(Video video);
+
+    /**
+     * Purge outbox poll: deleted videos whose trash window has run out and whose VideoPurgedEvent
+     * has not gone out yet. Not a derived query — {@code deletedAt} needs both {@code ne(null)}
+     * and {@code lt(purgeBefore)} in the same clause, which two derived-query keywords on one
+     * field cannot express (Spring Data rejects the second as a duplicate key).
+     *
+     * <p>{@code purgeBefore} is "now minus the retention period" — see
+     * {@code VideoEventPublisher#publishPendingPurges} — so a video stays out of this poll, and
+     * its media stays in MinIO, for as long as it sits in the trash. That is what lets an admin
+     * still watch a video its owner deleted: the event that makes media-worker erase it does not
+     * go out until this query starts returning the row. The deletion itself is announced right
+     * away by {@link VideoRepository#findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc}.
+     */
+    List<Video> findPendingPurge(Instant purgeBefore, int limit);
+
     /**
      * Parks a row whose event could not be built, taking it out of the poll — see
      * {@link Video#markEventFailed}.

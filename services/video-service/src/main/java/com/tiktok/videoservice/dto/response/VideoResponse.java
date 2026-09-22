@@ -45,10 +45,16 @@ public record VideoResponse(
         String takedownReason,
         /**
          * When the owner deleted the video. Admin reads only — a deleted video never reaches a
-         * public read path, so this is null everywhere else. The console needs it because the
-         * by-id admin route deliberately answers for videos the listing hides.
+         * public read path, so this is null everywhere else.
          */
         Instant deletedAt,
+        /**
+         * When the VideoPurgedEvent for this row was acknowledged by the broker — the point after
+         * which the media is gone from MinIO and the console can no longer play it. Admin reads
+         * only; null for a live video and for a deleted one still inside its trash window — see
+         * {@code Video.purgeEventPublishedAt}.
+         */
+        Instant purgeEventPublishedAt,
         /** What the classifier scored. Null on every public read path — admin console only. */
         ModerationResponse moderation
 ) {

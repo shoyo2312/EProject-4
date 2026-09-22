@@ -3,6 +3,7 @@ package com.tiktok.mediaworker.event.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.tiktok.event.video.VideoDeletedEvent;
+import com.tiktok.event.video.VideoPurgedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoTranscodedEventProducer;
@@ -223,17 +224,31 @@ class VideoEventConsumerTest {
     }
 
     /**
-     * Nothing else in the system knows where a video's objects live, so a deletion that does not
+     * Nothing else in the system knows where a video's objects live, so a purge that does not
      * reach here is storage nobody will ever reclaim or even be able to find.
      */
     @Test
-    void onMessage_deletion_removesTheMedia() throws Exception {
+    void onMessage_purge_removesTheMedia() throws Exception {
+        VideoPurgedEvent purged = VideoPurgedEvent.of("vid3", 1L, "s3://video-media/raw/1/vid3.mp4");
+
+        consumer().onMessage(objectMapper.writeValueAsString(purged), header("VideoPurgedEvent"));
+
+        verify(mediaCleanupService).deleteMediaFor("vid3", "s3://video-media/raw/1/vid3.mp4");
+        verifyNoInteractions(transcodeService, eventProducer);
+    }
+
+    /**
+     * The deletion is the index consumers' cue, not this worker's: the media stays in MinIO for
+     * the trash window so the console can still play it, and only the purge that follows erases
+     * it. Acting on the deletion here would empty the trash on the spot.
+     */
+    @Test
+    void onMessage_deletion_leavesTheMediaInPlace() throws Exception {
         VideoDeletedEvent deleted = VideoDeletedEvent.of("vid3", 1L, "s3://video-media/raw/1/vid3.mp4");
 
         consumer().onMessage(objectMapper.writeValueAsString(deleted), header("VideoDeletedEvent"));
 
-        verify(mediaCleanupService).deleteMediaFor("vid3", "s3://video-media/raw/1/vid3.mp4");
-        verifyNoInteractions(transcodeService, eventProducer);
+        verifyNoInteractions(mediaCleanupService, transcodeService, eventProducer);
     }
 
     /**

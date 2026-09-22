@@ -59,9 +59,13 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      * Deletion outbox poll: videos removed by their owner whose VideoDeletedEvent has not gone
      * out yet. The published-events poll above cannot serve this — it excludes exactly these rows.
      *
+     * <p>No retention cutoff here, unlike {@link VideoRepositoryCustom#findPendingPurge}: this
+     * event is what takes the video out of search and the feed, and that has to happen the
+     * moment the owner deletes. Only the media purge waits for the trash window.
+     *
      * <p>Every soft-deleted row, including one deleted before its publication was ever announced:
-     * that video's raw upload is in MinIO and this event is the only thing that still names the
-     * key. See {@code VideoEventPublisher#publishPendingDeletions}.
+     * consumers treat an unknown videoId as a no-op, and sending it keeps the purge that follows
+     * from being the first thing anyone hears about the video.
      */
     List<Video> findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc();
 
