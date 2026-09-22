@@ -161,7 +161,10 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 // Written on both sides of the pair: a takedown sets it, a restore clears it.
-                .set("takedownReason", video.getTakedownReason()));
+                .set("takedownReason", video.getTakedownReason())
+                // A restore back to PUBLISHED stamps this in memory (Video.markRestored ->
+                // stampPublishedAtIfLive) — write it or it never reaches Mongo.
+                .set("publishedAt", video.getPublishedAt()));
     }
 
     @Override
@@ -177,7 +180,11 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         return compareAndSet(video.getId(), expectedStatus, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
-                .set("moderation", video.getModeration()));
+                .set("moderation", video.getModeration())
+                // An APPROVED verdict stamps this in memory (Video.applyModeration ->
+                // stampPublishedAtIfLive) — write it or it never reaches Mongo, which is why
+                // every video published through normal moderation had a null publishedAt.
+                .set("publishedAt", video.getPublishedAt()));
     }
 
     @Override

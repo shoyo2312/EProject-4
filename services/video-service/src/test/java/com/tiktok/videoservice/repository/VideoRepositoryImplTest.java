@@ -114,6 +114,50 @@ class VideoRepositoryImplTest {
     }
 
     /**
+     * Regression: {@code Video.markRestored} stamps {@code publishedAt} in memory via
+     * {@code stampPublishedAtIfLive} whenever the restore lands on PUBLISHED, but the
+     * field-scoped {@code updateStatus} write used to leave that field out of its {@code Update}
+     * — so it was computed and then silently dropped, leaving every restored video's
+     * {@code publishedAt} null in Mongo forever.
+     */
+    @Test
+    void updateStatus_moderation_restorePersistsPublishedAt() {
+        Video video = save(VideoStatus.PUBLISHED);
+        assertThat(video.getPublishedAt()).isNull();
+        video.markTakenDown("policy violation");
+        videoRepository.updateStatus(video, VideoStatus.PUBLISHED);
+
+        Video takenDown = reload(video);
+        takenDown.markRestored();
+        videoRepository.updateStatus(takenDown, VideoStatus.TAKEN_DOWN);
+
+        assertThat(reload(video).getPublishedAt()).isNotNull();
+    }
+
+    /**
+     * Regression: same bug as {@link #updateStatus_moderation_restorePersistsPublishedAt}, on
+     * the moderation-verdict path instead of the restore path — {@code Video.applyModeration}
+     * stamps {@code publishedAt} too, and {@code updateModeration}'s {@code Update} used to
+     * leave it out.
+     */
+    @Test
+    void updateModeration_approvedVerdictPersistsPublishedAt() {
+        Video video = save(VideoStatus.PENDING_MODERATION);
+        assertThat(video.getPublishedAt()).isNull();
+
+        video.applyModeration(com.tiktok.videoservice.entity.VideoModeration.builder()
+                .verdict(com.tiktok.event.video.ModerationVerdict.APPROVED)
+                .totalFrames(10)
+                .checkedAt(java.time.Instant.now())
+                .build());
+        assertThat(videoRepository.updateModeration(video, VideoStatus.PENDING_MODERATION)).isTrue();
+
+        Video after = reload(video);
+        assertThat(after.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(after.getPublishedAt()).isNotNull();
+    }
+
+    /**
      * The interleaving that costs a takedown: the transcode consumer reads a PROCESSING video, a
      * moderator takes it down while the transcode is still running, and the consumer then writes
      * its outcome from what it read minutes ago. Unconditional, that write wins by arriving last
