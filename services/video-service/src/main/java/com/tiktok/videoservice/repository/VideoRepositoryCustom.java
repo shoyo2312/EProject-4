@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.repository;
 
+import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 
@@ -67,8 +68,9 @@ public interface VideoRepositoryCustom {
      * <p>Not expressible as a derived query — both filters are optional, which is four
      * combinations, and the title match is a case-insensitive substring rather than an equality.
      *
-     * <p>Soft-deleted videos stay out. A video its owner removed is gone as far as the platform is
-     * concerned; what a moderator needs to see is TAKEN_DOWN, which is a status and not a deletion.
+     * <p>Soft-deleted videos are included — this is the one listing the admin console has to
+     * account for them on, since {@code getById} only answers for a deleted video if you already
+     * know its id. {@code deletedAt} on the response is what tells a row apart from a live one.
      *
      * <p>No index serves this well: the sort is on createdAt while the filters are a status
      * equality and a regex, so with a status given Mongo can take bounds from {@code feed_idx} but
@@ -83,10 +85,12 @@ public interface VideoRepositoryCustom {
      * @param status   null for every status
      * @param term     case-insensitive substring of the title, or null for no title filter
      * @param ownerIds videos by these owners match too, or null/empty for no owner filter
+     * @param deleted  null for no filter on it (the default — both live and deleted rows match);
+     *                 {@code true} for deleted rows only; {@code false} for live rows only
      */
     org.springframework.data.domain.Page<Video> findForAdmin(
             VideoStatus status, String term, java.util.Collection<Long> ownerIds,
-            org.springframework.data.domain.Pageable pageable);
+            Boolean deleted, org.springframework.data.domain.Pageable pageable);
 
     /**
      * Transcode succeeded: the media fields it produced, plus where the outcome was recorded.
@@ -190,6 +194,22 @@ public interface VideoRepositoryCustom {
      * @param includeHidden true for the owner's own view — count PROCESSING and PRIVATE videos too
      */
     UserVideoStats sumUserVideoStats(Long userId, boolean includeHidden);
+
+    /**
+     * Uploads per day since the cutoff, with the current standing of that day's cohort — what
+     * the admin console's growth percentages are computed from.
+     *
+     * <p>Aggregated on read rather than kept as a rollup collection: the console asks for this
+     * once per page view over a bounded window, and a second copy of a count is a second thing
+     * that can drift from the videos themselves.
+     *
+     * <p>Owner-deleted videos are counted, the same as {@link #findForAdmin} with no
+     * {@code deleted} filter, so the percentage under a total describes the same set of videos
+     * the total counted. It is also the only answer that holds still: an upload happened on the
+     * day it happened, and excluding deletions would quietly walk a past day's figure downwards
+     * every time an owner cleared out an old video.
+     */
+    List<DailyVideoStatsResponse> countDailyUploads(Instant since);
 
     /** Soft delete. */
     void updateSoftDeleted(Video video);

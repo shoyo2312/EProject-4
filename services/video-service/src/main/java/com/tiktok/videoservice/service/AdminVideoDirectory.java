@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
@@ -10,7 +11,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Collection;
+import java.util.List;
 
 /**
  * The admin console's video listing.
@@ -35,11 +39,22 @@ public class AdminVideoDirectory {
      *                 for why they widen the search rather than narrowing it
      */
     public Page<VideoResponse> search(String query, VideoStatus status, Collection<Long> ownerIds,
-                                      Pageable pageable) {
+                                      Boolean deleted, Pageable pageable) {
         String term = (query == null || query.isBlank()) ? null : query.trim();
-        return videoRepository.findForAdmin(status, term, ownerIds, pageable)
+        return videoRepository.findForAdmin(status, term, ownerIds, deleted, pageable)
                 .map(videoMapper::toAdminResponse)
                 .map(quarantinedMediaUrls::forAdmin);
+    }
+
+    /**
+     * Uploads per day over the last {@code days} days, with each day's cohort standing.
+     *
+     * <p>The window is measured back from now rather than from the console's "as of" date: the
+     * console cuts the series itself, because it needs the period before the one on screen to
+     * compare against and would otherwise have to ask twice.
+     */
+    public List<DailyVideoStatsResponse> dailyStats(int days) {
+        return videoRepository.countDailyUploads(Instant.now().minus(days, ChronoUnit.DAYS));
     }
 
     /**
@@ -48,8 +63,9 @@ public class AdminVideoDirectory {
      *
      * <p>That rule is exactly wrong for moderation: the videos a moderator most needs to read back
      * are the ones nobody else can see — taken down, still processing, private, or deleted by their
-     * owner after being reported. The listing hides owner-deleted videos too, so this is the only
-     * route that answers for one; {@code deletedAt} on the response is what says so.
+     * owner after being reported. The listing answers for a deleted video too now, but only when
+     * asked to include it; this route always does — {@code deletedAt} on the response is what
+     * tells a deleted one apart.
      */
     public VideoResponse getById(String videoId) {
         return videoRepository.findById(videoId)
