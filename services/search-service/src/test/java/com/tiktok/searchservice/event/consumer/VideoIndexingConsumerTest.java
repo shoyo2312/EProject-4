@@ -207,6 +207,71 @@ class VideoIndexingConsumerTest {
         assertThat(document.getThumbnailUrl()).isEqualTo("http://minio/thumb.jpg");
     }
 
+    /**
+     * The verdict read before its transcode result. The late transcode used to write
+     * PENDING_MODERATION over the PUBLISHED the verdict had set, and nothing came after it to put
+     * the video back into search. Held until the transcode lands, the verdict is applied then —
+     * and not before, since a video with no media is not playable.
+     */
+    @Test
+    void onMessage_verdictBeforeTranscode_publishesWhenTheTranscodeLands() throws Exception {
+        publish("v30", "verdict first", null, List.of());
+        moderate("v30", ModerationVerdict.APPROVED);
+
+        assertThat(video("v30").orElseThrow().getStatus()).isEqualTo("PROCESSING");
+
+        transcode(VideoTranscodedEvent.success("v30", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+
+        VideoDocument document = video("v30").orElseThrow();
+        assertThat(document.getStatus()).isEqualTo("PUBLISHED");
+        assertThat(document.getThumbnailUrl()).isEqualTo("http://minio/t.jpg");
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("verdict", null, PageRequest.of(0, 10)))
+                .extracting(response -> response.id())
+                .containsExactly("v30");
+    }
+
+    /** The same, with both outcomes ahead of the publication: all three orders end the same. */
+    @Test
+    void onMessage_verdictThenTranscodeThenPublication_endsPublished() throws Exception {
+        moderate("v31", ModerationVerdict.REJECTED);
+        transcode(VideoTranscodedEvent.success("v31", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        assertThat(video("v31").orElseThrow().getStatus()).isNull();
+
+        publish("v31", "all out of order", null, List.of());
+
+        assertThat(video("v31").orElseThrow().getStatus()).isEqualTo("REJECTED");
+    }
+
+    /**
+     * media-worker's retried publish sends a verdict again under a fresh eventId, which the inbox
+     * cannot recognise. Applied again after an admin approved the video, it put the video back
+     * under review.
+     */
+    @Test
+    void onMessage_secondVerdictAfterAnApproval_changesNothing() throws Exception {
+        publish("v32", "approved by hand", null, List.of());
+        transcode(VideoTranscodedEvent.success("v32", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v32", ModerationVerdict.REVIEW);
+        restore("v32");
+
+        moderate("v32", ModerationVerdict.REVIEW);
+
+        assertThat(video("v32").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /** A failure from an earlier attempt, read after the success, does not undo it. */
+    @Test
+    void onMessage_staleFailureAfterSuccess_changesNothing() throws Exception {
+        publish("v33", "failed once", null, List.of());
+        transcode(VideoTranscodedEvent.success("v33", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v33", ModerationVerdict.APPROVED);
+
+        transcode(VideoTranscodedEvent.failure("v33", "first attempt"));
+
+        assertThat(video("v33").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
     /** A publication landing after a transcode must not roll the status back to PROCESSING. */
     @Test
     void onMessage_publicationReplay_doesNotOverwriteTranscodedStatus() throws Exception {

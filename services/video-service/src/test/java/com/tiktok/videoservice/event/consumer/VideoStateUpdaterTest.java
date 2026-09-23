@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.event.consumer;
 
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -61,13 +62,14 @@ class VideoStateUpdaterTest {
         Video video = videoRepository.save(processingVideo());
         AtomicBoolean moderatorHasActed = new AtomicBoolean(false);
 
-        BiPredicate<Video, VideoStatus> writeWithATakedownInTheGap = (candidate, expectedStatus) -> {
+        BiPredicate<Video, PipelineState> writeWithATakedownInTheGap = (candidate, expected) -> {
             if (moderatorHasActed.compareAndSet(false, true)) {
                 Video moderatorsCopy = videoRepository.findByIdAndDeletedAtIsNull(video.getId()).orElseThrow();
+                PipelineState read = PipelineState.of(moderatorsCopy);
                 moderatorsCopy.markTakenDown("policy violation");
-                videoRepository.updateStatus(moderatorsCopy, VideoStatus.PROCESSING);
+                videoRepository.updateStatus(moderatorsCopy, read);
             }
-            return videoRepository.updateTranscodeResult(candidate, expectedStatus);
+            return videoRepository.updateTranscodeResult(candidate, expected);
         };
 
         videoStateUpdater.apply(video.getId(),

@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.repository;
 
 import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -187,8 +188,8 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     // goes while the video is down — see Video.applyOutcome. Leaving it out would drop
     // the only record of the result on exactly the videos that need it at restore time.
     @Override
-    public boolean updateTranscodeResult(Video video, VideoStatus expectedStatus) {
-        return compareAndSet(video.getId(), expectedStatus, new Update()
+    public boolean updateTranscodeResult(Video video, PipelineState expected) {
+        return compareAndSet(video.getId(), expected, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("thumbnailUrl", video.getThumbnailUrl())
@@ -197,12 +198,15 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .set("durationSeconds", video.getDurationSeconds())
                 .set("width", video.getWidth())
                 .set("height", video.getHeight())
-                .set("failureReason", video.getFailureReason())); // null on the success path — clears a stale reason
+                .set("failureReason", video.getFailureReason()) // null on the success path — clears a stale reason
+                // A verdict that beat the transcode is applied with it (Video.markTranscoded), and
+                // an APPROVED one stamps this in memory like updateModeration's does.
+                .set("publishedAt", video.getPublishedAt()));
     }
 
     @Override
-    public boolean updateStatus(Video video, VideoStatus expectedStatus) {
-        return compareAndSet(video.getId(), expectedStatus, new Update()
+    public boolean updateStatus(Video video, PipelineState expected) {
+        return compareAndSet(video.getId(), expected, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 // Written on both sides of the pair: a takedown sets it, a restore clears it.
@@ -213,16 +217,16 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
-    public boolean updateFailed(Video video, VideoStatus expectedStatus) {
-        return compareAndSet(video.getId(), expectedStatus, new Update()
+    public boolean updateFailed(Video video, PipelineState expected) {
+        return compareAndSet(video.getId(), expected, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("failureReason", video.getFailureReason()));
     }
 
     @Override
-    public boolean updateModeration(Video video, VideoStatus expectedStatus) {
-        return compareAndSet(video.getId(), expectedStatus, new Update()
+    public boolean updateModeration(Video video, PipelineState expected) {
+        return compareAndSet(video.getId(), expected, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("moderation", video.getModeration())
@@ -287,29 +291,34 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     /**
-     * The status the caller read is part of the filter, so a write only lands if nothing else
+     * The state the caller read is part of the filter, so a write only lands if nothing else
      * moved the video in between. Both callers are Kafka consumers on different topics, running
      * on different listener threads: a transcode result that takes minutes to arrive is routinely
      * overtaken by a moderator, and without this filter the later write wins by arriving last
      * rather than by being correct — a takedown silently replaced by PUBLISHED.
      *
-     * <p>The filter is on status rather than on {@code @Version} on purpose. Spring Data does bump
-     * the version on these field-scoped updates, so a version filter would also fail whenever a
-     * like landed concurrently — the exact competition {@link VideoRepositoryCustom} was shaped to
-     * remove. Status is the field being contended; a like moving likeCount is not a conflict.
+     * <p>The filter is on the pipeline fields rather than on {@code @Version} on purpose. Spring
+     * Data does bump the version on these field-scoped updates, so a version filter would also
+     * fail whenever a like landed concurrently — the exact competition {@link VideoRepositoryCustom}
+     * was shaped to remove. The pipeline fields are what is being contended; a like moving
+     * likeCount is not a conflict.
      *
-     * @return false when nothing matched, meaning the status changed underneath: the caller must
+     * @return false when nothing matched, meaning the state changed underneath: the caller must
      *         re-read and re-apply against the new state, never simply write again
      */
-    private boolean compareAndSet(String videoId, VideoStatus expectedStatus, Update update) {
+    private boolean compareAndSet(String videoId, PipelineState expected, Update update) {
         // deletedAt belongs in the filter alongside status. VideoStateUpdater checks it when it
         // reads, but a delete landing between that read and this write would still match on
         // _id and status alone, producing the deleted-and-PUBLISHED document that class says it
         // prevents. Transcoding runs for minutes, so the gap is not a theoretical one. Failing
         // here is harmless: a false return sends the caller back to re-read, and the re-read
         // finds the video deleted and stops.
-        Query query = Query.query(
-                where("_id").is(videoId).and("status").is(expectedStatus).and("deletedAt").is(null));
+        Criteria moderation = where("_id").is(videoId)
+                .and("status").is(expected.status())
+                .and("statusBeforeTakedown").is(expected.statusBeforeTakedown())
+                .and("deletedAt").is(null)
+                .and("moderation");
+        Query query = Query.query(expected.moderated() ? moderation.ne(null) : moderation.is(null));
         return write(query, update) > 0;
     }
 

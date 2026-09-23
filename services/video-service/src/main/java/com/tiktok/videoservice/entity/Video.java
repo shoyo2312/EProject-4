@@ -265,10 +265,11 @@ public class Video {
     }
 
     /**
-     * Transcode succeeded. This does not publish the video: it goes to PENDING_MODERATION and
-     * waits for a verdict, so nothing reaches a viewer before it has been screened. A video that
-     * stops here is a video moderation never answered about, which is a bug worth being able to
-     * see rather than one that silently publishes.
+     * Transcode succeeded. This does not publish the video by itself: without a verdict it goes to
+     * PENDING_MODERATION and waits for one, so nothing reaches a viewer before it has been
+     * screened. A video that stops there is a video moderation never answered about, which is a
+     * bug worth being able to see rather than one that silently publishes. A verdict that got here
+     * first (see {@link #applyModeration}) is applied now instead.
      */
     public void markTranscoded(String thumbnailUrl, String previewUrl, String hlsUrl, Integer durationSeconds,
                                Integer width, Integer height) {
@@ -282,7 +283,8 @@ public class Video {
         this.width = width;
         this.height = height;
         this.failureReason = null; // a redelivered publish must not leave a prior FAILED reason on the doc
-        applyOutcome(VideoStatus.PENDING_MODERATION);
+        applyOutcome(moderation == null ? VideoStatus.PENDING_MODERATION : outcomeOf(moderation));
+        stampPublishedAtIfLive();
     }
 
     /**
@@ -290,20 +292,47 @@ public class Video {
      *
      * <p>REJECTED is the model's own removal and stays distinct from TAKEN_DOWN, which is an
      * admin's. An admin overturning either goes through {@link #markRestored()}.
+     *
+     * <p>The verdict and the transcode result travel on separate topics, so the verdict is
+     * sometimes read first: a consumer restarting with both waiting, or a transcode result held
+     * up in retries. It used to be dropped then, and the video sat in PENDING_MODERATION until the
+     * sweeper sent it to human review hours later with the real scores lost. A verdict that
+     * arrives while the transcode is still outstanding is kept on the video, without moving its
+     * status, and {@link #markTranscoded} applies it.
      */
     public void applyModeration(VideoModeration moderation) {
-        // A second verdict for the same video is a duplicate event, not a re-review: applying it
-        // would overrule the first one, or an admin's decision taken since.
-        if (pipelineStatus() != null && pipelineStatus() != VideoStatus.PENDING_MODERATION) {
+        // Only the first verdict counts. A second one is a duplicate event, not a re-review:
+        // applying it would overrule the first one, or an admin's decision taken since.
+        if (this.moderation != null) {
+            return;
+        }
+        VideoStatus pipeline = pipelineStatus();
+        if (pipeline == VideoStatus.PROCESSING || pipeline == VideoStatus.FAILED) {
+            this.moderation = moderation;
+            return;
+        }
+        if (pipeline != null && pipeline != VideoStatus.PENDING_MODERATION) {
             return;
         }
         this.moderation = moderation;
-        applyOutcome(switch (moderation.getVerdict()) {
+        applyOutcome(outcomeOf(moderation));
+        stampPublishedAtIfLive();
+    }
+
+    /**
+     * A verdict this build cannot read is not a pass. search-service reads a missing one the same
+     * way; it used to throw here, which is survivable on the verdict's own consumer but not once
+     * the verdict is kept for {@link #markTranscoded}, where it would fail the transcode result.
+     */
+    private static VideoStatus outcomeOf(VideoModeration moderation) {
+        if (moderation.getVerdict() == null) {
+            return VideoStatus.PENDING_REVIEW;
+        }
+        return switch (moderation.getVerdict()) {
             case APPROVED -> VideoStatus.PUBLISHED;
             case REVIEW -> VideoStatus.PENDING_REVIEW;
             case REJECTED -> VideoStatus.REJECTED;
-        });
-        stampPublishedAtIfLive();
+        };
     }
 
     public void markFailed(String reason) {

@@ -133,7 +133,8 @@ search-service **chỉ tiêu thụ**, không phát event nào. Toàn bộ index 
 |---|---|---|---|
 | `video.video-events` | `VideoPublishedEvent` (vắng ⇒ coi là Published) | `VideoPublishedEvent` | Tạo `VideoDocument`, `status = PROCESSING`, copy `title`/`description`/`tags` |
 | `video.video-events` | `VideoDeletedEvent` | `VideoDeletedEvent` | Xoá hẳn document (không đánh dấu cờ) |
-| `media.video-transcoded-events` | — | `VideoTranscodedEvent` | `success` → `status = PUBLISHED` + `thumbnailUrl` + `durationSeconds`; ngược lại `status = FAILED`. Đến trước publication thì kết quả được giữ ở `pendingStatus` và publication nhận lại — document chưa có `status` nên chưa vào kết quả tìm kiếm |
+| `media.video-transcoded-events` | — | `VideoTranscodedEvent` | Chỉ áp dụng khi video còn chờ transcode (`pendingStatus` rỗng/`PROCESSING`/`FAILED`): `success` → `PENDING_MODERATION`, hoặc verdict đã đến trước (`verdict`) nếu có; ngược lại `FAILED`. `thumbnailUrl` + `durationSeconds` luôn được ghi. Đến trước publication thì kết quả được giữ ở `pendingStatus` và publication nhận lại — document chưa có `status` nên chưa vào kết quả tìm kiếm |
+| `media.video-moderation-events` | — | `VideoModerationCompletedEvent` | Chỉ verdict đầu tiên có tác dụng (ghi vào `verdict`). `APPROVED` → `PUBLISHED`, `REVIEW` → `PENDING_REVIEW`, `REJECTED` → `REJECTED`, nhưng chỉ đổi status khi video đang `PENDING_MODERATION`; đến trước transcode thì được giữ lại cho transcode áp dụng (khớp `Video.applyModeration` bên video-service) |
 | `interaction.like-events` | — | `VideoLikeEvent` | `likeCount += liked ? 1 : -1` (kẹp ≥ 0) |
 | `interaction.view-events` | — | `VideoViewedEvent` | `viewCount++` |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | `commentCount++` / `commentCount--` (kẹp ≥ 0) |

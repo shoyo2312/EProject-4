@@ -2,6 +2,7 @@ package com.tiktok.videoservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoTranscodedEvent;
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -133,8 +134,9 @@ class VideoTranscodedEventConsumerTest {
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build());
+        PipelineState read = PipelineState.of(video);
         video.markTakenDown("policy violation");
-        videoRepository.updateStatus(video, VideoStatus.PROCESSING);
+        videoRepository.updateStatus(video, read);
 
         VideoTranscodedEvent event = VideoTranscodedEvent.success(
                 video.getId(), "http://minio/thumb.jpg", "http://minio/preview.webp",
@@ -162,8 +164,9 @@ class VideoTranscodedEventConsumerTest {
                 .visibility(VideoVisibility.PUBLIC)
                 .status(VideoStatus.PROCESSING)
                 .build());
+        PipelineState read = PipelineState.of(video);
         video.markTakenDown("policy violation");
-        videoRepository.updateStatus(video, VideoStatus.PROCESSING);
+        videoRepository.updateStatus(video, read);
 
         VideoTranscodedEvent event = VideoTranscodedEvent.failure(video.getId(), "boom");
         consumer.onMessage(objectMapper.writeValueAsString(event));

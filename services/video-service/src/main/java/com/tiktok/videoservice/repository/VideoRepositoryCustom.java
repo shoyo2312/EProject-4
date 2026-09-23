@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.repository;
 
 import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 
@@ -93,13 +94,14 @@ public interface VideoRepositoryCustom {
             Boolean deleted, org.springframework.data.domain.Pageable pageable);
 
     /**
-     * Transcode succeeded: the media fields it produced, plus where the outcome was recorded.
+     * Transcode succeeded: the media fields it produced, plus where the outcome was recorded, and
+     * {@code publishedAt} for a verdict that was waiting on it and publishes the video now.
      *
-     * @param expectedStatus the status read before the change was applied — see
-     *                       {@link #updateStatus} for what conditioning on it prevents
+     * @param expected the state read before the change was applied — see {@link #updateStatus}
+     *                 for what conditioning on it prevents
      * @return whether the write landed
      */
-    boolean updateTranscodeResult(Video video, VideoStatus expectedStatus);
+    boolean updateTranscodeResult(Video video, PipelineState expected);
 
     /**
      * The status pair alone, with no media fields to write: a moderation takedown or restore.
@@ -111,29 +113,30 @@ public interface VideoRepositoryCustom {
      * {@code markRestored()}. A failed transcode writes the same pair but owns {@code failureReason}
      * on top of it — see {@link #updateFailed}.
      *
-     * <p>Conditioned on the status the caller read, because these race each other across two Kafka
+     * <p>Conditioned on the state the caller read, because these race each other across two Kafka
      * topics and two listener threads. Transcoding takes minutes, so a moderator's takedown
      * routinely lands while a transcode result is in flight; an unconditional write lets whichever
      * arrives last win, which puts a taken-down video back on the feed with nothing left to say it
-     * was ever removed.
+     * was ever removed. The condition covers more than {@code status}; {@link PipelineState} says
+     * why.
      *
-     * @param expectedStatus the status read before the change was applied
-     * @return false when the status moved underneath — re-read and re-apply, do not retry the
+     * @param expected the state read before the change was applied
+     * @return false when the state moved underneath — re-read and re-apply, do not retry the
      *         same write
      */
-    boolean updateStatus(Video video, VideoStatus expectedStatus);
+    boolean updateStatus(Video video, PipelineState expected);
 
     /**
      * A failed transcode: the status pair plus the reason it failed. Separate from
      * {@link #updateStatus} (takedown/restore) because only this path owns {@code failureReason} —
      * keeping the write field-scoped to what the operation owns, like every other method here.
      *
-     * <p>Conditioned on the status the caller read, same as {@link #updateStatus}: a takedown can
+     * <p>Conditioned on the state the caller read, same as {@link #updateStatus}: a takedown can
      * land while the transcode is still running.
      *
-     * @return false when the status moved underneath — re-read and re-apply
+     * @return false when the state moved underneath — re-read and re-apply
      */
-    boolean updateFailed(Video video, VideoStatus expectedStatus);
+    boolean updateFailed(Video video, PipelineState expected);
 
     /**
      * The automatic moderation verdict: the status pair plus the scores behind it.
@@ -141,13 +144,13 @@ public interface VideoRepositoryCustom {
      * <p>Separate from {@link #updateStatus} because only this path owns {@code moderation},
      * keeping each write scoped to the fields its own operation owns.
      *
-     * <p>Conditioned on the status the caller read, for the reason {@link #updateStatus} gives and
+     * <p>Conditioned on the state the caller read, for the reason {@link #updateStatus} gives and
      * one specific to this path: a moderator can take a video down while the classifier is still
      * scoring it, and an unconditional APPROVED landing afterwards would put it back on the feed.
      *
-     * @return false when the status moved underneath — re-read and re-apply
+     * @return false when the state moved underneath — re-read and re-apply
      */
-    boolean updateModeration(Video video, VideoStatus expectedStatus);
+    boolean updateModeration(Video video, PipelineState expected);
 
     /** Outbox flag, set once the broker acknowledges the VideoPublishedEvent. */
     void updateEventPublished(Video video);

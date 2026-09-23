@@ -83,6 +83,14 @@ public class VideoDocument {
     @Field(type = FieldType.Keyword)
     private String pendingStatus;
 
+    /**
+     * The status the first moderation verdict maps to, kept even when it arrives before the
+     * transcode result so that result can apply it — see SearchIndexWriter. Absent on documents
+     * moderated before this field existed.
+     */
+    @Field(type = FieldType.Keyword)
+    private String verdict;
+
     @Field(type = FieldType.Integer)
     private Integer durationSeconds;
 

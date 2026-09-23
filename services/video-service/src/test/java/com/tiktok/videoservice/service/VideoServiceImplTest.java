@@ -6,6 +6,7 @@ import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoModeration;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -624,7 +625,8 @@ class VideoServiceImplTest {
 
     private void markTakenDown(String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
+        PipelineState read = PipelineState.of(video);
         video.markTakenDown("policy violation");
-        videoRepository.updateStatus(video, VideoStatus.PUBLISHED);
+        videoRepository.updateStatus(video, read);
     }
 }

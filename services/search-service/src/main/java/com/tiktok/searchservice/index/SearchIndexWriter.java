@@ -63,28 +63,62 @@ public class SearchIndexWriter {
             """;
 
     /**
-     * One script for every step of a video's own lifecycle — the transcode result and then the
-     * moderation verdict — because they are the same write: a new outcome for a video, which the
-     * search index has to record whether or not the publication carrying the content has arrived.
+     * A transcode result, mirroring {@code Video.markTranscoded} in video-service: it only applies
+     * to a video still waiting for one. FAILED stays open, so a redelivered publish that succeeds
+     * can still rescue the upload; anything past that already has its result, and a second one is
+     * a duplicate. The media fields are written either way — they describe the file.
      *
-     * <p>A step that beats its publication here creates a stub holding {@code pendingStatus} and
+     * <p>A success lands on PENDING_MODERATION unless a verdict got here first, in which case the
+     * verdict is the outcome. The two come on separate topics, so that order is routine: a
+     * consumer restarting with both waiting, or a cold start replaying both from
+     * {@code earliest}. This used to write PENDING_MODERATION unconditionally, which dropped a
+     * video the verdict had already published back out of search for good.
+     *
+     * <p>A result that beats its publication creates a stub holding {@code pendingStatus} and
      * nothing else. The stub is deliberately not given a {@code status}, so it cannot surface in a
-     * search that has no title to show — but the outcome is on disk, and the publication picks it
-     * up when it lands. Two topics with no ordering between them make that arrival order routine,
-     * and it is guaranteed on a cold start replaying both from {@code earliest}.
+     * search that has no title to show; the publication picks the outcome up when it lands.
      *
-     * <p>TAKEN_DOWN is never overwritten, mirroring {@code Video.applyOutcome} in video-service:
-     * a moderator acting on a video whose transcode or moderation is still running is routinely
-     * overtaken by it, and the outcome belongs in {@code pendingStatus} for the restore to read,
-     * not in {@code status} where it would put the video back into search results.
+     * <p>TAKEN_DOWN is never overwritten, mirroring {@code Video.applyOutcome}: a moderator acting
+     * on a video still in the pipeline is routinely overtaken by it, and the outcome belongs in
+     * {@code pendingStatus} for the restore to read, not in {@code status} where it would put the
+     * video back into search results.
      */
-    private static final String OUTCOME_SCRIPT = """
-            ctx._source.pendingStatus = params.status;
-            if (ctx._source.status != null && ctx._source.status != 'TAKEN_DOWN') {
-              ctx._source.status = params.status;
+    private static final String TRANSCODE_SCRIPT = """
+            def reached = ctx._source.pendingStatus;
+            if (reached == null || reached == 'PROCESSING' || reached == 'FAILED') {
+              def outcome = !params.success ? 'FAILED'
+                  : (ctx._source.verdict != null ? ctx._source.verdict : 'PENDING_MODERATION');
+              ctx._source.pendingStatus = outcome;
+              if (ctx._source.status != null && ctx._source.status != 'TAKEN_DOWN') {
+                ctx._source.status = outcome;
+              }
             }
             if (params.containsKey('thumbnailUrl')) { ctx._source.thumbnailUrl = params.thumbnailUrl; }
             if (params.containsKey('durationSeconds')) { ctx._source.durationSeconds = params.durationSeconds; }
+            """;
+
+    /**
+     * A moderation verdict, mirroring {@code Video.applyModeration}. Only the first one counts,
+     * which is what {@code verdict} records: a second is a duplicate event, and applying it would
+     * overrule the first or an admin's approval since — a replay after an approval used to put the
+     * video back under review here.
+     *
+     * <p>It moves the status only from PENDING_MODERATION. Before the transcode it is kept for
+     * {@link #TRANSCODE_SCRIPT} and changes nothing a viewer sees: a video with no media yet is
+     * not playable, and video-service does not publish it either.
+     */
+    private static final String VERDICT_SCRIPT = """
+            if (ctx._source.verdict != null) {
+              ctx.op = 'noop';
+            } else {
+              ctx._source.verdict = params.status;
+              if (ctx._source.pendingStatus == 'PENDING_MODERATION') {
+                ctx._source.pendingStatus = params.status;
+                if (ctx._source.status != null && ctx._source.status != 'TAKEN_DOWN') {
+                  ctx._source.status = params.status;
+                }
+              }
+            }
             """;
 
     private static final String COUNTER_SCRIPT = """
@@ -102,7 +136,7 @@ public class SearchIndexWriter {
      * of search for good.
      *
      * <p>pendingStatus moves to PUBLISHED with it, because a later takedown's restore reads it.
-     * A stub the publication has not reached keeps a null status, as in OUTCOME_SCRIPT.
+     * A stub the publication has not reached keeps a null status, as in TRANSCODE_SCRIPT.
      */
     private static final String RESTORE_SCRIPT = """
             if (ctx._source.status == 'TAKEN_DOWN') {
@@ -159,29 +193,28 @@ public class SearchIndexWriter {
     }
 
     /**
-     * A transcode result or a moderation verdict. The transcode passes the media it produced; the
-     * verdict passes nulls for both, since it only moves the status.
-     *
-     * <p>A transcode success is not PUBLISHED. video-service parks it at PENDING_MODERATION and
-     * only the verdict moves it on — indexing it as PUBLISHED here made every upload searchable
-     * before it had been screened, and left a rejected one searchable for good.
+     * A transcode result. A success is not PUBLISHED: video-service parks it at PENDING_MODERATION
+     * and only the verdict moves it on — indexing it as PUBLISHED here made every upload
+     * searchable before it had been screened, and left a rejected one searchable for good.
      */
-    public void applyOutcome(String videoId, String status, String thumbnailUrl, Integer durationSeconds) {
+    public void applyTranscode(String videoId, boolean success, String thumbnailUrl, Integer durationSeconds) {
         Map<String, Object> params = new HashMap<>();
-        params.put("status", status);
+        params.put("success", success);
         params.put("thumbnailUrl", thumbnailUrl);
         params.put("durationSeconds", durationSeconds);
 
         Map<String, Object> upsert = new HashMap<>();
-        upsert.put("pendingStatus", status);
-        if (thumbnailUrl != null) {
-            upsert.put("thumbnailUrl", thumbnailUrl);
-        }
-        if (durationSeconds != null) {
-            upsert.put("durationSeconds", durationSeconds);
-        }
+        upsert.put("pendingStatus", success ? "PENDING_MODERATION" : "FAILED");
+        upsert.put("thumbnailUrl", thumbnailUrl);
+        upsert.put("durationSeconds", durationSeconds);
 
-        update(VideoDocument.class, videoId, OUTCOME_SCRIPT, withoutNulls(params), Document.from(withoutNulls(upsert)));
+        update(VideoDocument.class, videoId, TRANSCODE_SCRIPT, withoutNulls(params), Document.from(withoutNulls(upsert)));
+    }
+
+    /** @param status the status the verdict maps to: PUBLISHED, PENDING_REVIEW or REJECTED */
+    public void applyVerdict(String videoId, String status) {
+        update(VideoDocument.class, videoId, VERDICT_SCRIPT, Map.of("status", status),
+                Document.from(Map.of("verdict", status)));
     }
 
     /**

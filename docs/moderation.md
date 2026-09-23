@@ -93,6 +93,7 @@ The rule is that no failure publishes a video and no failure removes one:
 | a verdict string this build does not know | `REVIEW` |
 | the model's labels do not include `nsfw` | every frame scores 1.0 — a misconfiguration goes to a human |
 | an admin took the video down mid-check | the takedown wins; the verdict is recorded as what a restore returns to |
+| the verdict is read before the transcode result (separate topics, e.g. a consumer restarting with both waiting) | the verdict is kept on the video and applied when the transcode result lands; a second verdict is ignored |
 | media-worker cannot reach Kafka | the transcode event is redelivered and the check re-runs |
 
 There is no path that leaves a video at `PENDING_MODERATION` with nothing to move it. A video

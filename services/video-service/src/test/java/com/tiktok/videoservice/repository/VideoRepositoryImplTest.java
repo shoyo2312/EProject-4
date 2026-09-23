@@ -1,6 +1,9 @@
 package com.tiktok.videoservice.repository;
 
+import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoModeration;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +21,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -60,8 +65,9 @@ class VideoRepositoryImplTest {
     void updateTranscodeResult_keepsConcurrentLikes() {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PROCESSING, 5);
 
+        PipelineState read = PipelineState.of(stale);
         stale.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42, 1080, 1920);
-        assertThat(videoRepository.updateTranscodeResult(stale, VideoStatus.PROCESSING)).isTrue();
+        assertThat(videoRepository.updateTranscodeResult(stale, read)).isTrue();
 
         Video after = reload(stale);
         assertThat(after.getLikeCount()).isEqualTo(5);
@@ -77,8 +83,9 @@ class VideoRepositoryImplTest {
     void updateStatus_keepsConcurrentLikes() {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PROCESSING, 3);
 
+        PipelineState read = PipelineState.of(stale);
         stale.markFailed("boom");
-        assertThat(videoRepository.updateStatus(stale, VideoStatus.PROCESSING)).isTrue();
+        assertThat(videoRepository.updateStatus(stale, read)).isTrue();
 
         Video after = reload(stale);
         assertThat(after.getLikeCount()).isEqualTo(3);
@@ -89,8 +96,9 @@ class VideoRepositoryImplTest {
     void updateStatus_moderation_keepsConcurrentLikes() {
         Video stale = givenVideoReadBeforeConcurrentLikes(VideoStatus.PUBLISHED, 7);
 
+        PipelineState read = PipelineState.of(stale);
         stale.markTakenDown("policy violation");
-        assertThat(videoRepository.updateStatus(stale, VideoStatus.PUBLISHED)).isTrue();
+        assertThat(videoRepository.updateStatus(stale, read)).isTrue();
 
         Video after = reload(stale);
         assertThat(after.getLikeCount()).isEqualTo(7);
@@ -101,12 +109,12 @@ class VideoRepositoryImplTest {
     @Test
     void updateStatus_moderation_restoreClearsStatusBeforeTakedown() {
         Video video = save(VideoStatus.PUBLISHED);
-        video.markTakenDown("policy violation");
-        videoRepository.updateStatus(video, VideoStatus.PUBLISHED);
+        takeDown(video);
 
         Video takenDown = reload(video);
+        PipelineState read = PipelineState.of(takenDown);
         takenDown.markRestored();
-        videoRepository.updateStatus(takenDown, VideoStatus.TAKEN_DOWN);
+        videoRepository.updateStatus(takenDown, read);
 
         Video after = reload(video);
         assertThat(after.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
@@ -124,12 +132,12 @@ class VideoRepositoryImplTest {
     void updateStatus_moderation_restorePersistsPublishedAt() {
         Video video = save(VideoStatus.PUBLISHED);
         assertThat(video.getPublishedAt()).isNull();
-        video.markTakenDown("policy violation");
-        videoRepository.updateStatus(video, VideoStatus.PUBLISHED);
+        takeDown(video);
 
         Video takenDown = reload(video);
+        PipelineState read = PipelineState.of(takenDown);
         takenDown.markRestored();
-        videoRepository.updateStatus(takenDown, VideoStatus.TAKEN_DOWN);
+        videoRepository.updateStatus(takenDown, read);
 
         assertThat(reload(video).getPublishedAt()).isNotNull();
     }
@@ -145,12 +153,9 @@ class VideoRepositoryImplTest {
         Video video = save(VideoStatus.PENDING_MODERATION);
         assertThat(video.getPublishedAt()).isNull();
 
-        video.applyModeration(com.tiktok.videoservice.entity.VideoModeration.builder()
-                .verdict(com.tiktok.event.video.ModerationVerdict.APPROVED)
-                .totalFrames(10)
-                .checkedAt(java.time.Instant.now())
-                .build());
-        assertThat(videoRepository.updateModeration(video, VideoStatus.PENDING_MODERATION)).isTrue();
+        PipelineState read = PipelineState.of(video);
+        video.applyModeration(verdict(ModerationVerdict.APPROVED));
+        assertThat(videoRepository.updateModeration(video, read)).isTrue();
 
         Video after = reload(video);
         assertThat(after.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
@@ -167,14 +172,13 @@ class VideoRepositoryImplTest {
     void updateTranscodeResult_whenAModeratorGotThereFirst_doesNotLand() {
         Video video = save(VideoStatus.PROCESSING);
         Video staleReadByTranscode = reload(video);
+        PipelineState readByTranscode = PipelineState.of(staleReadByTranscode);
 
-        Video readByModerator = reload(video);
-        readByModerator.markTakenDown("policy violation");
-        assertThat(videoRepository.updateStatus(readByModerator, VideoStatus.PROCESSING)).isTrue();
+        takeDown(reload(video));
 
         staleReadByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42, 1080, 1920);
 
-        assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, VideoStatus.PROCESSING))
+        assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, readByTranscode))
                 .as("the status moved after it was read, so this write must be refused")
                 .isFalse();
 
@@ -183,6 +187,57 @@ class VideoRepositoryImplTest {
         assertThat(after.getHlsUrl())
                 .as("a refused write must leave every field alone, not only status")
                 .isNull();
+    }
+
+    /**
+     * A verdict that beat its transcode result is kept on the video without moving its status, so
+     * a transcode write conditioned on status alone would land over it: PENDING_MODERATION on
+     * disk, the verdict never applied, and the video waiting hours for the sweeper.
+     */
+    @Test
+    void updateTranscodeResult_whenAVerdictWasKeptAfterItWasRead_doesNotLand() {
+        Video video = save(VideoStatus.PROCESSING);
+        Video staleReadByTranscode = reload(video);
+        PipelineState readByTranscode = PipelineState.of(staleReadByTranscode);
+
+        Video readByModeration = reload(video);
+        PipelineState readByVerdict = PipelineState.of(readByModeration);
+        readByModeration.applyModeration(verdict(ModerationVerdict.APPROVED));
+        assertThat(videoRepository.updateModeration(readByModeration, readByVerdict)).isTrue();
+        assertThat(reload(video).getStatus()).isEqualTo(VideoStatus.PROCESSING);
+
+        staleReadByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42, 1080, 1920);
+
+        assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, readByTranscode))
+                .as("a verdict was kept after this was read, so this write must be refused")
+                .isFalse();
+    }
+
+    /**
+     * The other order, on a taken-down video, where status stays TAKEN_DOWN through both writes
+     * and only statusBeforeTakedown moves. Landing, the kept verdict would put PROCESSING back
+     * over the transcode's PENDING_MODERATION, and a restore would bring back a video that never
+     * finishes.
+     */
+    @Test
+    void updateModeration_keepingAVerdict_whenATranscodeLandedDuringATakedown_doesNotLand() {
+        Video video = save(VideoStatus.PROCESSING);
+        takeDown(video);
+
+        Video staleReadByVerdict = reload(video);
+        PipelineState readByVerdict = PipelineState.of(staleReadByVerdict);
+
+        Video readByTranscode = reload(video);
+        PipelineState read = PipelineState.of(readByTranscode);
+        readByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42, 1080, 1920);
+        assertThat(videoRepository.updateTranscodeResult(readByTranscode, read)).isTrue();
+
+        staleReadByVerdict.applyModeration(verdict(ModerationVerdict.APPROVED));
+
+        assertThat(videoRepository.updateModeration(staleReadByVerdict, readByVerdict))
+                .as("the pipeline moved on under the takedown, so this write must be refused")
+                .isFalse();
+        assertThat(reload(video).getStatusBeforeTakedown()).isEqualTo(VideoStatus.PENDING_MODERATION);
     }
 
     @Test
@@ -217,8 +272,9 @@ class VideoRepositoryImplTest {
         Video video = save(VideoStatus.PROCESSING);
         var before = reload(video).getUpdatedAt();
 
+        PipelineState read = PipelineState.of(video);
         video.markFailed("boom");
-        videoRepository.updateStatus(video, VideoStatus.PROCESSING);
+        videoRepository.updateStatus(video, read);
 
         // @LastModifiedDate auditing does not run for MongoTemplate updates, so the timestamp
         // is written by hand — without that it would silently freeze at creation time.
@@ -252,6 +308,7 @@ class VideoRepositoryImplTest {
     void updateStatus_whenTheVideoWasDeletedAfterItWasRead_doesNotLand() {
         Video video = save(VideoStatus.PROCESSING);
         Video staleReadByTranscode = reload(video);
+        PipelineState readByTranscode = PipelineState.of(staleReadByTranscode);
 
         Video readByOwner = reload(video);
         readByOwner.markDeleted();
@@ -259,7 +316,7 @@ class VideoRepositoryImplTest {
 
         staleReadByTranscode.markTranscoded("http://minio/thumb.jpg", null, "http://minio/master.m3u8", 42, 1080, 1920);
 
-        assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, VideoStatus.PROCESSING))
+        assertThat(videoRepository.updateTranscodeResult(staleReadByTranscode, readByTranscode))
                 .as("the video was deleted after it was read, so this write must be refused")
                 .isFalse();
 
@@ -383,5 +440,15 @@ class VideoRepositoryImplTest {
 
     private Video reload(Video video) {
         return videoRepository.findById(video.getId()).orElseThrow();
+    }
+
+    private void takeDown(Video video) {
+        PipelineState read = PipelineState.of(video);
+        video.markTakenDown("policy violation");
+        assertThat(videoRepository.updateStatus(video, read)).isTrue();
+    }
+
+    private static VideoModeration verdict(ModerationVerdict verdict) {
+        return VideoModeration.builder().verdict(verdict).totalFrames(10).checkedAt(Instant.now()).build();
     }
 }
