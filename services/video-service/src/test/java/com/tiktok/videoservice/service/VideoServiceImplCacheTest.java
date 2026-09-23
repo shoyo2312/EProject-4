@@ -51,6 +51,8 @@ class VideoServiceImplCacheTest {
             mock(com.tiktok.videoservice.client.FriendshipClient.class);
 
     private final MinioClient quarantineClient = mock(MinioClient.class);
+    private final com.tiktok.videoservice.client.BlockClient blockClient =
+            mock(com.tiktok.videoservice.client.BlockClient.class);
 
     private final VideoService videoService = new VideoServiceImpl(
             videoRepository,
@@ -63,7 +65,8 @@ class VideoServiceImplCacheTest {
             friendshipClient,
             new UploadLimitProperties(524_288_000L, 600),
             new QuarantinedMediaUrls(quarantineClient, new MinioProperties("http://localhost:9000", "key", "secret",
-                    "video-media", "us-east-1", Duration.ofMinutes(15))));
+                    "video-media", "us-east-1", Duration.ofMinutes(15))),
+                blockClient);
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
@@ -172,6 +175,19 @@ class VideoServiceImplCacheTest {
 
         when(friendshipClient.areFriends(OWNER, 8L)).thenReturn(false);
         assertThatThrownBy(() -> videoService.getById(8L, "A"))
+                .isInstanceOf(VideoNotFoundException.class);
+    }
+
+    /**
+     * interaction-service asks this read before every like and comment, so this 404 is what keeps
+     * a blocked account off the blocker's videos.
+     */
+    @Test
+    void getById_acrossABlock_isNotFound() {
+        when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(publicVideo(VIDEO_ID)));
+        when(blockClient.isBlockedBetween(OWNER, 7L)).thenReturn(true);
+
+        assertThatThrownBy(() -> videoService.getById(7L, VIDEO_ID))
                 .isInstanceOf(VideoNotFoundException.class);
     }
 

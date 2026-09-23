@@ -57,6 +57,9 @@ class VideoServiceImplTest {
     @MockBean
     private com.tiktok.videoservice.client.FriendshipClient friendshipClient;
 
+    @MockBean
+    private com.tiktok.videoservice.client.BlockClient blockClient;
+
     @Autowired
     private VideoService videoService;
 

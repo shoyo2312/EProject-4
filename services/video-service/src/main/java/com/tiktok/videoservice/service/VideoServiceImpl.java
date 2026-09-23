@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.service;
 
 import com.tiktok.common.storage.ObjectKeys;
+import com.tiktok.videoservice.client.BlockClient;
 import com.tiktok.videoservice.client.FriendshipClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
@@ -101,6 +102,7 @@ public class VideoServiceImpl implements VideoService {
     private final FriendshipClient friendshipClient;
     private final UploadLimitProperties uploadLimits;
     private final QuarantinedMediaUrls quarantinedMediaUrls;
+    private final BlockClient blockClient;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -541,8 +543,17 @@ public class VideoServiceImpl implements VideoService {
         return videoMapper.toResponse(video);
     }
 
+    /**
+     * The single-video read, and so also the gate every interaction passes: interaction-service
+     * asks this with the caller's token before a like, comment, save, repost, share or view. A
+     * block between the viewer and the owner hides the video from both sides here, which is what
+     * keeps a blocked account from commenting on or liking the blocker's videos.
+     *
+     * <p>ponytail: listings and batches ({@link #isVisibleTo}) are not block-filtered — that is one
+     * user-service call per video. Needs a batch block endpoint if feeds must hide them too.
+     */
     private VideoResponse requireVisible(Long requesterId, VideoResponse video, String videoId) {
-        if (!isVisibleTo(requesterId, video)) {
+        if (!isVisibleTo(requesterId, video) || blockClient.isBlockedBetween(video.userId(), requesterId)) {
             throw new VideoNotFoundException(videoId);
         }
         return video;

@@ -6,6 +6,7 @@ import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
+import com.tiktok.notificationservice.client.BlockClient;
 import com.tiktok.notificationservice.client.VideoOwnerClient;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.repository.ProcessedEventRepository;
@@ -43,6 +44,9 @@ class InteractionEventConsumerTest {
     @Mock
     private NotificationService notificationService;
 
+    @Mock
+    private BlockClient blockClient;
+
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
     private InteractionEventConsumer consumer;
@@ -52,11 +56,21 @@ class InteractionEventConsumerTest {
         when(processedEventRepository.tryClaim(anyString(), anyString())).thenReturn(true);
         consumer = new InteractionEventConsumer(
                 new IdempotentEventProcessor(processedEventRepository),
-                videoOwnerClient, notificationService, objectMapper);
+                videoOwnerClient, notificationService, objectMapper, blockClient);
     }
 
     private String json(Object event) throws Exception {
         return objectMapper.writeValueAsString(event);
+    }
+
+    @Test
+    void onLike_acrossABlock_notifiesNobody() throws Exception {
+        when(videoOwnerClient.ownerOf("7")).thenReturn(50L);
+        when(blockClient.isBlockedBetween(50L, 9L)).thenReturn(true);
+
+        consumer.onLike(json(VideoLikeEvent.of(7L, 9L, true)));
+
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     @Test

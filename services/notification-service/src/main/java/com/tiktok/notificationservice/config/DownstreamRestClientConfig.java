@@ -28,4 +28,14 @@ public class DownstreamRestClientConfig {
         requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
         return RestClient.builder().baseUrl(videoServiceUri).requestFactory(requestFactory).build();
     }
+
+    /** For {@code BlockClient}: user-service's internal block check, same no-auth reasoning as above. */
+    @Bean
+    public RestClient userServiceRestClient(@Value("${downstream.user-service-uri}") String userServiceUri,
+                                            @Value("${downstream.timeout-millis:1000}") long timeoutMillis) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofMillis(timeoutMillis));
+        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
+        return RestClient.builder().baseUrl(userServiceUri).requestFactory(requestFactory).build();
+    }
 }

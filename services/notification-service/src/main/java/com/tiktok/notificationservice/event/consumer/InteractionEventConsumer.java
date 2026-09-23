@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
+import com.tiktok.notificationservice.client.BlockClient;
 import com.tiktok.notificationservice.client.VideoOwnerClient;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.service.NotificationService;
@@ -34,6 +35,7 @@ public class InteractionEventConsumer {
     private final VideoOwnerClient videoOwnerClient;
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
+    private final BlockClient blockClient;
 
     @KafkaListener(topics = "interaction.like-events", groupId = "notification-service")
     @SneakyThrows
@@ -115,6 +117,13 @@ public class InteractionEventConsumer {
         // Nobody wants to be told about their own like. Cheap to check and easy to forget, so it
         // lives on the one path every type goes through rather than in each listener.
         if (recipientId.equals(actorId)) {
+            return;
+        }
+        // Nor from someone they are blocking, or blocked by. video-service already stops a blocked
+        // account liking or commenting on the blocker's videos, but not replying to the blocker's
+        // comment under a third party's video, or liking it — and this is the one path all of
+        // those reach.
+        if (blockClient.isBlockedBetween(recipientId, actorId)) {
             return;
         }
         notificationService.create(recipientId, actorId, type, title, body, referenceId);

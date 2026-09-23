@@ -30,6 +30,7 @@ spring:
 
 downstream:
   video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+  user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
   timeout-millis: ${DOWNSTREAM_TIMEOUT_MILLIS:1000}
 
 jwt:

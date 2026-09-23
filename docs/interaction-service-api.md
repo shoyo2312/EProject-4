@@ -47,7 +47,7 @@ Lỗi:
 
 Base path: `/api/v1/interactions`. Mọi endpoint đều nằm dưới `/videos/{videoId}/...`.
 
-**Không endpoint nào kiểm tra video có tồn tại thật hay không.** interaction-service không giữ dữ liệu video và không gọi sang video-service để hỏi. Like một `videoId` bịa ra vẫn trả `200` và vẫn tạo counter. Hệ quả cho client: **không có `VIDEO_NOT_FOUND` ở service này**, và validate id là việc của luồng đọc video (video-service), không phải của luồng tương tác.
+**Mọi thao tác ghi hỏi video-service trước** (`GET /api/v1/videos/{id}` kèm token của người gọi): video không tồn tại, riêng tư, chưa publish, hoặc người gọi và chủ video đang chặn nhau → `404 VIDEO_NOT_FOUND`. video-service không trả lời được (sập, timeout) thì thao tác vẫn đi qua — một sự cố ở đó không được làm tê liệt mọi lượt like.
 
 ### 3.1 `POST /videos/{videoId}/like` — thích video
 **Bắt buộc token.** Trả `200 OK` (không phải `201`).
@@ -307,7 +307,7 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của interaction-service
 
 > **`INTERACTION_CONFLICT` (409) không phải lỗi của request.** Nó nghĩa là "server không biết chắc thao tác đã xong hay chưa" — hạ tầng lưu trữ trả về timeout ở một thao tác mà đoán bừa sẽ làm sai counter. **Retry được, và retry là an toàn**: like/unlike idempotent, và `/view` idempotent theo `playId` (mục 3.1, 3.8). Hiện thông báo dạng "thử lại" chứ đừng hiện lỗi kỹ thuật, và đừng đảo ngược optimistic update ngay lập tức — retry một lần trước đã.
 
-**Không có `VIDEO_NOT_FOUND`** ở service này, kể cả với `videoId` bịa hoàn toàn (xem đầu mục 3).
+`VIDEO_NOT_FOUND` (404): video-service không cho người gọi xem video đó — không tồn tại, riêng tư, chưa publish, hoặc người gọi và chủ video đang chặn nhau. Mọi thao tác ghi (like, comment, save, repost, share, view) đều hỏi video-service trước; nếu video-service không trả lời được thì thao tác vẫn đi qua (fail-open).
 
 ## 6. Rate limiting
 
