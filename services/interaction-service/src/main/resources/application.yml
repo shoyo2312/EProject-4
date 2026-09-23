@@ -32,6 +32,22 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # A like, comment, view, share, repost or save waits for the broker inside the request and is
+      # undone if the producer gives up (InteractionEventPublisher). That is only safe if giving up
+      # is final, and by default it is not for two minutes: the producer keeps retrying the record
+      # long after the request has undone the write. These bound the producer's answer to a few
+      # seconds instead, and the request waits for it.
+      #   delivery.timeout.ms  everything after send() returns, retries included. Keep it at or above
+      #                        request.timeout.ms + linger.ms (the producer refuses to start
+      #                        otherwise) and below the publisher's ACK_BACKSTOP.
+      #   max.block.ms         send() itself, while it fetches a topic's metadata. 60s by default,
+      #                        on the request thread. Failing here means the record was never queued.
+      # The fire-and-forget sends (watch sessions, comment likes) and the dead-letter publisher share
+      # this producer, so they also give up after 5s now rather than riding out a longer outage.
+      properties:
+        "[delivery.timeout.ms]": 5000
+        "[request.timeout.ms]": 4000
+        "[max.block.ms]": 2000
 
 downstream:
   video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}

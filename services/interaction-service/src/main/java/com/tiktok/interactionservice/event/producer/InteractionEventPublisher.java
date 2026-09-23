@@ -10,6 +10,7 @@ import com.tiktok.event.interaction.VideoSavedEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.event.interaction.VideoViewedEvent;
 import com.tiktok.event.interaction.VideoWatchEvent;
+import com.tiktok.interactionservice.exception.EventNotPublishedException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import lombok.SneakyThrows;
@@ -20,7 +21,9 @@ import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Publishes inline right after the corresponding Cassandra write succeeds. There is no outbox
@@ -38,6 +41,13 @@ import java.util.concurrent.TimeUnit;
  * compensated and whose client gets an error worth retrying — see LikeServiceImpl.like for the
  * shape. That trades a Kafka blip for a failed request instead of a silent, permanent divergence
  * between three services' idea of the same number.
+ *
+ * <p>Undoing the write is only right if the event is really not coming, so "failed" here means
+ * the producer's own verdict, never the request running out of patience first. The producer keeps
+ * retrying a record until its delivery.timeout.ms is up, so that timeout is bounded in
+ * application.yml to fit inside a request, and the publisher waits for it rather than for a clock
+ * of its own. One case stays open, as it does for any producer without transactions: a request the
+ * broker applied but whose answer never arrived is reported as a failure too.
  */
 @Slf4j
 @Component
@@ -45,11 +55,16 @@ import java.util.concurrent.TimeUnit;
 public class InteractionEventPublisher {
 
     /**
-     * Long enough to ride out a leader election, short enough that a person waiting on a like is
-     * not left holding the request. Deliberately far below media-worker's 30s: that publisher runs
-     * on a Kafka listener with nobody waiting, this one runs inside an HTTP request.
+     * Only a backstop, kept above the producer's delivery.timeout.ms (application.yml) on purpose.
+     * This used to be the wait itself, at 5s against the producer's default of two minutes: a
+     * request that stopped waiting had not seen a failure, only given up on a record still on its
+     * way. It undid a like that the broker then took a few seconds later, and video-service
+     * counted it, recommendation-service scored it and notification-service announced it.
+     *
+     * <p>The producer promises an answer within its delivery timeout, so this should never fire.
+     * If it does, nobody knows whether the record landed; it is treated as a failure, as before.
      */
-    private static final Duration ACK_TIMEOUT = Duration.ofSeconds(5);
+    static final Duration ACK_BACKSTOP = Duration.ofSeconds(10);
 
     private static final String LIKE_TOPIC = "interaction.like-events";
     private static final String COMMENT_TOPIC = "interaction.comment-events";
@@ -181,14 +196,32 @@ public class InteractionEventPublisher {
     /**
      * Sends and waits for the broker to say it has the record. Everything that moves a counter goes
      * through here; {@link #publishWatch} deliberately does not.
+     *
+     * <p>Every way of not getting that answer leaves as {@link EventNotPublishedException}, which
+     * is unchecked. The broker refusing a record fails the future rather than send(), and that
+     * used to escape as the checked ExecutionException — past every caller's undo, which catches
+     * RuntimeException. The interaction stayed stored with no event behind it, and the client's
+     * retry found it already there, so nothing ever sent one.
      */
-    @SneakyThrows
     private void confirm(ProducerRecord<String, String> record) {
         try {
-            kafkaTemplate.send(record).get(ACK_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            kafkaTemplate.send(record).get(ACK_BACKSTOP.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (ExecutionException e) {
+            throw notPublished(record, e.getCause());
+        } catch (TimeoutException e) {
+            // Past the producer's own delivery timeout — see ACK_BACKSTOP for what that leaves.
+            throw notPublished(record, e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted publishing to " + record.topic(), e);
+            throw notPublished(record, e);
+        } catch (RuntimeException e) {
+            throw notPublished(record, e);
         }
+    }
+
+    private static EventNotPublishedException notPublished(ProducerRecord<String, String> record, Throwable cause) {
+        log.warn("The broker did not take a record to {} with key {}; the interaction is undone",
+                record.topic(), record.key(), cause);
+        return new EventNotPublishedException(cause);
     }
 }

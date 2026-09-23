@@ -4,6 +4,7 @@ import com.tiktok.interactionservice.AbstractInteractionServiceIT;
 import com.tiktok.interactionservice.dto.response.RepostContextResponse;
 import com.tiktok.interactionservice.dto.response.RepostStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
+import com.tiktok.interactionservice.exception.EventNotPublishedException;
 import com.tiktok.interactionservice.exception.RepostRateLimitedException;
 import com.tiktok.interactionservice.repository.RepostByUserRepository;
 import com.tiktok.interactionservice.repository.RepostByVideoRepository;
@@ -158,7 +159,7 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         when(kafkaTemplate.send(any(ProducerRecord.class)))
                 .thenThrow(new IllegalStateException("broker refused the record"));
 
-        assertThatThrownBy(() -> repostService.repost(16L, 1L)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> repostService.repost(16L, 1L)).isInstanceOf(EventNotPublishedException.class);
 
         assertThat(repostService.listReposts(1L, null, 20).videoIds()).isEmpty();
         assertThat(repostService.getContexts(List.of(16L), 1L).get(0).repostedByMe()).isFalse();
@@ -179,7 +180,7 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         when(kafkaTemplate.send(any(ProducerRecord.class)))
                 .thenThrow(new IllegalStateException("broker refused the record"));
 
-        assertThatThrownBy(() -> repostService.unrepost(18L, 1L)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> repostService.unrepost(18L, 1L)).isInstanceOf(EventNotPublishedException.class);
 
         assertThat(repostService.getContexts(List.of(18L), 1L).get(0).repostedByMe()).isTrue();
         assertThat(repostService.listReposts(1L, null, 20).videoIds()).containsExactly(18L);

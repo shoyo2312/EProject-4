@@ -298,9 +298,12 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 | `NOT_COMMENT_OWNER` | 403 | Xoá bình luận của người khác (mục 3.6) |
 | `COMMENT_NOT_FOUND` | 404 | Bình luận không tồn tại, đã xoá, hoặc `videoId` trên URL không khớp với bình luận đó |
 | `INTERACTION_CONFLICT` | 409 | Ghi vào Cassandra không xác nhận được kết quả sau 3 lần thử (like/unlike ở mục 3.1–3.2, view ở mục 3.8). Xem bên dưới |
+| `INTERACTION_NOT_RECORDED` | 503 | Kafka không nhận event đi kèm thao tác nên thao tác đã được **hoàn tác** — like/unlike, repost, save, comment (tạo/xoá), share, view. Xem bên dưới |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 
 Ngoài ra `401 Unauthorized` (không có `code` riêng của interaction-service, đến từ `security-lib`/gateway) xảy ra ở mọi `POST`/`DELETE` khi thiếu/hết hạn/token bị thu hồi — xử lý giống auth-service doc (thử `/refresh` **một lần** rồi mới logout local).
+
+> **`INTERACTION_NOT_RECORDED` (503) nghĩa là không có gì được lưu.** Khác 409 ở chỗ server biết chắc kết quả: thao tác đã bị hoàn tác, counter không đổi. Retry là an toàn; nếu client đã optimistic update thì đảo lại sau khi retry cũng thất bại.
 
 > **`INTERACTION_CONFLICT` (409) không phải lỗi của request.** Nó nghĩa là "server không biết chắc thao tác đã xong hay chưa" — hạ tầng lưu trữ trả về timeout ở một thao tác mà đoán bừa sẽ làm sai counter. **Retry được, và retry là an toàn**: like/unlike idempotent, và `/view` idempotent theo `playId` (mục 3.1, 3.8). Hiện thông báo dạng "thử lại" chứ đừng hiện lỗi kỹ thuật, và đừng đảo ngược optimistic update ngay lập tức — retry một lần trước đã.
 
@@ -318,7 +321,9 @@ Phần này cho người tích hợp backend. `interaction-service` **chỉ phá
 
 ### Phát (producer) — `InteractionEventPublisher`
 
-Không có outbox (Cassandra không có transaction đa bảng để ghép). Thay vào đó **publish inline ngay sau khi ghi Cassandra thành công, và chờ broker ack** (timeout 5s — thấp hơn media-worker vì đang nằm trong request HTTP có người chờ). Ack fail → ghi Cassandra được bù trừ (compensate) → client nhận lỗi đáng retry, thay vì để 3 service lệch counter vĩnh viễn. Mọi topic key = `videoId` (một video giữ thứ tự trong partition).
+Không có outbox (Cassandra không có transaction đa bảng để ghép). Thay vào đó **publish inline ngay sau khi ghi Cassandra thành công, và chờ broker ack**. Ack fail → ghi Cassandra được bù trừ (compensate) → client nhận `INTERACTION_NOT_RECORDED` (503), thay vì để 3 service lệch counter vĩnh viễn. Mọi topic key = `videoId` (một video giữ thứ tự trong partition).
+
+"Fail" phải là phán quyết cuối của producer, không phải request hết kiên nhẫn trước: producer tự retry một record cho tới hết `delivery.timeout.ms` (mặc định 2 phút), nên request ngừng chờ sớm hơn thì sẽ hoàn tác một thao tác mà broker vài giây sau vẫn nhận — video-service vẫn đếm, notification vẫn gửi. Vì vậy `application.yml` giới hạn producer (`delivery.timeout.ms` 5s, `request.timeout.ms` 4s, `max.block.ms` 2s) và publisher chờ đúng câu trả lời đó (`ACK_BACKSTOP` 10s chỉ là chốt chặn). `InteractionEventPublisherTest` kiểm tra hai con số này không lệch nhau. Còn một khe hở như mọi producer không dùng transaction: request broker đã ghi nhưng response bị mất vẫn bị báo là fail.
 
 | Topic | Event | Payload | Phát khi | Xác nhận ack? |
 |---|---|---|---|---|
