@@ -16,7 +16,7 @@ Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi 
 
 `TranscodeServiceImpl`:
 
-1. Đọc `rawFileUrl` từ `VideoPublishedEvent`, suy ra object key trong bucket (`MediaKeys.objectKey` — hỗ trợ cả `s3://bucket/key` và `https://cdn/.../bucket/key`).
+1. Đọc `rawFileUrl` từ `VideoPublishedEvent`, suy ra object key trong bucket (`common-lib/ObjectKeys.objectKey` — hỗ trợ cả `s3://bucket/key` và `https://cdn/.../bucket/key`; video-service dùng đúng hàm này để kiểm tra quyền sở hữu lúc publish, nên hai bên luôn đọc ra cùng một key).
 2. `statObject` lấy size → vượt `media.video.max-bytes` (500 MB) → `MediaRejectedException` (từ chối vĩnh viễn). Check **trước** khi tải để file quá cỡ chỉ tốn một HEAD.
 3. `downloadObject` về thư mục tạm, `VideoProbe` (JAVE parse output `ffmpeg -i`) đọc duration + codec + kích thước từ file local. Duration vượt `media.video.max-duration-seconds` (600s) → `MediaRejectedException`.
 4. **Chọn một trong hai đường** theo `ProbedVideo.needsNormalizing()` (xem §2.1). Upload kết quả lên `hls/{videoId}/source.mp4`.

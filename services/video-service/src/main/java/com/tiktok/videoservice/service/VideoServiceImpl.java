@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.common.storage.ObjectKeys;
 import com.tiktok.videoservice.client.FriendshipClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
@@ -33,7 +34,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
 import java.time.ZonedDateTime;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -56,6 +56,9 @@ public class VideoServiceImpl implements VideoService {
      * bucket's lifecycle rule expires abandoned uploads by matching this prefix.
      */
     private static final String UPLOAD_PREFIX = "raw";
+
+    /** The last segment of an upload key as createUploadUrl issues it: a Snowflake and an extension. */
+    private static final Pattern UPLOAD_FILE_NAME = Pattern.compile("[A-Za-z0-9_-]+\\.[A-Za-z0-9]+");
 
     /**
      * How many authors one Following feed request may name. Well above what a real account follows
@@ -142,20 +145,19 @@ public class VideoServiceImpl implements VideoService {
         formFields.put("Content-Type", contentType);
 
         String uploadUrl = "%s/%s".formatted(minioProperties.endpoint(), minioProperties.bucket());
-        String fileUrl = "s3://%s/%s".formatted(minioProperties.bucket(), objectKey);
-        return new UploadUrlResponse(uploadUrl, formFields, fileUrl, expirySeconds);
+        return new UploadUrlResponse(uploadUrl, formFields, storedUrl(objectKey), expirySeconds);
     }
 
     @Override
     public VideoResponse publish(Long userId, CreateVideoRequest request) {
-        requireOwnUpload(userId, request.rawFileUrl());
+        String rawFileUrl = storedUrl(requireOwnUpload(userId, request.rawFileUrl()));
 
         Video video = Video.builder()
                 .id(Video.newId())
                 .userId(userId)
                 .title(request.title())
                 .description(request.description())
-                .rawFileUrl(request.rawFileUrl())
+                .rawFileUrl(rawFileUrl)
                 .visibility(request.visibility())
                 .tags(normalizeTags(request.tags(), request.description()))
                 .status(VideoStatus.PROCESSING)
@@ -168,7 +170,8 @@ public class VideoServiceImpl implements VideoService {
             return videoMapper.toResponse(videoRepository.save(video));
         } catch (DuplicateKeyException e) {
             // raw_file_idx. The only unique index on this collection besides _id, and _id is a
-            // fresh Snowflake generated a few lines above.
+            // fresh Snowflake generated a few lines above. rawFileUrl is rebuilt from the key, so
+            // two spellings of one object (s3:// and the CDN URL, say) collide here too.
             throw new AlreadyPublishedException();
         }
     }
@@ -217,37 +220,39 @@ public class VideoServiceImpl implements VideoService {
     /**
      * {@code @ValidMediaUrl} answers "does this point at our storage" — scheme, host, bucket. It
      * says nothing about <em>whose</em> file it is, and every upload key already carries that:
-     * createUploadUrl above issues {@code raw/{userId}/...} and nothing else can write there.
-     * Without this check, publishing someone else's raw key republishes their video under the
-     * caller's name, and the transcode pipeline does the rest.
+     * createUploadUrl above issues {@code raw/{userId}/{id}.{ext}} and nothing else can write
+     * there. Without this check, publishing someone else's raw key republishes their video under
+     * the caller's name, and the transcode pipeline does the rest.
      *
-     * <p>Matched on the segment after {@code raw/} rather than on a fixed prefix, because the
-     * same key reaches this method as an {@code s3://bucket/key} URI and as an {@code https} CDN
-     * URL, which put a different number of segments in front of it. A URL with no {@code raw}
-     * segment at all is rejected too: it is not something this service ever handed out.
+     * <p>The key is read with {@link ObjectKeys#objectKey}, the same parser media-worker fetches
+     * the file with. Reading it any other way checks one object and transcodes another: this used
+     * to match the segment after the first {@code raw}, so
+     * {@code https://cdn/raw/1/video-media/quarantine/hls/555/source.mp4} passed as user 1's upload
+     * while media-worker, reading from the bucket name on, pulled a taken-down video out of
+     * quarantine. The whole key has to have the exact shape createUploadUrl issues — a prefix
+     * alone would still admit {@code raw/1/x/../../2/y.mp4}, whose dot segments only an
+     * encoded slash hides from normalization.
+     *
+     * @return the object key, for the caller to store in canonical form
      */
-    private void requireOwnUpload(Long userId, String rawFileUrl) {
-        // normalize() before reading segments, because java.net.URI does not resolve dot
-        // segments on its own and every HTTP client downstream does. Without it,
-        // ".../raw/{attacker}/../{victim}/file.mp4" satisfies the check below on the segment
-        // after the first "raw" and then addresses the victim's object the moment anything
-        // fetches it.
-        String path = URI.create(rawFileUrl).normalize().getPath();
-        if (path == null) {
+    private String requireOwnUpload(Long userId, String rawFileUrl) {
+        String key = ObjectKeys.objectKey(rawFileUrl, minioProperties.bucket())
+                .orElseThrow(ForeignUploadException::new);
+
+        String ownPrefix = "%s/%d/".formatted(UPLOAD_PREFIX, userId);
+        if (!key.startsWith(ownPrefix)
+                || !UPLOAD_FILE_NAME.matcher(key.substring(ownPrefix.length())).matches()) {
             throw new ForeignUploadException();
         }
+        return key;
+    }
 
-        String[] segments = path.split("/");
-        for (int i = 0; i < segments.length - 1; i++) {
-            if (UPLOAD_PREFIX.equals(segments[i])) {
-                if (!String.valueOf(userId).equals(segments[i + 1])) {
-                    throw new ForeignUploadException();
-                }
-                return;
-            }
-        }
-
-        throw new ForeignUploadException();
+    /**
+     * The form a raw upload is stored in: the key under an {@code s3://} bucket authority, which is
+     * what media-worker reads and what raw_file_idx compares.
+     */
+    private String storedUrl(String objectKey) {
+        return "s3://%s/%s".formatted(minioProperties.bucket(), objectKey);
     }
 
     /**

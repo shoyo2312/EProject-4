@@ -156,6 +156,60 @@ class VideoServiceImplTest {
     }
 
     /**
+     * media-worker reads the key from the bucket-named segment on, so to the transcode this is
+     * {@code raw/2/stolen.mp4} whatever comes before it. The check used to read the segment after
+     * the first {@code raw} instead, saw user 1, and let it through.
+     */
+    @Test
+    void publish_aUrlWhoseKeyStartsBehindTheCallersPrefix_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Nested", null, "https://cdn.tiktok-clone.local/raw/1/video-media/raw/2/stolen.mp4",
+                VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /** The same shape aimed at a taken-down video's quarantined media, which would go live again. */
+    @Test
+    void publish_aUrlPointingIntoQuarantine_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Quarantined", null,
+                "https://cdn.tiktok-clone.local/raw/1/video-media/quarantine/hls/555/source.mp4",
+                VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /**
+     * normalize() works on the encoded path, where {@code x%2F..%2F..%2F2%2Fstolen.mp4} is one
+     * segment; the dot segments only appear once getPath() decodes it. The key starts with the
+     * caller's prefix, so only the exact-shape check stops it.
+     */
+    @Test
+    void publish_aKeyHidingDotSegmentsBehindEncodedSlashes_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Encoded", null,
+                "https://cdn.tiktok-clone.local/video-media/raw/1/x%2F..%2F..%2F2%2Fstolen.mp4",
+                VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /**
+     * One upload is one video whichever of its URLs comes back. raw_file_idx compares strings, so
+     * the stored URL is rebuilt from the key rather than kept as the client spelled it.
+     */
+    @Test
+    void publish_theSameUploadUnderItsCdnUrl_isRejectedAsAlreadyPublished() {
+        VideoResponse first = videoService.publish(1L, new CreateVideoRequest(
+                "Over https", null, "https://cdn.tiktok-clone.local/video-media/raw/1/twice.mp4",
+                VideoVisibility.PUBLIC, List.of()));
+
+        assertThat(videoRepository.findById(first.id()).orElseThrow().getRawFileUrl())
+                .isEqualTo("s3://video-media/raw/1/twice.mp4");
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Over s3", null, "s3://video-media/raw/1/twice.mp4", VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(AlreadyPublishedException.class);
+    }
+
+    /**
      * A media type may carry parameters. Rejecting {@code video/mp4; charset=utf-8} tells the
      * client its file is unsupported when the type is one this service accepts.
      */
