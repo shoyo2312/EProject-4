@@ -7,6 +7,7 @@ import com.tiktok.analyticsservice.repository.TrainingDataRepository;
 import com.tiktok.event.interaction.VideoWatchEvent;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -41,13 +42,13 @@ class TrainingSinkConsumerTest {
         VideoWatchEvent event = new VideoWatchEvent(
                 "evt-1", Instant.parse("2026-08-20T10:00:00Z"), 42L, 7L, 9_000L, 10_000L, true);
 
-        new VideoWatchEventConsumer(trainingDataRepository, objectMapper)
-                .onMessage(objectMapper.writeValueAsString(event));
+        new VideoWatchEventConsumer(trainingDataRepository, objectMapper).onMessages(List.of(
+                new ConsumerRecord<>("interaction.watch-events", 0, 0L, "42", objectMapper.writeValueAsString(event))));
 
         // Both durations, not only the completed flag: a model wants how much was watched, and
         // that cannot be recovered later from a boolean.
-        verify(trainingDataRepository).insertWatch(
-                "evt-1", "42", 7L, 9_000L, 10_000L, true, Instant.parse("2026-08-20T10:00:00Z"));
+        verify(trainingDataRepository).insertWatches(List.of(new TrainingDataRepository.WatchRow(
+                "evt-1", "42", 7L, 9_000L, 10_000L, true, Instant.parse("2026-08-20T10:00:00Z"))));
     }
 
     @Test

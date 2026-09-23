@@ -5,18 +5,15 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.tiktok.analyticsservice.repository.EngagementEventRepository;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
@@ -35,9 +32,10 @@ class CommentCreatedEventConsumerTest {
     void createdEvent_isRecordedAsAComment() throws Exception {
         CommentCreatedEvent event = CommentCreatedEvent.of(1L, 42L, 7L, "hi", null, null);
 
-        consumer().onMessage(objectMapper.writeValueAsString(event), header("CommentCreatedEvent"));
+        consumer().onMessages(List.of(record(objectMapper.writeValueAsString(event), "CommentCreatedEvent")));
 
-        verify(engagementEventRepository).insert(eq(event.eventId()), eq("COMMENTED"), eq("42"), eq(7L), any());
+        verify(engagementEventRepository).insertAll(List.of(
+                new EngagementEventRepository.Row(event.eventId(), "COMMENTED", "42", 7L, event.occurredAt())));
     }
 
     /**
@@ -49,22 +47,42 @@ class CommentCreatedEventConsumerTest {
     void deletedEvent_isRecordedAsARemovalNotAsANewComment() throws Exception {
         CommentDeletedEvent event = CommentDeletedEvent.of(1L, 42L, 7L);
 
-        consumer().onMessage(objectMapper.writeValueAsString(event), header("CommentDeletedEvent"));
+        consumer().onMessages(List.of(record(objectMapper.writeValueAsString(event), "CommentDeletedEvent")));
 
-        verify(engagementEventRepository, never()).insert(anyString(), eq("COMMENTED"), anyString(), anyLong(), any());
-        verify(engagementEventRepository).insert(eq(event.eventId()), eq("UNCOMMENTED"), eq("42"), eq(7L), any());
+        verify(engagementEventRepository).insertAll(List.of(
+                new EngagementEventRepository.Row(event.eventId(), "UNCOMMENTED", "42", 7L, event.occurredAt())));
     }
 
     @Test
     void missingHeader_isReadAsACreationLikeTheOlderProducer() throws Exception {
         CommentCreatedEvent event = CommentCreatedEvent.of(2L, 42L, 7L, "hi", null, null);
 
-        consumer().onMessage(objectMapper.writeValueAsString(event), null);
+        consumer().onMessages(List.of(record(objectMapper.writeValueAsString(event), null)));
 
-        verify(engagementEventRepository).insert(eq(event.eventId()), eq("COMMENTED"), eq("42"), eq(7L), any());
+        verify(engagementEventRepository).insertAll(List.of(
+                new EngagementEventRepository.Row(event.eventId(), "COMMENTED", "42", 7L, event.occurredAt())));
     }
 
-    private static byte[] header(String eventType) {
-        return eventType.getBytes(StandardCharsets.UTF_8);
+    /** Routed per record: one poll can mix both types, and each keeps its own. */
+    @Test
+    void aPollMixingBothTypesIsOneInsertWithEachRoutedByItsOwnHeader() throws Exception {
+        CommentCreatedEvent created = CommentCreatedEvent.of(3L, 42L, 7L, "hi", null, null);
+        CommentDeletedEvent deleted = CommentDeletedEvent.of(3L, 42L, 7L);
+
+        consumer().onMessages(List.of(
+                record(objectMapper.writeValueAsString(created), "CommentCreatedEvent"),
+                record(objectMapper.writeValueAsString(deleted), "CommentDeletedEvent")));
+
+        verify(engagementEventRepository).insertAll(List.of(
+                new EngagementEventRepository.Row(created.eventId(), "COMMENTED", "42", 7L, created.occurredAt()),
+                new EngagementEventRepository.Row(deleted.eventId(), "UNCOMMENTED", "42", 7L, deleted.occurredAt())));
+    }
+
+    private static ConsumerRecord<String, String> record(String payload, String eventType) {
+        ConsumerRecord<String, String> record = new ConsumerRecord<>("interaction.comment-events", 0, 0L, "42", payload);
+        if (eventType != null) {
+            record.headers().add("eventType", eventType.getBytes(StandardCharsets.UTF_8));
+        }
+        return record;
     }
 }

@@ -20,15 +20,25 @@ public class TrainingDataRepository {
 
     private final JdbcTemplate jdbcTemplate;
 
-    public void insertWatch(String eventId, String videoId, Long userId,
-                            long watchedMs, long durationMs, boolean completed, Instant occurredAt) {
-        jdbcTemplate.update(
+    public record WatchRow(String eventId, String videoId, Long userId,
+                           long watchedMs, long durationMs, boolean completed, Instant occurredAt) {
+    }
+
+    /**
+     * One INSERT for the whole poll. This is the densest stream in the system — a row per playback
+     * session — and one INSERT per row is one ClickHouse part per row; see KafkaBatchConfig.
+     */
+    public void insertWatches(List<WatchRow> rows) {
+        jdbcTemplate.batchUpdate(
                 """
                 INSERT INTO watch_events
                     (event_id, video_id, user_id, watched_ms, duration_ms, completed, occurred_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                eventId, videoId, userId, watchedMs, durationMs, completed ? 1 : 0, Timestamp.from(occurredAt));
+                rows.stream()
+                        .map(row -> new Object[]{row.eventId(), row.videoId(), row.userId(), row.watchedMs(),
+                                row.durationMs(), row.completed() ? 1 : 0, Timestamp.from(row.occurredAt())})
+                        .toList());
     }
 
     /**
@@ -37,16 +47,15 @@ public class TrainingDataRepository {
      * one fewer special case.
      */
     public void insertTags(String videoId, List<String> tags, Instant publishedAt) {
-        if (tags == null) {
+        if (tags == null || tags.isEmpty()) {
             // VideoPublishedEvent.of never produces null, but Jackson bypasses that factory and
             // uses the canonical constructor, so an event from a producer older than the tags
             // field deserializes to null here — the same case the visibility field documents.
             return;
         }
-        for (String tag : tags) {
-            jdbcTemplate.update(
-                    "INSERT INTO video_tags (video_id, tag, published_at) VALUES (?, ?, ?)",
-                    videoId, tag, Timestamp.from(publishedAt));
-        }
+        // One INSERT for all of a video's tags, not one each.
+        jdbcTemplate.batchUpdate(
+                "INSERT INTO video_tags (video_id, tag, published_at) VALUES (?, ?, ?)",
+                tags.stream().map(tag -> new Object[]{videoId, tag, Timestamp.from(publishedAt)}).toList());
     }
 }

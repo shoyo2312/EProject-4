@@ -14,12 +14,28 @@ import java.util.List;
 @RequiredArgsConstructor
 public class EngagementEventRepository {
 
+    private static final String INSERT =
+            "INSERT INTO engagement_events (event_id, event_type, video_id, user_id, occurred_at) VALUES (?, ?, ?, ?, ?)";
+
     private final JdbcTemplate jdbcTemplate;
 
+    public record Row(String eventId, String eventType, String videoId, Long userId, Instant occurredAt) {
+    }
+
+    /** For the topics that see a record at a time; see {@link #insertAll} for the busy ones. */
     public void insert(String eventId, String eventType, String videoId, Long userId, Instant occurredAt) {
-        jdbcTemplate.update(
-                "INSERT INTO engagement_events (event_id, event_type, video_id, user_id, occurred_at) VALUES (?, ?, ?, ?, ?)",
-                eventId, eventType, videoId, userId, Timestamp.from(occurredAt));
+        insertAll(List.of(new Row(eventId, eventType, videoId, userId, occurredAt)));
+    }
+
+    /**
+     * One INSERT, and so one part, for all of them. The driver sends a JDBC batch as a single
+     * request, where one update per row wrote one part per row — see KafkaBatchConfig.
+     */
+    public void insertAll(List<Row> rows) {
+        jdbcTemplate.batchUpdate(INSERT, rows.stream()
+                .map(row -> new Object[]{row.eventId(), row.eventType(), row.videoId(), row.userId(),
+                        Timestamp.from(row.occurredAt())})
+                .toList());
     }
 
     public List<DailyCountResponse> findDailyCounts(int days) {
