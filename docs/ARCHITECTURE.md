@@ -59,6 +59,14 @@ A gửi msg → instance 1 → lưu MongoDB
 | search                           | Elasticsearch | sync từ Kafka              |
 | analytics                        | ClickHouse    | OLAP                       |
 
+Redis dùng chung, và không chỉ là cache: nó giữ revocation token (`auth:blacklist:*`), bộ đếm OTP/login,
+và các set ẩn video của recommendation-service (`reco:video:taken-down`/`private`/`held`). Vì vậy
+`maxmemory-policy` **phải là `noeviction`** ở mọi môi trường — policy LRU nào (kể cả `volatile-lru`,
+vì revocation key và bộ đếm đều có TTL) cũng có thể lặng lẽ xoá chúng: token đã logout dùng lại được,
+giới hạn đoán OTP reset, video bị gỡ quay lại feed. Đầy bộ nhớ thì Redis từ chối ghi và lỗi hiện ra,
+thay vì mất dữ liệu âm thầm. Thứ tăng không có TTL là các hash/zset theo video của recommendation
+(`reco:video:published`, `owner`, `watches`, `completions`) — theo dõi `used_memory` theo đó.
+
 ## 5. Shared Libraries (`libs/`)
 
 ```
