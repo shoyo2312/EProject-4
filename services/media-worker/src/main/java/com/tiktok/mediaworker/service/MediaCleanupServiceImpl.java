@@ -44,6 +44,7 @@ public class MediaCleanupServiceImpl implements MediaCleanupService {
         keys.add(MediaQuarantineService.PREFIX + MediaKeys.preview(videoId));
         keys.addAll(listUnder(MediaQuarantineService.PREFIX + MediaKeys.hlsPrefix(videoId)));
         keys.add(MediaKeys.quarantineMarker(videoId));
+        keys.addAll(listUnder(MediaKeys.quarantineHolds(videoId)));
         keys.add(MediaKeys.transcodedMarker(videoId));
         // Skipped rather than guessed when the URL does not name this bucket — see
         // ObjectKeys.objectKey. The abandoned-upload lifecycle rule is what covers it then.

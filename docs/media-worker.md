@@ -93,7 +93,8 @@ Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file t�
 
 ## 3. Cleanup khi xoá video
 
-`VideoPurgedEvent` → `MediaCleanupServiceImpl.deleteMediaFor(videoId, rawFileUrl)`. **Không phải** `VideoDeletedEvent`: event đó phát ngay khi owner xoá và là tín hiệu cho search/recommendation gỡ video; media thì giữ nguyên trong thùng rác (`video.trash.retention`, mặc định 30 ngày) để admin còn xem lại được, và chỉ `VideoPurgedEvent` — video-service phát khi hết hạn — mới xoá. Consumer bỏ qua `VideoDeletedEvent`; xoá theo nó là đổ thùng rác ngay lập tức.
+`VideoPurgedEvent` → `MediaCleanupServiceImpl.deleteMediaFor(videoId, rawFileUrl)`. **Không phải** `VideoDeletedEvent`: event đó phát ngay khi owner xoá và là tín hiệu cho search/recommendation gỡ video; media thì giữ lại trong thùng rác (`video.trash.retention`, mặc định 30 ngày) để admin còn xem lại được, và chỉ `VideoPurgedEvent` — video-service phát khi hết hạn — mới xoá. Xoá theo `VideoDeletedEvent` là đổ thùng rác ngay lập tức. Việc `VideoDeletedEvent` làm ở đây là **quarantine** media (hold `DELETED`, xem §3.1): trước đây nó vẫn public theo URL suốt cả tháng owner tưởng đã xoá.
+- Xoá cả bản trong `quarantine/` và mọi marker (`quarantine/markers/{id}`, `quarantine/holds/{id}/*`).
 - Xoá `thumbnails/{id}.jpg`.
 - List đệ quy `hls/{id}/` và xoá từng object (HLS thật = 1 playlist + nhiều segment, nên phải list chứ không đoán key).
 - Xoá file raw — chỉ khi `rawFileUrl` nằm trong bucket cấu hình; không thì **bỏ qua + log warn** (đoán key = xoá nhầm object). Khi bỏ qua, lifecycle rule prefix `raw/` (7 ngày, khai ở `minio-init`) là thứ dọn hộ.
@@ -127,6 +128,20 @@ URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) →
 | `media.avatar.max-bytes` | 5242880 (5 MB) | |
 | `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` | localhost:9000 / minioadmin / … / `video-media` | Credential MinIO **chỉ nằm ở service này** — đó là lý do cleanup chạy ở đây chứ không ở video-service |
 
+### 3.1. Quarantine — media rời đường đọc ẩn danh
+
+Bucket cho đọc ẩn danh `hls/`, `thumbnails/`, `previews/` (player đi theo URL không ký). Status bên video-service chỉ ẩn video khỏi listing, không chặn ai đã có — hoặc đoán được, id là Snowflake — URL. `MediaQuarantineService` dời object sang `quarantine/` (ngoài policy) khi có **hold**, mỗi lý do một marker `quarantine/holds/{id}/{HOLD}`:
+
+| Hold | Đặt khi | Gỡ khi |
+|---|---|---|
+| `MODERATION` | verdict không phải `APPROVED` (`REVIEW` lẫn `REJECTED`) — đặt **trước** khi phát verdict | admin duyệt (restore một video không bị takedown) |
+| `TAKEN_DOWN` | `VideoTakenDownEvent` | `VideoRestoredEvent` trên video đang có hold này |
+| `DELETED` | `VideoDeletedEvent` | không bao giờ — chờ purge |
+
+Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown của video đang chờ review thì media vẫn ở quarantine, như video-service trả nó về `PENDING_REVIEW`. Marker cũ `quarantine/markers/{id}` (trước khi có hold) vẫn được tính, và restore gỡ nó. Admin console xem media bị quarantine qua URL ký ngắn hạn (`video-service/QuarantinedMediaUrls`); chủ video cũng nhận URL ký cho video của chính mình đang `PENDING_REVIEW` (trước đây họ vẫn xem được vì media còn public).
+
+**Chưa che:** video `PRIVATE`/`FRIENDS` (media vẫn public theo URL — cần URL ký hoặc CDN signed cookie cho người xem hợp lệ), và khoảng giữa transcode xong và có verdict (`PENDING_MODERATION`, thường vài giây).
+
 ## 6. Bố cục object trong bucket (`MediaKeys`)
 
 | Loại | Key | Ai ghi | Ai xoá |
@@ -137,6 +152,8 @@ URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) →
 | Thumbnail | `thumbnails/{videoId}.jpg` | media-worker transcode | cleanup |
 | Hover preview | `previews/{videoId}.webp` | media-worker transcode | cleanup |
 | Avatar | `avatars/{userId}.jpg` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; ghi đè) |
+| Bản quarantine | `quarantine/` + key gốc | quarantine (§3.1) | restore khi hết hold (dời về key gốc), hoặc cleanup |
+| Hold marker | `quarantine/holds/{videoId}/{HOLD}` | quarantine (§3.1) | restore, hoặc cleanup |
 
 ## 7. kafka-lib
 

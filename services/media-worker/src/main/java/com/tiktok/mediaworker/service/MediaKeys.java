@@ -49,14 +49,29 @@ public final class MediaKeys {
         return hlsPrefix(videoId) + "source.mp4";
     }
 
-    /** Present while the video's media is quarantined. See MediaQuarantineService. */
     /** Written once a transcode's result has been published; outside every public prefix. */
     public static String transcodedMarker(String videoId) {
         return "transcoded/markers/%s".formatted(videoId);
     }
 
+    /**
+     * The single marker quarantines wrote before they recorded why — a takedown or a REJECTED
+     * verdict. Still honoured, and lifted by a restore. See MediaQuarantineService.
+     */
     public static String quarantineMarker(String videoId) {
         return "quarantine/markers/%s".formatted(videoId);
+    }
+
+    /**
+     * One object per decision holding the video's media off the public path. Not under
+     * {@link #quarantineMarker}: MinIO refuses an object below a key that is itself an object.
+     */
+    public static String quarantineHold(String videoId, String hold) {
+        return quarantineHolds(videoId) + hold;
+    }
+
+    public static String quarantineHolds(String videoId) {
+        return "quarantine/holds/%s/".formatted(videoId);
     }
 
     public static String hlsPlaylist(String videoId) {

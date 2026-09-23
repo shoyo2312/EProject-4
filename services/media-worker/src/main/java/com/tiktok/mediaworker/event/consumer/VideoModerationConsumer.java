@@ -53,10 +53,11 @@ public class VideoModerationConsumer {
         // with nothing left to move it.
         VideoModerationCompletedEvent verdict = moderationService.moderate(event.videoId(), event.durationSeconds());
         // Before the verdict goes out, so a failed move is redelivered and retried rather than
-        // leaving a rejected video's media public behind a published REJECTED. REVIEW stays
-        // readable on purpose: the admin deciding it has to be able to watch it.
-        if (verdict.verdict() == ModerationVerdict.REJECTED) {
-            quarantine.quarantine(event.videoId());
+        // leaving a held video's media public behind a published verdict. REVIEW is held too: it
+        // is a video nobody has cleared, and it used to stay public by URL while it waited. The
+        // admin deciding it watches it through the console's signed URLs.
+        if (verdict.verdict() != ModerationVerdict.APPROVED) {
+            quarantine.hold(event.videoId(), MediaQuarantineService.Hold.MODERATION);
         }
         eventProducer.publish(verdict);
     }

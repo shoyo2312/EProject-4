@@ -100,6 +100,7 @@ public class VideoServiceImpl implements VideoService {
     private final VideoCache videoCache;
     private final FriendshipClient friendshipClient;
     private final UploadLimitProperties uploadLimits;
+    private final QuarantinedMediaUrls quarantinedMediaUrls;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -262,7 +263,9 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public VideoResponse getById(Long requesterId, String videoId) {
-        return requireVisible(requesterId, load(videoId), videoId);
+        VideoResponse video = requireVisible(requesterId, load(videoId), videoId);
+        // After the cache, never into it: a signed URL expires, and the entry serves everyone.
+        return isSelf(requesterId, video.userId()) ? quarantinedMediaUrls.forOwner(video) : video;
     }
 
     /**
@@ -425,10 +428,14 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable) {
-        Page<Video> videos;
         if (isSelf(requesterId, userId)) {
-            videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable);
-        } else if (friendshipClient.areFriends(userId, requesterId)) {
+            return videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
+                    .map(videoMapper::toResponse)
+                    .map(quarantinedMediaUrls::forOwner);
+        }
+
+        Page<Video> videos;
+        if (friendshipClient.areFriends(userId, requesterId)) {
             // One friendship check per page load, not per video: the answer is the same for every
             // video on this owner's grid.
             videos = videoRepository.findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByCreatedAtDesc(

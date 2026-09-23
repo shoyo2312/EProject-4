@@ -9,6 +9,7 @@ import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoTranscodedEventProducer;
 import com.tiktok.mediaworker.service.MediaCleanupService;
 import com.tiktok.mediaworker.service.MediaQuarantineService;
+import com.tiktok.mediaworker.service.MediaRejectedException;
 import com.tiktok.mediaworker.service.TranscodeResult;
 import com.tiktok.mediaworker.service.TranscodeService;
 import org.junit.jupiter.api.Test;
@@ -67,22 +68,22 @@ class VideoEventConsumerTest {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid9", 1L, "t", null, "s3://raw/vid9.mp4", "PUBLIC", List.of());
         when(transcodeService.transcode("vid9", "s3://raw/vid9.mp4"))
                 .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
-        when(quarantine.isQuarantined("vid9")).thenReturn(true);
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
-        verify(quarantine).quarantine("vid9");
+        verify(quarantine).enforce("vid9");
     }
 
+    /** A failed transcode wrote nothing public, so there is nothing to hold. */
     @Test
-    void onMessage_ordinaryTranscode_leavesTheMediaPublic() throws Exception {
+    void onMessage_failedTranscode_leavesTheQuarantineAlone() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid8", 1L, "t", null, "s3://raw/vid8.mp4", "PUBLIC", List.of());
         when(transcodeService.transcode("vid8", "s3://raw/vid8.mp4"))
-                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
+                .thenThrow(new MediaRejectedException("not a video"));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
-        verify(quarantine, never()).quarantine(anyString());
+        verifyNoInteractions(quarantine);
     }
 
     /**
@@ -238,16 +239,17 @@ class VideoEventConsumerTest {
     }
 
     /**
-     * The deletion is the index consumers' cue, not this worker's: the media stays in MinIO for
-     * the trash window so the console can still play it, and only the purge that follows erases
-     * it. Acting on the deletion here would empty the trash on the spot.
+     * The media stays in MinIO for the trash window so the console can still play it, and only the
+     * purge that follows erases it; erasing on the deletion would empty the trash on the spot. It
+     * does leave the public path at once — it used to stay readable by URL for the whole window.
      */
     @Test
-    void onMessage_deletion_leavesTheMediaInPlace() throws Exception {
+    void onMessage_deletion_quarantinesTheMediaWithoutErasingIt() throws Exception {
         VideoDeletedEvent deleted = VideoDeletedEvent.of("vid3", 1L, "s3://video-media/raw/1/vid3.mp4");
 
         consumer().onMessage(objectMapper.writeValueAsString(deleted), header("VideoDeletedEvent"));
 
+        verify(quarantine).hold("vid3", MediaQuarantineService.Hold.DELETED);
         verifyNoInteractions(mediaCleanupService, transcodeService, eventProducer);
     }
 

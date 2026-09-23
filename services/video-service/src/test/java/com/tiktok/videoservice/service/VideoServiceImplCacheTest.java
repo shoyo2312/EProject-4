@@ -50,6 +50,8 @@ class VideoServiceImplCacheTest {
     private final com.tiktok.videoservice.client.FriendshipClient friendshipClient =
             mock(com.tiktok.videoservice.client.FriendshipClient.class);
 
+    private final MinioClient quarantineClient = mock(MinioClient.class);
+
     private final VideoService videoService = new VideoServiceImpl(
             videoRepository,
             videoMapper,
@@ -59,7 +61,9 @@ class VideoServiceImplCacheTest {
                     "video-media", "us-east-1", Duration.ofMinutes(15)),
             videoCache,
             friendshipClient,
-            new UploadLimitProperties(524_288_000L, 600));
+            new UploadLimitProperties(524_288_000L, 600),
+            new QuarantinedMediaUrls(quarantineClient, new MinioProperties("http://localhost:9000", "key", "secret",
+                    "video-media", "us-east-1", Duration.ofMinutes(15))));
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
@@ -215,6 +219,32 @@ class VideoServiceImplCacheTest {
 
         assertThat(videoService.getById(OWNER, VIDEO_ID)).isEqualTo(mapped);
         assertThat(videoService.getByIds(OWNER, List.of(VIDEO_ID))).containsExactly(mapped);
+    }
+
+    /**
+     * A video waiting for review has its media quarantined, but its uploader could always watch it
+     * while it waited: they get a signed copy. Only after the cache, since a signed URL expires and
+     * the cached entry serves everyone.
+     */
+    @Test
+    void getById_ownersVideoInReview_isServedThroughASignedQuarantineUrl() throws Exception {
+        VideoResponse inReview = new VideoResponse(
+                "A", OWNER, "t", "d", null, null, "http://localhost:9000/video-media/hls/A/source.mp4",
+                10, 1080, 1920, VideoStatus.PENDING_REVIEW, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null);
+        when(videoCache.get("A")).thenReturn(Optional.of(inReview));
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        assertThat(videoService.getById(OWNER, "A").hlsUrl()).isEqualTo("signed");
+        verify(videoCache, org.mockito.Mockito.never()).put(any());
+    }
+
+    @Test
+    void getById_ownersPublishedVideo_keepsItsPublicUrl() {
+        when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(publicVideo(VIDEO_ID)));
+
+        assertThat(videoService.getById(OWNER, VIDEO_ID).hlsUrl()).isEqualTo("https://cdn/v.m3u8");
+        verifyNoInteractions(quarantineClient);
     }
 
     private static VideoResponse publicVideo(String id) {

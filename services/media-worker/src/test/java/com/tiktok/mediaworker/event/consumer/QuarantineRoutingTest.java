@@ -10,6 +10,7 @@ import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoModerationEventProducer;
 import com.tiktok.mediaworker.service.MediaQuarantineService;
+import com.tiktok.mediaworker.service.MediaQuarantineService.Hold;
 import com.tiktok.mediaworker.service.ModerationService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,10 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.nio.charset.StandardCharsets;
 
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.inOrder;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -46,14 +44,14 @@ class QuarantineRoutingTest {
     void takedown_quarantinesTheMedia() throws Exception {
         admin().onMessage(json(VideoTakenDownEvent.of("v1", 9L, "nsfw")), header("VideoTakenDownEvent"));
 
-        verify(quarantine).quarantine("v1");
+        verify(quarantine).hold("v1", Hold.TAKEN_DOWN);
     }
 
     @Test
-    void restore_releasesTheMedia() throws Exception {
+    void restore_liftsWhatTheRestoreLifts() throws Exception {
         admin().onMessage(json(VideoRestoredEvent.of("v1", 9L, "appeal")), header("VideoRestoredEvent"));
 
-        verify(quarantine).release("v1");
+        verify(quarantine).restore("v1");
     }
 
     /** Same topic, and a ban has no videoId: read as a takedown it would quarantine "null". */
@@ -78,21 +76,32 @@ class QuarantineRoutingTest {
         moderation().onMessage(json(VideoTranscodedEvent.success("v2", "t", null, "h", 4)));
 
         InOrder order = inOrder(quarantine, moderationProducer);
-        order.verify(quarantine).quarantine("v2");
+        order.verify(quarantine).hold("v2", Hold.MODERATION);
         order.verify(moderationProducer).publish(rejected);
     }
 
-    /** REVIEW waits for a human, who has to be able to watch it; APPROVED is live. */
+    /**
+     * REVIEW is a video nobody has cleared, and it used to stay public by URL while it waited.
+     * The admin deciding it watches it through the console's signed URLs.
+     */
     @Test
-    void approvedAndReviewVerdicts_leaveTheMediaAlone() throws Exception {
-        when(moderationService.moderate(anyString(), any())).thenReturn(
-                VideoModerationCompletedEvent.of("v3", ModerationVerdict.REVIEW, "nsfw", 0.7, 1, 10, 5L, "m", "1", null),
+    void reviewVerdict_isHeldToo() throws Exception {
+        when(moderationService.moderate("v4", 4)).thenReturn(
+                VideoModerationCompletedEvent.of("v4", ModerationVerdict.REVIEW, "nsfw", 0.7, 1, 10, 5L, "m", "1", null));
+
+        moderation().onMessage(json(VideoTranscodedEvent.success("v4", "t", null, "h", 4)));
+
+        verify(quarantine).hold("v4", Hold.MODERATION);
+    }
+
+    @Test
+    void approvedVerdict_leavesTheMediaAlone() throws Exception {
+        when(moderationService.moderate("v3", 4)).thenReturn(
                 VideoModerationCompletedEvent.of("v3", ModerationVerdict.APPROVED, "nsfw", 0.1, 0, 10, 5L, "m", "1", null));
 
         moderation().onMessage(json(VideoTranscodedEvent.success("v3", "t", null, "h", 4)));
-        moderation().onMessage(json(VideoTranscodedEvent.success("v3", "t", null, "h", 4)));
 
-        verify(quarantine, never()).quarantine(anyString());
+        verifyNoInteractions(quarantine);
     }
 
     private AdminModerationEventConsumer admin() {
