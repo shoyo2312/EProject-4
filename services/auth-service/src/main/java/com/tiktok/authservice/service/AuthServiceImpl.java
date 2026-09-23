@@ -132,7 +132,7 @@ public class AuthServiceImpl implements AuthService {
                 .orElse(null);
 
         String key = rateLimitKey(user, identifier);
-        loginRateLimiter.checkAllowed(key);
+        loginRateLimiter.acquireAttempt(key);
 
         // Checked after the limit, so a locked-out account costs one indexed read rather than a
         // bcrypt verification per attempt — the work an attacker would otherwise get for free.
@@ -146,7 +146,6 @@ public class AuthServiceImpl implements AuthService {
                 && HashUtils.bcryptMatches(request.password(), user.getPasswordHash());
 
         if (!valid) {
-            loginRateLimiter.recordFailure(key);
             throw new InvalidCredentialsException();
         }
 

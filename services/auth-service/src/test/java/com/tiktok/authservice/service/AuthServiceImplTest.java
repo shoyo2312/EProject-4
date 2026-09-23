@@ -47,6 +47,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
@@ -55,6 +57,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -407,6 +410,18 @@ class AuthServiceImplTest {
                 .isInstanceOf(InvalidCredentialsException.class);
     }
 
+    /** The same burst against a password: five attempts reach bcrypt, the rest are refused. */
+    @Test
+    void login_parallelBurst_getsNoMoreThanFiveAttempts() throws Exception {
+        registerVerified();
+
+        List<Class<?>> outcomes = inParallel(40,
+                () -> authService.login(new LoginRequest("johndoe", "wrongpass")));
+
+        assertThat(outcomes).filteredOn(InvalidCredentialsException.class::equals).hasSize(5);
+        assertThat(outcomes).filteredOn(TooManyLoginAttemptsException.class::equals).hasSize(35);
+    }
+
     /**
      * The limit is per account, not per spelling of it. Keyed on the raw usernameOrEmail, the two
      * ways of naming one account were two Redis counters and simply alternating them bought an
@@ -698,6 +713,23 @@ class AuthServiceImplTest {
                 .isInstanceOf(TooManyOtpRequestsException.class);
     }
 
+    /**
+     * The limit used to read the counter and record a failure only after the code had been
+     * checked, so every submission in a parallel burst read the same count and got its guess.
+     * Taking the guess up front leaves exactly five of them, however many arrive at once.
+     */
+    @Test
+    void verifyEmail_parallelBurst_getsNoMoreThanFiveGuesses() throws Exception {
+        authService.register(validRegisterRequest());
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), org.mockito.ArgumentMatchers.anyString());
+
+        List<Class<?>> outcomes = inParallel(40,
+                () -> authService.verifyEmail(new VerifyEmailRequest("john@example.com", "000000")));
+
+        assertThat(outcomes).filteredOn(InvalidOtpException.class::equals).hasSize(5);
+        assertThat(outcomes).filteredOn(TooManyOtpRequestsException.class::equals).hasSize(35);
+    }
+
     @Test
     void verifyEmail_withUnknownEmail_countsAgainstTheGuessBudget() {
         for (int i = 0; i < 5; i++) {
@@ -854,6 +886,37 @@ class AuthServiceImplTest {
         assertThat(authService.refresh(new RefreshTokenRequest(otherDevice.refreshToken())).accessToken())
                 .as("a lost response on one device must not sign the user out everywhere")
                 .isNotBlank();
+    }
+
+    /**
+     * Runs {@code action} on {@code count} threads released together, and answers with what each
+     * one threw — the exception class, or {@code Void.class} for a call that returned normally.
+     */
+    private List<Class<?>> inParallel(int count, Runnable action) throws InterruptedException {
+        ExecutorService pool = Executors.newFixedThreadPool(count);
+        CyclicBarrier startTogether = new CyclicBarrier(count);
+        Callable<Class<?>> task = () -> {
+            startTogether.await(30, TimeUnit.SECONDS);
+            try {
+                action.run();
+                return Void.class;
+            } catch (RuntimeException e) {
+                return e.getClass();
+            }
+        };
+        try {
+            List<Class<?>> outcomes = new ArrayList<>();
+            for (Future<Class<?>> outcome : pool.invokeAll(Collections.nCopies(count, task))) {
+                try {
+                    outcomes.add(outcome.get(30, TimeUnit.SECONDS));
+                } catch (ExecutionException | TimeoutException e) {
+                    throw new AssertionError("a parallel call did not finish", e);
+                }
+            }
+            return outcomes;
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     private Callable<TokenResponse> refreshTask(String refreshToken, CyclicBarrier startTogether) {
