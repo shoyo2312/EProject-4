@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
@@ -16,7 +17,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Authorizes STOMP SUBSCRIBE frames.
+ * Authorizes the STOMP frames a client sends: SUBSCRIBE by destination, SEND by prefix.
+ *
+ * <p>SEND first. A client frame whose destination starts with a broker prefix goes straight to the
+ * simple broker, which relays it to every subscriber as if the server had sent it — a client could
+ * put a message with any {@code senderId} into {@code /topic/conversations/{id}}, or a fake
+ * notification into {@code /user/{id}/queue/notifications}. Clients only ever send to the
+ * {@code /app} handlers, which is where the participant check and the persistence live, so
+ * anything else is refused.
  *
  * <p>The simple broker delivers to whoever asks: a client that knows a conversation id can
  * subscribe to its topic and read the thread live, and conversation ids are Snowflakes, which
@@ -35,6 +43,8 @@ import java.util.regex.Pattern;
 @Component
 @RequiredArgsConstructor
 public class StompSubscriptionInterceptor implements ChannelInterceptor {
+
+    private static final String APPLICATION_PREFIX = "/app/";
 
     private static final Pattern CONVERSATION = Pattern.compile("^/topic/conversations/([0-9A-Za-z_-]+)$");
 
@@ -55,6 +65,15 @@ public class StompSubscriptionInterceptor implements ChannelInterceptor {
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = StompHeaderAccessor.wrap(message);
+        // By message type, not StompCommand.SEND: a client-sent MESSAGE frame is routed the same way.
+        if (SimpMessageType.MESSAGE == accessor.getMessageType()) {
+            String destination = accessor.getDestination();
+            if (destination == null || !destination.startsWith(APPLICATION_PREFIX)) {
+                log.warn("Refused send to {}", destination);
+                throw new IllegalArgumentException("Sending to " + destination + " is not allowed");
+            }
+            return message;
+        }
         if (StompCommand.SUBSCRIBE != accessor.getCommand()) {
             return message;
         }

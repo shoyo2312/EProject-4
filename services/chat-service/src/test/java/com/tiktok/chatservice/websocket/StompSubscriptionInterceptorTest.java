@@ -40,6 +40,69 @@ class StompSubscriptionInterceptorTest {
         return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
     }
 
+    private Message<byte[]> frame(StompCommand command, String destination) {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(command);
+        if (destination != null) {
+            accessor.setDestination(destination);
+        }
+        accessor.setUser((Principal) () -> "42");
+        accessor.setLeaveMutable(true);
+        return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+    }
+
+    @Test
+    void sendToAnApplicationHandlerIsAllowed() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        Message<byte[]> message = frame(StompCommand.SEND, "/app/chat.send/c1");
+
+        assertThat(interceptor.preSend(message, null)).isSameAs(message);
+        // The participant check for a send lives in the handler, not here.
+        verifyNoInteractions(conversationService);
+    }
+
+    /**
+     * Every broker-prefixed destination a client could SEND to, which the broker would otherwise
+     * relay to subscribers verbatim: a forged chat message, a fake notification in someone else's
+     * queue, fake counters and feed entries.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/topic/conversations/c1",
+            "/topic/feed",
+            "/topic/videos.v1",
+            "/topic/videos.v1.comments",
+            "/topic/users.42",
+            "/user/7/queue/notifications",
+            "/user/queue/notifications",
+            "/queue/errors",
+            "/app",
+            "/application/chat.send/c1"
+    })
+    void rejectsSendOutsideApplicationPrefix(String destination) {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(frame(StompCommand.SEND, destination), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsSendWithoutADestination() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(frame(StompCommand.SEND, null), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** MESSAGE is a server frame, but a client can still write one, and it is routed like a SEND. */
+    @Test
+    void rejectsClientMessageFrameToABrokerDestination() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(frame(StompCommand.MESSAGE, "/topic/conversations/c1"), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void nonParticipantCannotSubscribeToAConversation() {
         StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
