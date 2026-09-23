@@ -44,13 +44,16 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
      * accounts match "an" — and the one people mean is almost always the biggest. The userId
      * tiebreak keeps paging stable across two profiles with the same count.
      *
+     * <p>{@code query} must arrive LIKE-escaped (see {@code UserProfileServiceImpl.search}):
+     * unescaped, {@code _} matches any character and {@code q=_} listed every profile.
+     *
      * <p>Blocks are excluded in the query rather than filtered out of the page afterwards, because
      * a page filtered afterwards is short and its total still counts rows the caller can never
      * reach — a client paging towards that total never arrives. Here the two agree.
      */
     @Query("select p from UserProfile p where p.deletedAt is null "
-            + "and (lower(p.displayName) like lower(concat('%', :query, '%')) "
-            + "or lower(p.username) like lower(concat('%', :query, '%'))) "
+            + "and (lower(p.displayName) like lower(concat('%', :query, '%')) escape '\\' "
+            + "or lower(p.username) like lower(concat('%', :query, '%')) escape '\\') "
             + "and not exists (select 1 from UserBlock b where b.deletedAt is null "
             + "and ((b.blockerId = :viewerId and b.blockedId = p.userId) "
             + "or (b.blockedId = :viewerId and b.blockerId = p.userId))) "

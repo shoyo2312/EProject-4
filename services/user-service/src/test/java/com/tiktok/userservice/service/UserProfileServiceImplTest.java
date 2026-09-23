@@ -390,6 +390,18 @@ class UserProfileServiceImplTest {
                 .containsExactly(1L);
     }
 
+    /** Unescaped, "_" matched any one character and so listed every profile on the platform. */
+    @Test
+    void search_treatsWildcardsAsLiteralText() {
+        userProfileService.createFromRegisteredEvent(1L, "john_doe", null);
+        userProfileService.createFromRegisteredEvent(2L, "johndoe", null);
+
+        assertThat(userProfileService.search(99L, "_", PageRequest.of(0, 20)).getContent())
+                .extracting(UserProfileResponse::userId)
+                .containsExactly(1L);
+        assertThat(userProfileService.search(99L, "%", PageRequest.of(0, 20))).isEmpty();
+    }
+
     /** "Show me everyone" is not a search, and paging through every profile is what it would cost. */
     @Test
     void search_withABlankQuery_isEmpty() {

@@ -124,8 +124,13 @@ public class UserProfileServiceImpl implements UserProfileService {
         // Blocks are excluded by the query, so the page comes back full and its total is a number
         // the caller can actually page to. Filtering the page here instead handed out short pages
         // under a total that counted rows this viewer is never shown.
-        return userProfileRepository.search(viewerId, query.strip(), unsorted)
+        return userProfileRepository.search(viewerId, escapeLike(query.strip()), unsorted)
                 .map(userProfileMapper::toResponse);
+    }
+
+    /** The query is text to find, not a pattern: {@code _} and {@code %} match themselves. */
+    private static String escapeLike(String query) {
+        return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     @Override
