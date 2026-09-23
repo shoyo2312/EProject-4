@@ -93,9 +93,26 @@ public class SearchIndexWriter {
             ctx._source[params.field] = next < 0 ? 0 : next;
             """;
 
-    /** A restore puts back what moderation interrupted, not a blanket PUBLISHED. */
+    /**
+     * One admin action, two meanings, split the way {@code Video.markRestored} in video-service
+     * splits them. On a taken-down video it lifts the takedown and puts back what the pipeline had
+     * reached, not a blanket PUBLISHED. On a video that moderation held back (PENDING_REVIEW) or
+     * rejected, it is the admin approving it, and the video goes live. That second case used to
+     * read pendingStatus back too, which still held the verdict, so an approved video stayed out
+     * of search for good.
+     *
+     * <p>pendingStatus moves to PUBLISHED with it, because a later takedown's restore reads it.
+     * A stub the publication has not reached keeps a null status, as in OUTCOME_SCRIPT.
+     */
     private static final String RESTORE_SCRIPT = """
-            ctx._source.status = ctx._source.pendingStatus != null ? ctx._source.pendingStatus : 'PUBLISHED';
+            if (ctx._source.status == 'TAKEN_DOWN') {
+              ctx._source.status = ctx._source.pendingStatus != null ? ctx._source.pendingStatus : 'PUBLISHED';
+            } else if (ctx._source.pendingStatus == 'PENDING_REVIEW' || ctx._source.pendingStatus == 'REJECTED') {
+              ctx._source.pendingStatus = 'PUBLISHED';
+              if (ctx._source.status != null) { ctx._source.status = 'PUBLISHED'; }
+            } else {
+              ctx.op = 'noop';
+            }
             """;
 
     private static final String STATUS_SCRIPT = "ctx._source.status = params.status;";

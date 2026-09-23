@@ -66,7 +66,7 @@ class VideoModerationEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
-        verify(recommendationService).recordVideoDeleted("vid2");
+        verify(recommendationService).recordHeld("vid2");
         verify(recommendationService, never()).recordVideoReady(anyString());
     }
 
@@ -79,7 +79,7 @@ class VideoModerationEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
-        verify(recommendationService).recordVideoDeleted("vid3");
+        verify(recommendationService).recordHeld("vid3");
         verify(recommendationService, never()).recordVideoReady(anyString());
     }
 

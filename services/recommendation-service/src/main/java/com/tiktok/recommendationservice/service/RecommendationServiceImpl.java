@@ -122,15 +122,34 @@ public class RecommendationServiceImpl implements RecommendationService {
         withdraw(videoId);
     }
 
+    /**
+     * The takedown is checked first, as in video-service: a video taken down while it waited for
+     * review goes back to waiting, and only the next restore approves it. A restore that finds
+     * neither marker has nothing to undo.
+     */
     @Override
     public void recordRestored(String videoId) {
-        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
-        reindexIfVisible(videoId);
+        if (removed(redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId))) {
+            reindexIfVisible(videoId);
+        } else if (removed(redisTemplate.opsForSet().remove(RecoKeys.VIDEO_HELD, videoId))) {
+            recordVideoReady(videoId);
+        }
+    }
+
+    @Override
+    public void recordHeld(String videoId) {
+        redisTemplate.opsForSet().add(RecoKeys.VIDEO_HELD, videoId);
+        withdraw(videoId);
+    }
+
+    private static boolean removed(Long count) {
+        return count != null && count > 0;
     }
 
     private boolean isHidden(String videoId) {
         return Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_PRIVATE, videoId))
-                || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_TAKEN_DOWN, videoId));
+                || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_TAKEN_DOWN, videoId))
+                || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_HELD, videoId));
     }
 
     /**
@@ -195,6 +214,7 @@ public class RecommendationServiceImpl implements RecommendationService {
         redisTemplate.opsForHash().delete(RecoKeys.VIDEO_OWNER, videoId);
         redisTemplate.opsForSet().remove(RecoKeys.VIDEO_PRIVATE, videoId);
         redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
+        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_HELD, videoId);
     }
 
     @Override

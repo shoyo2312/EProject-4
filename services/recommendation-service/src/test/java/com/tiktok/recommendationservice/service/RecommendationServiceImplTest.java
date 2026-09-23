@@ -72,6 +72,7 @@ class RecommendationServiceImplTest {
         recommendationService.recordVideoDeleted("vid1");
 
         verify(hashOperations).delete("reco:video:owner", "vid1");
+        verify(setOperations).remove("reco:video:held", "vid1");
     }
 
     /**
@@ -175,18 +176,19 @@ class RecommendationServiceImplTest {
 
     @Test
     void recordRestored_putsTheVideoBackUnderItsTagsAtItsOriginalPublishTime() {
+        when(setOperations.remove("reco:video:taken-down", "vid1")).thenReturn(1L);
         when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
 
         recommendationService.recordRestored("vid1");
 
-        verify(setOperations).remove("reco:video:taken-down", "vid1");
         verify(zSetOperations).add("reco:tag:dance", "vid1", 1700.0);
     }
 
     /** Restoring a takedown must not undo the owner making the video private. */
     @Test
     void recordRestored_ofAPrivateVideo_keepsItOutOfTheFeed() {
+        when(setOperations.remove("reco:video:taken-down", "vid1")).thenReturn(1L);
         when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
         when(setOperations.isMember("reco:video:private", "vid1")).thenReturn(true);
@@ -194,6 +196,73 @@ class RecommendationServiceImplTest {
         recommendationService.recordRestored("vid1");
 
         verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * A verdict other than APPROVED used to run the deletion cleanup, which threw away the tags
+     * and owner that an admin's approval later needs to index the video.
+     */
+    @Test
+    void recordHeld_withdrawsTheVideoButKeepsWhatAnApprovalNeeds() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordHeld("vid1");
+
+        verify(setOperations).add("reco:video:held", "vid1");
+        verify(zSetOperations).remove("reco:tag:dance", (Object) "vid1");
+        verify(zSetOperations).remove("reco:trending", (Object) "vid1");
+        verify(redisTemplate, never()).delete("reco:video:tags:vid1");
+        verify(hashOperations, never()).delete("reco:video:owner", "vid1");
+    }
+
+    /** The owner watching and liking their own held video must not walk it into trending. */
+    @Test
+    void engagementOnAHeldVideo_doesNotPutItIntoTrending() {
+        when(setOperations.isMember("reco:video:held", "vid1")).thenReturn(true);
+
+        recommendationService.recordLike("vid1", true);
+
+        verify(zSetOperations, never()).incrementScore(startsWith("reco:trend:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * An admin approving a held video: it goes into the feed the way an APPROVED verdict would
+     * have put it there, under its stashed tags and published as of now.
+     */
+    @Test
+    void recordRestored_ofAHeldVideo_putsItIntoTheFeed() {
+        when(setOperations.remove("reco:video:held", "vid1")).thenReturn(1L);
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordRestored("vid1");
+
+        verify(zSetOperations).add(eq("reco:video:published"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations).add(eq("reco:tag:dance"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * Taken down while it waited for review: the restore lifts the takedown and nothing more,
+     * as video-service returns it to PENDING_REVIEW. Approving it takes a second restore.
+     */
+    @Test
+    void recordRestored_ofAHeldVideoThatWasTakenDown_onlyLiftsTheTakedown() {
+        when(setOperations.remove("reco:video:taken-down", "vid1")).thenReturn(1L);
+        when(setOperations.isMember("reco:video:held", "vid1")).thenReturn(true);
+
+        recommendationService.recordRestored("vid1");
+
+        verify(setOperations, never()).remove("reco:video:held", "vid1");
+        verify(zSetOperations, never()).add(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /** Neither down nor held: already live, or never heard of. Nothing to undo either way. */
+    @Test
+    void recordRestored_withNothingToUndo_indexesNothing() {
+        recommendationService.recordRestored("vid1");
+
+        verify(zSetOperations, never()).add(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations, never()).incrementScore(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
     }
 
     /**

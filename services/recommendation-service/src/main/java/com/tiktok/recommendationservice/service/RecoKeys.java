@@ -121,8 +121,15 @@ public final class RecoKeys {
     /**
      * Videos that exist but must not be recommended, one set per reason, because the reasons lift
      * independently: restoring a takedown must not undo the owner making the video private, and
-     * making it public again must not undo a takedown. Visible means in neither.
+     * making it public again must not undo a takedown. Visible means in none of them.
      */
     public static final String VIDEO_PRIVATE = "reco:video:private";
     public static final String VIDEO_TAKEN_DOWN = "reco:video:taken-down";
+
+    /**
+     * Videos automatic moderation did not approve (REVIEW or REJECTED), waiting on an admin. An
+     * approval arrives as a VideoRestoredEvent, and this set is how a restore tells an approval
+     * apart from the end of a takedown.
+     */
+    public static final String VIDEO_HELD = "reco:video:held";
 }

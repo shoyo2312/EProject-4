@@ -298,6 +298,73 @@ class VideoIndexingConsumerTest {
     }
 
     /**
+     * An admin approving a video the classifier sent to review. The restore used to put back
+     * pendingStatus, which was still PENDING_REVIEW, so video-service published the video and
+     * search kept it hidden for good.
+     */
+    @Test
+    void onMessage_restoreOfAHeldVideo_publishesIt() throws Exception {
+        publish("v20", "held for review", null, List.of());
+        transcode(VideoTranscodedEvent.success("v20", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v20", ModerationVerdict.REVIEW);
+        assertThat(video("v20").orElseThrow().getStatus()).isEqualTo("PENDING_REVIEW");
+
+        restore("v20");
+
+        assertThat(video("v20").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("held", null, PageRequest.of(0, 10)))
+                .extracting(response -> response.id())
+                .containsExactly("v20");
+    }
+
+    /** Overturning the classifier's own removal is the same approval. */
+    @Test
+    void onMessage_restoreOfARejectedVideo_publishesIt() throws Exception {
+        publish("v21", "wrongly rejected", null, List.of());
+        transcode(VideoTranscodedEvent.success("v21", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v21", ModerationVerdict.REJECTED);
+
+        restore("v21");
+
+        assertThat(video("v21").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /**
+     * A video taken down while it waited for review goes back to waiting, the same as in
+     * video-service, and only a second restore (the approval) publishes it. After that, a takedown
+     * and its restore return it to PUBLISHED, because the approval moved pendingStatus too.
+     */
+    @Test
+    void onMessage_heldVideoTakenDownThenRestored_goesBackToReview() throws Exception {
+        publish("v22", "held then down", null, List.of());
+        transcode(VideoTranscodedEvent.success("v22", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v22", ModerationVerdict.REVIEW);
+
+        takeDown("v22");
+        restore("v22");
+        assertThat(video("v22").orElseThrow().getStatus()).isEqualTo("PENDING_REVIEW");
+
+        restore("v22");
+        assertThat(video("v22").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+
+        takeDown("v22");
+        restore("v22");
+        assertThat(video("v22").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /** Nothing to approve before a verdict: the pipeline is still the one moving the status. */
+    @Test
+    void onMessage_restoreOfAVideoStillInThePipeline_changesNothing() throws Exception {
+        publish("v23", "still moderating", null, List.of());
+        transcode(VideoTranscodedEvent.success("v23", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+
+        restore("v23");
+
+        assertThat(video("v23").orElseThrow().getStatus()).isEqualTo("PENDING_MODERATION");
+    }
+
+    /**
      * A private video is PUBLISHED like any other — moderation is what sets that, and it does not
      * look at visibility. Search is a read path of its own, with no viewer identity and no call
      * into video-service, so filtering on status alone handed the title, description and thumbnail
@@ -361,6 +428,18 @@ class VideoIndexingConsumerTest {
         VideoModerationCompletedEvent event = VideoModerationCompletedEvent.of(
                 videoId, verdict, "nsfw", 0.1, 0, 10, 900L, "model", "v1", null);
         videoModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event));
+    }
+
+    private void takeDown(String videoId) throws Exception {
+        adminModerationEventConsumer.onMessage(
+                objectMapper.writeValueAsString(VideoTakenDownEvent.of(videoId, 99L, "spam")),
+                header("VideoTakenDownEvent"));
+    }
+
+    private void restore(String videoId) throws Exception {
+        adminModerationEventConsumer.onMessage(
+                objectMapper.writeValueAsString(VideoRestoredEvent.of(videoId, 99L, "approved")),
+                header("VideoRestoredEvent"));
     }
 
     private void comment(String eventType, Object event) throws Exception {
