@@ -38,6 +38,9 @@ import java.util.regex.Pattern;
  *
  * <p>{@code /topic/videos.*} and {@code /topic/users.*} carry counters and public comments — the
  * same numbers the unauthenticated REST endpoints hand out — so they only have to be well-formed.
+ * "Public comments" is kept true on the sending side, not here: VideoStatsFanout sends a comment
+ * frame only for a video anyone may see, which also covers a video made private after somebody
+ * subscribed.
  */
 @Slf4j
 @Component

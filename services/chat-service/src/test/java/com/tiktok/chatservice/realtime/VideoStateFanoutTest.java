@@ -16,12 +16,14 @@ import static org.mockito.Mockito.verify;
 class VideoStateFanoutTest {
 
     private SimpMessagingTemplate messaging;
+    private VideoAudienceClient audience;
     private VideoStateFanout fanout;
 
     @BeforeEach
     void setUp() {
         messaging = mock(SimpMessagingTemplate.class);
-        fanout = new VideoStateFanout(messaging, new ObjectMapper().findAndRegisterModules());
+        audience = mock(VideoAudienceClient.class);
+        fanout = new VideoStateFanout(messaging, new ObjectMapper().findAndRegisterModules(), audience);
     }
 
     @Test
@@ -33,6 +35,34 @@ class VideoStateFanoutTest {
         fanout.onVideoEvent(payload, "VideoVisibilityChangedEvent".getBytes(StandardCharsets.UTF_8));
 
         verify(messaging).convertAndSend(eq("/topic/videos.100"), any(VideoFrame.class));
+    }
+
+    /** Who may see its comments may have just changed, so chat asks video-service again. */
+    @Test
+    void aVisibilityChangeForgetsWhoMaySeeTheVideosComments() {
+        fanout.onVideoEvent("""
+                {"eventId":"e1","occurredAt":"2026-09-09T10:00:00Z","videoId":"100",
+                 "userId":7,"visibility":"PRIVATE"}""",
+                "VideoVisibilityChangedEvent".getBytes(StandardCharsets.UTF_8));
+
+        verify(audience).forget("100");
+    }
+
+    @Test
+    void aTakedownForgetsWhoMaySeeTheVideosComments() {
+        fanout.onModerationEvent("""
+                {"eventId":"e1","occurredAt":"2026-09-09T10:00:00Z","videoId":"100","reason":"spam"}""",
+                "VideoTakenDownEvent".getBytes(StandardCharsets.UTF_8));
+
+        verify(audience).forget("100");
+    }
+
+    @Test
+    void aVerdictForgetsWhoMaySeeTheVideosCommentsWhateverItSays() {
+        fanout.onModerationVerdict("""
+                {"eventId":"e1","occurredAt":"2026-09-09T10:00:00Z","videoId":"100","verdict":"REVIEW"}""");
+
+        verify(audience).forget("100");
     }
 
     @Test

@@ -25,6 +25,7 @@ public class VideoStateFanout {
 
     private final SimpMessagingTemplate messaging;
     private final ObjectMapper objectMapper;
+    private final VideoAudienceClient audience;
 
     @KafkaListener(topics = "video.video-events")
     public void onVideoEvent(String payload,
@@ -37,6 +38,8 @@ public class VideoStateFanout {
         if (videoId == null) {
             return;
         }
+        // Whatever the event, who may see this video's comments may have just changed.
+        audience.forget(videoId);
 
         // A missing header means VideoPublishedEvent: producers older than the mixed topic sent
         // only that type.
@@ -74,6 +77,7 @@ public class VideoStateFanout {
             // UserBannedEvent and friends share this topic and have no videoId.
             return;
         }
+        audience.forget(videoId);
 
         String eventType = new String(eventTypeHeader);
         VideoFrame frame = switch (eventType) {
@@ -102,7 +106,11 @@ public class VideoStateFanout {
             return;
         }
         String videoId = text(node, "videoId");
-        if (videoId == null || !"APPROVED".equals(text(node, "verdict"))) {
+        if (videoId == null) {
+            return;
+        }
+        audience.forget(videoId);
+        if (!"APPROVED".equals(text(node, "verdict"))) {
             return;
         }
         messaging.convertAndSend(VideoTopics.FEED, VideoFrame.status(videoId, "PUBLISHED"));
