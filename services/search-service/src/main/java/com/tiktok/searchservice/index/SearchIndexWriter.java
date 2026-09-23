@@ -149,7 +149,19 @@ public class SearchIndexWriter {
             }
             """;
 
-    private static final String STATUS_SCRIPT = "ctx._source.status = params.status;";
+    /**
+     * The takedown half of {@link #RESTORE_SCRIPT}. A restore puts {@code pendingStatus} back, and
+     * a video taken down before the pipeline recorded anything had none, so it came back as
+     * PUBLISHED — searchable while still transcoding, and never screened. The status it had is
+     * recorded instead; for a document indexed before {@code pendingStatus} existed that is the
+     * PUBLISHED the fallback used to assume.
+     */
+    private static final String TAKEDOWN_SCRIPT = """
+            if (ctx._source.pendingStatus == null && ctx._source.status != null && ctx._source.status != 'TAKEN_DOWN') {
+              ctx._source.pendingStatus = ctx._source.status;
+            }
+            ctx._source.status = 'TAKEN_DOWN';
+            """;
 
     private static final String VISIBILITY_SCRIPT = "ctx._source.visibility = params.visibility;";
 
@@ -227,8 +239,8 @@ public class SearchIndexWriter {
                 Map.of("field", field, "delta", delta), null);
     }
 
-    public void applyVideoStatus(String videoId, String status) {
-        update(VideoDocument.class, videoId, STATUS_SCRIPT, Map.of("status", status), null);
+    public void takeDownVideo(String videoId) {
+        update(VideoDocument.class, videoId, TAKEDOWN_SCRIPT, Map.of(), null);
     }
 
     /**

@@ -396,14 +396,31 @@ public class Video {
     }
 
     /**
-     * A video taken down while still PROCESSING or FAILED has no hlsUrl, so restoring it as
-     * PUBLISHED would put an unplayable entry on the feed. It goes back to whatever it was;
-     * the transcode result, if one arrives later, publishes it normally.
+     * One admin action with two meanings, and nothing to do outside them.
+     *
+     * <p>On a taken-down video it lifts the takedown. A video taken down while still PROCESSING or
+     * FAILED has no hlsUrl, so restoring it as PUBLISHED would put an unplayable entry on the feed.
+     * It goes back to whatever it was; the transcode result, if one arrives later, publishes it
+     * normally. Only a takedown from before {@code statusBeforeTakedown} existed has nothing
+     * recorded, and those were all of live videos.
+     *
+     * <p>On a video automatic moderation held back (PENDING_REVIEW) or rejected, it is the admin
+     * approving it, and the video goes live.
+     *
+     * <p>Anything else is left alone. This used to publish whatever it was given, so a restore sent
+     * for a video that was still transcoding, or had failed to, put an unplayable entry on the feed
+     * — and the transcode result arriving later found it already past PROCESSING and was dropped.
      */
     public void markRestored() {
-        this.status = this.statusBeforeTakedown == null ? VideoStatus.PUBLISHED : this.statusBeforeTakedown;
-        this.statusBeforeTakedown = null;
-        this.takedownReason = null; // a restored video is not down, so nothing should still say why it was
+        if (this.status == VideoStatus.TAKEN_DOWN) {
+            this.status = this.statusBeforeTakedown == null ? VideoStatus.PUBLISHED : this.statusBeforeTakedown;
+            this.statusBeforeTakedown = null;
+            this.takedownReason = null; // a restored video is not down, so nothing should still say why it was
+        } else if (this.status == VideoStatus.PENDING_REVIEW || this.status == VideoStatus.REJECTED) {
+            this.status = VideoStatus.PUBLISHED;
+        } else {
+            return;
+        }
         stampPublishedAtIfLive();
     }
 

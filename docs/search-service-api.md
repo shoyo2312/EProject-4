@@ -139,7 +139,7 @@ search-service **chỉ tiêu thụ**, không phát event nào. Toàn bộ index 
 | `interaction.view-events` | — | `VideoViewedEvent` | `viewCount++` |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | `commentCount++` / `commentCount--` (kẹp ≥ 0) |
 | `interaction.share-events` | — | `VideoSharedEvent` | `shareCount++` |
-| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` | 2 event trên | `status = TAKEN_DOWN` / restore: video đang TAKEN_DOWN thì trả về `pendingStatus`; video không bị gỡ mà đang `PENDING_REVIEW`/`REJECTED` thì đó là admin duyệt → `PUBLISHED` (khớp `Video.markRestored` bên video-service). Event khác trên topic (UserBanned…) bị bỏ qua |
+| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` | 2 event trên | `status = TAKEN_DOWN` (chưa có `pendingStatus` thì ghi status bị thay vào đó, để restore không nhảy thẳng lên `PUBLISHED` khi video còn đang transcode) / restore: video đang TAKEN_DOWN thì trả về `pendingStatus`; video không bị gỡ mà đang `PENDING_REVIEW`/`REJECTED` thì đó là admin duyệt → `PUBLISHED` (khớp `Video.markRestored` bên video-service). Event khác trên topic (UserBanned…) bị bỏ qua |
 
 Mọi consumer **claim `eventId` trước khi xử lý** (`op_type=create` trên index `processed_events`, 409 ⇒ đã xử lý) chứ không đọc-rồi-ghi: trên Elasticsearch một document vừa ghi chưa đọc lại được cho tới lần refresh kế tiếp (mặc định 1s), nên check-then-act để lọt mọi redelivery trong cửa sổ đó. Mọi cập nhật counter là scripted partial update kèm `retry_on_conflict`, không phải đọc-sửa-ghi cả document.
 

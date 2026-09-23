@@ -97,6 +97,19 @@ class AdminModerationEventConsumerTest {
                 .isEqualTo(VideoStatus.PROCESSING);
     }
 
+    /** A restore for a video nobody took down leaves a video still being transcoded alone. */
+    @Test
+    void onMessage_restoredWithoutATakedown_doesNotPublishAVideoInThePipeline() throws Exception {
+        Video video = videoRepository.save(processingVideo());
+
+        VideoRestoredEvent event = VideoRestoredEvent.of(video.getId(), 99L, "stray");
+        consumer.onMessage(objectMapper.writeValueAsString(event), "VideoRestoredEvent".getBytes());
+
+        Video updated = videoRepository.findById(video.getId()).orElseThrow();
+        assertThat(updated.getStatus()).isEqualTo(VideoStatus.PROCESSING);
+        assertThat(updated.getPublishedAt()).isNull();
+    }
+
     @Test
     void onMessage_takenDown_deletedVideo_isIgnored() throws Exception {
         Video video = videoRepository.save(publishedVideo("s3://video-media/raw/6.mp4"));

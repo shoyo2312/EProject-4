@@ -53,7 +53,7 @@ public class AdminModerationEventConsumer {
             case VIDEO_TAKEN_DOWN -> {
                 VideoTakenDownEvent event = objectMapper.readValue(payload, VideoTakenDownEvent.class);
                 idempotentEventProcessor.runOnce(event.eventId(), VIDEO_TAKEN_DOWN, () ->
-                        searchIndexWriter.applyVideoStatus(event.videoId(), "TAKEN_DOWN"));
+                        searchIndexWriter.takeDownVideo(event.videoId()));
             }
             case VIDEO_RESTORED -> {
                 VideoRestoredEvent event = objectMapper.readValue(payload, VideoRestoredEvent.class);

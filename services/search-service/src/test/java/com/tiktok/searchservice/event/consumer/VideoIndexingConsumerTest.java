@@ -430,6 +430,35 @@ class VideoIndexingConsumerTest {
     }
 
     /**
+     * Taken down before the pipeline recorded anything, the restore had no pendingStatus to put
+     * back and fell back to PUBLISHED: searchable while still transcoding, never screened.
+     */
+    @Test
+    void onMessage_takedownDuringTheTranscode_restoresToProcessing() throws Exception {
+        publish("v24", "down while transcoding", null, List.of());
+        takeDown("v24");
+        restore("v24");
+
+        assertThat(video("v24").orElseThrow().getStatus()).isEqualTo("PROCESSING");
+
+        transcode(VideoTranscodedEvent.success("v24", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        assertThat(video("v24").orElseThrow().getStatus()).isEqualTo("PENDING_MODERATION");
+
+        moderate("v24", ModerationVerdict.APPROVED);
+        assertThat(video("v24").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /** A restore nobody took down for leaves a video still in the pipeline where it is. */
+    @Test
+    void onMessage_restoreWithoutATakedown_ofAVideoStillProcessing_changesNothing() throws Exception {
+        publish("v25", "never down", null, List.of());
+
+        restore("v25");
+
+        assertThat(video("v25").orElseThrow().getStatus()).isEqualTo("PROCESSING");
+    }
+
+    /**
      * A private video is PUBLISHED like any other — moderation is what sets that, and it does not
      * look at visibility. Search is a read path of its own, with no viewer identity and no call
      * into video-service, so filtering on status alone handed the title, description and thumbnail

@@ -322,7 +322,7 @@ Mọi consumer idempotent qua `IdempotentEventProcessor` (bảng `processed_even
 | `interaction.like-events` | `VideoLikeEvent` | `likeCount += liked ? 1 : -1` |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (route theo header; vắng ⇒ Created) | `commentCount ± 1` |
 | `interaction.view-events` | `VideoViewedEvent` | `viewCount += 1` (chỉ view đã qua dedupe của interaction-service) |
-| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` (route theo header; **bắt buộc** có header, thiếu → drop + warn) | `status = TAKEN_DOWN` / khôi phục về trạng thái trước takedown |
+| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` (route theo header; **bắt buộc** có header, thiếu → drop + warn) | `status = TAKEN_DOWN` / restore: video đang TAKEN_DOWN thì về trạng thái trước takedown; đang `PENDING_REVIEW`/`REJECTED` thì là admin duyệt → `PUBLISHED`; trạng thái khác (PROCESSING, FAILED, PENDING_MODERATION, PUBLISHED) thì không làm gì |
 
 `kafka-lib` error handler: retry 3 lần → `<topic>.DLT`.
 
