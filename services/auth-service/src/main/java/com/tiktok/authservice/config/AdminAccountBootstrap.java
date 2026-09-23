@@ -23,7 +23,10 @@ import java.util.Locale;
  * the address here was chosen by whoever configured the deployment, not claimed by a visitor.
  *
  * <p>An existing account with that email is promoted rather than duplicated — the password is left
- * alone, so this cannot be used to take over an account by re-pointing the env var at it.
+ * alone, so this cannot be used to take over an account by re-pointing the env var at it. Only an
+ * account that has verified the address, though: anyone can register an address they do not own,
+ * with a password of their choosing or a Facebook identity that merely claims it, and promoting
+ * that account would hand the console to whoever did.
  */
 @Slf4j
 @Configuration
@@ -63,6 +66,12 @@ public class AdminAccountBootstrap {
 
             if (existing != null) {
                 if (existing.getRole() == UserRole.ADMIN) {
+                    return;
+                }
+                if (!existing.isEmailVerified()) {
+                    log.error("Admin bootstrap skipped: {} belongs to an account that never verified "
+                            + "the address, so nothing shows it is yours. If you created it, verify "
+                            + "the address and restart; if not, set ADMIN_EMAIL to another one.", email);
                     return;
                 }
                 existing.promoteToAdmin();
