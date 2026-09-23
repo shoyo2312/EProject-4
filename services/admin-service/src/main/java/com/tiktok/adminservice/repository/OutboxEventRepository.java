@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
@@ -12,6 +13,12 @@ import java.util.List;
 public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> {
 
     List<OutboxEvent> findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
+
+    /** The rows the broker acknowledged, marked in one statement and its own transaction. */
+    @Transactional
+    @Modifying
+    @Query("UPDATE OutboxEvent e SET e.publishedAt = :publishedAt WHERE e.id IN :ids")
+    int markPublished(@Param("ids") List<Long> ids, @Param("publishedAt") Instant publishedAt);
 
     /**
      * Deletes up to {@code batchSize} rows the broker acknowledged before {@code cutoff}.

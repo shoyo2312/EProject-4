@@ -55,8 +55,4 @@ public class OutboxEvent {
         }
         createdAt = Instant.now();
     }
-
-    public void markPublished() {
-        this.publishedAt = Instant.now();
-    }
 }

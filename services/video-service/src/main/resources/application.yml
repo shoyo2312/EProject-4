@@ -22,6 +22,14 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+  task:
+    scheduling:
+      # One thread per @Scheduled method: the four event polls and the stuck-video sweep.
+      # On the default pool of one they take turns, and an outbox poll waiting out its ack
+      # timeout on a dead broker holds up every other job behind it.
+      pool:
+        size: 5
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:

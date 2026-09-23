@@ -19,6 +19,14 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
+  task:
+    scheduling:
+      # One thread per @Scheduled method: the outbox poll, the ban sweep and the retention cleanup.
+      # On the default pool of one they take turns, and an outbox poll waiting out its ack
+      # timeout on a dead broker holds up every other job behind it.
+      pool:
+        size: 3
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:

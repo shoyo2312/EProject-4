@@ -8,8 +8,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -29,15 +30,23 @@ public class OutboxPublisher {
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxDispatcher outboxDispatcher;
 
+    /**
+     * Not {@code @Transactional}: the dispatcher waits up to the ack timeout for the broker, and a
+     * transaction around that wait held a pooled connection for all of it whenever Kafka was slow
+     * or down. The acknowledged rows are marked afterwards in one short update of their own.
+     */
     @Scheduled(fixedDelay = 5000)
-    @Transactional
     public void publishPending() {
         List<OutboxEvent> pending = outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
         if (pending.isEmpty()) {
             return;
         }
 
-        int published = outboxDispatcher.dispatch(pending, this::toRecord, OutboxEvent::markPublished);
+        List<Long> acked = new ArrayList<>(pending.size());
+        int published = outboxDispatcher.dispatch(pending, this::toRecord, event -> acked.add(event.getId()));
+        if (!acked.isEmpty()) {
+            outboxEventRepository.markPublished(acked, Instant.now());
+        }
 
         if (published < pending.size()) {
             log.warn("Published {}/{} user outbox events, the rest stay pending for the next poll",

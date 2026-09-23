@@ -36,6 +36,14 @@ spring:
       max-file-size: ${AVATAR_MAX_FILE_SIZE:6MB}
       max-request-size: ${AVATAR_MAX_REQUEST_SIZE:7MB}
 
+  task:
+    scheduling:
+      # One thread per @Scheduled method: the outbox poll and the two retention cleanups.
+      # On the default pool of one they take turns, and an outbox poll waiting out its ack
+      # timeout on a dead broker holds up every other job behind it.
+      pool:
+        size: 3
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
