@@ -1,0 +1,7 @@
+# The ITs assume there is no video-service: the visibility, ownership and comments-off checks all
+# fail open when it cannot be reached. A video-service running on the default port — a local stack
+# left up — answers 404 for every made-up id these tests use instead, and refuses their likes,
+# shares and views before the code under test runs. Nothing listens on port 1, so the connection is
+# refused at once. Tests that need an answer from video-service mock VideoOwnershipClient.
+downstream:
+  video-service-uri: http://localhost:1
