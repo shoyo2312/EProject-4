@@ -1,6 +1,7 @@
 package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.entity.User;
+import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +33,14 @@ public class UserModerationService {
         User user = userRepository.findById(userId).orElse(null);
         if (user == null) {
             log.warn("Ban for unknown userId={} ignored", userId);
+            return;
+        }
+        // Refused here because this is the only service that knows the role. A ban revokes every
+        // session, so one admin — or one stolen admin session — could lock every other admin out
+        // of the console, and an admin who banned themselves would have nobody left to lift it.
+        if (user.getRole() == UserRole.ADMIN) {
+            log.warn("Ban of ADMIN userId={} by adminId={} refused: admin accounts are not banned",
+                    userId, adminId);
             return;
         }
         user.ban(reason, bannedUntil);

@@ -296,6 +296,15 @@ class AdminServiceImplTest {
                 .isCloseTo(Instant.now().plus(3, ChronoUnit.DAYS), within(1, ChronoUnit.MINUTES));
     }
 
+    /** auth-service refuses it anyway; this is the 400 instead of an audit row for a ban that never lands. */
+    @Test
+    void moderate_anAdminCannotBanThemselves() {
+        assertThatThrownBy(() -> adminService.moderate(
+                2L, ReportTargetType.USER, "2", ModerationActionType.BAN_USER, "oops", null))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository, adminEventProducer);
+    }
+
     @Test
     void resolveReport_banUserOnVideoReport_rejected() {
         Report pending = Report.builder()

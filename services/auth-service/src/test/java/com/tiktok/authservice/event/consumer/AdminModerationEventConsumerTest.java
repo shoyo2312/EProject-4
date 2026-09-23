@@ -65,6 +65,18 @@ class AdminModerationEventConsumerTest {
         verify(sessionRevoker).revokeAllSessions(USER_ID);
     }
 
+    /** Not even by another admin: one stolen admin session could otherwise lock every other admin out. */
+    @Test
+    void anAdminAccountIsNotBanned() throws Exception {
+        user.promoteToAdmin();
+
+        consumer.onMessage(json(UserBannedEvent.of(USER_ID, ADMIN_ID, "spam")), header("UserBannedEvent"));
+
+        assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(userRepository, never()).save(any());
+        verify(sessionRevoker, never()).revokeAllSessions(anyLong());
+    }
+
     /** The field is new and nullable, so an event written without it must still ban permanently. */
     @Test
     void aBanWithADeadlineCarriesItOntoTheAccount() throws Exception {

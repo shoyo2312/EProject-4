@@ -300,6 +300,11 @@ public class AdminServiceImpl implements AdminService {
     private ModerationAction record(Long adminId, ReportTargetType targetType, String targetId,
                                     ModerationActionType actionType, String reason, Long reportId,
                                     Instant bannedUntil) {
+        // auth-service refuses to ban any admin account, since only it knows roles. This one knows
+        // who is asking, so a self-ban gets a 400 instead of an audit row for a ban that never lands.
+        if (actionType == ModerationActionType.BAN_USER && targetId.equals(String.valueOf(adminId))) {
+            throw new InvalidModerationTargetException("An admin cannot ban their own account");
+        }
         // No existence check against the owning service: this one cannot read its database, and an
         // extra HTTP call would only move the failure. An action against an id that does not exist
         // is a no-op on the consumer side, and the audit row is still the honest record of the
