@@ -72,7 +72,7 @@ class SocialLinkChallengeTest {
 
         assertThat(challenge.confirm(PROFILE, "123456")).isSameAs(owner);
 
-        verify(registrar).link(owner, PROFILE);
+        verify(registrar).claim(owner, PROFILE);
     }
 
     /**
@@ -90,7 +90,7 @@ class SocialLinkChallengeTest {
         assertThatThrownBy(() -> challenge.confirm(PROFILE, "123456"))
                 .isInstanceOf(InvalidOtpException.class);
 
-        verify(registrar, never()).link(any(), any());
+        verify(registrar, never()).claim(any(), any());
     }
 
     private User activeUser() {

@@ -48,7 +48,7 @@ public class SocialAccountRegistrar {
 
         if (existing != null) {
             if (profile.emailVerified()) {
-                link(existing, profile);
+                claim(existing, profile);
                 return existing;
             }
             // Address already has an owner and the provider vouches for nothing. Both ways out of
@@ -91,20 +91,40 @@ public class SocialAccountRegistrar {
     }
 
     /**
+     * Attaches a provider account to an existing account whose address the person signing in has
+     * just proven they own: the provider vouched for it, or they spent the code
+     * {@link SocialLinkChallenge} mailed there.
+     *
+     * <p>If the account had never proven that address itself, its password is dropped and the
+     * address marked verified. Anyone can register someone else's address with a password of their
+     * choosing, and it stays unverified only because they cannot read the mail. Linking that
+     * account as it stood let the real owner move in with the squatter's password still on it,
+     * and once anything verified the address, that password was a working login. Without it the
+     * owner signs in through the provider, or sets a password through the reset flow.
+     *
+     * <p>Public for {@link SocialLinkChallenge}. No {@code @Transactional} of its own, and one here
+     * would be a lie: both callers are already inside a transaction — {@link #register} above by
+     * self-invocation, which the Spring proxy never sees, and {@code SocialLinkChallenge.confirm}
+     * through its own annotation. The changes have to live or die with the caller's work.
+     */
+    public void claim(User owner, SocialProfile profile) {
+        if (!owner.isEmailVerified()) {
+            owner.clearPassword();
+            owner.markEmailVerified();
+            userRepository.save(owner);
+        }
+        link(owner, profile);
+    }
+
+    /**
      * Flushed rather than merely saved: the id is assigned, so Hibernate would otherwise defer the
      * INSERT to commit and the uq_identity violation would surface after this method returned,
      * outside the caller's catch. Same reasoning as {@code AuthServiceImpl.saveUnique}.
      *
-     * <p>Public for {@link SocialLinkChallenge}, which links an account the OTP has just proven
-     * ownership of. One insert, one place: uq_identity is what makes a link unique, and a second
-     * copy of this would be a second thing to keep in step with it.
-     *
-     * <p>No {@code @Transactional} of its own, and one here would be a lie: both callers are
-     * already inside a transaction — {@link #register} above by self-invocation, which the Spring
-     * proxy never sees, and {@code SocialLinkChallenge.confirm} through its own annotation. The row
-     * has to live or die with the caller's work either way.
+     * <p>One insert, one place: uq_identity is what makes a link unique, and a second copy of this
+     * would be a second thing to keep in step with it.
      */
-    public void link(User user, SocialProfile profile) {
+    private void link(User user, SocialProfile profile) {
         userIdentityRepository.saveAndFlush(UserIdentity.builder()
                 .userId(user.getId())
                 .provider(profile.provider())

@@ -95,6 +95,60 @@ class SocialAccountRegistrarTest {
         verify(userRepository, never()).saveAndFlush(any());
     }
 
+    /**
+     * Pre-account takeover. Someone registered the address with a password of their own and could
+     * never verify it. The real owner arriving through Google gets the account, and the password
+     * they never chose goes: kept, it became a working login the moment the address was verified.
+     */
+    @Test
+    void verifiedAddress_onAnAccountThatNeverVerifiedIt_dropsThePasswordAndVerifies() {
+        User squatted = existing("a@example.com");
+        squatted.changePasswordHash("squatter-chose-this");
+        when(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("a@example.com"))
+                .thenReturn(Optional.of(squatted));
+
+        registrar.register(new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true));
+
+        assertThat(squatted.getPasswordHash()).isNull();
+        assertThat(squatted.isEmailVerified()).isTrue();
+        assertThat(squatted.getEmailVerifiedAt()).isNotNull();
+        verify(identityRepository).saveAndFlush(any());
+    }
+
+    /** An owner who already proved the address keeps the password they set. */
+    @Test
+    void verifiedAddress_onAVerifiedAccount_keepsItsPassword() {
+        User owner = User.builder()
+                .username("owner")
+                .email("a@example.com")
+                .passwordHash("owner-chose-this")
+                .emailVerified(true)
+                .role(UserRole.USER)
+                .status(UserStatus.ACTIVE)
+                .build();
+        when(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("a@example.com"))
+                .thenReturn(Optional.of(owner));
+
+        registrar.register(new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true));
+
+        assertThat(owner.getPasswordHash()).isEqualTo("owner-chose-this");
+        verify(userRepository, never()).save(any());
+        verify(identityRepository).saveAndFlush(any());
+    }
+
+    /** The mailed code proves the address the same way, so the Facebook path gets the same treatment. */
+    @Test
+    void claim_afterTheLinkCode_dropsASquattersPassword() {
+        User squatted = existing("a@example.com");
+        squatted.changePasswordHash("squatter-chose-this");
+
+        registrar.claim(squatted, facebook("a@example.com"));
+
+        assertThat(squatted.getPasswordHash()).isNull();
+        assertThat(squatted.isEmailVerified()).isTrue();
+        verify(identityRepository).saveAndFlush(any());
+    }
+
     private User savedUser() {
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
         verify(userRepository).saveAndFlush(captor.capture());

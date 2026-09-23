@@ -445,6 +445,12 @@ public class AuthServiceImpl implements AuthService {
                 request.email(), request.otp());
 
         user.changePasswordHash(HashUtils.bcryptHash(request.newPassword()));
+        // The code was mailed to the address, so spending it proves the address. Without this an
+        // account created through a social login that never asserted its address could set a
+        // password here and still not log in with it: login refuses unverified addresses.
+        if (!user.isEmailVerified()) {
+            user.markEmailVerified();
+        }
         userRepository.save(user);
 
         // Revoking refresh tokens alone left the attacker's already-issued access token working

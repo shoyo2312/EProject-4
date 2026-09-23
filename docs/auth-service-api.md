@@ -192,6 +192,8 @@ Request:
 
 Đổi mật khẩu bằng OTP nhận từ `forgot-password`. **Sau khi đổi thành công, mọi phiên của tài khoản chết ngay lập tức** — không chỉ refresh token bị thu hồi, mà cả access token đang sống trên thiết bị khác cũng bị vô hiệu tức thì (không phải chờ hết 15 phút, cũng không phải chờ tới lần `/refresh` kế tiếp). Đây là chủ đích: reset password thường được dùng đúng lúc nghi tài khoản bị chiếm, nên phải cắt truy cập ngay.
 
+Mã được gửi tới hòm thư, nên dùng được mã cũng là chứng minh sở hữu địa chỉ: tài khoản chưa verify email sẽ được **đánh dấu đã verify** luôn. Đây là đường duy nhất để một tài khoản tạo bằng social mà provider không khẳng định email (Facebook) có được mật khẩu đăng nhập được — nếu không, `/login` sẽ trả `403 EMAIL_NOT_VERIFIED` với chính mật khẩu vừa đặt.
+
 Hệ quả cho client: thiết bị vừa reset password **cũng** mất phiên — sau `204` phải điều hướng về màn hình đăng nhập và cho user login lại bằng mật khẩu mới, không được giữ token cũ trong app.
 
 Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400), `TOO_MANY_OTP_REQUESTS` (429 — nhập sai OTP quá **5 lần/15 phút** theo email, độc lập với giới hạn gửi lại OTP ở mục 3.8).
@@ -237,7 +239,7 @@ Email đã có chủ ở hệ thống ta **không** rơi vào `requiresEmail` m�
 
 Ngược lại, email chưa verify mà **chưa ai giữ** thì vẫn được lưu (`email_verified = false`) — không lấy mất gì của ai, và user đỡ được một màn hình. Cờ `email_verified` chỉ bật khi provider khẳng định, hoặc khi user tự xác thực bằng OTP của ta.
 
-Ghép tài khoản: server tìm theo `(provider, provider_uid)` trước. Nếu chưa từng thấy, **chỉ khi provider khẳng định email đã verify** mới ghép thẳng vào tài khoản sẵn có cùng email. Nếu provider không khẳng định (Facebook không bao giờ khẳng định) mà email đó đã có chủ, server **không** ghép và cũng **không** tạo tài khoản thứ hai — nó trả `409` và mở luồng ở mục 3.11. Ranh giới nằm đúng ở chỗ "được đòi tài khoản sẵn có": nếu email chưa verify mà đòi được tài khoản thì bất kỳ ai khai email của bạn trên Facebook đều chiếm được tài khoản của bạn ở đây. Tài khoản tạo bằng social có `password_hash = NULL` → gọi `/login` bằng mật khẩu luôn trả `401 INVALID_CREDENTIALS` cho tới khi user đặt mật khẩu qua `forgot-password` → `reset-password` (cần có email trước).
+Ghép tài khoản: server tìm theo `(provider, provider_uid)` trước. Nếu chưa từng thấy, **chỉ khi provider khẳng định email đã verify** mới ghép thẳng vào tài khoản sẵn có cùng email. Nếu provider không khẳng định (Facebook không bao giờ khẳng định) mà email đó đã có chủ, server **không** ghép và cũng **không** tạo tài khoản thứ hai — nó trả `409` và mở luồng ở mục 3.11. Ranh giới nằm đúng ở chỗ "được đòi tài khoản sẵn có": nếu email chưa verify mà đòi được tài khoản thì bất kỳ ai khai email của bạn trên Facebook đều chiếm được tài khoản của bạn ở đây. Khi ghép vào tài khoản sẵn có mà **chính tài khoản đó chưa từng verify email** (ghép thẳng vì provider khẳng định, hoặc qua mã ở mục 3.11), server **xoá mật khẩu** của tài khoản đó và đánh dấu email đã verify. Lý do: ai cũng đăng ký được `victim@gmail.com` kèm mật khẩu do mình chọn — nó chỉ nằm ở trạng thái chưa verify vì kẻ đó không đọc được mail. Giữ nguyên mật khẩu ấy thì ngay khi địa chỉ được verify, kẻ đăng ký trước có một cách đăng nhập hợp lệ vào tài khoản chủ thật đang dùng. Chủ thật muốn đăng nhập bằng mật khẩu thì đặt lại qua `forgot-password` → `reset-password`. Tài khoản đã verify email thì giữ nguyên mật khẩu. Tài khoản tạo bằng social có `password_hash = NULL` → gọi `/login` bằng mật khẩu luôn trả `401 INVALID_CREDENTIALS` cho tới khi user đặt mật khẩu qua `forgot-password` → `reset-password` (cần có email trước).
 
 Lỗi: `VALIDATION_ERROR` (400), `INVALID_SOCIAL_TOKEN` (401 — token sai/hết hạn/**cấp cho app khác**), `INVALID_CREDENTIALS` (401 — tài khoản bị khoá), `SOCIAL_LINK_VERIFICATION_REQUIRED` (409 — email đã có chủ, xem mục 3.11), `INTERNAL_ERROR` (500 — provider timeout hoặc lỗi 5xx; đây là lỗi phía ta, cho user retry).
 
@@ -255,7 +257,7 @@ Request:
 
 `token` là **đúng token provider của lần đăng nhập vừa bị từ chối** — client phải giữ nó lại, không được vứt đi khi nhận 409. Server không nhớ challenge phía nó: token được verify lại ở đây, và đó mới là kiểm tra mạnh. Hai nửa phải cùng có mặt — token chứng minh người gọi giữ tài khoản Facebook, mã chứng minh họ giữ hòm thư. Chỉ một nửa thì không ghép được gì, và đó là toàn bộ lập luận bảo mật của luồng này.
 
-Kết quả: tài khoản provider được gắn vào tài khoản sẵn có, **không tạo tài khoản thứ hai** (kiểm chứng bằng `SELECT count(*) FROM users` trước và sau: con số không đổi). Phiên trả về là của tài khoản sẵn có đó.
+Kết quả: tài khoản provider được gắn vào tài khoản sẵn có, **không tạo tài khoản thứ hai** (kiểm chứng bằng `SELECT count(*) FROM users` trước và sau: con số không đổi). Phiên trả về là của tài khoản sẵn có đó. Nếu tài khoản đó chưa từng verify email thì mật khẩu của nó bị xoá và email được đánh dấu verify — xem mục 3.10.
 
 Thông điệp 409 **cố tình không chứa địa chỉ email** và không nói gì về tài khoản sẽ được ghép. Người chủ thật đã biết cả hai; với kẻ đang giữ một tài khoản provider khai email của người khác, nói ra là xác nhận nạn nhân có tài khoản ở đây.
 

@@ -83,7 +83,7 @@ public class SocialLinkChallenge {
             throw new InvalidOtpException();
         }
 
-        registrar.link(owner, profile);
+        registrar.claim(owner, profile);
         return owner;
     }
 }

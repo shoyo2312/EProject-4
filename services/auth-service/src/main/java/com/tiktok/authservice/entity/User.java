@@ -92,6 +92,14 @@ public class User extends BaseEntity {
         this.passwordHash = newHash;
     }
 
+    /**
+     * Leaves the account with no password, as a social signup starts out: signing in by password
+     * is impossible until the owner sets one through the reset flow.
+     */
+    public void clearPassword() {
+        this.passwordHash = null;
+    }
+
     public void lock() {
         this.status = UserStatus.LOCKED;
     }

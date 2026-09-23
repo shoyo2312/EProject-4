@@ -783,6 +783,28 @@ class AuthServiceImplTest {
     }
 
     /**
+     * The reset code goes to the address, so spending it proves the address. Without marking it,
+     * an account whose address was never verified set a password and then got 403
+     * EMAIL_NOT_VERIFIED on it: the case for every social account whose provider never vouched
+     * for its email.
+     */
+    @Test
+    void resetPassword_onAnUnverifiedAccount_verifiesTheAddress() {
+        authService.register(validRegisterRequest());
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), org.mockito.ArgumentMatchers.anyString());
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+
+        authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThat(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("john@example.com").orElseThrow()
+                .isEmailVerified()).isTrue();
+        assertThat(authService.login(new LoginRequest("johndoe", "newpassword123")).accessToken()).isNotBlank();
+    }
+
+    /**
      * Rotation without replay detection is worse than no rotation: whoever refreshes first keeps
      * a valid chain forever, and the loser just sees "please sign in again" — no alarm anywhere.
      * A rotated token coming back means two parties hold it, so every session for that user dies
