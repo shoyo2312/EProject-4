@@ -144,7 +144,7 @@ class AdminServiceImplTest {
     void resolveReport_unknownReport_throwsNotFound() {
         when(reportRepository.findByIdAndDeletedAtIsNull(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> adminService.resolveReport(1L, 99L, new ResolveReportRequest(ModerationActionType.WARN_USER, "warn")))
+        assertThatThrownBy(() -> adminService.resolveReport(1L, 99L, new ResolveReportRequest(ModerationActionType.WARN_USER, "warn", null)))
                 .isInstanceOf(ReportNotFoundException.class);
     }
 
@@ -160,7 +160,7 @@ class AdminServiceImplTest {
                 .build();
         when(reportRepository.findByIdAndDeletedAtIsNull(5L)).thenReturn(Optional.of(resolved));
 
-        assertThatThrownBy(() -> adminService.resolveReport(1L, 5L, new ResolveReportRequest(ModerationActionType.WARN_USER, "warn")))
+        assertThatThrownBy(() -> adminService.resolveReport(1L, 5L, new ResolveReportRequest(ModerationActionType.WARN_USER, "warn", null)))
                 .isInstanceOf(ReportAlreadyResolvedException.class);
     }
 
@@ -178,7 +178,7 @@ class AdminServiceImplTest {
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
                 new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "nudity", ReportStatus.RESOLVED, 2L, null, null));
 
-        ReportResponse response = adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation"));
+        ReportResponse response = adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation", null));
 
         assertThat(response.status()).isEqualTo(ReportStatus.RESOLVED);
         assertThat(pending.getStatus()).isEqualTo(ReportStatus.RESOLVED);
@@ -207,7 +207,7 @@ class AdminServiceImplTest {
             return new ReportResponse(r.getId(), r.getReporterId(), r.getTargetType(), r.getTargetId(), r.getReason(), r.getStatus(), r.getResolvedBy(), r.getResolvedAt(), null);
         });
 
-        ReportResponse response = adminService.resolveReport(2L, 8L, new ResolveReportRequest(ModerationActionType.DISMISS_REPORT, "not a violation"));
+        ReportResponse response = adminService.resolveReport(2L, 8L, new ResolveReportRequest(ModerationActionType.DISMISS_REPORT, "not a violation", null));
 
         assertThat(response.status()).isEqualTo(ReportStatus.DISMISSED);
     }
@@ -258,6 +258,26 @@ class AdminServiceImplTest {
     }
 
     @Test
+    void resolveReport_banCarriesItsDuration() {
+        Report pending = Report.builder()
+                .id(9L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.USER)
+                .targetId("42")
+                .reason("harassment")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(9L)).thenReturn(Optional.of(pending));
+
+        adminService.resolveReport(2L, 9L, new ResolveReportRequest(ModerationActionType.BAN_USER, "harassment", 3));
+
+        ArgumentCaptor<ModerationAction> saved = ArgumentCaptor.forClass(ModerationAction.class);
+        verify(moderationActionRepository).save(saved.capture());
+        assertThat(saved.getValue().getBannedUntil())
+                .isCloseTo(Instant.now().plus(3, ChronoUnit.DAYS), within(1, ChronoUnit.MINUTES));
+    }
+
+    @Test
     void resolveReport_banUserOnVideoReport_rejected() {
         Report pending = Report.builder()
                 .id(9L)
@@ -272,7 +292,7 @@ class AdminServiceImplTest {
         // Otherwise this publishes a UserBannedEvent carrying a Mongo document id where a user id
         // belongs — or, when the id happens to parse, a ban aimed at whoever owns that number.
         assertThatThrownBy(() -> adminService.resolveReport(2L, 9L,
-                new ResolveReportRequest(ModerationActionType.BAN_USER, "ban")))
+                new ResolveReportRequest(ModerationActionType.BAN_USER, "ban", null)))
                 .isInstanceOf(InvalidModerationTargetException.class);
         verifyNoInteractions(moderationActionRepository, adminEventProducer);
         assertThat(pending.getStatus()).isEqualTo(ReportStatus.PENDING);
@@ -340,7 +360,7 @@ class AdminServiceImplTest {
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
                 new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "x", ReportStatus.RESOLVED, 2L, null, null));
 
-        adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation"));
+        adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation", null));
 
         // Everyone else who flagged the same video is answered by the same decision; leaving them
         // PENDING is how the video comes back up the queue with an admin about to decide it twice.

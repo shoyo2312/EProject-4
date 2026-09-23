@@ -81,7 +81,7 @@ public class ReportController {
             @AuthenticationPrincipal Long currentAdminId,
             @Valid @RequestBody ResolveQueueRequest request) {
         return ApiResponse.success(adminService.moderate(currentAdminId, request.targetType(),
-                request.targetId(), request.actionType(), request.reason()));
+                request.targetId(), request.actionType(), request.reason(), request.banDays()));
     }
 
     @PostMapping("/{reportId}/resolve")

@@ -147,7 +147,8 @@ public class AdminServiceImpl implements AdminService {
         report.getTargetType().validateTargetId(report.getTargetId());
 
         record(adminId, report.getTargetType(), report.getTargetId(),
-                request.actionType(), request.reason(), report.getId());
+                request.actionType(), request.reason(), report.getId(),
+                bannedUntil(request.actionType(), request.banDays()));
 
         ReportStatus finalStatus = request.actionType().resolutionStatus();
         report.resolve(adminId, finalStatus);
@@ -168,13 +169,8 @@ public class AdminServiceImpl implements AdminService {
         actionType.requireApplicableTo(targetType);
         targetType.validateTargetId(targetId);
 
-        // Only a ban has a duration, and only here is it turned into an instant: computing it at
-        // the consumer would date the ban from whenever the event happened to be delivered.
-        Instant bannedUntil = banDays != null && actionType == ModerationActionType.BAN_USER
-                ? Instant.now().plus(banDays, ChronoUnit.DAYS)
-                : null;
-
-        ModerationAction action = record(adminId, targetType, targetId, actionType, reason, null, bannedUntil);
+        ModerationAction action = record(adminId, targetType, targetId, actionType, reason, null,
+                bannedUntil(actionType, banDays));
 
         // The console resolves a whole queue row through this path — one decision, every
         // standing report against that target closed. It is also what a takedown taken straight
@@ -283,12 +279,17 @@ public class AdminServiceImpl implements AdminService {
                 .filter(action -> action.getActionType().effect() == ModerationActionType.Effect.ENFORCE);
     }
 
-    /** Writes the audit row and the outbox event for one decision. */
-    private ModerationAction record(Long adminId, ReportTargetType targetType, String targetId,
-                                    ModerationActionType actionType, String reason, Long reportId) {
-        return record(adminId, targetType, targetId, actionType, reason, reportId, null);
+    /**
+     * Only a ban has a duration, and only here is it turned into an instant: computing it at the
+     * consumer would date the ban from whenever the event happened to be delivered.
+     */
+    private static Instant bannedUntil(ModerationActionType actionType, Integer banDays) {
+        return banDays != null && actionType == ModerationActionType.BAN_USER
+                ? Instant.now().plus(banDays, ChronoUnit.DAYS)
+                : null;
     }
 
+    /** Writes the audit row and the outbox event for one decision. */
     private ModerationAction record(Long adminId, ReportTargetType targetType, String targetId,
                                     ModerationActionType actionType, String reason, Long reportId,
                                     Instant bannedUntil) {
