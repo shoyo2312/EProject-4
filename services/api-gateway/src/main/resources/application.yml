@@ -72,6 +72,14 @@ spring:
             redis-rate-limiter.burstCapacity: 40
             key-resolver: "#{@ipKeyResolver}"
 
+gateway:
+  rate-limit:
+    # The proxies whose X-Forwarded-For the rate limiter believes (see RateLimiterConfig). The
+    # default is loopback plus the private ranges the web server sits on inside Docker or a
+    # cluster, so a caller reaching the gateway from a public address is keyed on that address
+    # whatever header it sends. Narrow this to the proxies' actual addresses once they are known.
+    trusted-proxies: ${RATE_LIMIT_TRUSTED_PROXIES:127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
+
 downstream:
   auth-service-uri: ${AUTH_SERVICE_URI:http://localhost:8081}
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}

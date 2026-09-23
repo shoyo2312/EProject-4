@@ -96,10 +96,11 @@ Lỗi sinh ở tầng gateway (route không khớp, downstream chết/không k�
 
 ### Key resolver — cách xác định IP
 
-`ipKeyResolver`: lấy **entry đầu tiên** của header `X-Forwarded-For` nếu có; không có thì dùng `getRemoteAddress()`; không có nữa thì literal `"unknown"`.
+`ipKeyResolver` (`RateLimiterConfig`): bắt đầu từ `getRemoteAddress()`; **chỉ khi** địa chỉ đó thuộc `gateway.rate-limit.trusted-proxies` (env `RATE_LIMIT_TRUSTED_PROXIES`, mặc định loopback + dải private) thì mới đọc `X-Forwarded-For`, và đọc **từ phải sang trái**: còn là proxy tin cậy thì lùi thêm một hop, gặp địa chỉ đầu tiên không phải proxy thì đó là client. Entry không phải IP literal (hostname, `ip:port`…) thì dừng ở proxy vừa chuyển nó tới. Không có remote address thì literal `"unknown"`.
 
-- Web client qua Next.js proxy `/api/*` từ server của nó → nếu chỉ dùng `getRemoteAddress()` thì **cả site chung một bucket 20 req/s** (một trang feed 20 video + lookup tác giả là hết). Vì thế proxy phải set `X-Forwarded-For` = IP người dùng thật.
-- ⚠️ Header này **client tự bịa được**. Chỉ an toàn khi không gì ngoài proxy nội bộ chạm được cổng gateway. **Trước khi expose gateway ra ngoài trực tiếp: giới hạn `X-Forwarded-For` theo danh sách IP proxy đã biết.**
+- Web client qua Next.js proxy `/api/*` từ server của nó → nếu chỉ dùng `getRemoteAddress()` thì **cả site chung một bucket 20 req/s** (một trang feed 20 video + lookup tác giả là hết). Vì thế cần `X-Forwarded-For`.
+- Trước đây lấy **entry đầu tiên** — chính là phần client tự viết, proxy chỉ append vào cuối. Đổi IP bịa mỗi request là được bucket mới mỗi lần. Giờ các entry bên trái địa chỉ client không bao giờ được đọc, và gọi thẳng vào gateway từ địa chỉ public thì header bị bỏ qua.
+- ⚠️ **Next.js rewrites không append**: nó chỉ set `X-Forwarded-For` khi request chưa có (`??=`), nên nếu Next.js được expose thẳng ra internet thì header client tự bịa đi qua nguyên vẹn và gateway không thể biết IP thật. Cần một proxy đứng trước Next.js ghi đè/append header này (Vercel edge đã làm; chạy Docker thì đặt nginx/Caddy phía trước). Khi đã biết địa chỉ proxy, thu hẹp `trusted-proxies` về đúng các địa chỉ đó.
 
 Hệ quả cho mobile: nhiều thiết bị sau cùng một NAT chia nhau hạn mức 20 req/s. Đây là lý do các doc khác yêu cầu poll giãn dần, không gọi `/like-status` cho cả trang feed cùng lúc, dùng `GET /videos/batch` thay vì `GET /{id}` nhiều lần.
 
