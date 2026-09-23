@@ -222,9 +222,19 @@ public class RecommendationServiceImpl implements RecommendationService {
         addEngagement(videoId, liked ? LIKE_SCORE : -LIKE_SCORE);
     }
 
+    /**
+     * A share is the heaviest signal here, and the share endpoint allows sixty an hour per viewer
+     * per video — scoring each one let a single account buy a video 300 points an hour, a hundred
+     * viewers' likes. Every share still counts on the video's own counter; only the first one per
+     * viewer counts toward trending, for as long as trending remembers it.
+     */
     @Override
-    public void recordShare(String videoId) {
-        addEngagement(videoId, SHARE_SCORE);
+    public void recordShare(String videoId, Long userId) {
+        Boolean first = redisTemplate.opsForValue()
+                .setIfAbsent(RecoKeys.sharedBy(videoId, userId), "1", RecoKeys.BUCKET_TTL);
+        if (Boolean.TRUE.equals(first)) {
+            addEngagement(videoId, SHARE_SCORE);
+        }
     }
 
     @Override

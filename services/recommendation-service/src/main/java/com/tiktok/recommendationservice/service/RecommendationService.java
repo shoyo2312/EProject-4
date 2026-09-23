@@ -58,7 +58,8 @@ public interface RecommendationService {
 
     void recordLike(String videoId, boolean liked);
 
-    void recordShare(String videoId);
+    /** Scores only the first share by {@code userId} of this video within the trending window. */
+    void recordShare(String videoId, Long userId);
 
     /**
      * @param created true for a new comment, false when one was removed — the engagement a

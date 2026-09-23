@@ -14,6 +14,7 @@ import org.springframework.data.redis.connection.zset.Weights;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 
 import java.util.LinkedHashSet;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -46,6 +48,9 @@ class RecommendationServiceImplTest {
     @Mock
     private HashOperations<String, Object, Object> hashOperations;
 
+    @Mock
+    private ValueOperations<String, String> valueOperations;
+
     private RecommendationServiceImpl recommendationService;
 
     @BeforeEach
@@ -54,6 +59,7 @@ class RecommendationServiceImplTest {
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(redisTemplate.<Object, Object>opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
     /**
@@ -318,6 +324,18 @@ class RecommendationServiceImplTest {
 
         verify(zSetOperations, times(RecoKeys.TRENDING_WINDOW_HOURS))
                 .remove(startsWith("reco:trend:"), eq((Object) "vid1"));
+    }
+
+    /** Sixty shares an hour from one account used to be worth a hundred viewers' likes. */
+    @Test
+    void recordShare_scoresOnlyAViewersFirstShareOfTheVideo() {
+        when(valueOperations.setIfAbsent(eq("reco:shared:vid1:9"), any(), any(java.time.Duration.class)))
+                .thenReturn(true, false);
+
+        recommendationService.recordShare("vid1", 9L);
+        recommendationService.recordShare("vid1", 9L);
+
+        verify(zSetOperations, times(1)).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(5.0));
     }
 
     @Test

@@ -52,6 +52,14 @@ public final class RecoKeys {
                 .mapToObj(hoursAgo -> trendBucket(now.minus(Duration.ofHours(hoursAgo))));
     }
 
+    /**
+     * Present while one viewer's share of one video is already scored in the trending window;
+     * see {@code RecommendationServiceImpl.recordShare}. Lives {@link #BUCKET_TTL}, as the buckets do.
+     */
+    public static String sharedBy(String videoId, Long userId) {
+        return "reco:shared:" + videoId + ":" + userId;
+    }
+
     /** Decayed union of the window. Rebuilt on a schedule; read by both /trending and /feed. */
     public static final String TRENDING = "reco:trending";
 

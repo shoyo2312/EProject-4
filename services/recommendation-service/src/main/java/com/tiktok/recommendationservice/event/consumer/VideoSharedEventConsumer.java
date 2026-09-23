@@ -23,6 +23,6 @@ public class VideoSharedEventConsumer {
         VideoSharedEvent event = objectMapper.readValue(payload, VideoSharedEvent.class);
 
         inboxService.runOnce(event.eventId(), () ->
-                recommendationService.recordShare(String.valueOf(event.videoId())));
+                recommendationService.recordShare(String.valueOf(event.videoId()), event.userId()));
     }
 }
