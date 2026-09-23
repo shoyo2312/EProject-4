@@ -22,6 +22,7 @@ import com.tiktok.adminservice.repository.ModerationActionRepository;
 import com.tiktok.adminservice.repository.ReportQueueRow;
 import com.tiktok.adminservice.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -89,7 +90,13 @@ public class AdminServiceImpl implements AdminService {
         } catch (DataIntegrityViolationException e) {
             // Lost the race with a concurrent submit of the same report. 409 rather than the
             // other request's row, because that row cannot be read from this transaction any more.
-            throw new ReportAlreadySubmittedException();
+            // Only for that index: any other violation is a bug on our side, and calling it a
+            // duplicate told the reporter their report was filed when nothing was.
+            if (e.getCause() instanceof ConstraintViolationException cause
+                    && "idx_reports_one_per_reporter_target".equalsIgnoreCase(cause.getConstraintName())) {
+                throw new ReportAlreadySubmittedException();
+            }
+            throw e;
         }
     }
 

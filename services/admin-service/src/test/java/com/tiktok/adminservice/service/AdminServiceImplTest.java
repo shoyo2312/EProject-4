@@ -24,11 +24,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -251,10 +253,27 @@ class AdminServiceImplTest {
         when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
                 10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
         when(reportRepository.saveAndFlush(any(Report.class)))
-                .thenThrow(new DataIntegrityViolationException("idx_reports_one_per_reporter_target"));
+                .thenThrow(violationOf("idx_reports_one_per_reporter_target"));
 
         assertThatThrownBy(() -> adminService.submitReport(10L, request))
                 .isInstanceOf(ReportAlreadySubmittedException.class);
+    }
+
+    /** Anything but the duplicate index is our bug, and calling it a duplicate said "filed" for a report that was not. */
+    @Test
+    void submitReport_otherConstraintViolation_isNotCalledADuplicate() {
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content");
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.saveAndFlush(any(Report.class))).thenThrow(violationOf("reports_reason_check"));
+
+        assertThatThrownBy(() -> adminService.submitReport(10L, request))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    private static DataIntegrityViolationException violationOf(String constraint) {
+        return new DataIntegrityViolationException("could not execute statement",
+                new ConstraintViolationException("violation", new SQLException(), constraint));
     }
 
     @Test

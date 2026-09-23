@@ -7,7 +7,9 @@ import jakarta.validation.constraints.Size;
 
 public record SubmitReportRequest(
         @NotNull ReportTargetType targetType,
-        @NotBlank String targetId,
+        // The column's width. Past it the insert failed on a constraint and was answered as a
+        // duplicate report.
+        @NotBlank @Size(max = 100) String targetId,
         @NotBlank @Size(max = 1000) String reason
 ) {
 }

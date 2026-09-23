@@ -17,7 +17,7 @@ import jakarta.validation.constraints.Size;
  */
 public record ResolveQueueRequest(
         @NotNull ReportTargetType targetType,
-        @NotBlank String targetId,
+        @NotBlank @Size(max = 100) String targetId,
         @NotNull ModerationActionType actionType,
         @NotBlank @Size(max = 1000) String reason,
 
