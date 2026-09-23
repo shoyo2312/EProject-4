@@ -1,6 +1,5 @@
 package com.tiktok.interactionservice.service;
 
-import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.SaveStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
@@ -9,7 +8,6 @@ import com.tiktok.interactionservice.entity.SaveByUserKey;
 import com.tiktok.interactionservice.entity.SaveByUserTime;
 import com.tiktok.interactionservice.entity.SaveByUserTimeKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
-import com.tiktok.interactionservice.exception.InteractionConflictException;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
 import com.tiktok.interactionservice.exception.SaveRateLimitedException;
 import com.tiktok.interactionservice.repository.SaveByUserRepository;
@@ -23,8 +21,8 @@ import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
-import java.util.function.BooleanSupplier;
 
 /**
  * Favourites. Two tables, same shape as the like pair but for a different reason: saves_by_user is
@@ -36,8 +34,6 @@ import java.util.function.BooleanSupplier;
 @Service
 @RequiredArgsConstructor
 public class SaveServiceImpl implements SaveService {
-
-    private static final int MAX_LWT_RETRIES = 2;
 
     private final SaveByUserRepository saveByUserRepository;
     private final SaveByUserTimeRepository saveByUserTimeRepository;
@@ -52,9 +48,14 @@ public class SaveServiceImpl implements SaveService {
         videoOwnershipClient.requireVisible(videoId);
         rateLimiter.require("save-rate", videoId, currentUserId, SaveRateLimitedException::new);
 
-        Instant savedAt = Instant.now();
-        boolean newlySaved = executeLwtWithRetry(
-                () -> saveByUserRepository.insertIfNotExists(currentUserId, videoId, savedAt));
+        // Truncated to what Cassandra stores, so a retry can recognise the row as this call's own.
+        Instant savedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        SaveByUserKey key = SaveByUserKey.builder().userId(currentUserId).videoId(videoId).build();
+        boolean newlySaved = LwtRetry.run(
+                () -> saveByUserRepository.insertIfNotExists(currentUserId, videoId, savedAt),
+                () -> saveByUserRepository.findById(key)
+                        .filter(row -> savedAt.equals(row.getCreatedAt())).isPresent(),
+                "Save/unsave");
 
         if (newlySaved) {
             // The LWT is what grants the right to move the counter, and it grants it exactly
@@ -107,7 +108,8 @@ public class SaveServiceImpl implements SaveService {
 
         rateLimiter.require("save-rate", videoId, currentUserId, SaveRateLimitedException::new);
 
-        boolean wasSaved = executeLwtWithRetry(() -> saveByUserRepository.deleteIfExists(currentUserId, videoId));
+        boolean wasSaved = LwtRetry.runDelete(
+                () -> saveByUserRepository.deleteIfExists(currentUserId, videoId), "Save/unsave");
         if (wasSaved) {
             boolean countered = false;
             boolean delisted = false;
@@ -157,24 +159,6 @@ public class SaveServiceImpl implements SaveService {
         }
     }
 
-    /**
-     * Same reasoning as {@link LikeServiceImpl}: a WriteTimeoutException leaves an LWT's outcome
-     * indeterminate, and IF NOT EXISTS / IF EXISTS is idempotent, so retrying it is safe.
-     */
-    private boolean executeLwtWithRetry(BooleanSupplier lwtOperation) {
-        WriteTimeoutException lastError = null;
-        for (int attempt = 0; attempt <= MAX_LWT_RETRIES; attempt++) {
-            try {
-                return lwtOperation.getAsBoolean();
-            } catch (WriteTimeoutException e) {
-                lastError = e;
-            }
-        }
-        InteractionConflictException failure = new InteractionConflictException(
-                "Save/unsave could not be confirmed after retries, please try again");
-        failure.initCause(lastError);
-        throw failure;
-    }
 
     private static SaveByUserTimeKey listingKey(Long videoId, Long userId, Instant savedAt) {
         return SaveByUserTimeKey.builder().userId(userId).createdAt(savedAt).videoId(videoId).build();

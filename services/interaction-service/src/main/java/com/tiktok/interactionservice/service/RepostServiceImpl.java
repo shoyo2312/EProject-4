@@ -1,6 +1,5 @@
 package com.tiktok.interactionservice.service;
 
-import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.RepostContextResponse;
 import com.tiktok.interactionservice.dto.response.RepostStatusResponse;
@@ -10,7 +9,6 @@ import com.tiktok.interactionservice.entity.RepostByUserKey;
 import com.tiktok.interactionservice.entity.RepostByVideo;
 import com.tiktok.interactionservice.entity.RepostByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
-import com.tiktok.interactionservice.exception.InteractionConflictException;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
 import com.tiktok.interactionservice.exception.RepostRateLimitedException;
 import com.tiktok.interactionservice.repository.RepostByUserRepository;
@@ -24,9 +22,9 @@ import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
-import java.util.function.BooleanSupplier;
 
 /**
  * Repost is a toggle, exactly like {@link LikeServiceImpl} — not an event log like
@@ -38,8 +36,6 @@ import java.util.function.BooleanSupplier;
 @Service
 @RequiredArgsConstructor
 public class RepostServiceImpl implements RepostService {
-
-    private static final int MAX_LWT_RETRIES = 2;
 
     /** Same ceiling the paged listings and like-status batch use — one feed page's worth. */
     private static final int MAX_BATCH_SIZE = 50;
@@ -67,9 +63,14 @@ public class RepostServiceImpl implements RepostService {
 
         long repostCount = counterCacheService.getCounts(videoId).repostCount();
 
-        Instant repostedAt = Instant.now();
-        boolean newlyReposted = executeLwtWithRetry(
-                () -> repostByVideoRepository.insertIfNotExists(videoId, currentUserId, repostedAt));
+        // Truncated to what Cassandra stores, so a retry can recognise the row as this call's own.
+        Instant repostedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        RepostByVideoKey key = RepostByVideoKey.builder().videoId(videoId).userId(currentUserId).build();
+        boolean newlyReposted = LwtRetry.run(
+                () -> repostByVideoRepository.insertIfNotExists(videoId, currentUserId, repostedAt),
+                () -> repostByVideoRepository.findById(key)
+                        .filter(row -> repostedAt.equals(row.getCreatedAt())).isPresent(),
+                "Repost/un-repost");
 
         if (newlyReposted) {
             boolean countered = false;
@@ -114,8 +115,8 @@ public class RepostServiceImpl implements RepostService {
 
         Instant repostedAt = claim.getCreatedAt();
 
-        boolean wasReposted = executeLwtWithRetry(
-                () -> repostByVideoRepository.deleteIfExists(videoId, currentUserId));
+        boolean wasReposted = LwtRetry.runDelete(
+                () -> repostByVideoRepository.deleteIfExists(videoId, currentUserId), "Repost/un-repost");
 
         if (wasReposted) {
             boolean countered = false;
@@ -191,20 +192,5 @@ public class RepostServiceImpl implements RepostService {
             log.error("Could not undo the {} after {}; its counter is now off by one",
                     what, cause.getMessage(), ex);
         }
-    }
-
-    private boolean executeLwtWithRetry(BooleanSupplier lwtOperation) {
-        WriteTimeoutException lastError = null;
-        for (int attempt = 0; attempt <= MAX_LWT_RETRIES; attempt++) {
-            try {
-                return lwtOperation.getAsBoolean();
-            } catch (WriteTimeoutException e) {
-                lastError = e;
-            }
-        }
-        InteractionConflictException failure = new InteractionConflictException(
-                "Repost/un-repost could not be confirmed after retries, please try again");
-        failure.initCause(lastError);
-        throw failure;
     }
 }

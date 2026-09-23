@@ -9,6 +9,7 @@ import com.tiktok.interactionservice.entity.CommentByVideo;
 import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.entity.CommentCounters;
 import com.tiktok.interactionservice.entity.CommentIndex;
+import com.tiktok.interactionservice.entity.CommentLikeKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.CommentsDisabledException;
@@ -30,6 +31,7 @@ import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -412,8 +414,16 @@ public class CommentServiceImpl implements CommentService {
 
         // The membership LWT is what grants the right to move the count, and it grants it once:
         // a retried like finds the row already there, is told newlyLiked=false, and leaves the
-        // tally alone.
-        boolean newlyLiked = commentLikeRepository.insertIfNotExists(commentId, currentUserId, Instant.now());
+        // tally alone. Through LwtRetry for the one retry it cannot tell apart on its own: an attempt
+        // that timed out after it applied. Truncated to what Cassandra stores, so that retry can
+        // recognise the row as this call's own.
+        Instant likedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        CommentLikeKey key = CommentLikeKey.builder().commentId(commentId).userId(currentUserId).build();
+        boolean newlyLiked = LwtRetry.run(
+                () -> commentLikeRepository.insertIfNotExists(commentId, currentUserId, likedAt),
+                () -> commentLikeRepository.findById(key)
+                        .filter(row -> likedAt.equals(row.getCreatedAt())).isPresent(),
+                "Comment like/unlike");
         int likeCount = newlyLiked ? moveLikes(videoId, commentId, comment, 1) : comment.likeCount();
         // Only on an actual change: a retried like moved nothing, and announcing it would wake
         // every open panel to redraw the number it already shows.
@@ -430,7 +440,8 @@ public class CommentServiceImpl implements CommentService {
         rateLimiter.require("comment-like-rate", commentId, currentUserId, CommentLikeRateLimitedException::new);
         CommentByVideo comment = liveComment(videoId, commentId);
 
-        boolean wasLiked = commentLikeRepository.deleteIfExists(commentId, currentUserId);
+        boolean wasLiked = LwtRetry.runDelete(
+                () -> commentLikeRepository.deleteIfExists(commentId, currentUserId), "Comment like/unlike");
         int likeCount = wasLiked ? moveLikes(videoId, commentId, comment, -1) : comment.likeCount();
         if (wasLiked) {
             eventPublisher.publishCommentLikeChanged(commentId, videoId, currentUserId, false, likeCount);
