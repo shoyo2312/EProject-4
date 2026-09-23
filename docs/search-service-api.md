@@ -42,9 +42,11 @@ Mọi response bọc trong `ApiResponse<T>` như các service khác. `data` là 
 Phân trang bằng query param chuẩn Spring: `?page=0&size=20&sort=field,dir`.
 
 - `page` bắt đầu từ **0**. Không truyền → `page=0`, `size=20`.
-- **Không có chặn trên cho `size` ở service này** (khác video-service kẹp 50). Xin 20–50 là hợp lý; xin vài nghìn thì tự làm chậm app mình và tốn hạn mức gateway.
+- `size` bị kẹp ở **100** (`spring.data.web.pageable.max-page-size`); xin lớn hơn thì nhận về 100. Xin 20–50 là hợp lý.
 - Điều kiện dừng infinite scroll: `last == true` (hoặc `number + 1 >= totalPages`). `content` ngắn hơn `size` ở trang cuối là bình thường.
 - `sort` mặc định theo **điểm liên quan (relevance)** của Elasticsearch khi có `q`; không truyền `q` thì thứ tự không xác định — nên truyền `sort=createdAt,desc` nếu muốn thứ tự ổn định cho danh mục.
+- `sort` chỉ nhận `_score`, `createdAt`, `viewCount`, `likeCount`, `commentCount`, `shareCount`. Field khác (vd. `title` — field text, Elasticsearch không sort được) → `400 INVALID_SORT`.
+- Chỉ phân trang được trong **10 000 kết quả đầu** (`(page + 1) * size <= 10000`, giới hạn `max_result_window` của Elasticsearch). Vượt quá → `400 PAGE_TOO_DEEP`; thu hẹp `q`/`hashtag` thay vì lật tiếp.
 
 Phía Dart: có thể tái dùng wrapper `PageResponse<T>` bằng cách đọc đúng 4 field `content` / `number` / `totalElements` / `totalPages`, bỏ qua phần còn lại.
 
@@ -120,10 +122,12 @@ Client nên tự ẩn video vừa xoá ở phía mình thay vì đợi search lo
 | `code` | HTTP | Khi nào |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Param sai kiểu (vd. `minPrice=abc`) |
+| `INVALID_SORT` | 400 | `sort` theo field không nằm trong danh sách ở mục 2 |
+| `PAGE_TOO_DEEP` | 400 | Trang vượt quá 10 000 kết quả đầu |
 | `INTERNAL_ERROR` | 500 | Elasticsearch không phản hồi / lỗi không xác định |
 | — | 429 | Vượt hạn mức gateway (20 req/s, burst 40, theo IP) |
 
-Không có mã lỗi nghiệp vụ riêng — mọi endpoint đều là đọc và luôn trả `Page`, kể cả rỗng. `q`/`hashtag` không khớp gì → `content: []`, `totalElements: 0`, **không** phải 404.
+Ngoài hai mã phân trang ở trên, không có mã lỗi nghiệp vụ riêng — mọi endpoint đều là đọc và luôn trả `Page`, kể cả rỗng. `q`/`hashtag` không khớp gì → `content: []`, `totalElements: 0`, **không** phải 404.
 
 ## 7. Sự kiện Kafka (Events)
 

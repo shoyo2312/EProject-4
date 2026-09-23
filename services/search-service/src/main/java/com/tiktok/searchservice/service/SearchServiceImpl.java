@@ -2,6 +2,7 @@ package com.tiktok.searchservice.service;
 
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
+import com.tiktok.common.exception.BadRequestException;
 import com.tiktok.searchservice.document.VideoDocument;
 import com.tiktok.searchservice.dto.response.VideoSearchResponse;
 import com.tiktok.searchservice.mapper.SearchMapper;
@@ -20,6 +21,7 @@ import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * Only surfaces documents in a terminal "visible" state (video status PUBLISHED and visibility
@@ -41,6 +43,20 @@ public class SearchServiceImpl implements SearchService {
      */
     private static final float TITLE_BOOST = 3f;
 
+    /**
+     * What a caller may sort on. The sort used to go to Elasticsearch as given, and title or
+     * description (text fields, which it will not sort) or any unmapped name failed the whole
+     * search as a 500.
+     */
+    private static final Set<String> SORTABLE =
+            Set.of("_score", "createdAt", "viewCount", "likeCount", "commentCount", "shareCount");
+
+    /**
+     * Elasticsearch's default {@code index.max_result_window}: a page reaching past it is refused
+     * outright rather than returned short, which surfaced as a 500.
+     */
+    private static final int MAX_RESULT_WINDOW = 10_000;
+
     private final ElasticsearchOperations elasticsearchOperations;
     private final SearchMapper searchMapper;
 
@@ -57,6 +73,17 @@ public class SearchServiceImpl implements SearchService {
 
     @Override
     public Page<VideoSearchResponse> searchVideos(String query, String hashtag, Pageable pageable) {
+        for (Sort.Order order : pageable.getSort()) {
+            if (!SORTABLE.contains(order.getProperty())) {
+                throw new BadRequestException("INVALID_SORT",
+                        "Cannot sort by '" + order.getProperty() + "'. Sortable: " + SORTABLE);
+            }
+        }
+        if (pageable.getOffset() + pageable.getPageSize() > MAX_RESULT_WINDOW) {
+            throw new BadRequestException("PAGE_TOO_DEEP",
+                    "Only the first " + MAX_RESULT_WINDOW + " results can be paged through; narrow the search.");
+        }
+
         BoolQuery.Builder bool = new BoolQuery.Builder();
 
         // Both conditions, because they answer different questions: status says the video finished

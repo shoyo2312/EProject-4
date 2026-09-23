@@ -10,7 +10,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import com.tiktok.common.exception.BadRequestException;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
@@ -20,8 +22,10 @@ import java.util.List;
 import java.util.Objects;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -42,7 +46,21 @@ class SearchServiceImplTest {
         searchService = new SearchServiceImpl(elasticsearchOperations, searchMapper);
         VideoDocument document = VideoDocument.builder().id("v1").status("PUBLISHED").build();
         SearchHits<VideoDocument> hits = mockSearchHits(document);
-        when(elasticsearchOperations.search(any(NativeQuery.class), eq(VideoDocument.class))).thenReturn(hits);
+        // Lenient: the rejection tests never get as far as searching.
+        lenient().when(elasticsearchOperations.search(any(NativeQuery.class), eq(VideoDocument.class))).thenReturn(hits);
+    }
+
+    /** title is a text field: Elasticsearch refuses to sort on it, and that refusal was a 500. */
+    @Test
+    void searchVideos_refusesASortOnAFieldElasticsearchCannotSort() {
+        assertThatThrownBy(() -> searchService.searchVideos("x", null, PageRequest.of(0, 10, Sort.by("title"))))
+                .isInstanceOf(BadRequestException.class);
+    }
+
+    @Test
+    void searchVideos_refusesAPagePastTheResultWindow() {
+        assertThatThrownBy(() -> searchService.searchVideos("x", null, PageRequest.of(100, 100)))
+                .isInstanceOf(BadRequestException.class);
     }
 
     @Test
@@ -104,9 +122,9 @@ class SearchServiceImplTest {
     private <T> SearchHits<T> mockSearchHits(T content) {
         SearchHits<T> hits = mock(SearchHits.class);
         SearchHit<T> searchHit = mock(SearchHit.class);
-        when(searchHit.getContent()).thenReturn(content);
-        when(hits.getSearchHits()).thenReturn(List.of(searchHit));
-        when(hits.getTotalHits()).thenReturn(1L);
+        lenient().when(searchHit.getContent()).thenReturn(content);
+        lenient().when(hits.getSearchHits()).thenReturn(List.of(searchHit));
+        lenient().when(hits.getTotalHits()).thenReturn(1L);
         return hits;
     }
 }
