@@ -1,5 +1,6 @@
 package com.tiktok.apigateway.config;
 
+import io.netty.util.NetUtil;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.cloud.gateway.filter.ratelimit.KeyResolver;
 import org.springframework.context.annotation.Bean;
@@ -62,7 +63,11 @@ public class RateLimiterConfig {
             }
             client = hop;
         }
-        return client.getHostAddress();
+        // toAddressString, not getHostAddress: the latter prints IPv6 uncompressed, so loopback
+        // reaches the security log as "0:0:0:0:0:0:0:1" — an address every operator and every
+        // tool writes "::1". Netty is already here for TrustedProxies' literal parsing, and this
+        // is the RFC 5952 form the rest of the world uses.
+        return NetUtil.toAddressString(client);
     }
 
     /** Every entry of every X-Forwarded-For header, in the order the proxies added them. */

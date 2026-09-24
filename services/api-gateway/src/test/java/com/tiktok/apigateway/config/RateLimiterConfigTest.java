@@ -86,8 +86,17 @@ class RateLimiterConfigTest {
 
     @Test
     void ipv6_isMatchedAndReturned() {
-        assertThat(keyFor("fd00::1", "2001:db8::42")).isEqualTo("2001:db8:0:0:0:0:0:42");
-        assertThat(keyFor("2001:db8::99", "2001:db8::42")).isEqualTo("2001:db8:0:0:0:0:0:99");
+        assertThat(keyFor("fd00::1", "2001:db8::42")).isEqualTo("2001:db8::42");
+        assertThat(keyFor("2001:db8::99", "2001:db8::42")).isEqualTo("2001:db8::99");
+    }
+
+    /**
+     * The address every local request actually comes from. Printed uncompressed it reached the
+     * security log as "0:0:0:0:0:0:0:1", which is correct and unreadable.
+     */
+    @Test
+    void loopbackIsWrittenTheWayItIsRead() {
+        assertThat(keyFor("::1")).isEqualTo("::1");
     }
 
     @Test
