@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
+import com.tiktok.event.interaction.CommentLikeChangedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.notificationservice.client.BlockClient;
@@ -132,6 +133,35 @@ class InteractionEventConsumerTest {
 
         verify(notificationService).create(eq(33L), any(), eq(NotificationType.COMMENT), any(), any(), eq("7"));
         verify(videoOwnerClient, never()).ownerOf(any());
+    }
+
+    @Test
+    void onComment_notifiesTheTopLevelAuthorOfADirectReply() throws Exception {
+        consumer.onComment(json(CommentCreatedEvent.of(2L, 7L, 9L, "agreed", 1L, null, 44L)), CREATED);
+
+        verify(notificationService).create(eq(44L), eq(9L), eq(NotificationType.COMMENT), any(), any(), eq("7"));
+        verify(videoOwnerClient, never()).ownerOf(any());
+    }
+
+    @Test
+    void onCommentLike_notifiesTheCommentAuthor() throws Exception {
+        consumer.onCommentLike(json(CommentLikeChangedEvent.of(1L, 7L, 9L, true, 3, 44L)));
+
+        verify(notificationService).create(eq(44L), eq(9L), eq(NotificationType.COMMENT_LIKE), any(), any(), eq("7"));
+    }
+
+    @Test
+    void onCommentLike_ignoresAnUnlike() throws Exception {
+        consumer.onCommentLike(json(CommentLikeChangedEvent.of(1L, 7L, 9L, false, 2, 44L)));
+
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void onCommentLike_doesNotNotifyTheAuthorAboutTheirOwnLike() throws Exception {
+        consumer.onCommentLike(json(CommentLikeChangedEvent.of(1L, 7L, 44L, true, 1, 44L)));
+
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     /**

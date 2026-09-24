@@ -87,6 +87,7 @@ public class CommentServiceImpl implements CommentService {
         // video is the client sending a stale or wrong id — refused rather than stored dangling.
         Long resolvedParentId = null;
         Long replyToUserId = null;
+        Long parentAuthorId = null;
         if (parentId != null) {
             CommentByVideo parent = commentByVideoRepository
                     .findById(CommentByVideoKey.builder().videoId(videoId).commentId(parentId).build())
@@ -96,6 +97,7 @@ public class CommentServiceImpl implements CommentService {
             // Target was itself a reply => record its author so the flat list shows "A > B". A direct
             // reply to a top-level comment leaves this null: its target is the thread owner above it.
             replyToUserId = parent.getParentId() != null ? parent.getUserId() : null;
+            parentAuthorId = parent.getUserId();
         }
 
         Long commentId = SnowflakeIdGenerator.nextId();
@@ -131,7 +133,7 @@ public class CommentServiceImpl implements CommentService {
             countered = true;
             counterCacheService.invalidate(videoId);
             eventPublisher.publishCommentCreated(commentId, videoId, currentUserId, content,
-                    resolvedParentId, replyToUserId);
+                    resolvedParentId, replyToUserId, parentAuthorId);
         } catch (RuntimeException ex) {
             // The counter is taken back as well as the row. Removing the row while the increment
             // stands leaves the video showing more comments than it lists — the mirror image of
@@ -428,7 +430,8 @@ public class CommentServiceImpl implements CommentService {
         // Only on an actual change: a retried like moved nothing, and announcing it would wake
         // every open panel to redraw the number it already shows.
         if (newlyLiked) {
-            eventPublisher.publishCommentLikeChanged(commentId, videoId, currentUserId, true, likeCount);
+            eventPublisher.publishCommentLikeChanged(commentId, videoId, currentUserId, true, likeCount,
+                    comment.getUserId());
         }
         return new CommentLikeResponse(commentId, true, likeCount);
     }
@@ -444,7 +447,8 @@ public class CommentServiceImpl implements CommentService {
                 () -> commentLikeRepository.deleteIfExists(commentId, currentUserId), "Comment like/unlike");
         int likeCount = wasLiked ? moveLikes(videoId, commentId, comment, -1) : comment.likeCount();
         if (wasLiked) {
-            eventPublisher.publishCommentLikeChanged(commentId, videoId, currentUserId, false, likeCount);
+            eventPublisher.publishCommentLikeChanged(commentId, videoId, currentUserId, false, likeCount,
+                    comment.getUserId());
         }
         return new CommentLikeResponse(commentId, false, likeCount);
     }

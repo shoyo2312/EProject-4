@@ -2,6 +2,7 @@ package com.tiktok.notificationservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
+import com.tiktok.event.interaction.CommentLikeChangedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.notificationservice.client.BlockClient;
@@ -18,7 +19,7 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Turns the three interaction streams into inbox entries for the account that owns the video.
+ * Turns the interaction streams into inbox entries for the account that owns the video.
  *
  * <p>None of these events names that account — they carry the video and whoever acted on it — so
  * the owner is resolved through {@link VideoOwnerClient}. An unresolvable owner drops the
@@ -76,12 +77,11 @@ public class InteractionEventConsumer {
 
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () -> {
             // A reply is news for the person being replied to, not for the video's owner — who
-            // already heard about the thread when it started. replyToUserId is only set when the
-            // target was itself a reply, so a reply to a top-level comment still notifies the
-            // owner: the top-level author's id is not in the event, and asking
-            // interaction-service for it would add a second lookup to every comment.
-            if (event.replyToUserId() != null) {
-                notify(event.replyToUserId(), event.userId(), NotificationType.COMMENT,
+            // already heard about the thread when it started. replyToUserId covers events from a
+            // producer older than parentAuthorId, which only knew the author of a nested target.
+            Long repliedTo = event.parentAuthorId() != null ? event.parentAuthorId() : event.replyToUserId();
+            if (repliedTo != null) {
+                notify(repliedTo, event.userId(), NotificationType.COMMENT,
                         "New reply", event.content(),
                         String.valueOf(event.videoId()));
                 return;
@@ -90,6 +90,24 @@ public class InteractionEventConsumer {
             notifyVideoOwner(event.videoId(), event.userId(), NotificationType.COMMENT,
                     "New comment", event.content());
         });
+    }
+
+    /**
+     * Only a like is news, as with videos. An event without commentAuthorId came from a producer
+     * older than the field and has nobody to tell.
+     */
+    @KafkaListener(topics = "interaction.comment-like-events", groupId = "notification-service")
+    @SneakyThrows
+    public void onCommentLike(String payload) {
+        CommentLikeChangedEvent event = objectMapper.readValue(payload, CommentLikeChangedEvent.class);
+        if (!event.liked() || event.commentAuthorId() == null) {
+            return;
+        }
+
+        idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
+                notify(event.commentAuthorId(), event.userId(), NotificationType.COMMENT_LIKE,
+                        "New like", "Someone liked your comment.",
+                        String.valueOf(event.videoId())));
     }
 
     @KafkaListener(topics = "interaction.share-events", groupId = "notification-service")

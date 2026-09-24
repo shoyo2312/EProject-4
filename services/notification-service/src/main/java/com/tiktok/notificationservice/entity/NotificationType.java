@@ -3,6 +3,7 @@ package com.tiktok.notificationservice.entity;
 public enum NotificationType {
     LIKE,
     COMMENT,
+    COMMENT_LIKE,
     SHARE,
     NEW_FOLLOWER,
     SYSTEM;
@@ -18,6 +19,6 @@ public enum NotificationType {
      * hide the second. SYSTEM has no actor to collapse against.
      */
     public boolean collapsesRepeats() {
-        return this == LIKE || this == SHARE || this == NEW_FOLLOWER;
+        return this == LIKE || this == COMMENT_LIKE || this == SHARE || this == NEW_FOLLOWER;
     }
 }

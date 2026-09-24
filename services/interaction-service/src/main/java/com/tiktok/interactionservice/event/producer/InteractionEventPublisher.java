@@ -93,9 +93,9 @@ public class InteractionEventPublisher {
      */
     @SneakyThrows
     public void publishCommentCreated(Long commentId, Long videoId, Long userId, String content,
-                                      Long parentId, Long replyToUserId) {
+                                      Long parentId, Long replyToUserId, Long parentAuthorId) {
         CommentCreatedEvent event = CommentCreatedEvent.of(commentId, videoId, userId, content,
-                parentId, replyToUserId);
+                parentId, replyToUserId, parentAuthorId);
         confirm(commentRecord(videoId, "CommentCreatedEvent", objectMapper.writeValueAsString(event)));
     }
 
@@ -114,9 +114,9 @@ public class InteractionEventPublisher {
      */
     @SneakyThrows
     public void publishCommentLikeChanged(Long commentId, Long videoId, Long userId,
-                                          boolean liked, int likeCount) {
+                                          boolean liked, int likeCount, Long commentAuthorId) {
         CommentLikeChangedEvent event =
-                CommentLikeChangedEvent.of(commentId, videoId, userId, liked, likeCount);
+                CommentLikeChangedEvent.of(commentId, videoId, userId, liked, likeCount, commentAuthorId);
         kafkaTemplate.send(new ProducerRecord<>(COMMENT_LIKE_TOPIC, String.valueOf(videoId),
                         objectMapper.writeValueAsString(event)))
                 .whenComplete((result, failure) -> {
