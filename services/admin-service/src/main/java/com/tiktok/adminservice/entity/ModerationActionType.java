@@ -80,6 +80,16 @@ public enum ModerationActionType {
     }
 
     /**
+     * Whether this decision is an answer to the reports standing against its target. False only
+     * for PURGE_VIDEO, which decides nothing about the video: it empties the trash, and
+     * video-service ignores it for a video that is not in there. Closing reports on it answered
+     * them "handled" while the video stayed live — and the queue is the only place they surface.
+     */
+    public boolean answersReports() {
+        return this != PURGE_VIDEO;
+    }
+
+    /**
      * What this decision makes of the reports standing against the same target.
      *
      * <p>A reversal dismisses them rather than resolving them: restoring a video or unbanning an

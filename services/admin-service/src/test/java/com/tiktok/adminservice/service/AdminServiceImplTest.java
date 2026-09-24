@@ -437,6 +437,34 @@ class AdminServiceImplTest {
     }
 
     @Test
+    void moderate_purgeLeavesTheReportsStanding() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.PURGE_VIDEO, "owner asked");
+
+        // video-service ignores a purge for a video that is not in the trash, so the video may
+        // well be live. Closing the reports here answered them without anything having happened.
+        verify(reportRepository, never()).closePendingFor(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void resolveReport_purgeIsNotADecisionOnAReport() {
+        Report pending = Report.builder()
+                .id(9L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("v1")
+                .reason("nudity")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(9L)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> adminService.resolveReport(2L, 9L,
+                new ResolveReportRequest(ModerationActionType.PURGE_VIDEO, "purge", null)))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository, adminEventProducer);
+        assertThat(pending.getStatus()).isEqualTo(ReportStatus.PENDING);
+    }
+
+    @Test
     void listReportQueue_dropsAnySortTheCallerAsksFor() {
         when(reportRepository.findPendingQueue(any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of()));

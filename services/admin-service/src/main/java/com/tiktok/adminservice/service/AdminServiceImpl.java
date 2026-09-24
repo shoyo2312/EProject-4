@@ -144,6 +144,10 @@ public class AdminServiceImpl implements AdminService {
         // still carry an id this action cannot use, so both halves are verified.
         request.actionType().requireApplicableTo(report.getTargetType());
         report.getTargetType().validateTargetId(report.getTargetId());
+        if (!request.actionType().answersReports()) {
+            throw new InvalidModerationTargetException(
+                    request.actionType() + " is not a decision on a report");
+        }
 
         record(adminId, report.getTargetType(), report.getTargetId(),
                 request.actionType(), request.reason(), report.getId(),
@@ -190,9 +194,12 @@ public class AdminServiceImpl implements AdminService {
         // standing report against that target closed. It is also what a takedown taken straight
         // from the video listing does, which is the point: an action nobody tied to a report
         // still answers the reports, and leaving them PENDING is how the same video comes back
-        // to the top of the queue an hour after it was dealt with.
-        reportRepository.closePendingFor(targetType, targetId, actionType.resolutionStatus(),
-                adminId, null, Instant.now());
+        // to the top of the queue an hour after it was dealt with. A purge is the exception: it
+        // says nothing about whether the reports were right, so they stay where they are.
+        if (actionType.answersReports()) {
+            reportRepository.closePendingFor(targetType, targetId, actionType.resolutionStatus(),
+                    adminId, null, Instant.now());
+        }
 
         return adminMapper.toResponse(action);
     }
