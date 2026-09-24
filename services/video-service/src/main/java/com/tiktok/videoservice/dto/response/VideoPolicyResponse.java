@@ -15,12 +15,21 @@ package com.tiktok.videoservice.dto.response;
  * against, sending the two equal makes every session a completion — the highest-value label the
  * ranker has. Null until the transcode has probed the file.
  *
- * <p>Nothing here is more than a videoId already reveals to somebody who has one.
+ * <p>{@code commentAudience} is the owner's account-level setting, which only user-service knows —
+ * carried here so interaction-service can apply it without a client of its own, on a call it was
+ * already making. Relayed as the raw enum name ({@code EVERYONE}, {@code FRIENDS}, {@code NO_ONE}):
+ * video-service does not interpret it, and a name it has never heard of is for the service that
+ * enforces the setting to deal with, not a reason for this response to fail. Null means nobody
+ * could say — user-service was unreachable — and the guard reads that as no restriction.
+ *
+ * <p>Nothing here is more than a videoId already reveals to somebody who has one. An audience is
+ * visible from the video's own comment box anyway.
  */
 public record VideoPolicyResponse(
         String videoId,
         Long userId,
         boolean commentsDisabled,
-        Integer durationSeconds
+        Integer durationSeconds,
+        String commentAudience
 ) {
 }

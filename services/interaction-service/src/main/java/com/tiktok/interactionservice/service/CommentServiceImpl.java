@@ -1,6 +1,8 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.common.id.SnowflakeIdGenerator;
+import com.tiktok.interactionservice.client.CommentPolicy;
+import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
@@ -13,6 +15,7 @@ import com.tiktok.interactionservice.entity.CommentLikeKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.CommentsDisabledException;
+import com.tiktok.interactionservice.exception.CommentsNotAllowedException;
 import com.tiktok.interactionservice.exception.CommentLikeRateLimitedException;
 import com.tiktok.interactionservice.exception.CommentRateLimitedException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
@@ -64,6 +67,7 @@ public class CommentServiceImpl implements CommentService {
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
     private final VideoOwnershipClient videoOwnershipClient;
+    private final FriendshipClient friendshipClient;
 
     @Override
     public CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId) {
@@ -74,12 +78,19 @@ public class CommentServiceImpl implements CommentService {
         // neither, and posting then deleting in a loop moves the ranking either way.
         rateLimiter.require("comment-rate", videoId, currentUserId, CommentRateLimitedException::new);
 
-        // The owner's comments-off switch lives on the Video in video-service; this is the only
-        // place that enforces it. Fails open (see areCommentsDisabled) — an unreachable
-        // video-service lets the comment through rather than blocking every comment site-wide.
-        if (videoOwnershipClient.areCommentsDisabled(videoId)) {
+        // The per-video switch and the owner's account-level audience, from one /policy read.
+        // Fails open (see commentPolicy) — an unreachable video-service lets the comment through
+        // rather than blocking every comment site-wide. Note this is the opposite of chat's block
+        // and DM checks, which fail closed; the asymmetry is deliberate on both sides.
+        CommentPolicy policy = videoOwnershipClient.commentPolicy(videoId);
+
+        // The switch is checked before the owner exemption below, so a video with comments off
+        // stays off for its owner too — that is the behaviour this guard already had, and the
+        // audience rules are what the owner is exempt from.
+        if (policy.commentsDisabled()) {
             throw new CommentsDisabledException(videoId);
         }
+        requireAudienceAccepts(policy, currentUserId, videoId);
 
         // A reply points at its top-level comment. Replying to a reply flattens onto that reply's
         // own parent, so the thread is always one level deep (as on TikTok) and no reply is ever
@@ -153,6 +164,36 @@ public class CommentServiceImpl implements CommentService {
         }
 
         return commentMapper.toResponse(comment);
+    }
+
+    /**
+     * The owner's account-level audience, which is a restriction on top of the per-video switch
+     * and never an override of it: a video with comments off stays off however permissive the
+     * account is, and an account set to NO_ONE closes videos whose own switch was never touched.
+     *
+     * <p>The owner always passes — an account that accepts comments from nobody can still reply on
+     * its own videos, which is how the setting behaves on the real product.
+     *
+     * <p>An unknown owner (video-service unreachable) passes too: at that point there is no
+     * audience to enforce, and this guard fails open by design.
+     */
+    private void requireAudienceAccepts(CommentPolicy policy, Long commenterId, Long videoId) {
+        if (policy.ownerId() == null || policy.ownerId().equals(commenterId)) {
+            return;
+        }
+
+        switch (policy.commentAudience()) {
+            case NO_ONE -> throw new CommentsNotAllowedException(videoId);
+            case FRIENDS -> {
+                // Fails closed, unlike the audience lookup: "only my friends" must not become
+                // "everyone" because user-service could not be reached. See FriendshipClient.
+                if (!friendshipClient.areFriends(policy.ownerId(), commenterId)) {
+                    throw new CommentsNotAllowedException(videoId);
+                }
+            }
+            case EVERYONE -> {
+            }
+        }
     }
 
     @Override

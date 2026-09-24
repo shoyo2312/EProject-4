@@ -51,6 +51,9 @@ spring:
 
 downstream:
   video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+  # For the FRIENDS comment-audience check only; the commenter's own JWT is forwarded on the call,
+  # so no service credential here.
+  user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
 
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}

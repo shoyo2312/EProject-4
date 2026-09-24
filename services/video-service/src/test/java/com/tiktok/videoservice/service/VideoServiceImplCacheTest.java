@@ -53,6 +53,8 @@ class VideoServiceImplCacheTest {
     private final MinioClient quarantineClient = mock(MinioClient.class);
     private final com.tiktok.videoservice.client.BlockClient blockClient =
             mock(com.tiktok.videoservice.client.BlockClient.class);
+    private final com.tiktok.videoservice.client.UserSettingsClient userSettingsClient =
+            mock(com.tiktok.videoservice.client.UserSettingsClient.class);
 
     private final VideoService videoService = new VideoServiceImpl(
             videoRepository,
@@ -66,7 +68,8 @@ class VideoServiceImplCacheTest {
             new UploadLimitProperties(524_288_000L, 600),
             new QuarantinedMediaUrls(quarantineClient, new MinioProperties("http://localhost:9000", "key", "secret",
                     "video-media", "us-east-1", Duration.ofMinutes(15))),
-                blockClient);
+                blockClient,
+                userSettingsClient);
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
@@ -189,6 +192,27 @@ class VideoServiceImplCacheTest {
 
         assertThatThrownBy(() -> videoService.getById(7L, VIDEO_ID))
                 .isInstanceOf(VideoNotFoundException.class);
+    }
+
+    /**
+     * The audience is the owner's account setting, so it cannot come off the video document —
+     * /policy is where interaction-service picks it up, on a call it was already making.
+     */
+    @Test
+    void getPolicy_carriesTheOwnersCommentAudience() {
+        when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(publicVideo(VIDEO_ID)));
+        when(userSettingsClient.commentAudience(OWNER)).thenReturn("FRIENDS");
+
+        assertThat(videoService.getPolicy(VIDEO_ID).commentAudience()).isEqualTo("FRIENDS");
+    }
+
+    /** Nobody could say, so the policy says nothing and the guard downstream lets comments through. */
+    @Test
+    void getPolicy_whenUserServiceCannotBeReached_carriesNoAudience() {
+        when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(publicVideo(VIDEO_ID)));
+        when(userSettingsClient.commentAudience(OWNER)).thenReturn(null);
+
+        assertThat(videoService.getPolicy(VIDEO_ID).commentAudience()).isNull();
     }
 
     @Test

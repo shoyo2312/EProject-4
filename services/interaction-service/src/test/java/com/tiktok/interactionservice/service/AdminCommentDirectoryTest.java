@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
+import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.request.AdminCommentFilter;
 import com.tiktok.interactionservice.dto.response.AdminCommentPageResponse;
@@ -19,6 +20,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.when;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -56,6 +59,10 @@ class AdminCommentDirectoryTest extends AbstractInteractionServiceIT {
         commentIndexRepository.deleteAll();
         videoCountersRepository.deleteAll();
         redisTemplate.getConnectionFactory().getConnection().flushAll();
+
+        // These tests seed comments through addComment, whose guard reads a whole policy. A mock's
+        // default would be null, which the real client never returns — it fails open.
+        when(videoOwnershipClient.commentPolicy(anyLong())).thenReturn(CommentPolicy.unrestricted());
     }
 
     /** The whole point of the admin read: a comment somebody removed is still on the page. */

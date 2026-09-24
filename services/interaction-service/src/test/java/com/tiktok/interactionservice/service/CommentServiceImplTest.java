@@ -1,11 +1,15 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
+import com.tiktok.interactionservice.client.CommentAudience;
+import com.tiktok.interactionservice.client.CommentPolicy;
+import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.CommentsDisabledException;
+import com.tiktok.interactionservice.exception.CommentsNotAllowedException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
@@ -19,6 +23,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 
 class CommentServiceImplTest extends AbstractInteractionServiceIT {
@@ -44,12 +49,27 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     @MockBean
     private VideoOwnershipClient videoOwnershipClient;
 
+    // Same reasoning: the FRIENDS branch of the audience guard asks user-service over HTTP.
+    @MockBean
+    private FriendshipClient friendshipClient;
+
+    /** What the real client answers when video-service cannot be reached: nothing restricted. */
+    private static final CommentPolicy FAILED_OPEN = CommentPolicy.unrestricted();
+
+    private static CommentPolicy ownedBy(Long ownerId, CommentAudience audience) {
+        return new CommentPolicy(ownerId, false, audience);
+    }
+
     @BeforeEach
     void cleanUp() {
         commentByVideoRepository.deleteAll();
         commentIndexRepository.deleteAll();
         videoCountersRepository.deleteAll();
         redisTemplate.getConnectionFactory().getConnection().flushAll();
+
+        // A mock's default would be null, which is not a state the real client can be in — it
+        // fails open. Tests that care about a policy override this.
+        when(videoOwnershipClient.commentPolicy(anyLong())).thenReturn(FAILED_OPEN);
     }
 
     @Test
@@ -168,12 +188,70 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
 
     @Test
     void addComment_whenOwnerTurnedCommentsOff_isRejected() {
+        when(videoOwnershipClient.commentPolicy(28L))
+                .thenReturn(new CommentPolicy(9L, true, CommentAudience.EVERYONE));
         when(videoOwnershipClient.areCommentsDisabled(28L)).thenReturn(true);
 
         assertThatThrownBy(() -> commentService.addComment(28L, 1L, "nope"))
                 .isInstanceOf(CommentsDisabledException.class);
 
         assertThat(commentService.listComments(28L, null, 20).items()).isEmpty();
+    }
+
+    /**
+     * The per-video switch and the account setting are both restrictions, never an override in
+     * either direction — so the switch still wins over the most permissive audience there is.
+     */
+    @Test
+    void addComment_commentsOffBeatsAPermissiveAudience() {
+        when(videoOwnershipClient.commentPolicy(60L))
+                .thenReturn(new CommentPolicy(9L, true, CommentAudience.EVERYONE));
+
+        assertThatThrownBy(() -> commentService.addComment(60L, 1L, "nope"))
+                .isInstanceOf(CommentsDisabledException.class);
+    }
+
+    /** ...and the account setting closes a video whose own switch was never touched. */
+    @Test
+    void addComment_whenTheOwnerAcceptsCommentsFromNobody_isRejectedWithItsOwnCode() {
+        when(videoOwnershipClient.commentPolicy(61L)).thenReturn(ownedBy(9L, CommentAudience.NO_ONE));
+
+        assertThatThrownBy(() -> commentService.addComment(61L, 1L, "nope"))
+                .isInstanceOf(CommentsNotAllowedException.class);
+    }
+
+    /**
+     * "Nobody" never means the owner: an account that accepts comments from no one can still reply
+     * on its own videos, which is how the setting behaves on the real product.
+     */
+    @Test
+    void addComment_byTheOwnerOfANoOneVideo_isAllowed() {
+        when(videoOwnershipClient.commentPolicy(62L)).thenReturn(ownedBy(9L, CommentAudience.NO_ONE));
+
+        assertThat(commentService.addComment(62L, 9L, "my own video").content()).isEqualTo("my own video");
+    }
+
+    @Test
+    void addComment_onAFriendsOnlyAccount_acceptsAMutualFollowerAndRefusesEveryoneElse() {
+        when(videoOwnershipClient.commentPolicy(63L)).thenReturn(ownedBy(9L, CommentAudience.FRIENDS));
+        when(friendshipClient.areFriends(9L, 1L)).thenReturn(true);
+        when(friendshipClient.areFriends(9L, 2L)).thenReturn(false);
+
+        assertThat(commentService.addComment(63L, 1L, "hi friend").content()).isEqualTo("hi friend");
+
+        assertThatThrownBy(() -> commentService.addComment(63L, 2L, "hello"))
+                .isInstanceOf(CommentsNotAllowedException.class);
+    }
+
+    /**
+     * Fail-open, as this guard already was: an outage in video-service must not stop every comment
+     * on the platform. The opposite of chat-service's DM check, on purpose.
+     */
+    @Test
+    void addComment_whenVideoServiceCannotBeReached_goesThrough() {
+        when(videoOwnershipClient.commentPolicy(64L)).thenReturn(FAILED_OPEN);
+
+        assertThat(commentService.addComment(64L, 1L, "still posts").content()).isEqualTo("still posts");
     }
 
     @Test

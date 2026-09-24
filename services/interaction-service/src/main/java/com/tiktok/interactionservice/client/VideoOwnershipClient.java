@@ -33,7 +33,8 @@ public class VideoOwnershipClient {
     private final RestClient videoServiceRestClient;
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record VideoPolicyView(Long userId, boolean commentsDisabled, Integer durationSeconds) {
+    private record VideoPolicyView(Long userId, boolean commentsDisabled, Integer durationSeconds,
+                                   String commentAudience) {
     }
 
     /**
@@ -92,6 +93,43 @@ public class VideoOwnershipClient {
     public boolean areCommentsDisabled(Long videoId) {
         VideoPolicyView view = fetch(videoId);
         return view != null && view.commentsDisabled();
+    }
+
+    /**
+     * The per-video switch, the owner and the owner's account-level audience, from one read.
+     *
+     * <p>Posting a comment needs all three, and asking {@link #areCommentsDisabled} and then
+     * {@link #isOwnedBy} would be two {@code /policy} calls for one guard. The listing paths still
+     * use the single-question method above, which is the only thing they need.
+     *
+     * <p>Fails open in every direction a lookup can fail: no owner, comments not disabled,
+     * audience EVERYONE.
+     */
+    public CommentPolicy commentPolicy(Long videoId) {
+        VideoPolicyView view = fetch(videoId);
+        if (view == null) {
+            return CommentPolicy.unrestricted();
+        }
+        return new CommentPolicy(view.userId(), view.commentsDisabled(), audienceOf(view.commentAudience()));
+    }
+
+    /**
+     * An audience nobody could name is EVERYONE — both when video-service relayed null (it could
+     * not reach user-service) and when it relayed a name this service has never heard of, which is
+     * what a user-service deployed ahead of this one looks like. Fail-open on purpose, consistent
+     * with the rest of this client; the warn is there so a genuinely new value is visible rather
+     * than silently ignored.
+     */
+    private static CommentAudience audienceOf(String raw) {
+        if (raw == null) {
+            return CommentAudience.EVERYONE;
+        }
+        try {
+            return CommentAudience.valueOf(raw);
+        } catch (IllegalArgumentException e) {
+            log.warn("Unknown comment audience '{}' from video-service; leaving comments unrestricted", raw);
+            return CommentAudience.EVERYONE;
+        }
     }
 
     /**

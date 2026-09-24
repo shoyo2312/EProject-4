@@ -62,6 +62,48 @@ class VideoOwnershipClientTest {
         assertThat(client.areCommentsDisabled(42L)).isTrue();
     }
 
+    /** One read answers the whole guard — the switch, the owner and the audience. */
+    @Test
+    void commentPolicy_readsAllThreeQuestionsFromOneCall() {
+        server.expect(requestTo("http://video-service/api/v1/videos/42/policy"))
+                .andRespond(withSuccess("""
+                        {"success": true, "data": {"userId": 7, "commentsDisabled": false,
+                         "commentAudience": "FRIENDS"}}
+                        """, MediaType.APPLICATION_JSON));
+
+        CommentPolicy policy = client.commentPolicy(42L);
+
+        assertThat(policy.ownerId()).isEqualTo(7L);
+        assertThat(policy.commentsDisabled()).isFalse();
+        assertThat(policy.commentAudience()).isEqualTo(CommentAudience.FRIENDS);
+    }
+
+    /**
+     * A user-service deployed ahead of this one, or a video-service that could not reach it at
+     * all: an audience nobody can name leaves commenting open rather than failing the request.
+     */
+    @Test
+    void commentPolicy_withAnAudienceItCannotName_failsOpen() {
+        server.expect(requestTo("http://video-service/api/v1/videos/42/policy"))
+                .andRespond(withSuccess("""
+                        {"success": true, "data": {"userId": 7, "commentAudience": "MUTUALS"}}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThat(client.commentPolicy(42L).commentAudience()).isEqualTo(CommentAudience.EVERYONE);
+    }
+
+    @Test
+    void commentPolicy_whenVideoServiceIsDown_failsOpenWithNoOwner() {
+        server.expect(requestTo("http://video-service/api/v1/videos/42/policy"))
+                .andRespond(withServerError());
+
+        CommentPolicy policy = client.commentPolicy(42L);
+
+        assertThat(policy.ownerId()).isNull();
+        assertThat(policy.commentsDisabled()).isFalse();
+        assertThat(policy.commentAudience()).isEqualTo(CommentAudience.EVERYONE);
+    }
+
     @AfterEach
     void clearRequest() {
         RequestContextHolder.resetRequestAttributes();

@@ -3,6 +3,7 @@ package com.tiktok.videoservice.service;
 import com.tiktok.common.storage.ObjectKeys;
 import com.tiktok.videoservice.client.BlockClient;
 import com.tiktok.videoservice.client.FriendshipClient;
+import com.tiktok.videoservice.client.UserSettingsClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
@@ -103,6 +104,7 @@ public class VideoServiceImpl implements VideoService {
     private final UploadLimitProperties uploadLimits;
     private final QuarantinedMediaUrls quarantinedMediaUrls;
     private final BlockClient blockClient;
+    private final UserSettingsClient userSettingsClient;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -271,14 +273,20 @@ public class VideoServiceImpl implements VideoService {
     }
 
     /**
-     * Owner and comment setting, and nothing the caller has to be allowed to see — so no
+     * Owner and comment settings, and nothing the caller has to be allowed to see — so no
      * visibility check runs here. {@link VideoPolicyResponse} has the reason.
+     *
+     * <p>The account-level comment audience is fetched rather than read off the video, and
+     * deliberately not denormalised onto the document: this endpoint is already a per-request
+     * lookup, so a cached call is O(1) and near-fresh, while denormalising would mean rewriting
+     * every document a creator owns each time they change the setting. The feed filter, which
+     * cannot call per row, is the case that will need the opposite answer.
      */
     @Override
     public VideoPolicyResponse getPolicy(String videoId) {
         VideoResponse video = load(videoId);
         return new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled(),
-                video.durationSeconds());
+                video.durationSeconds(), userSettingsClient.commentAudience(video.userId()));
     }
 
     /**

@@ -118,7 +118,16 @@ Response **không kèm thông tin user** (tên, avatar) — service này chỉ g
 
 **Không có khử trùng lặp.** Bấm gửi hai lần tạo hai comment khác nhau — khác hẳn like ở mục 3.1. Phía Flutter phải khoá nút gửi cho tới khi có response, và **không** retry tự động khi timeout (nếu request đã tới server thì retry sẽ ra comment đôi).
 
-Lỗi: `VALIDATION_ERROR` (400), `COMMENT_NOT_FOUND` (404 — `parentId` không hợp lệ), `401`.
+**Hai mã 403 khác nhau trên cùng một nút gửi, đừng gộp copy:**
+
+- `COMMENTS_DISABLED` — chủ video **tắt comment cho video này**. Hiện "Comments are turned off for this video". Chủ video cũng không comment được trên video đã tắt.
+- `COMMENTS_NOT_ALLOWED` — cài đặt **tài khoản** của chủ video không nhận comment từ người gọi: `commentAudience = NO_ONE`, hoặc `FRIENDS` mà hai bên không follow lẫn nhau (xem `user-service-api.md` mục 3.15). Hiện "This account doesn't accept comments from you". Dùng chung copy với `COMMENTS_DISABLED` sẽ nói với người xem friends-only rằng một thread họ đang đọc bị khoá với tất cả mọi người.
+
+Cờ từng video và cài đặt tài khoản **đều là hạn chế**, không phía nào override phía nào: video đã tắt comment thì vẫn tắt dù cài đặt tài khoản có thoáng đến đâu, và tài khoản đặt `NO_ONE` thì khoá cả những video chưa từng chạm vào cờ đó. Chủ video luôn comment được trên video của mình — nhưng chỉ với luật audience, không vượt qua được cờ tắt comment.
+
+Nếu video-service không trả lời được thì comment **vẫn đi qua** (fail-open) — một sự cố ở video-service không được phép chặn toàn bộ comment của hệ thống. Riêng nhánh `FRIENDS` thì fail-closed: không xác nhận được quan hệ follow là từ chối, vì "chỉ bạn bè" không được phép biến thành "tất cả mọi người" lúc user-service chết.
+
+Lỗi: `VALIDATION_ERROR` (400), `COMMENTS_DISABLED` (403), `COMMENTS_NOT_ALLOWED` (403), `COMMENT_NOT_FOUND` (404 — `parentId` không hợp lệ), `401`.
 
 ### 3.5 `GET /videos/{videoId}/comments` — danh sách bình luận
 Không cần token. **Phân trang bằng cursor.** Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CommentPageResponse`:
@@ -296,6 +305,8 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `content` rỗng/quá 1000 ký tự (mục 3.4); thiếu `watchedMs`/`durationMs`, `watchedMs` âm, `durationMs` <= 0 (mục 3.9) |
 | `NOT_COMMENT_OWNER` | 403 | Xoá bình luận của người khác (mục 3.6) |
+| `COMMENTS_DISABLED` | 403 | Chủ video đã tắt comment cho **video đó** (mục 3.4). Listing (mục 3.5) không lỗi mà trả trang rỗng |
+| `COMMENTS_NOT_ALLOWED` | 403 | Cài đặt **tài khoản** của chủ video không nhận comment từ người gọi — `NO_ONE`, hoặc `FRIENDS` mà không follow lẫn nhau (mục 3.4) |
 | `COMMENT_NOT_FOUND` | 404 | Bình luận không tồn tại, đã xoá, hoặc `videoId` trên URL không khớp với bình luận đó |
 | `INTERACTION_CONFLICT` | 409 | Ghi vào Cassandra không xác nhận được kết quả sau 3 lần thử (like/unlike ở mục 3.1–3.2, view ở mục 3.8). Xem bên dưới |
 | `INTERACTION_NOT_RECORDED` | 503 | Kafka không nhận event đi kèm thao tác nên thao tác đã được **hoàn tác** — like/unlike, repost, save, comment (tạo/xoá), share, view. Xem bên dưới |

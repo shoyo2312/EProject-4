@@ -28,4 +28,18 @@ public class DownstreamRestClientConfig {
         requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
         return RestClient.builder().baseUrl(videoServiceUri).requestFactory(requestFactory).build();
     }
+
+    /**
+     * user-service, for the mutual-follow check a FRIENDS comment audience needs. Unlike the
+     * client above this one does carry an auth header — the commenter's own, forwarded per call by
+     * {@code FriendshipClient}, because user-service's {@code /friendship} endpoint requires a JWT.
+     */
+    @Bean
+    public RestClient userServiceRestClient(@Value("${downstream.user-service-uri}") String userServiceUri,
+                                            @Value("${downstream.timeout-millis:1000}") long timeoutMillis) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofMillis(timeoutMillis));
+        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
+        return RestClient.builder().baseUrl(userServiceUri).requestFactory(requestFactory).build();
+    }
 }

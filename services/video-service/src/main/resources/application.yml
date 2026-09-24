@@ -63,6 +63,13 @@ app:
       enabled: ${VIDEO_CACHE_ENABLED:true}
       ttl: ${VIDEO_CACHE_TTL:60s}
 
+    user-settings:
+      # A video owner's comment audience, read from user-service for GET /videos/{id}/policy.
+      # The TTL is the bound on how long a tightened audience keeps letting comments through —
+      # nothing invalidates it, see UserSettingsCacheProperties.
+      enabled: ${USER_SETTINGS_CACHE_ENABLED:true}
+      ttl: ${USER_SETTINGS_CACHE_TTL:30s}
+
   upload:
     # max-bytes is signed into the upload POST policy; media-worker enforces both as a backstop.
     # Same env vars there — keep in step.
@@ -90,8 +97,9 @@ minio:
   url-expiry: ${MINIO_URL_EXPIRY:15m}
 
 downstream:
-  # user-service, for the FRIENDS visibility check (mutual-follow lookup). The viewer's own JWT
-  # is forwarded on the call, so no service credential here.
+  # user-service, for the FRIENDS visibility check (mutual-follow lookup) and for the video
+  # owner's comment audience. The friendship call forwards the viewer's own JWT; the settings call
+  # goes to the internal prefix, which takes no token — so no service credential either way.
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
 
 springdoc:
