@@ -44,8 +44,23 @@ public class SecurityEventRecorder {
      */
     private static final String CLIENT_IP_HEADER = "X-Client-Ip";
 
+    /**
+     * User-Agent Client Hints, which the browser only sends after it has seen this origin's
+     * {@code Accept-CH} — that header is set by each front end's Next config, since the browser
+     * talks to them and never to this service.
+     *
+     * <p>They exist because the user agent no longer carries either value: it is frozen for
+     * privacy, so every Mac reports "Intel Mac OS X 10_15_7" whatever it actually is, and Chrome
+     * on Android reports the model as the literal "K". Only Chromium implements the hints, and
+     * {@code Sec-CH-UA-Model} is specified to be empty on every desktop platform, so expect both
+     * to be absent most of the time.
+     */
+    private static final String MODEL_HEADER = "Sec-CH-UA-Model";
+    private static final String PLATFORM_VERSION_HEADER = "Sec-CH-UA-Platform-Version";
+
     private static final int MAX_IP = 45;
     private static final int MAX_USER_AGENT = 512;
+    private static final int MAX_MODEL = 64;
     private static final int MAX_DETAIL = 255;
 
     private final AuthSecurityEventRepository repository;
@@ -78,13 +93,16 @@ public class SecurityEventRecorder {
         try {
             HttpServletRequest request = currentRequest();
             String userAgent = header(request, HttpHeaders.USER_AGENT);
+            String platformVersion = hint(request, PLATFORM_VERSION_HEADER);
+            String model = hint(request, MODEL_HEADER);
 
             AuthSecurityEvent event = AuthSecurityEvent.builder()
                     .userId(userId)
                     .eventType(type)
                     .ipAddress(truncate(clientIp(request), MAX_IP))
                     .userAgent(truncate(userAgent, MAX_USER_AGENT))
-                    .deviceLabel(DeviceLabel.of(userAgent))
+                    .deviceLabel(DeviceLabel.of(userAgent, platformVersion, model))
+                    .deviceModel(truncate(model, MAX_MODEL))
                     .detail(truncate(detail, MAX_DETAIL))
                     .build();
 
@@ -121,6 +139,27 @@ public class SecurityEventRecorder {
 
     private static String header(HttpServletRequest request, String name) {
         return request == null ? null : request.getHeader(name);
+    }
+
+    /**
+     * A client hint, unquoted. They are RFC 8941 structured-header strings, so the value arrives
+     * as {@code "SM-A525F"} with the quotes included and would otherwise be stored that way.
+     *
+     * <p>An empty result becomes null rather than an empty string, because that is what it means:
+     * every desktop Chromium answers {@code Sec-CH-UA-Model} with {@code ""}, and a column of
+     * empty strings reads like data that failed to parse instead of a device that cannot be named.
+     */
+    private static String hint(HttpServletRequest request, String name) {
+        String value = header(request, name);
+        if (value == null) {
+            return null;
+        }
+
+        String unquoted = value.strip();
+        if (unquoted.length() >= 2 && unquoted.startsWith("\"") && unquoted.endsWith("\"")) {
+            unquoted = unquoted.substring(1, unquoted.length() - 1);
+        }
+        return unquoted.isBlank() ? null : unquoted;
     }
 
     private static String truncate(String value, int max) {

@@ -1025,6 +1025,40 @@ class AuthServiceImplTest {
     // transaction of its own, which is the whole point of it, and a test that rolled back would
     // be asserting against rows the production path never writes that way.
 
+    /**
+     * Client hints arrive as RFC 8941 quoted strings, so an unstripped value would be stored with
+     * its quotes — and the console would show a device called {@code "SM-A525F"}, quotes included.
+     */
+    @Test
+    void signIn_recordsTheDeviceModelTheBrowserDisclosed() {
+        registerVerified();
+        MockHttpServletRequest request = arriveFrom("203.0.113.7", "Mozilla/5.0 (Linux; Android 10; K) "
+                + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36");
+        request.addHeader("Sec-CH-UA-Model", "\"SM-A525F\"");
+        request.addHeader("Sec-CH-UA-Platform-Version", "\"15.0.0\"");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getDeviceModel, AuthSecurityEvent::getDeviceLabel)
+                .containsExactly(tuple("SM-A525F", "Chrome on Android 15 · SM-A525F"));
+    }
+
+    /** Every desktop Chromium answers the model hint with "" — stored, that is noise. */
+    @Test
+    void signIn_fromADesktopRecordsNoModelRatherThanAnEmptyOne() {
+        registerVerified();
+        MockHttpServletRequest request = arriveFrom("203.0.113.7", "Mozilla/5.0 (Macintosh; Intel Mac "
+                + "OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+        request.addHeader("Sec-CH-UA-Model", "\"\"");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getDeviceModel)
+                .containsExactly((String) null);
+    }
+
     @Test
     void signIn_isRecordedWithTheAddressAndDeviceItCameFrom() {
         registerVerified();

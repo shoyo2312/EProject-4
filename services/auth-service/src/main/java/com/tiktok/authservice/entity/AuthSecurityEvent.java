@@ -55,6 +55,15 @@ public class AuthSecurityEvent {
     @Column(name = "device_label", length = 128)
     private String deviceLabel;
 
+    /**
+     * The hardware the browser admits to, from the {@code Sec-CH-UA-Model} client hint —
+     * {@code "SM-A525F"}, {@code "Pixel 9"}. Null far more often than not, and legitimately so:
+     * only Chromium sends the hint, it is empty by specification on every desktop platform, and
+     * Apple models are not exposed to the web at all. See the V13 migration.
+     */
+    @Column(name = "device_model", length = 64)
+    private String deviceModel;
+
     /** A short phrase: the new address, why sessions were revoked. Never a secret. */
     @Column(name = "detail", length = 255)
     private String detail;

@@ -12,7 +12,9 @@ import java.time.Instant;
  * matters.
  *
  * @param ipAddress   the address the request came from, or null when nothing HTTP caused the entry
- * @param deviceLabel {@code "Chrome on macOS"}, or null when the agent named nothing recognised
+ * @param deviceLabel {@code "Chrome on macOS 15.1"}, or null when the agent named nothing known
+ * @param deviceModel the hardware the browser admitted to, or null — which is the normal case,
+ *                    since only Chromium sends the hint and it is empty on every desktop
  * @param detail      a short phrase, or null — never a secret
  */
 public record SecurityEventResponse(
@@ -21,6 +23,7 @@ public record SecurityEventResponse(
         String ipAddress,
         String userAgent,
         String deviceLabel,
+        String deviceModel,
         String detail,
         Instant createdAt
 ) {
