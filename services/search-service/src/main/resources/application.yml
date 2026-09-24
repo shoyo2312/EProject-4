@@ -24,6 +24,11 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
+downstream:
+  user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
+  # Nằm trên đường search của user: user-service treo thì mỗi lần tìm chờ đúng chừng này.
+  timeout-millis: ${DOWNSTREAM_TIMEOUT_MILLIS:500}
+
 springdoc:
   api-docs:
     path: /v3/api-docs

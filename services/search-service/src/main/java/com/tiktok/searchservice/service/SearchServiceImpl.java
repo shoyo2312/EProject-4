@@ -1,8 +1,10 @@
 package com.tiktok.searchservice.service;
 
+import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import com.tiktok.common.exception.BadRequestException;
+import com.tiktok.searchservice.client.UserDirectoryClient;
 import com.tiktok.searchservice.document.VideoDocument;
 import com.tiktok.searchservice.dto.response.VideoSearchResponse;
 import com.tiktok.searchservice.mapper.SearchMapper;
@@ -61,6 +63,7 @@ public class SearchServiceImpl implements SearchService {
 
     private final ElasticsearchOperations elasticsearchOperations;
     private final SearchMapper searchMapper;
+    private final UserDirectoryClient userDirectoryClient;
 
     /**
      * A hashtag as a caller types it — "#Dance", "dance", " Dance " — reduced to what
@@ -131,6 +134,14 @@ public class SearchServiceImpl implements SearchService {
             // Tags are in the free-text arms too, so a caller who types "dance" without the hash
             // still finds videos whose only mention of it is a caption hashtag.
             bool.should(s -> s.term(t -> t.field(TAGS).value(normalizeHashtag(query)).boost(2f)));
+            // The author's name: "vmh" lists vmh26122004's videos even when none of them says
+            // "vmh". The index holds only userId, so user-service resolves the name to ids.
+            List<FieldValue> authorIds = userDirectoryClient.findUserIds(query.strip()).stream()
+                    .map(id -> FieldValue.of(id.longValue()))
+                    .toList();
+            if (!authorIds.isEmpty()) {
+                bool.should(s -> s.terms(t -> t.field("userId").terms(v -> v.value(authorIds)).boost(2f)));
+            }
             bool.minimumShouldMatch("1");
         }
         if (StringUtils.hasText(hashtag)) {

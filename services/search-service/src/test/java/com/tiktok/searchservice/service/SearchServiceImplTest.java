@@ -1,7 +1,9 @@
 package com.tiktok.searchservice.service;
 
+import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
+import com.tiktok.searchservice.client.UserDirectoryClient;
 import com.tiktok.searchservice.document.VideoDocument;
 import com.tiktok.searchservice.mapper.SearchMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,11 +41,14 @@ class SearchServiceImplTest {
     @Mock
     private SearchMapper searchMapper;
 
+    @Mock
+    private UserDirectoryClient userDirectoryClient;
+
     private SearchServiceImpl searchService;
 
     @BeforeEach
     void setUp() {
-        searchService = new SearchServiceImpl(elasticsearchOperations, searchMapper);
+        searchService = new SearchServiceImpl(elasticsearchOperations, searchMapper, userDirectoryClient);
         VideoDocument document = VideoDocument.builder().id("v1").status("PUBLISHED").build();
         SearchHits<VideoDocument> hits = mockSearchHits(document);
         // Lenient: the rejection tests never get as far as searching.
@@ -80,6 +85,29 @@ class SearchServiceImplTest {
                 .hasSize(2);
         assertThat(hashtag.should().stream().filter(Query::isMultiMatch)
                 .map(q -> q.multiMatch().fuzziness()).filter(Objects::nonNull)).containsExactly("AUTO");
+    }
+
+    @Test
+    void searchVideos_freeTextAlsoFindsTheVideosOfAuthorsItNames() {
+        when(userDirectoryClient.findUserIds("vmh")).thenReturn(List.of(7L, 8L));
+
+        searchService.searchVideos(" vmh ", null, PageRequest.of(0, 10));
+
+        List<Long> authorIds = capturedBool().should().stream()
+                .filter(Query::isTerms)
+                .filter(q -> q.terms().field().equals("userId"))
+                .flatMap(q -> q.terms().terms().value().stream())
+                .map(FieldValue::longValue)
+                .toList();
+        assertThat(authorIds).containsExactly(7L, 8L);
+    }
+
+    /** Nobody by that name, or user-service down: the search runs on the text alone. */
+    @Test
+    void searchVideos_withNoMatchingAuthor_addsNoAuthorArm() {
+        searchService.searchVideos("dance", null, PageRequest.of(0, 10));
+
+        assertThat(capturedBool().should()).noneMatch(Query::isTerms);
     }
 
     @Test
