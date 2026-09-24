@@ -8,11 +8,13 @@ import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
+import com.tiktok.authservice.entity.AuthProvider;
 import com.tiktok.authservice.entity.AuthSecurityEvent;
 import com.tiktok.authservice.entity.OutboxEvent;
 import com.tiktok.authservice.entity.RefreshToken;
 import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
+import com.tiktok.authservice.entity.UserIdentity;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.EmailNotVerifiedException;
@@ -26,6 +28,7 @@ import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.repository.AuthSecurityEventRepository;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
+import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.authservice.repository.VerificationTokenRepository;
 import com.tiktok.crypto.hash.HashUtils;
@@ -132,6 +135,9 @@ class AuthServiceImplTest {
     @Autowired
     private AuthSecurityEventRepository securityEventRepository;
 
+    @Autowired
+    private UserIdentityRepository userIdentityRepository;
+
     @BeforeEach
     void cleanUp() {
         // Before the users it references — auth_security_events carries a foreign key, and these
@@ -140,6 +146,7 @@ class AuthServiceImplTest {
         outboxEventRepository.deleteAll();
         refreshTokenRepository.deleteAll();
         verificationTokenRepository.deleteAll();
+        userIdentityRepository.deleteAll();
         userRepository.deleteAll();
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushDb();
     }
@@ -837,6 +844,42 @@ class AuthServiceImplTest {
         assertThat(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("john@example.com").orElseThrow()
                 .isEmailVerified()).isTrue();
         assertThat(authService.login(new LoginRequest("johndoe", "newpassword123")).accessToken()).isNotBlank();
+    }
+
+    /**
+     * Pre-account takeover, social half: a squatter signed up through Facebook with the victim's
+     * address. The victim registers, is told the address is taken, and resets the password — which
+     * hands them the account. The squatter's Facebook link must not come with it working.
+     */
+    @Test
+    void resetPassword_onAnUnverifiedAccount_flagsTheProviderLinksAlreadyOnIt() {
+        UserResponse squatted = authService.register(validRegisterRequest());
+        UserIdentity squattersFacebook = userIdentityRepository.save(UserIdentity.builder()
+                .userId(squatted.id()).provider(AuthProvider.FACEBOOK).providerUid("squatter-fb").build());
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+        authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThat(userIdentityRepository.findById(squattersFacebook.getId()).orElseThrow()
+                .isNeedsReconfirmation()).isTrue();
+    }
+
+    /** A link made after the address was proven was made against a proven address, and stays. */
+    @Test
+    void resetPassword_leavesLinksMadeAfterTheAddressWasProven() {
+        UserResponse owner = registerVerified();
+        UserIdentity ownGoogle = userIdentityRepository.save(UserIdentity.builder()
+                .userId(owner.id()).provider(AuthProvider.GOOGLE).providerUid("owner-google").build());
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+        authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThat(userIdentityRepository.findById(ownGoogle.getId()).orElseThrow()
+                .isNeedsReconfirmation()).isFalse();
     }
 
     /**

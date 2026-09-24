@@ -6,6 +6,7 @@ import com.tiktok.authservice.dto.response.SocialLoginResponse;
 import com.tiktok.authservice.entity.AuthProvider;
 import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
+import com.tiktok.authservice.entity.UserIdentity;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
@@ -59,13 +60,26 @@ public class OAuthServiceImpl implements OAuthService {
     public SocialLoginResponse login(AuthProvider provider, SocialLoginRequest request) {
         SocialProfile profile = verifiers.get(provider).verify(request.token());
 
-        User user = findLinked(profile).orElseGet(() -> registerOrJoinWinner(profile));
+        Optional<UserIdentity> link = userIdentityRepository
+                .findByProviderAndProviderUid(profile.provider(), profile.uid());
+        User user;
+        if (link.isPresent()) {
+            user = ownerOf(link.get());
+            if (link.get().isNeedsReconfirmation()) {
+                // Attached before the address was proven, and its owner has since taken the
+                // account over — see IdentityReconfirmation. Same answer as a new link to an
+                // address that is spoken for: a code to the mailbox, and the /link endpoint.
+                requireStillActive(user);
+                linkChallenge.start(user, profile);
+                throw new SocialLinkVerificationRequiredException();
+            }
+        } else {
+            user = registerOrJoinWinner(profile);
+        }
 
         // A locked account must not be handed a session by the side door. Same answer the password
         // login gives, for the same reason: why the sign-in failed is not the client's business.
-        if (user.getStatus() != UserStatus.ACTIVE) {
-            throw new InvalidCredentialsException();
-        }
+        requireStillActive(user);
 
         announceAvatar(user, profile);
 
@@ -87,20 +101,29 @@ public class OAuthServiceImpl implements OAuthService {
     public SocialLoginResponse confirmLink(AuthProvider provider, SocialLinkRequest request) {
         SocialProfile profile = verifiers.get(provider).verify(request.token());
 
-        // No address means no challenge was ever mailed for this provider account, so there is no
-        // code that could be right. Answered as a bad code, not as "you asked the wrong endpoint".
-        if (profile.email() == null) {
-            throw new InvalidOtpException();
+        Optional<UserIdentity> link = userIdentityRepository
+                .findByProviderAndProviderUid(profile.provider(), profile.uid());
+        User user;
+        if (link.isPresent()) {
+            user = ownerOf(link.get());
+            // A link waiting to be confirmed again: the code went to the account's own address,
+            // whatever the provider says it is — see SocialLinkChallenge.start.
+            if (link.get().isNeedsReconfirmation()) {
+                user = linkChallenge.reconfirm(user, link.get(), request.otp());
+            }
+            // Otherwise already linked: a resubmitted confirmation, or a second tab that finished
+            // first. The code it carries is spent or about to be, and re-spending it is not
+            // required to prove anything — the identity row already says this account is ours.
+        } else {
+            // No address means no challenge was ever mailed for this provider account, so there is
+            // no code that could be right. Answered as a bad code, not as "wrong endpoint".
+            if (profile.email() == null) {
+                throw new InvalidOtpException();
+            }
+            user = confirmOrJoinWinner(profile, request.otp());
         }
 
-        // Already linked: a resubmitted confirmation, or a second tab that finished first. The
-        // code it carries is spent or about to be, and re-spending it is not required to prove
-        // anything — the identity row already says this provider account is ours.
-        User user = findLinked(profile).orElseGet(() -> confirmOrJoinWinner(profile, request.otp()));
-
-        if (user.getStatus() != UserStatus.ACTIVE) {
-            throw new InvalidCredentialsException();
-        }
+        requireStillActive(user);
 
         announceAvatar(user, profile);
 
@@ -183,13 +206,28 @@ public class OAuthServiceImpl implements OAuthService {
         }
     }
 
+    /**
+     * The account behind the link that just won a creation race. Freshly written, so it never
+     * waits on a reconfirmation.
+     */
     private Optional<User> findLinked(SocialProfile profile) {
         return userIdentityRepository
                 .findByProviderAndProviderUid(profile.provider(), profile.uid())
-                .map(identity -> userRepository.findById(identity.getUserId())
-                        .filter(user -> !user.isDeleted())
-                        // The link outlives the account it points at, so a deleted account would
-                        // otherwise send us down the create path and straight into uq_identity.
-                        .orElseThrow(InvalidCredentialsException::new));
+                .map(this::ownerOf);
+    }
+
+    private User ownerOf(UserIdentity identity) {
+        return userRepository.findById(identity.getUserId())
+                .filter(user -> !user.isDeleted())
+                // The link outlives the account it points at, so a deleted account would otherwise
+                // send us down the create path and straight into uq_identity.
+                .orElseThrow(InvalidCredentialsException::new);
+    }
+
+    /** Not banned or locked. Checked before a reconfirmation code is mailed as well as before a session. */
+    private static void requireStillActive(User user) {
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw new InvalidCredentialsException();
+        }
     }
 }

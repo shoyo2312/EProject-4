@@ -32,6 +32,7 @@ public class SocialAccountRegistrar {
     private final UserIdentityRepository userIdentityRepository;
     private final UsernameGenerator usernameGenerator;
     private final UserEventProducer userEventProducer;
+    private final IdentityReconfirmation identityReconfirmation;
 
     @Transactional
     public User register(SocialProfile profile) {
@@ -102,12 +103,18 @@ public class SocialAccountRegistrar {
      * and once anything verified the address, that password was a working login. Without it the
      * owner signs in through the provider, or sets a password through the reset flow.
      *
+     * <p>The provider links it already carries are a squatter's other way in and go the same way,
+     * through {@link IdentityReconfirmation} — before the address is marked verified, since that
+     * is what dates the ones made before it was proven. The link being made here is written after,
+     * so it is not among them.
+     *
      * <p>Public for {@link SocialLinkChallenge}. No {@code @Transactional} of its own, and one here
      * would be a lie: both callers are already inside a transaction — {@link #register} above by
      * self-invocation, which the Spring proxy never sees, and {@code SocialLinkChallenge.confirm}
      * through its own annotation. The changes have to live or die with the caller's work.
      */
     public void claim(User owner, SocialProfile profile) {
+        identityReconfirmation.onMailboxOwnerTakesOver(owner);
         if (!owner.isEmailVerified()) {
             owner.clearPassword();
             owner.markEmailVerified();

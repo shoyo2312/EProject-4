@@ -217,6 +217,67 @@ class OAuthServiceImplTest {
         verify(linkChallenge, never()).confirm(any(), any());
     }
 
+    /**
+     * A link the address owner's takeover flagged signs nobody in on the provider token alone —
+     * a squatter's Facebook is exactly this — and gets the same code-to-the-mailbox answer as a
+     * new link to an address that is spoken for.
+     */
+    @Test
+    void linkAwaitingReconfirmationMailsACodeInsteadOfSigningIn() {
+        User owner = activeUser("a@example.com");
+        flaggedLinkTo(owner);
+
+        assertThatThrownBy(() -> service.login(AuthProvider.GOOGLE, REQUEST))
+                .isInstanceOf(SocialLinkVerificationRequiredException.class);
+
+        verify(linkChallenge).start(eq(owner), any());
+        verify(tokenIssuer, never()).issue(any(), any());
+    }
+
+    @Test
+    void linkAwaitingReconfirmationSignsInOnceTheCodeIsSpent() {
+        User owner = activeUser("a@example.com");
+        UserIdentity flagged = flaggedLinkTo(owner);
+        when(linkChallenge.reconfirm(owner, flagged, "123456")).thenReturn(owner);
+
+        SocialLoginResponse response =
+                service.confirmLink(AuthProvider.GOOGLE, new SocialLinkRequest(REQUEST.token(), "123456"));
+
+        assertThat(response.tokens().accessToken()).isEqualTo("access");
+        verify(linkChallenge).reconfirm(owner, flagged, "123456");
+        verify(linkChallenge, never()).confirm(any(), any());
+    }
+
+    /**
+     * The provider account may carry no address at all — that is how a Facebook signup without an
+     * email looks — and the code was mailed to the account's own address, so that is no reason to
+     * refuse it here.
+     */
+    @Test
+    void reconfirmingALinkWithoutAProviderAddressStillWorks() {
+        when(verifier.verify(REQUEST.token()))
+                .thenReturn(new SocialProfile(AuthProvider.GOOGLE, UID, null, false));
+        User owner = activeUser("a@example.com");
+        UserIdentity flagged = flaggedLinkTo(owner);
+        when(linkChallenge.reconfirm(owner, flagged, "123456")).thenReturn(owner);
+
+        assertThat(service.confirmLink(AuthProvider.GOOGLE, new SocialLinkRequest(REQUEST.token(), "123456"))
+                .tokens().accessToken()).isEqualTo("access");
+    }
+
+    private UserIdentity flaggedLinkTo(User user) {
+        UserIdentity flagged = UserIdentity.builder()
+                .userId(1L)
+                .provider(AuthProvider.GOOGLE)
+                .providerUid(UID)
+                .needsReconfirmation(true)
+                .build();
+        when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
+                .thenReturn(Optional.of(flagged));
+        when(userRepository.findById(any())).thenReturn(Optional.of(user));
+        return flagged;
+    }
+
     private void linkedTo(User user) {
         when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
                 .thenReturn(Optional.of(identityFor(user)));

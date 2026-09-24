@@ -74,6 +74,7 @@ public class AuthServiceImpl implements AuthService {
     private final TurnstileService turnstileService;
     private final AdminMfaService adminMfaService;
     private final SecurityEventRecorder securityEventRecorder;
+    private final IdentityReconfirmation identityReconfirmation;
 
     @Override
     @Transactional
@@ -464,6 +465,11 @@ public class AuthServiceImpl implements AuthService {
     public void resetPassword(ResetPasswordRequest request) {
         User user = otpService.consume(PURPOSE_PASSWORD_RESET, VerificationTokenType.PASSWORD_RESET,
                 request.email(), request.otp());
+
+        // Before the address is marked verified below, which would move the cutoff this reads: the
+        // provider links attached before the address was proven may be a squatter's, and a reset is
+        // the mailbox owner taking the account over. See IdentityReconfirmation.
+        identityReconfirmation.onMailboxOwnerTakesOver(user);
 
         user.changePasswordHash(HashUtils.bcryptHash(request.newPassword()));
         // The code was mailed to the address, so spending it proves the address. Without this an

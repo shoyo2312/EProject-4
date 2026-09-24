@@ -47,6 +47,20 @@ public class UserIdentity {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    /**
+     * This link was attached before the account's address was proven, and the owner of that
+     * mailbox has since taken the account over. Until a code mailed to the address is spent it signs
+     * nobody in — see {@link com.tiktok.authservice.service.IdentityReconfirmation}.
+     */
+    @Builder.Default
+    @Column(name = "needs_reconfirmation", nullable = false)
+    private boolean needsReconfirmation = false;
+
+    /** The mailbox owner spent a code for this link; it signs in again like any other. */
+    public void reconfirm() {
+        this.needsReconfirmation = false;
+    }
+
     @PrePersist
     protected void onCreate() {
         if (id == null) {

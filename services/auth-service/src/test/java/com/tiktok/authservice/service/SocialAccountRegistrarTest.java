@@ -10,12 +10,15 @@ import com.tiktok.authservice.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -33,6 +36,7 @@ class SocialAccountRegistrarTest {
     private final UserIdentityRepository identityRepository = mock(UserIdentityRepository.class);
     private final UsernameGenerator usernameGenerator = mock(UsernameGenerator.class);
     private final UserEventProducer eventProducer = mock(UserEventProducer.class);
+    private final IdentityReconfirmation identityReconfirmation = mock(IdentityReconfirmation.class);
 
     private SocialAccountRegistrar registrar;
 
@@ -41,7 +45,7 @@ class SocialAccountRegistrarTest {
         when(usernameGenerator.generate(any())).thenReturn("someone");
         when(userRepository.saveAndFlush(any())).thenAnswer(call -> call.getArgument(0));
         registrar = new SocialAccountRegistrar(userRepository, identityRepository,
-                usernameGenerator, eventProducer);
+                usernameGenerator, eventProducer, identityReconfirmation);
     }
 
     /**
@@ -147,6 +151,26 @@ class SocialAccountRegistrarTest {
         assertThat(squatted.getPasswordHash()).isNull();
         assertThat(squatted.isEmailVerified()).isTrue();
         verify(identityRepository).saveAndFlush(any());
+    }
+
+    /**
+     * The social half of the same takeover: a squatter who signed up through Facebook with the
+     * victim's address keeps that Facebook link unless the claim deals with it — and it has to
+     * see the account before it is marked verified, since that is what dates the unproven links.
+     */
+    @Test
+    void claim_sendsTheAccountsExistingLinksToReconfirmationBeforeVerifyingOrLinking() {
+        User squatted = existing("a@example.com");
+        doAnswer(call -> {
+            assertThat(((User) call.getArgument(0)).isEmailVerified()).isFalse();
+            return null;
+        }).when(identityReconfirmation).onMailboxOwnerTakesOver(squatted);
+
+        registrar.claim(squatted, new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true));
+
+        InOrder order = inOrder(identityReconfirmation, identityRepository);
+        order.verify(identityReconfirmation).onMailboxOwnerTakesOver(squatted);
+        order.verify(identityRepository).saveAndFlush(any());
     }
 
     private User savedUser() {
