@@ -43,6 +43,10 @@ public class FollowController {
         return ApiResponse.success(null);
     }
 
+    /**
+     * The tokenless sibling of this, for services with no bearer token to forward, is
+     * {@link InternalFollowController} — keep the two answering the same question.
+     */
     @Operation(summary = "Whether the viewer and this user follow each other",
             description = "Edge-only: an id with no account is simply not a friend, not a 404.")
     @GetMapping("/friendship")

@@ -199,16 +199,86 @@ Lỗi: `NOT_MUTED` (404), `CONCURRENT_MODIFICATION` (409 — xem mục 3.5).
 ### 3.13 `GET /me/muted`
 Danh sách user mình đang mute. Phân trang giống mục 3.6. Trả `200 OK`, `data` → `Page<UserProfileResponse>`.
 
+### 3.14 `GET /me/settings`
+
+Cài đặt tài khoản (phần đứng sau trang `/setting` của web). **Bắt buộc token.** Trả `200 OK`, `data` → `UserSettingsResponse`:
+
+```json
+{
+  "commentAudience": "EVERYONE",
+  "dmAudience": "EVERYONE",
+  "screenTimeLimitMinutes": null,
+  "sleepHoursStart": null,
+  "sleepHoursEnd": null,
+  "weeklyScreenTimeDigest": true
+}
+```
+
+> **Không bao giờ trả `404`.** Tài khoản chưa từng đổi cài đặt nào thì **không có row trong DB** và endpoint trả đúng bộ giá trị mặc định ở trên — khác `GET /me` (mục 3.1), ở đây client không phải retry và không phải xử lý case "chưa có cài đặt". Đọc cũng **không** tạo row.
+
+- Đây là một **object phẳng theo key**, không phải cây section/group mà trang settings vẽ ra. Layout là việc của client; server chỉ giữ giá trị.
+- `null` ở ba field screen-time nghĩa là **tắt** — không có cờ enable riêng, và `screenTimeLimitMinutes = 0` là lỗi validate chứ không phải cách thứ hai để nói "tắt".
+- `sleepHoursStart`/`sleepHoursEnd` là **giờ treo tường, không mang timezone** (`"22:30"`, định dạng `HH:mm`). Không tài khoản nào trên hệ thống này có timezone, nên hai field đó chỉ có thể hiểu là "22:30 theo giờ của chính máy người dùng" và **client là phía enforce**. Server không bao giờ hẹn được lịch từ hai field này.
+- Bốn field screen-time hiện **chỉ được lưu và trả lại, không có gì đọc chúng** ở server. Đó là trạng thái cố ý: giới hạn thời gian dùng app do client enforce, việc của server là sync cài đặt đó giữa các thiết bị.
+- `commentAudience` / `dmAudience` **có** hiệu lực thật, do interaction-service và chat-service enforce — xem mục 3.15.
+
+### 3.15 `PATCH /me/settings`
+
+Sửa cài đặt. **Bắt buộc token.** Trả `200 OK`, `data` → `UserSettingsResponse` (toàn bộ, sau khi đã áp thay đổi).
+
+Request (mọi field optional, `UpdateUserSettingsRequest`):
+```json
+{
+  "commentAudience": "FRIENDS",
+  "dmAudience": "NO_ONE",
+  "screenTimeLimitMinutes": 60,
+  "sleepHoursStart": "22:30",
+  "sleepHoursEnd": "07:00",
+  "weeklyScreenTimeDigest": false
+}
+```
+
+**Quy tắc partial update — KHÁC `PATCH /me` (mục 3.2), đừng áp dụng lẫn nhau:**
+
+| Client gửi | Kết quả |
+|---|---|
+| **Không có key** trong JSON | Giữ nguyên giá trị cũ |
+| Key = `null`, với 3 field **nullable** (`screenTimeLimitMinutes`, `sleepHoursStart`, `sleepHoursEnd`) | **Xoá** giá trị (về `null` = tắt) |
+| Key = `null`, với `commentAudience` / `dmAudience` / `weeklyScreenTimeDigest` | `VALIDATION_ERROR` (400) — ba cột này NOT NULL, không có `null` để xoá về |
+| Chuỗi rỗng `""` | **Không** phải cách xoá field ở endpoint này (khác mục 3.2) — sẽ là `VALIDATION_ERROR` |
+
+→ Ở Flutter: build body bằng `Map<String, dynamic>` chỉ chứa key user vừa đổi. Muốn tắt giới hạn thời gian thì gửi đúng `{"screenTimeLimitMinutes": null}`, **phải có key**, đừng bỏ trống.
+
+Validate:
+
+- `commentAudience`, `dmAudience` ∈ `EVERYONE` | `FRIENDS` | `NO_ONE` → sai giá trị là `VALIDATION_ERROR` (400).
+- `screenTimeLimitMinutes` ∈ `[10, 1440]` hoặc `null`.
+- `sleepHoursStart`/`sleepHoursEnd`: **cùng có hoặc cùng không** — set một cái và để cái kia `null` là `VALIDATION_ERROR`, kể cả khi cái kia đang có sẵn trong DB (luật được kiểm trên **kết quả sau khi merge**, không phải trên request). Hai đầu **bằng nhau** là lỗi; `start > end` thì **hợp lệ** (khung giờ vắt qua nửa đêm là chuyện thường).
+- Định dạng giờ là `HH:mm` đúng như response trả về — gửi `"22:30:00"` hoặc `"10:30 PM"` sẽ bị body parser từ chối với `400 BAD_REQUEST` (không phải `VALIDATION_ERROR`).
+
+`CONCURRENT_MODIFICATION` (409) nếu hai thiết bị ghi cùng lúc — đọc lại rồi thử lại một lần, giống mục 3.5.
+
+**Hai field có hiệu lực thật, và chúng chỉ chặn lúc bắt đầu:**
+
+- `commentAudience` do **interaction-service** enforce khi post comment: `NO_ONE` chặn tất cả, `FRIENDS` chỉ cho người follow lẫn nhau → `COMMENTS_NOT_ALLOWED` (403). Cờ tắt comment của **từng video** vẫn thắng cài đặt tài khoản: video đã tắt comment thì tắt hẳn, và trả mã riêng `COMMENTS_DISABLED`. Chủ video luôn comment được trên video của mình.
+- `dmAudience` do **chat-service** enforce **lúc mở cuộc hội thoại**, không phải mỗi tin nhắn → `MESSAGING_NOT_ALLOWED` (403). Hội thoại đã mở trước khi người kia siết cài đặt thì vẫn gửi được (giống "người đang follow không bị ảnh hưởng" của private account). Chỉ cài đặt của **người nhận** được xét: người gửi dù đặt `NO_ONE` vẫn chủ động mở được hội thoại.
+- Đổi `commentAudience` có thể mất tới ~30 giây mới có tác dụng: video-service cache cài đặt của chủ video trong Redis với TTL ngắn. Không có event invalidate.
+
 ## 4. Enums
 
-Không có enum nào ở user-service (không có trạng thái "visibility", "follow status"... — follow/block/mute chỉ là quan hệ có/không, xoá mềm qua `deletedAt`). Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
+| Enum | Giá trị | Dùng ở đâu |
+|---|---|---|
+| `SettingsAudience` | `EVERYONE`, `FRIENDS`, `NO_ONE` | `commentAudience` và `dmAudience` ở mục 3.14 / 3.15. `FRIENDS` nghĩa là **follow lẫn nhau** (mutual), không phải "người tôi follow" |
+
+Ngoài ra không có enum nào khác ở user-service (không có "visibility", "follow status"... — follow/block/mute chỉ là quan hệ có/không, xoá mềm qua `deletedAt`). Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
 
 ## 5. Bảng mã lỗi (`code`) đầy đủ
 
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
 | `INVALID_AVATAR` | 400 / 413 | File upload ở `POST /me/avatar` sai định dạng, rỗng, hoặc quá 5 MB |
-| `VALIDATION_ERROR` | 400 | Body không đúng ràng buộc (`displayName`/`bio`/`avatarUrl` sai định dạng/độ dài) |
+| `VALIDATION_ERROR` | 400 | Body không đúng ràng buộc (`displayName`/`bio`/`avatarUrl` sai định dạng/độ dài); ở mục 3.15: audience sai giá trị, `screenTimeLimitMinutes` ngoài `[10, 1440]`, `null` trên field NOT NULL, hoặc khung giờ ngủ thiếu một đầu / hai đầu bằng nhau |
+| `BAD_REQUEST` | 400 | Body không parse được — ví dụ giờ ngủ không đúng định dạng `HH:mm` (mục 3.15). Khác `VALIDATION_ERROR` ở chỗ request chưa bao giờ thành object để validate |
 | `TOO_MANY_PROFILE_IDS` | 400 | Gửi quá 100 id cho `GET /?ids=` (mục 3.3b). Chia nhỏ theo trang, đừng gộp cả feed vào 1 lần gọi |
 | `CANNOT_FOLLOW_SELF` | 400 | Gọi `follow` lên chính `userId` của mình |
 | `CANNOT_BLOCK_SELF` | 400 | Gọi `block` lên chính mình |
@@ -241,6 +311,9 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của user-service, đế
 - Không dừng infinite scroll khi `content` ngắn hơn `size` — dùng `number + 1 >= totalPages`, vì server có thể bỏ qua vài id không còn profile trong trang (xem mục 2).
 - Không coi mọi `409` như nhau: `CONCURRENT_MODIFICATION` nên retry 1 lần, còn `ALREADY_FOLLOWING`/`ALREADY_BLOCKED`/`ALREADY_MUTED` thì phải đồng bộ lại UI chứ retry không giải quyết gì.
 - Không cho user bấm liên tục nút follow/unfollow (debounce nút sau khi bấm) — 2 request song song sẽ tạo `CONCURRENT_MODIFICATION` và counter hiển thị nhấp nháy.
+- Không dùng luật "chuỗi rỗng = xoá field" của `PATCH /me` cho `PATCH /me/settings` — ở endpoint settings, xoá một field nullable là gửi **đúng `null`** (và phải có key); chuỗi rỗng là lỗi validate. Hai endpoint đứng cạnh nhau nhưng cố ý khác nhau (mục 3.15).
+- Không coi `GET /me/settings` trả mặc định là "chưa load xong" rồi retry — tài khoản chưa đổi cài đặt nào thì đó **là** câu trả lời đúng, không có row nào cả (mục 3.14).
+- Không kỳ vọng đổi `commentAudience` có hiệu lực ngay lập tức trên mọi video — có cache TTL ngắn ở video-service; nếu UI vừa đổi vừa test thì chờ vài chục giây (mục 3.15).
 - Không gọi thẳng `user-service:8082` từ production build — luôn qua gateway `:8080`.
 
 ## 8. Sự kiện Kafka (Events)

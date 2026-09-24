@@ -54,6 +54,26 @@ class GatewaySecurityRulesTest {
                 .expectStatus().isForbidden();
     }
 
+    /**
+     * The settings endpoints ride on the same prefix rule, which is the whole reason they were put
+     * there: a settings endpoint at its own path would need its own deny rule, and forgetting it
+     * publishes every account's comment and DM audience. Answering 401 without a token and 403
+     * with one, it never reaches user-service either way.
+     */
+    @Test
+    void internalSettingsEndpoints_areRefusedWithAndWithoutAToken() {
+        for (String uri : List.of("/api/v1/users/internal/settings?ids=1",
+                "/api/v1/users/internal/friendship?userA=1&userB=2")) {
+            client.get().uri(uri)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                    .exchange()
+                    .expectStatus().isForbidden();
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isUnauthorized();
+        }
+    }
+
     @Test
     void ordinaryUserEndpoints_stillPassForASignedInCaller() {
         client.get().uri("/api/v1/users/42")
@@ -88,7 +108,8 @@ class GatewaySecurityRulesTest {
     @RestController
     static class Stub {
 
-        @GetMapping({"/api/v1/users/internal/blocks", "/api/v1/users/42",
+        @GetMapping({"/api/v1/users/internal/blocks", "/api/v1/users/internal/settings",
+                "/api/v1/users/internal/friendship", "/api/v1/users/42",
                 "/api/v1/videos/123/policy", "/api/v1/videos/123"})
         Mono<String> ok() {
             return Mono.just("ok");
