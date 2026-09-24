@@ -989,6 +989,39 @@ class AuthServiceImplTest {
     }
 
     /**
+     * Two devices of one account, each with its own chain, refreshing in the same instant — a
+     * phone and a laptop coming back from sleep. Every refresh stamped last_login_at by saving the
+     * user row, which bumped its version, so the slower of the two failed its optimistic lock and
+     * answered 409; a client that reads a failed refresh as "signed out" then was. Several rounds,
+     * because a single pair only collides when the two loads land before either commit.
+     */
+    @Test
+    void refresh_twoDevicesRefreshingAtOnce_bothKeepTheirSessions() throws Exception {
+        registerVerified();
+        String phone = authService.login(new LoginRequest("johndoe", "password123")).refreshToken();
+        String laptop = authService.login(new LoginRequest("johndoe", "password123")).refreshToken();
+
+        for (int round = 0; round < 10; round++) {
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            CyclicBarrier startTogether = new CyclicBarrier(2);
+            try {
+                List<Future<TokenResponse>> refreshed = pool.invokeAll(List.of(
+                        refreshTask(phone, startTogether),
+                        refreshTask(laptop, startTogether)));
+                phone = refreshed.get(0).get(30, TimeUnit.SECONDS).refreshToken();
+                laptop = refreshed.get(1).get(30, TimeUnit.SECONDS).refreshToken();
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+
+        assertThat(userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull("johndoe").orElseThrow()
+                .getLastLoginAt())
+                .as("still advanced on every refresh, just without contending for the row's version")
+                .isNotNull();
+    }
+
+    /**
      * Runs {@code action} on {@code count} threads released together, and answers with what each
      * one threw — the exception class, or {@code Void.class} for a call that returned normally.
      */

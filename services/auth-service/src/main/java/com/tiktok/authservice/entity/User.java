@@ -51,7 +51,8 @@ public class User extends BaseEntity {
 
     /**
      * Last time a token pair was issued for this account — a fresh sign-in or a refresh. Advanced
-     * from {@code TokenIssuer}, the one funnel every sign-in path ends in. Not a precise login
+     * from {@code TokenIssuer}, the one funnel every sign-in path ends in, by a bulk update that
+     * leaves {@code version} alone ({@code UserRepository.stampLastLogin}). Not a precise login
      * clock (a background refresh moves it too); enough to tell a dormant account from a live one.
      */
     @Column(name = "last_login_at")
@@ -123,11 +124,6 @@ public class User extends BaseEntity {
             this.bannedUntil = null;
             this.banReason = null;
         }
-    }
-
-    /** Advances {@link #lastLoginAt}; see its field doc for why a refresh counts. */
-    public void recordLogin() {
-        this.lastLoginAt = Instant.now();
     }
 
     public void promoteToAdmin() {

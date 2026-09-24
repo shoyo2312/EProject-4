@@ -5,6 +5,7 @@ import com.tiktok.authservice.entity.UserStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -47,4 +48,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Page<User> searchForAdmin(@Param("status") UserStatus status,
                               @Param("term") String term,
                               Pageable pageable);
+
+    /**
+     * Stamps {@code last_login_at} without touching {@code version}: a JPQL bulk update is not
+     * versioned unless it says so. Saving the entity instead bumped the version on every sign-in
+     * and refresh, so two devices of one account refreshing together raced for the row and the
+     * slower one answered 409 — to a refresh that had already rotated its token successfully.
+     * Nothing reads this field to decide anything, so last-writer-wins is the right lock.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("update User u set u.lastLoginAt = :at where u.id = :userId")
+    int stampLastLogin(@Param("userId") Long userId, @Param("at") Instant at);
 }

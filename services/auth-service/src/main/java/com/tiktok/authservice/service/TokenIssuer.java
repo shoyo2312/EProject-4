@@ -75,11 +75,10 @@ public class TokenIssuer {
     private TokenResponse mint(User user) {
         String subject = String.valueOf(user.getId());
 
-        // The one place every sign-in path ends, so the one place last_login_at is stamped.
-        // save() rather than dirty-check: on the password-login path this entity was loaded
-        // before any transaction was open and is detached here.
-        user.recordLogin();
-        userRepository.save(user);
+        // The one place every sign-in path ends, so the one place last_login_at is stamped. A bulk
+        // update rather than a change to the entity: saving it bumped the row's version, and two
+        // devices refreshing at once then failed one of them with 409 (see stampLastLogin).
+        userRepository.stampLastLogin(user.getId(), Instant.now());
 
         String accessToken = jwtProvider.generateToken(
                 subject,
