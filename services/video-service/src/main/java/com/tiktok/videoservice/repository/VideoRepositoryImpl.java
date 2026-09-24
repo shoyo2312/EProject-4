@@ -77,7 +77,7 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
 
     @Override
     public Page<Video> findForAdmin(VideoStatus status, String term, Collection<Long> ownerIds,
-                                    Boolean deleted, Pageable pageable) {
+                                    Boolean deleted, Boolean purged, Pageable pageable) {
         // Owner-deleted videos are included by default, unlike every other read path here: the
         // admin console is the one place that has to account for a video after its owner removed
         // it. `deleted` narrows to just the one side when a moderator wants only deleted rows, or
@@ -88,6 +88,11 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         }
         if (deleted != null) {
             criteria = deleted ? criteria.and("deletedAt").ne(null) : criteria.and("deletedAt").is(null);
+        }
+        if (purged != null) {
+            criteria = purged
+                    ? criteria.and("purgeEventPublishedAt").ne(null)
+                    : criteria.and("purgeEventPublishedAt").is(null);
         }
 
         List<Criteria> matches = new ArrayList<>(2);
@@ -257,6 +262,14 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .with(Sort.by(Sort.Direction.ASC, "deletedAt"))
                 .limit(limit);
         return mongoTemplate.find(query, Video.class);
+    }
+
+    @Override
+    public boolean requestPurge(String videoId) {
+        Query query = Query.query(where("_id").is(videoId)
+                .and("deletedAt").ne(null)
+                .and("purgeEventPublishedAt").is(null));
+        return write(query, new Update().set("purgeRequestedAt", Instant.now())) > 0;
     }
 
     @Override

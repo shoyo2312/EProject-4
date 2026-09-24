@@ -88,10 +88,12 @@ public interface VideoRepositoryCustom {
      * @param ownerIds videos by these owners match too, or null/empty for no owner filter
      * @param deleted  null for no filter on it (the default — both live and deleted rows match);
      *                 {@code true} for deleted rows only; {@code false} for live rows only
+     * @param purged   same three states on whether the media is already erased; {@code false}
+     *                 with {@code deleted = true} is the trash — deleted, still watchable
      */
     org.springframework.data.domain.Page<Video> findForAdmin(
             VideoStatus status, String term, java.util.Collection<Long> ownerIds,
-            Boolean deleted, org.springframework.data.domain.Pageable pageable);
+            Boolean deleted, Boolean purged, org.springframework.data.domain.Pageable pageable);
 
     /**
      * Transcode succeeded: the media fields it produced, plus where the outcome was recorded, and
@@ -175,6 +177,15 @@ public interface VideoRepositoryCustom {
      * away by {@link VideoRepository#findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc}.
      */
     List<Video> findPendingPurge(Instant purgeBefore, int limit);
+
+    /**
+     * An admin emptying one video out of the trash early: stamps {@code purgeRequestedAt}, which
+     * puts the row on the early-purge poll. Conditioned on the video being in the trash, so a
+     * request against a live video, or one already purged, changes nothing.
+     *
+     * @return whether the video was in the trash
+     */
+    boolean requestPurge(String videoId);
 
     /**
      * Parks a row whose event could not be built, taking it out of the poll — see

@@ -229,6 +229,32 @@ class OutboxPollQueryTest {
                 .isEmpty();
     }
 
+    /** An admin emptying the trash early: due now, not at deletedAt plus the retention window. */
+    @Test
+    void requestedPurgeIsPickedByTheEarlyPurgePoll() {
+        Video video = save(true);
+
+        assertThat(videoRepository.requestPurge(video.getId())).isTrue();
+        assertThat(videoRepository
+                .findTop100ByPurgeRequestedAtIsNotNullAndPurgeEventPublishedAtIsNullOrderByPurgeRequestedAtAsc())
+                .extracting(Video::getId)
+                .containsExactly(video.getId());
+    }
+
+    @Test
+    void purgeRequestOutsideTheTrashChangesNothing() {
+        Video live = save(false);
+        Video purged = save(true);
+        purged.markPurgeEventPublished();
+        videoRepository.save(purged);
+
+        assertThat(videoRepository.requestPurge(live.getId())).isFalse();
+        assertThat(videoRepository.requestPurge(purged.getId())).isFalse();
+        assertThat(videoRepository
+                .findTop100ByPurgeRequestedAtIsNotNullAndPurgeEventPublishedAtIsNullOrderByPurgeRequestedAtAsc())
+                .isEmpty();
+    }
+
     @Test
     void thePurgePollIsIndexed() {
         Document explain = mongoTemplate.getDb().runCommand(new Document("explain",

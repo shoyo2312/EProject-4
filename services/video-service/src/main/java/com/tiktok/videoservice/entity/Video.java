@@ -67,6 +67,9 @@ import java.util.List;
         // The visibility-change poll. Only ever a handful of rows carry a non-null value at any
         // moment, but the collection it scans without this index is the largest one here.
         @CompoundIndex(name = "visibility_outbox_idx", def = "{'visibilityEventPendingAt': 1}"),
+        // The early-purge poll, same reasoning: a handful of rows ever carry a value.
+        // See VideoEventPublisher.publishRequestedPurges.
+        @CompoundIndex(name = "purge_request_idx", def = "{'purgeRequestedAt': 1}"),
         // One upload is one video. Enforced here rather than by checking before the insert,
         // because a check followed by an insert lets two concurrent publishes of the same key
         // both pass and produce two documents, two VideoPublishedEvents, and two transcode jobs
@@ -199,6 +202,13 @@ public class Video {
      * is forever.
      */
     private Instant purgeEventPublishedAt;
+
+    /**
+     * An admin emptied this video out of the trash before {@code video.trash.retention} ran out.
+     * Only ever set on a trashed row, and it makes the purge due now rather than moving
+     * {@code deletedAt}, which has to keep saying when the owner deleted it.
+     */
+    private Instant purgeRequestedAt;
 
     /**
      * The third outbox slot, for VideoVisibilityChangedEvent. Unlike the other two this one is

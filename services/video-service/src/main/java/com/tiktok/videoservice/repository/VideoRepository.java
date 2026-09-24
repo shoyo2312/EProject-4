@@ -77,6 +77,13 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      */
     List<Video> findTop100ByVisibilityEventPendingAtIsNotNullOrderByVisibilityEventPendingAtAsc();
 
+    /**
+     * Early-purge outbox poll: trashed videos an admin asked to erase now — see
+     * {@link VideoRepositoryCustom#requestPurge}. The retention poll,
+     * {@link VideoRepositoryCustom#findPendingPurge}, would not reach them for up to 30 days.
+     */
+    List<Video> findTop100ByPurgeRequestedAtIsNotNullAndPurgeEventPublishedAtIsNullOrderByPurgeRequestedAtAsc();
+
     /** For StuckVideoSweeper. A handful of rows at most, so feed_idx's status prefix is enough. */
     List<Video> findTop100ByStatusAndCreatedAtBeforeAndDeletedAtIsNullOrderByCreatedAtAsc(
             VideoStatus status, Instant createdBefore);

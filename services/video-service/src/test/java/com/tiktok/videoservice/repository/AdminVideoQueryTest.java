@@ -61,7 +61,7 @@ class AdminVideoQueryTest {
 
     @Test
     void listsEveryStatusWhenNoFilterIsGiven() {
-        assertThat(videoRepository.findForAdmin(null, null, null, null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(null, null, null, null, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .as("a moderator's list is not the feed — processing, taken-down and deleted videos all belong on it")
                 .containsExactlyInAnyOrder("Morning routine", "Late night COOKING",
@@ -70,21 +70,21 @@ class AdminVideoQueryTest {
 
     @Test
     void includesVideosTheirOwnerDeleted() {
-        assertThat(videoRepository.findForAdmin(null, null, null, null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(null, null, null, null, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .contains("Deleted by owner");
     }
 
     @Test
     void deletedTrueNarrowsToOnlyDeletedRows() {
-        assertThat(videoRepository.findForAdmin(null, null, null, true, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(null, null, null, true, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .containsExactly("Deleted by owner");
     }
 
     @Test
     void deletedFalseExcludesDeletedRows() {
-        assertThat(videoRepository.findForAdmin(null, null, null, false, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(null, null, null, false, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .doesNotContain("Deleted by owner")
                 .hasSize(5);
@@ -93,23 +93,47 @@ class AdminVideoQueryTest {
     /** status still narrows within the deleted-only set — the two filters are ANDed. */
     @Test
     void combinesDeletedWithStatus() {
-        assertThat(videoRepository.findForAdmin(VideoStatus.PUBLISHED, null, null, true, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(VideoStatus.PUBLISHED, null, null, true, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .containsExactly("Deleted by owner");
-        assertThat(videoRepository.findForAdmin(VideoStatus.TAKEN_DOWN, null, null, true, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(VideoStatus.TAKEN_DOWN, null, null, true, null, FIRST_PAGE))
                 .isEmpty();
+    }
+
+    /** The console's trash: deleted, media not yet erased. A purged row has nothing left to review. */
+    @Test
+    void deletedButNotPurgedIsTheTrash() {
+        videoRepository.save(Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("Purged long ago")
+                .rawFileUrl("raw/purged")
+                .status(VideoStatus.PUBLISHED)
+                .visibility(VideoVisibility.PUBLIC)
+                .tags(java.util.List.of())
+                .createdAt(Instant.now())
+                .deletedAt(Instant.now())
+                .purgeEventPublishedAt(Instant.now())
+                .build());
+
+        assertThat(videoRepository.findForAdmin(null, null, null, true, false, FIRST_PAGE))
+                .extracting(Video::getTitle)
+                .containsExactly("Deleted by owner");
+        assertThat(videoRepository.findForAdmin(null, null, null, true, true, FIRST_PAGE))
+                .extracting(Video::getTitle)
+                .containsExactly("Purged long ago");
     }
 
     @Test
     void filtersByStatusAlone() {
-        assertThat(videoRepository.findForAdmin(VideoStatus.TAKEN_DOWN, null, null, null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(VideoStatus.TAKEN_DOWN, null, null, null, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .containsExactly("Removed for spam");
     }
 
     @Test
     void matchesTitleCaseInsensitivelyOnASubstring() {
-        assertThat(videoRepository.findForAdmin(null, "cook", null, null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(null, "cook", null, null, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .containsExactly("Late night COOKING");
     }
@@ -117,23 +141,23 @@ class AdminVideoQueryTest {
     /** "+" is a quantifier; unquoted, this either throws or matches something else entirely. */
     @Test
     void treatsRegexMetacharactersInTheSearchAsLiteralText() {
-        assertThat(videoRepository.findForAdmin(null, "C++", null, null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(null, "C++", null, null, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .containsExactly("C++ in 60 seconds");
     }
 
     @Test
     void combinesBothFilters() {
-        assertThat(videoRepository.findForAdmin(VideoStatus.PUBLISHED, "routine", null, null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(VideoStatus.PUBLISHED, "routine", null, null, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .containsExactly("Morning routine");
-        assertThat(videoRepository.findForAdmin(VideoStatus.TAKEN_DOWN, "routine", null, null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(VideoStatus.TAKEN_DOWN, "routine", null, null, null, FIRST_PAGE))
                 .isEmpty();
     }
 
     @Test
     void reportsATotalThatCountsEveryMatchAndNotJustThePage() {
-        assertThat(videoRepository.findForAdmin(null, null, null, null, PageRequest.of(0, 2)).getTotalElements())
+        assertThat(videoRepository.findForAdmin(null, null, null, null, null, PageRequest.of(0, 2)).getTotalElements())
                 .isEqualTo(6);
     }
 
@@ -143,14 +167,14 @@ class AdminVideoQueryTest {
      */
     @Test
     void matchesVideosByOwnerEvenWhenTheTitleDoesNot() {
-        assertThat(videoRepository.findForAdmin(null, "mihug2004", java.util.List.of(2L), null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(null, "mihug2004", java.util.List.of(2L), null, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .containsExactlyInAnyOrder("Removed for spam", "C++ in 60 seconds");
     }
 
     @Test
     void keepsTitleHitsFromOtherOwnersAlongsideTheOwnerHits() {
-        assertThat(videoRepository.findForAdmin(null, "routine", java.util.List.of(2L), null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(null, "routine", java.util.List.of(2L), null, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .containsExactlyInAnyOrder("Morning routine", "Removed for spam", "C++ in 60 seconds");
     }
@@ -158,14 +182,14 @@ class AdminVideoQueryTest {
     /** status still narrows — it is a filter, not part of the search term. */
     @Test
     void narrowsOwnerHitsByStatus() {
-        assertThat(videoRepository.findForAdmin(VideoStatus.TAKEN_DOWN, null, java.util.List.of(2L), null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(VideoStatus.TAKEN_DOWN, null, java.util.List.of(2L), null, null, FIRST_PAGE))
                 .extracting(Video::getTitle)
                 .containsExactly("Removed for spam");
     }
 
     @Test
     void ignoresAnEmptyOwnerListRatherThanMatchingNothing() {
-        assertThat(videoRepository.findForAdmin(null, null, java.util.List.of(), null, FIRST_PAGE))
+        assertThat(videoRepository.findForAdmin(null, null, java.util.List.of(), null, null, FIRST_PAGE))
                 .hasSize(6);
     }
 
@@ -177,7 +201,7 @@ class AdminVideoQueryTest {
      */
     @Test
     void dailyUploadsCountTheSameVideosTheListingDoes() {
-        long listed = videoRepository.findForAdmin(null, null, null, null, FIRST_PAGE).getTotalElements();
+        long listed = videoRepository.findForAdmin(null, null, null, null, null, FIRST_PAGE).getTotalElements();
 
         long counted = videoRepository.countDailyUploads(Instant.now().minus(1, ChronoUnit.DAYS))
                 .stream()

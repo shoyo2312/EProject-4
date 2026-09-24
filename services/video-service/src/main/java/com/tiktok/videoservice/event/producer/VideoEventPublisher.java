@@ -135,6 +135,28 @@ public class VideoEventPublisher {
     }
 
     /**
+     * The same purge, for a video an admin emptied out of the trash before its window ran out.
+     * A row that is both requested and past its window can be picked by both polls in one round;
+     * media-worker treats a second purge as the no-op it is.
+     */
+    @Scheduled(fixedDelay = 5000)
+    public void publishRequestedPurges() {
+        List<Video> requested = videoRepository
+                .findTop100ByPurgeRequestedAtIsNotNullAndPurgeEventPublishedAtIsNullOrderByPurgeRequestedAtAsc();
+
+        if (requested.isEmpty()) {
+            return;
+        }
+
+        int published = outboxDispatcher.dispatch(requested, this::toPurgedRecord, this::markPurgePublished);
+
+        if (published < requested.size()) {
+            log.warn("Published {}/{} requested purge events, the rest stay pending for the next poll",
+                    published, requested.size());
+        }
+    }
+
+    /**
      * The owner moved a video between PUBLIC, FRIENDS and PRIVATE. Announced because visibility
      * rides on the publication event, and that one is sent once: without this poll a video
      * indexed while it was public stays searchable by anyone for as long as the index lives.

@@ -21,6 +21,12 @@ public enum ModerationActionType {
     UNBAN_USER(ReportTargetType.USER, Effect.REVERSE),
     TAKEDOWN_VIDEO(ReportTargetType.VIDEO, Effect.ENFORCE),
     RESTORE_VIDEO(ReportTargetType.VIDEO, Effect.REVERSE),
+    /**
+     * Empties a video its owner deleted out of the trash early. NONE rather than ENFORCE: the
+     * owner removed it, not moderation, so it is no strike against them and says nothing about
+     * whether the video was ever under enforcement.
+     */
+    PURGE_VIDEO(ReportTargetType.VIDEO, Effect.NONE),
     /** No reversal exists: interaction-service removes the comment row, it does not hide it. */
     REMOVE_COMMENT(ReportTargetType.COMMENT, Effect.ENFORCE),
     /** Audit-only, and an admin may warn over any kind of report, so nothing to pin it to. */

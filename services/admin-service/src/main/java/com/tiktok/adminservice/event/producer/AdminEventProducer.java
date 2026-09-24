@@ -11,6 +11,7 @@ import com.tiktok.event.admin.CommentRemovedEvent;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.UserWarnedEvent;
+import com.tiktok.event.admin.VideoPurgeRequestedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import lombok.RequiredArgsConstructor;
@@ -50,6 +51,7 @@ public class AdminEventProducer {
             case UNBAN_USER -> UserUnbannedEvent.of(Long.valueOf(targetId), adminId, reason);
             case TAKEDOWN_VIDEO -> VideoTakenDownEvent.of(targetId, adminId, reason);
             case RESTORE_VIDEO -> VideoRestoredEvent.of(targetId, adminId, reason);
+            case PURGE_VIDEO -> VideoPurgeRequestedEvent.of(targetId, adminId, reason);
             case REMOVE_COMMENT -> {
                 CommentTarget target = CommentTarget.parse(targetId);
                 yield CommentRemovedEvent.of(target.videoId(), target.commentId(), adminId, reason);

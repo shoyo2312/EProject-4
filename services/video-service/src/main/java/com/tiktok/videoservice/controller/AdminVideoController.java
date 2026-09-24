@@ -44,6 +44,8 @@ public class AdminVideoController {
     /**
      * @param deleted null for no filter (the default — both live and deleted rows match);
      *                {@code true} for deleted rows only; {@code false} for live rows only
+     * @param purged  the same three states on whether the media is erased — the console's trash
+     *                is {@code deleted=true&purged=false}
      */
     @GetMapping
     public ApiResponse<Page<VideoResponse>> list(
@@ -51,9 +53,10 @@ public class AdminVideoController {
             @RequestParam(required = false) VideoStatus status,
             @RequestParam(required = false) List<Long> ownerId,
             @RequestParam(required = false) Boolean deleted,
+            @RequestParam(required = false) Boolean purged,
             @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC)
             Pageable pageable) {
-        return ApiResponse.success(adminVideoDirectory.search(q, status, ownerId, deleted, pageable));
+        return ApiResponse.success(adminVideoDirectory.search(q, status, ownerId, deleted, purged, pageable));
     }
 
     /**

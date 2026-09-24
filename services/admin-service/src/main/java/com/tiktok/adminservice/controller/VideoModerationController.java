@@ -47,4 +47,14 @@ public class VideoModerationController {
         return ApiResponse.success(adminService.moderate(currentAdminId, ReportTargetType.VIDEO,
                 videoId, ModerationActionType.RESTORE_VIDEO, request.reason()));
     }
+
+    /** Empties a video out of the trash now instead of when its retention window runs out. */
+    @PostMapping("/{videoId}/purge")
+    public ApiResponse<ModerationActionResponse> purge(
+            @AuthenticationPrincipal Long currentAdminId,
+            @PathVariable String videoId,
+            @Valid @RequestBody ModerationRequest request) {
+        return ApiResponse.success(adminService.moderate(currentAdminId, ReportTargetType.VIDEO,
+                videoId, ModerationActionType.PURGE_VIDEO, request.reason()));
+    }
 }

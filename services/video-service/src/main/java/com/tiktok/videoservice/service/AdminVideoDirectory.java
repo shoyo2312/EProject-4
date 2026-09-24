@@ -39,9 +39,9 @@ public class AdminVideoDirectory {
      *                 for why they widen the search rather than narrowing it
      */
     public Page<VideoResponse> search(String query, VideoStatus status, Collection<Long> ownerIds,
-                                      Boolean deleted, Pageable pageable) {
+                                      Boolean deleted, Boolean purged, Pageable pageable) {
         String term = (query == null || query.isBlank()) ? null : query.trim();
-        return videoRepository.findForAdmin(status, term, ownerIds, deleted, pageable)
+        return videoRepository.findForAdmin(status, term, ownerIds, deleted, purged, pageable)
                 .map(videoMapper::toAdminResponse)
                 .map(quarantinedMediaUrls::forAdmin);
     }

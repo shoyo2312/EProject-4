@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tiktok.event.admin.VideoPurgeRequestedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import com.tiktok.videoservice.entity.Video;
@@ -24,6 +25,7 @@ public class AdminModerationEventConsumer {
 
     private static final String VIDEO_TAKEN_DOWN = "VideoTakenDownEvent";
     private static final String VIDEO_RESTORED = "VideoRestoredEvent";
+    private static final String VIDEO_PURGE_REQUESTED = "VideoPurgeRequestedEvent";
 
     private final IdempotentEventProcessor idempotentEventProcessor;
     private final VideoStateUpdater videoStateUpdater;
@@ -40,6 +42,8 @@ public class AdminModerationEventConsumer {
             handleTakenDown(objectMapper.readValue(payload, VideoTakenDownEvent.class));
         } else if (VIDEO_RESTORED.equals(eventType)) {
             handleRestored(objectMapper.readValue(payload, VideoRestoredEvent.class));
+        } else if (VIDEO_PURGE_REQUESTED.equals(eventType)) {
+            handlePurgeRequested(objectMapper.readValue(payload, VideoPurgeRequestedEvent.class));
         } else if (eventType == null) {
             // A moderation event with no eventType header is a producer bug, not a foreign event:
             // routing here is header-only, so a takedown that arrives without one is dropped in
@@ -67,5 +71,14 @@ public class AdminModerationEventConsumer {
         idempotentEventProcessor.runOnce(event.eventId(), VIDEO_RESTORED, () ->
                 videoStateUpdater.apply(event.videoId(), Video::markRestored,
                         videoRepository::updateStatus, VIDEO_RESTORED));
+    }
+
+    /** The purge itself goes out on the next early-purge poll — see VideoEventPublisher. */
+    private void handlePurgeRequested(VideoPurgeRequestedEvent event) {
+        idempotentEventProcessor.runOnce(event.eventId(), VIDEO_PURGE_REQUESTED, () -> {
+            if (!videoRepository.requestPurge(event.videoId())) {
+                log.info("Purge requested for video {}, which is not in the trash — ignored", event.videoId());
+            }
+        });
     }
 }
