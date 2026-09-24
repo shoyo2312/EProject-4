@@ -4,6 +4,7 @@ import com.tiktok.authservice.dto.request.SocialLinkRequest;
 import com.tiktok.authservice.dto.request.SocialLoginRequest;
 import com.tiktok.authservice.dto.response.SocialLoginResponse;
 import com.tiktok.authservice.entity.AuthProvider;
+import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
@@ -70,7 +71,8 @@ public class OAuthServiceImpl implements OAuthService {
 
         // Not checked: emailVerified. The provider has already proven the user controls the
         // account, and an account with no address at all could never satisfy it.
-        return new SocialLoginResponse(tokenIssuer.issue(user), user.getEmail() == null);
+        return new SocialLoginResponse(tokenIssuer.issue(user, SecurityEventType.LOGIN_SUCCEEDED),
+                user.getEmail() == null);
     }
 
     /**
@@ -102,7 +104,8 @@ public class OAuthServiceImpl implements OAuthService {
 
         announceAvatar(user, profile);
 
-        return new SocialLoginResponse(tokenIssuer.issue(user), user.getEmail() == null);
+        return new SocialLoginResponse(tokenIssuer.issue(user, SecurityEventType.LOGIN_SUCCEEDED),
+                user.getEmail() == null);
     }
 
     /**

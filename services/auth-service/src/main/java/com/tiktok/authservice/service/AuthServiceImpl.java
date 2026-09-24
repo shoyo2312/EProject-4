@@ -14,6 +14,7 @@ import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.entity.RefreshToken;
+import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
@@ -72,6 +73,7 @@ public class AuthServiceImpl implements AuthService {
     private final TokenIssuer tokenIssuer;
     private final TurnstileService turnstileService;
     private final AdminMfaService adminMfaService;
+    private final SecurityEventRecorder securityEventRecorder;
 
     @Override
     @Transactional
@@ -146,6 +148,11 @@ public class AuthServiceImpl implements AuthService {
                 && HashUtils.bcryptMatches(request.password(), user.getPasswordHash());
 
         if (!valid) {
+            // Null for an identifier matching no account, which the recorder drops: an attempt
+            // against a name nobody holds has no history to belong to, and filing it under the
+            // typed string would make the log itself a way of asking which names are real.
+            securityEventRecorder.record(user == null ? null : user.getId(),
+                    SecurityEventType.LOGIN_FAILED);
             throw new InvalidCredentialsException();
         }
 
@@ -167,7 +174,7 @@ public class AuthServiceImpl implements AuthService {
             }
         }
 
-        return issueTokens(user);
+        return tokenIssuer.issue(user, SecurityEventType.LOGIN_SUCCEEDED);
     }
 
     /**
@@ -236,7 +243,7 @@ public class AuthServiceImpl implements AuthService {
                 .filter(u -> !u.isDeleted() && u.getStatus() == UserStatus.ACTIVE)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        return issueTokens(user);
+        return tokenIssuer.reissue(user);
     }
 
     /**
@@ -258,6 +265,8 @@ public class AuthServiceImpl implements AuthService {
         if (token.wasRotatedBefore(now.minusMillis(jwtProperties.rotationGraceMillis()))) {
             log.warn("Refresh token replay detected for user {} — revoking all sessions", token.getUserId());
             sessionRevoker.revokeAllSessions(token.getUserId());
+            securityEventRecorder.record(token.getUserId(), SecurityEventType.SESSIONS_REVOKED,
+                    "refresh token replay detected");
         }
         return new InvalidRefreshTokenException();
     }
@@ -309,6 +318,10 @@ public class AuthServiceImpl implements AuthService {
                 .ifPresent(storedToken -> {
                     storedToken.revoke();
                     refreshTokenRepository.save(storedToken);
+                    // Inside the ifPresent: an unknown token revokes nothing, and logging a
+                    // logout that ended no session would put sessions in the trail that never
+                    // existed.
+                    securityEventRecorder.record(owner, SecurityEventType.LOGOUT);
                 });
     }
 
@@ -397,6 +410,8 @@ public class AuthServiceImpl implements AuthService {
         user.changeEmail(email);
         saveUnique(user, user.getUsername(), email);
 
+        securityEventRecorder.record(user.getId(), SecurityEventType.EMAIL_CHANGED, email);
+
         otpService.issue(user, VerificationTokenType.EMAIL_VERIFICATION,
                 otpProperties.emailVerificationExpiryMillis(),
                 otp -> new EmailVerificationRequestedEvent(email, otp));
@@ -410,6 +425,8 @@ public class AuthServiceImpl implements AuthService {
 
         user.markEmailVerified();
         userRepository.save(user);
+
+        securityEventRecorder.record(user.getId(), SecurityEventType.EMAIL_VERIFIED, user.getEmail());
     }
 
     @Override
@@ -433,9 +450,13 @@ public class AuthServiceImpl implements AuthService {
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .filter(user -> user.getStatus() == UserStatus.ACTIVE)
-                .ifPresent(user -> otpService.issue(user, VerificationTokenType.PASSWORD_RESET,
-                        otpProperties.passwordResetExpiryMillis(),
-                        otp -> new PasswordResetRequestedEvent(user.getEmail(), otp)));
+                .ifPresent(user -> {
+                    otpService.issue(user, VerificationTokenType.PASSWORD_RESET,
+                            otpProperties.passwordResetExpiryMillis(),
+                            otp -> new PasswordResetRequestedEvent(user.getEmail(), otp));
+                    securityEventRecorder.record(user.getId(),
+                            SecurityEventType.PASSWORD_RESET_REQUESTED);
+                });
     }
 
     @Override
@@ -457,6 +478,11 @@ public class AuthServiceImpl implements AuthService {
         // until it expired — the reset is usually done *because* the account is suspected stolen,
         // so the whole point is to cut access now.
         sessionRevoker.revokeAllSessions(user.getId());
+
+        // One entry rather than two: a completed reset always ends every session, so a separate
+        // SESSIONS_REVOKED beside it would read as a second thing having happened.
+        securityEventRecorder.record(user.getId(), SecurityEventType.PASSWORD_RESET_COMPLETED,
+                "all sessions revoked");
     }
 
     /**
@@ -521,9 +547,5 @@ public class AuthServiceImpl implements AuthService {
             return new EmailAlreadyExistsException(email);
         }
         return ex;
-    }
-
-    private TokenResponse issueTokens(User user) {
-        return tokenIssuer.issue(user);
     }
 }

@@ -3,6 +3,7 @@ package com.tiktok.authservice.service;
 import com.tiktok.authservice.config.OtpProperties;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.entity.RememberedDevice;
+import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
@@ -44,6 +45,7 @@ public class AdminMfaService {
     private final OtpRateLimiter otpRateLimiter;
     private final OtpProperties otpProperties;
     private final TokenIssuer tokenIssuer;
+    private final SecurityEventRecorder securityEventRecorder;
 
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -68,6 +70,8 @@ public class AdminMfaService {
         otpRateLimiter.checkAllowed(OTP_PURPOSE, user.getEmail());
         otpService.issue(user, VerificationTokenType.ADMIN_LOGIN, otpProperties.adminLoginExpiryMillis(),
                 otp -> new AdminLoginOtpRequestedEvent(user.getEmail(), otp));
+
+        securityEventRecorder.record(user.getId(), SecurityEventType.MFA_CHALLENGED);
     }
 
     /**
@@ -89,7 +93,7 @@ public class AdminMfaService {
 
         otpService.consume(OTP_PURPOSE, VerificationTokenType.ADMIN_LOGIN, user.getEmail(), otp);
 
-        TokenResponse tokens = tokenIssuer.issue(user);
+        TokenResponse tokens = tokenIssuer.issue(user, SecurityEventType.LOGIN_SUCCEEDED);
         if (!rememberDevice) {
             return tokens;
         }
@@ -100,6 +104,12 @@ public class AdminMfaService {
                 .tokenHash(HashUtils.sha256(deviceToken))
                 .expiresAt(Instant.now().plusMillis(REMEMBER_DEVICE_MILLIS))
                 .build());
+
+        // Worth its own entry: from here until it expires, this browser signs in on the password
+        // alone. That is the account's second factor being switched off for one device, which is
+        // exactly the change an admin who never made it needs to be able to find.
+        securityEventRecorder.record(user.getId(), SecurityEventType.DEVICE_REMEMBERED,
+                "admin second factor skipped on this browser for 30 days");
 
         return new TokenResponse(tokens.accessToken(), tokens.refreshToken(),
                 tokens.expiresInMillis(), deviceToken);

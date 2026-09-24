@@ -3,6 +3,7 @@ package com.tiktok.authservice.service;
 import com.tiktok.authservice.config.JwtProperties;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.entity.RefreshToken;
+import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
@@ -40,9 +41,38 @@ public class TokenIssuer {
     private final JwtProperties jwtProperties;
     private final RefreshTokenRepository refreshTokenRepository;
     private final UserRepository userRepository;
+    private final SecurityEventRecorder securityEventRecorder;
 
+    /**
+     * A sign-in. Mints the pair and appends {@code signIn} to the account's security log, so every
+     * way of proving an account — password, admin OTP, social — is recorded in one place rather
+     * than at each of the four call sites that would otherwise have to remember to.
+     *
+     * @param signIn how the account was proven, for the log
+     */
     @Transactional
-    public TokenResponse issue(User user) {
+    public TokenResponse issue(User user, SecurityEventType signIn) {
+        TokenResponse tokens = mint(user);
+        securityEventRecorder.record(user.getId(), signIn);
+        return tokens;
+    }
+
+    /**
+     * A refresh. The same pair is minted and {@code last_login_at} still advances, but nothing is
+     * appended to the security log.
+     *
+     * <p>ponytail: a signed-in client refreshes every fifteen minutes, so recording rotations
+     * would outnumber every other security event by two orders of magnitude — to say that a
+     * session the log already holds is still alive. The one rotation worth an entry is the one
+     * from an address the account has not used before; add it here, behind that comparison, if
+     * spotting a stolen refresh token ever matters more than the rows it costs.
+     */
+    @Transactional
+    public TokenResponse reissue(User user) {
+        return mint(user);
+    }
+
+    private TokenResponse mint(User user) {
         String subject = String.valueOf(user.getId());
 
         // The one place every sign-in path ends, so the one place last_login_at is stamped.

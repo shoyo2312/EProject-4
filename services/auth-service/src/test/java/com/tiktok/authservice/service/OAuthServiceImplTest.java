@@ -52,7 +52,7 @@ class OAuthServiceImplTest {
         when(verifier.provider()).thenReturn(AuthProvider.GOOGLE);
         when(verifier.verify(REQUEST.token()))
                 .thenReturn(new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true));
-        when(tokenIssuer.issue(any())).thenReturn(new TokenResponse("access", "refresh", 900_000L));
+        when(tokenIssuer.issue(any(), any())).thenReturn(new TokenResponse("access", "refresh", 900_000L));
 
         service = new OAuthServiceImpl(List.of(verifier), identityRepository, userRepository,
                 registrar, linkChallenge, tokenIssuer, avatarEventProducer);
@@ -122,7 +122,7 @@ class OAuthServiceImplTest {
 
         assertThatThrownBy(() -> service.login(AuthProvider.GOOGLE, REQUEST))
                 .isInstanceOf(InvalidCredentialsException.class);
-        verify(tokenIssuer, never()).issue(any());
+        verify(tokenIssuer, never()).issue(any(), any());
     }
 
     /**
@@ -187,7 +187,7 @@ class OAuthServiceImplTest {
                 .isInstanceOf(SocialLinkVerificationRequiredException.class);
 
         verify(linkChallenge).start(eq(owner), any());
-        verify(tokenIssuer, never()).issue(any());
+        verify(tokenIssuer, never()).issue(any(), any());
     }
 
     /** The code proves the mailbox, the token proves the provider account — then, one session. */

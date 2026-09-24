@@ -8,8 +8,10 @@ import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
+import com.tiktok.authservice.entity.AuthSecurityEvent;
 import com.tiktok.authservice.entity.OutboxEvent;
 import com.tiktok.authservice.entity.RefreshToken;
+import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
@@ -21,6 +23,7 @@ import com.tiktok.authservice.exception.TooManyLoginAttemptsException;
 import com.tiktok.authservice.exception.TooManyOtpRequestsException;
 import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
+import com.tiktok.authservice.repository.AuthSecurityEventRepository;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
@@ -28,6 +31,7 @@ import com.tiktok.authservice.repository.VerificationTokenRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.crypto.jwt.RevocationKeys;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -37,9 +41,12 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -61,6 +68,7 @@ import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
@@ -121,13 +129,40 @@ class AuthServiceImplTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private AuthSecurityEventRepository securityEventRepository;
+
     @BeforeEach
     void cleanUp() {
+        // Before the users it references — auth_security_events carries a foreign key, and these
+        // rows are committed by their own transaction rather than rolled back with the test.
+        securityEventRepository.deleteAll();
         outboxEventRepository.deleteAll();
         refreshTokenRepository.deleteAll();
         verificationTokenRepository.deleteAll();
         userRepository.deleteAll();
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushDb();
+    }
+
+    @AfterEach
+    void clearRequestContext() {
+        RequestContextHolder.resetRequestAttributes();
+    }
+
+    /**
+     * Puts a request on the thread the way Spring MVC would, so the recorder — which reads the
+     * current request rather than taking the address as a parameter — sees one.
+     */
+    private MockHttpServletRequest arriveFrom(String clientIp, String userAgent) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        if (clientIp != null) {
+            request.addHeader("X-Client-Ip", clientIp);
+        }
+        if (userAgent != null) {
+            request.addHeader("User-Agent", userAgent);
+        }
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        return request;
     }
 
     private RegisterRequest validRegisterRequest() {
@@ -984,5 +1019,109 @@ class AuthServiceImplTest {
         assertThat(accessTokenBlacklist.isBlacklisted(jwtProvider.extractClaims(owner.accessToken())))
                 .as("the cutoff must not lock the user out of the session they just opened")
                 .isFalse();
+    }
+
+    // The security log below. No @Transactional on any of it: the recorder commits in a
+    // transaction of its own, which is the whole point of it, and a test that rolled back would
+    // be asserting against rows the production path never writes that way.
+
+    @Test
+    void signIn_isRecordedWithTheAddressAndDeviceItCameFrom() {
+        registerVerified();
+        arriveFrom("203.0.113.7", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                + "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getIpAddress,
+                        AuthSecurityEvent::getDeviceLabel)
+                .containsExactly(tuple(SecurityEventType.LOGIN_SUCCEEDED, "203.0.113.7", "Chrome on macOS"));
+    }
+
+    /**
+     * The entry that matters most is written on a path that then throws. Recorded in the caller's
+     * transaction it would be rolled back by that throw, and the log would hold every successful
+     * sign-in and no failed one — which is the opposite of what a security log is for.
+     */
+    @Test
+    void failedSignIn_isRecordedAlthoughTheAttemptThrows() {
+        UserResponse registered = registerVerified();
+        arriveFrom("203.0.113.9", null);
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpassword")))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getUserId)
+                .containsExactly(tuple(SecurityEventType.LOGIN_FAILED, registered.id()));
+    }
+
+    /**
+     * An attempt on a name nobody holds has no account to be filed under, and inventing one keyed
+     * on the typed string would turn the log into a way of asking which usernames are real.
+     */
+    @Test
+    void failedSignIn_againstNoAccount_recordsNothing() {
+        arriveFrom("203.0.113.9", null);
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ghost", "password123")))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        assertThat(securityEventRepository.findAll()).isEmpty();
+    }
+
+    /**
+     * A client refreshes every fifteen minutes. Recording that would bury every other event in
+     * the account's history under entries saying a session the log already has is still alive.
+     */
+    @Test
+    void refresh_isNotRecordedAsASignIn() {
+        registerVerified();
+        arriveFrom("203.0.113.7", null);
+        TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.refresh(new RefreshTokenRequest(session.refreshToken()));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType)
+                .containsExactly(SecurityEventType.LOGIN_SUCCEEDED);
+    }
+
+    @Test
+    void passwordReset_isRecordedAtBothEnds() {
+        registerVerified();
+        arriveFrom("203.0.113.7", null);
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+        authService.resetPassword(
+                new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType)
+                .as("asking for a reset and completing one are different facts about an account")
+                .containsExactlyInAnyOrder(SecurityEventType.PASSWORD_RESET_REQUESTED,
+                        SecurityEventType.PASSWORD_RESET_COMPLETED);
+    }
+
+    /**
+     * X-Forwarded-For is written by the client on the way in, so believing it would let an
+     * attacker choose the address their own break-in is filed under. Only the header api-gateway
+     * sets after resolving the hop chain is read; everything else falls back to the peer.
+     */
+    @Test
+    void anAddressTheClientWroteItselfIsNeverBelieved() {
+        registerVerified();
+        MockHttpServletRequest request = arriveFrom(null, null);
+        request.addHeader("X-Forwarded-For", "198.51.100.66");
+        request.setRemoteAddr("10.0.0.4");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getIpAddress)
+                .containsExactly("10.0.0.4");
     }
 }

@@ -87,6 +87,11 @@ auth:
     verification-token-grace: 1d
     published-outbox-grace: 7d
     remembered-device-grace: 1d
+    # The exception to the line above: this one runs from when the entry was written, because a
+    # sign-in never stops being true. Six months is how far back an account-recovery or abuse
+    # investigation realistically reaches; shorten it only against a real size problem, and know
+    # that shortening it is deleting evidence.
+    security-event-grace: 180d
   admin:
     # First ADMIN account for the admin console. Both must be set or nothing is provisioned;
     # an account that already owns this email is promoted, never overwritten.

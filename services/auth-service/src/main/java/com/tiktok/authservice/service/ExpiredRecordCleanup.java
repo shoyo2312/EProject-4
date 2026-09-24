@@ -1,6 +1,7 @@
 package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.config.RetentionProperties;
+import com.tiktok.authservice.repository.AuthSecurityEventRepository;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.RememberedDeviceRepository;
@@ -41,6 +42,7 @@ public class ExpiredRecordCleanup {
     private final VerificationTokenRepository verificationTokenRepository;
     private final RememberedDeviceRepository rememberedDeviceRepository;
     private final OutboxEventRepository outboxEventRepository;
+    private final AuthSecurityEventRepository authSecurityEventRepository;
     private final RetentionProperties retention;
     private final TransactionTemplate transactionTemplate;
 
@@ -57,6 +59,11 @@ public class ExpiredRecordCleanup {
                 now.minus(retention.rememberedDeviceGrace()), batchSize));
         sweep("published outbox events", () -> outboxEventRepository.deletePublishedBefore(
                 now.minus(retention.publishedOutboxGrace()), batchSize));
+
+        // Age alone, because an entry never expires the way a token does — see
+        // AuthSecurityEventRepository.deleteRecordedBefore.
+        sweep("security events", () -> authSecurityEventRepository.deleteRecordedBefore(
+                now.minus(retention.securityEventGrace()), batchSize));
     }
 
     /**
