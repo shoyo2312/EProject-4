@@ -14,7 +14,7 @@ Quy tắc token: **mọi endpoint đều public, không cần token.** Gửi tok
 | Base URL (qua gateway) | `http://<gateway-host>:8080/api/v1/search` |
 | Docs tương tác | `http://localhost:8095/swagger-ui.html` (chạy trực tiếp service khi dev) |
 
-Kho dữ liệu phía server là Elasticsearch. Index được dựng **hoàn toàn từ Kafka event** (video published/deleted/transcoded, like, comment, share) — service này **không có database riêng và không đọc database của service khác**. Hệ quả cho client: kết quả tìm kiếm **trễ vài giây** so với thao tác thật (đăng video, like…), và một video vừa xoá có thể còn xuất hiện trong ~5 giây. Xem mục 5.
+Kho dữ liệu phía server là Elasticsearch. Index được dựng **hoàn toàn từ Kafka event** (video published/deleted/transcoded, like, comment, share) — service này **không có database riêng và không đọc database của service khác**; tên tác giả hỏi `user-service` qua HTTP nội bộ lúc tìm. Hệ quả cho client: kết quả tìm kiếm **trễ vài giây** so với thao tác thật (đăng video, like…), và một video vừa xoá có thể còn xuất hiện trong ~5 giây. Xem mục 5.
 
 ## 2. Response envelope & phân trang
 
@@ -60,13 +60,14 @@ Query param (tất cả optional, nhưng nên có **ít nhất một** trong `q`
 
 | Param | Kiểu | Ý nghĩa |
 |---|---|---|
-| `q` | string | Từ khoá tự do. Khớp trên `title`, `description`, **và** `tags`. Gõ `dance` (không có `#`) vẫn ra video chỉ nhắc `dance` trong hashtag |
-| `hashtag` | string | Lọc **chính xác** theo một hashtag. `#Dance`, `dance`, ` Dance ` đều được — server tự chuẩn hoá (lowercase, bỏ `#`, trim) trước khi so |
+| `q` | string | Từ khoá tự do. Khớp trên `title`, `description`, `tags` **và tên tác giả** (username hoặc display name). Khớp gần đúng: nguyên từ xếp trên, rồi tiền tố (`vid` → `video_1`), rồi sai một ký tự (`vidoe`). Gõ `vmh` ra video của `vmh26122004` dù không video nào có chữ `vmh` |
+| `hashtag` | string | Tìm theo hashtag, **gần đúng** như `q`. `#Dance`, `dance`, ` Dance ` đều được — server tự chuẩn hoá (lowercase, bỏ `#`, trim). Khớp trên `tags` và `description` |
 | `page`, `size`, `sort` | | Xem mục 2 |
 
-- `q` và `hashtag` **cộng dồn (AND)**: `?q=biển&hashtag=dance` = video vừa khớp "biển" ở text vừa có tag `dance`.
+- `q` và `hashtag` **cộng dồn (AND)**: `?q=biển&hashtag=dance` = video vừa khớp "biển" ở text vừa khớp hashtag `dance`.
 - Không truyền cả hai → trả về mọi video `PUBLISHED` (phân trang). Không phải lỗi, nhưng thường không phải ý client muốn.
-- `hashtag` phải **khớp cả tag**: `dance` không khớp video tag `dancing`. Đây là chủ đích (field keyword, không phân tích) — để lọc hashtag chính xác như TikTok.
+- `hashtag` xếp hạng theo độ khớp: `#cat` → tag `cat` trước, rồi tag bắt đầu bằng `cat` (`catdance`), rồi tag lệch một ký tự hoặc chung tiền tố (`capcut`, `car`), cuối cùng video chỉ nhắc nó trong `description`.
+- Tên tác giả do `user-service` trả về lúc tìm (50 tài khoản nhiều follower nhất khớp tên). `user-service` lỗi/chậm quá 500ms thì vẫn trả kết quả, chỉ thiếu phần khớp tác giả.
 
 Chỉ trả về video ở trạng thái **`PUBLISHED`**. Video đang `PROCESSING`, `FAILED`, `TAKEN_DOWN`, `PRIVATE` hoặc đã xoá **không** xuất hiện, kể cả với chủ video (service này không biết ai đang gọi).
 
