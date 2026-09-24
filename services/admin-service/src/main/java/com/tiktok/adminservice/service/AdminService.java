@@ -19,7 +19,13 @@ public interface AdminService {
 
     ReportResponse submitReport(Long reporterId, SubmitReportRequest request);
 
-    Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType, Pageable pageable);
+    /**
+     * The report ledger. Every filter is optional: {@code reporterId} narrows it to what one
+     * account has filed and {@code targetId} to what was filed against one target, which is
+     * both halves of what an account's activity history reads.
+     */
+    Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType,
+                                     String targetId, Long reporterId, Pageable pageable);
 
     /**
      * The queue an admin works: one row per reported target, heaviest first. Separate from
@@ -37,10 +43,8 @@ public interface AdminService {
      * {@code targetId} is a string because target ids are not one type: a user is a Snowflake
      * long, a video is a Mongo document id.
      */
-    default ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
-                                              ModerationActionType actionType, String reason) {
-        return moderate(adminId, targetType, targetId, actionType, reason, null);
-    }
+    ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
+                                      ModerationActionType actionType, String reason);
 
     /**
      * @param banDays how long a BAN_USER lasts, or null for a ban that does not lapse. Ignored

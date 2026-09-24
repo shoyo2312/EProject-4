@@ -160,6 +160,86 @@ class ReportQueueRepositoryTest {
     }
 
     /**
+     * The ledger filter, exercised against real Postgres rather than a mock, because
+     * {@code (:param IS NULL OR ...)} is the kind of thing that parses, deploys, and then fails
+     * at execution time on "could not determine data type of parameter". Four filters means
+     * sixteen combinations; these cover all-null, each one alone, and two together.
+     *
+     * <p>Lives in this class to share its container — a second {@code @Testcontainers} class
+     * boots a second Postgres for the same schema.
+     */
+    @Test
+    void anUnfilteredLedgerReturnsEveryReport() {
+        report("v1", SPAM, hoursAgo(3));
+        report("v2", SELF_HARM, hoursAgo(2));
+
+        assertThat(reportRepository.findFiltered(null, null, null, null, PageRequest.of(0, 10)))
+                .hasSize(2);
+    }
+
+    @Test
+    void theLedgerNarrowsToOneReporter() {
+        Report mine = filedBy(42L, "v1");
+        filedBy(43L, "v2");
+        filedBy(44L, "v3");
+
+        assertThat(reportRepository.findFiltered(null, null, null, 42L, PageRequest.of(0, 10)))
+                .extracting(Report::getId)
+                .containsExactly(mine.getId());
+    }
+
+    @Test
+    void theLedgerCombinesReporterWithStatus() {
+        Report pending = filedBy(42L, "v1");
+        Report resolved = filedBy(42L, "v2");
+        resolved.resolve(99L, ReportStatus.RESOLVED);
+        reportRepository.saveAndFlush(resolved);
+        filedBy(43L, "v3");
+
+        assertThat(reportRepository.findFiltered(ReportStatus.PENDING, null, null, 42L, PageRequest.of(0, 10)))
+                .extracting(Report::getId)
+                .containsExactly(pending.getId());
+    }
+
+    @Test
+    void theLedgerFiltersByTargetTypeAndHidesSoftDeletedRows() {
+        report("v1", SPAM, hoursAgo(3));
+        Report gone = report("v2", SPAM, hoursAgo(2));
+        entityManager.getEntityManager()
+                .createNativeQuery("UPDATE reports SET deleted_at = now() WHERE id = :id")
+                .setParameter("id", gone.getId())
+                .executeUpdate();
+        entityManager.clear();
+
+        assertThat(reportRepository.findFiltered(null, ReportTargetType.VIDEO, null, null, PageRequest.of(0, 10)))
+                .hasSize(1);
+        assertThat(reportRepository.findFiltered(null, ReportTargetType.USER, null, null, PageRequest.of(0, 10)))
+                .isEmpty();
+    }
+
+    @Test
+    void theLedgerNarrowsToOneTarget() {
+        report("v-wanted", SPAM, hoursAgo(3));
+        report("v-wanted", SELF_HARM, hoursAgo(2));
+        report("v-other", SPAM, hoursAgo(1));
+
+        assertThat(reportRepository.findFiltered(
+                null, ReportTargetType.VIDEO, "v-wanted", null, PageRequest.of(0, 10)))
+                .hasSize(2);
+    }
+
+    /** A report by a named reporter — the filter tests turn on who filed it, not when. */
+    private Report filedBy(long reporterId, String targetId) {
+        return reportRepository.saveAndFlush(Report.builder()
+                .reporterId(reporterId)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId(targetId)
+                .reason(SPAM)
+                .status(ReportStatus.PENDING)
+                .build());
+    }
+
+    /**
      * Read back from the database, not from the persistence context: every write under test is a
      * bulk update, which goes round the entities and leaves the cached copies saying PENDING.
      */

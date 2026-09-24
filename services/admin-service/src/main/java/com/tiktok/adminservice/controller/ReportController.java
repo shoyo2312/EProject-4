@@ -37,8 +37,11 @@ public class ReportController {
     public ApiResponse<Page<ReportResponse>> list(
             @RequestParam(required = false) ReportStatus status,
             @RequestParam(required = false) ReportTargetType targetType,
+            @RequestParam(required = false) String targetId,
+            @RequestParam(required = false) Long reporterId,
             Pageable pageable) {
-        return ApiResponse.success(adminService.listReports(status, targetType, pageable));
+        return ApiResponse.success(
+                adminService.listReports(status, targetType, targetId, reporterId, pageable));
     }
 
     /**

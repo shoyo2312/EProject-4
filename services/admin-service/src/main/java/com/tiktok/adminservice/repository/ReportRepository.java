@@ -22,13 +22,26 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     Optional<Report> findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
             Long reporterId, ReportTargetType targetType, String targetId);
 
-    Page<Report> findByStatusAndDeletedAtIsNull(ReportStatus status, Pageable pageable);
-
-    Page<Report> findByTargetTypeAndDeletedAtIsNull(ReportTargetType targetType, Pageable pageable);
-
-    Page<Report> findByStatusAndTargetTypeAndDeletedAtIsNull(ReportStatus status, ReportTargetType targetType, Pageable pageable);
-
-    Page<Report> findByDeletedAtIsNull(Pageable pageable);
+    /**
+     * The report ledger, narrowed by any combination of the three filters the console offers.
+     * A null filter is not applied, so all-null is the whole ledger.
+     *
+     * <p>One query rather than a derived method per combination: four filters would be sixteen
+     * derived methods, and the console asks for a different subset on every page.
+     */
+    @Query("""
+            SELECT r FROM Report r
+            WHERE r.deletedAt IS NULL
+              AND (:status IS NULL OR r.status = :status)
+              AND (:targetType IS NULL OR r.targetType = :targetType)
+              AND (:targetId IS NULL OR r.targetId = :targetId)
+              AND (:reporterId IS NULL OR r.reporterId = :reporterId)
+            """)
+    Page<Report> findFiltered(@Param("status") ReportStatus status,
+                              @Param("targetType") ReportTargetType targetType,
+                              @Param("targetId") String targetId,
+                              @Param("reporterId") Long reporterId,
+                              Pageable pageable);
 
     long countByStatusAndDeletedAtIsNull(ReportStatus status);
 

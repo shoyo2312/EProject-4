@@ -112,6 +112,25 @@ class AdminServiceImplTest {
         assertThat(saved.getValue().getBannedUntil()).isNull();
     }
 
+    /**
+     * Both overloads must be declared on the class, each carrying {@code @Transactional}. As a
+     * {@code default} on the interface the short one was self-invocation, so no transaction was
+     * open: the saves committed one by one, the event published and the status changed, and then
+     * the bulk report-closing update failed with TransactionRequiredException — a 500 for an
+     * action that had already happened.
+     */
+    @Test
+    void moderate_isTransactionalOnBothOverloads() throws Exception {
+        for (Class<?>[] args : List.<Class<?>[]>of(
+                new Class<?>[]{Long.class, ReportTargetType.class, String.class, ModerationActionType.class, String.class},
+                new Class<?>[]{Long.class, ReportTargetType.class, String.class, ModerationActionType.class, String.class, Integer.class})) {
+            assertThat(AdminServiceImpl.class.getDeclaredMethod("moderate", args)
+                    .isAnnotationPresent(org.springframework.transaction.annotation.Transactional.class))
+                    .as("moderate/%d must be declared on AdminServiceImpl with @Transactional", args.length)
+                    .isTrue();
+        }
+    }
+
     /** A takedown has no duration, and nothing reverses one on a timer. */
     @Test
     void moderate_ignoresADurationOnAnythingButABan() {

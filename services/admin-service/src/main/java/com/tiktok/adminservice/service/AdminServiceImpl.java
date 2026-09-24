@@ -101,18 +101,10 @@ public class AdminServiceImpl implements AdminService {
     }
 
     @Override
-    public Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType, Pageable pageable) {
-        Page<Report> reports;
-        if (status != null && targetType != null) {
-            reports = reportRepository.findByStatusAndTargetTypeAndDeletedAtIsNull(status, targetType, pageable);
-        } else if (status != null) {
-            reports = reportRepository.findByStatusAndDeletedAtIsNull(status, pageable);
-        } else if (targetType != null) {
-            reports = reportRepository.findByTargetTypeAndDeletedAtIsNull(targetType, pageable);
-        } else {
-            reports = reportRepository.findByDeletedAtIsNull(pageable);
-        }
-        return reports.map(adminMapper::toResponse);
+    public Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType,
+                                            String targetId, Long reporterId, Pageable pageable) {
+        return reportRepository.findFiltered(status, targetType, targetId, reporterId, pageable)
+                .map(adminMapper::toResponse);
     }
 
     @Override
@@ -167,6 +159,21 @@ public class AdminServiceImpl implements AdminService {
                 finalStatus, adminId, report.getId(), Instant.now());
 
         return adminMapper.toResponse(report);
+    }
+
+    /**
+     * Implemented here rather than as a {@code default} on the interface: a default method is
+     * self-invocation once the proxy calls through to it, so the {@code @Transactional} on the
+     * overload below never applied. The two repository writes below still committed on their own
+     * (Spring Data wraps {@code save}), the event published and the status changed — and then the
+     * bulk {@code closePendingFor} update failed with TransactionRequiredException, so the caller
+     * got a 500 for an action that had in fact happened.
+     */
+    @Override
+    @Transactional
+    public ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
+                                            ModerationActionType actionType, String reason) {
+        return moderate(adminId, targetType, targetId, actionType, reason, null);
     }
 
     @Override
