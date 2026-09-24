@@ -10,12 +10,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 class IndexBootstrapTest {
 
     @Test
-    void hasPrefixSubfield_isTrueOnlyWhenTitleCarriesThePrefixField() {
-        Map<String, Object> current = Map.of("properties", Map.of(
-                "title", Map.of("type", "text", "fields", Map.of("prefix", Map.of("type", "text")))));
+    void hasPrefixSubfield_isTrueOnlyWhenTitleAndTagsBothCarryThePrefixField() {
+        Map<String, Object> prefixed = Map.of("fields", Map.of("prefix", Map.of("type", "text")));
+        Map<String, Object> current = Map.of("properties", Map.of("title", prefixed, "tags", prefixed));
+        // Built after the title migration, before tags had one: still needs rebuilding.
+        Map<String, Object> titleOnly = Map.of("properties", Map.of(
+                "title", prefixed, "tags", Map.of("type", "keyword")));
         Map<String, Object> legacy = Map.of("properties", Map.of("title", Map.of("type", "text")));
 
         assertThat(IndexBootstrap.hasPrefixSubfield(current)).isTrue();
+        assertThat(IndexBootstrap.hasPrefixSubfield(titleOnly)).isFalse();
         assertThat(IndexBootstrap.hasPrefixSubfield(legacy)).isFalse();
         assertThat(IndexBootstrap.hasPrefixSubfield(Map.of())).isFalse();
     }

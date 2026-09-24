@@ -36,6 +36,8 @@ public class SearchServiceImpl implements SearchService {
     private static final String DESCRIPTION = "description";
     private static final String TITLE_PREFIX = TITLE + "." + VideoDocument.PREFIX_SUBFIELD;
     private static final String DESCRIPTION_PREFIX = DESCRIPTION + "." + VideoDocument.PREFIX_SUBFIELD;
+    private static final String TAGS = "tags";
+    private static final String TAGS_PREFIX = TAGS + "." + VideoDocument.PREFIX_SUBFIELD;
 
     /**
      * Title outranks a body mention of the same word: without the boost a caption that happens to
@@ -115,26 +117,38 @@ public class SearchServiceImpl implements SearchService {
                     .fields(TITLE + "^" + TITLE_BOOST, DESCRIPTION)
                     .boost(3f)));
             bool.should(s -> s.multiMatch(m -> m.query(query)
-                    .fields(TITLE_PREFIX + "^" + TITLE_BOOST, DESCRIPTION_PREFIX)));
+                    .fields(TITLE_PREFIX + "^" + TITLE_BOOST, DESCRIPTION_PREFIX, TAGS_PREFIX)));
             // Fuzziness goes on the prefix fields, not the main ones: the standard analyser keeps
             // "video_1" as a single token, so a typo like "vidoe" is three edits from it and finds
             // nothing, whereas the prefix field holds "video" itself. Half weight, so a near-miss
             // never outranks something the term actually starts. prefixLength keeps the first
             // letter exact, or one- and two-letter terms match nearly every short word indexed.
             bool.should(s -> s.multiMatch(m -> m.query(query)
-                    .fields(TITLE_PREFIX + "^" + TITLE_BOOST, DESCRIPTION_PREFIX)
+                    .fields(TITLE_PREFIX + "^" + TITLE_BOOST, DESCRIPTION_PREFIX, TAGS_PREFIX)
                     .fuzziness("AUTO")
                     .prefixLength(1)
                     .boost(0.5f)));
             // Tags are in the free-text arms too, so a caller who types "dance" without the hash
             // still finds videos whose only mention of it is a caption hashtag.
-            bool.should(s -> s.term(t -> t.field("tags").value(normalizeHashtag(query)).boost(2f)));
+            bool.should(s -> s.term(t -> t.field(TAGS).value(normalizeHashtag(query)).boost(2f)));
             bool.minimumShouldMatch("1");
         }
         if (StringUtils.hasText(hashtag)) {
             String normalized = normalizeHashtag(hashtag);
             if (!normalized.isEmpty()) {
-                bool.filter(f -> f.term(t -> t.field("tags").value(normalized)));
+                // The free-text arms again, over the tags and the caption they are written in:
+                // "#cat" lists #cat first, then tags it starts (#catdance), then near-misses
+                // (#capcut, #car). A must rather than a filter, so it ranks as well as admits.
+                bool.must(m -> m.bool(tag -> tag
+                        .should(s -> s.term(t -> t.field(TAGS).value(normalized).boost(3f)))
+                        .should(s -> s.multiMatch(mm -> mm.query(normalized)
+                                .fields(TAGS_PREFIX + "^3", DESCRIPTION_PREFIX)))
+                        .should(s -> s.multiMatch(mm -> mm.query(normalized)
+                                .fields(TAGS_PREFIX + "^3", DESCRIPTION_PREFIX)
+                                .fuzziness("AUTO")
+                                .prefixLength(1)
+                                .boost(0.5f)))
+                        .minimumShouldMatch("1")));
             }
         }
 
@@ -146,8 +160,8 @@ public class SearchServiceImpl implements SearchService {
                 // to be exact.
                 .withTrackTotalHits(true);
         if (pageable.getSort().isUnsorted()) {
-            // Best match first; among equal matches (and for a tag-only search, where every hit
-            // scores the same) the newest video.
+            // Best match first; among equal matches (and with neither q nor hashtag, where every
+            // hit scores the same) the newest video.
             builder.withSort(Sort.by(Sort.Order.desc("_score"), Sort.Order.desc("createdAt")));
         }
         NativeQuery nativeQuery = builder.build();

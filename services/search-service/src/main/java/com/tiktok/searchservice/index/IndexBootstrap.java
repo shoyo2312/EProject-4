@@ -14,6 +14,7 @@ import org.springframework.kafka.listener.AbstractMessageListenerContainer;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
+import java.util.stream.Stream;
 
 /**
  * Creates the indexes with their declared mappings before anything writes to them.
@@ -31,10 +32,10 @@ import java.util.Map;
  * mapping — the very failure this class exists to prevent — and the create that follows then
  * fails the startup outright. Starting here means no listener has been handed a record yet.
  *
- * <p>The videos index is also brought up to date when it predates the prefix sub-fields. Its
- * analysers live in the index settings, which cannot change on an open index, so the documents
- * are parked in a staging index while the live one is dropped and recreated with the current
- * mapping, then copied back. The staging index survives a crash midway, and the next start
+ * <p>The videos index is also brought up to date when it predates the prefix sub-fields
+ * (title and description first, tags later). Its analysers live in the index settings, which
+ * cannot change on an open index, so the documents are parked in a staging index while the
+ * live one is dropped and recreated with the current mapping, then copied back. The staging index survives a crash midway, and the next start
  * finishes the job from it — including when the crash landed after live was recreated, which
  * looks like a finished migration and is not one. Staging is deleted only after a copy-back has
  * run in the same startup, because until then it holds the only full copy of the documents.
@@ -169,19 +170,17 @@ public class IndexBootstrap implements SmartLifecycle {
     }
 
     /**
-     * Whether the index was created with a mapping that has the prefix-analysed copy of the
-     * title — the one piece the pre-migration mapping lacks.
+     * Whether the index was created with a mapping that has every prefix-analysed copy: title's
+     * (the first migration) and tags' (the second). An index missing either is rebuilt.
      */
     static boolean hasPrefixSubfield(Map<String, Object> mapping) {
         Object properties = mapping.get("properties");
         if (!(properties instanceof Map<?, ?> props)) {
             return false;
         }
-        Object title = props.get("title");
-        if (!(title instanceof Map<?, ?> titleMapping)) {
-            return false;
-        }
-        Object fields = titleMapping.get("fields");
-        return fields instanceof Map<?, ?> subfields && subfields.containsKey(VideoDocument.PREFIX_SUBFIELD);
+        return Stream.of("title", "tags").allMatch(field ->
+                props.get(field) instanceof Map<?, ?> fieldMapping
+                        && fieldMapping.get("fields") instanceof Map<?, ?> subfields
+                        && subfields.containsKey(VideoDocument.PREFIX_SUBFIELD));
     }
 }

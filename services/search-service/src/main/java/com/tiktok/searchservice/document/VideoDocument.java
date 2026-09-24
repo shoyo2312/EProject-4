@@ -28,8 +28,8 @@ import java.util.List;
 public class VideoDocument {
 
     /**
-     * Name of the sub-field that holds the prefix-analysed copy of {@code title} and
-     * {@code description}. Also what IndexBootstrap looks for to tell an index built with this
+     * Name of the sub-field that holds the prefix-analysed copy of {@code title},
+     * {@code description} and {@code tags}. Also what IndexBootstrap looks for to tell an index built with this
      * mapping from one built before it.
      */
     public static final String PREFIX_SUBFIELD = "prefix";
@@ -95,11 +95,15 @@ public class VideoDocument {
     private Integer durationSeconds;
 
     /**
-     * Hashtags, already normalised by video-service (lowercased, {@code #} stripped) — so a
-     * keyword field rather than text: a tag filter is an exact match on the whole tag, not an
-     * analysed match that would let "dancing" hit "dance". Never null; an untagged video is empty.
+     * Hashtags, already normalised by video-service (lowercased, {@code #} stripped). The main
+     * field is a keyword, so an exact tag can rank first; {@code prefix} is analysed like the
+     * title's, so "#cat" also reaches #capcut and #car the way a title search does.
+     * Never null; an untagged video is empty.
      */
-    @Field(type = FieldType.Keyword)
+    @MultiField(
+            mainField = @Field(type = FieldType.Keyword),
+            otherFields = @InnerField(suffix = PREFIX_SUBFIELD, type = FieldType.Text,
+                    analyzer = "prefix_index", searchAnalyzer = "prefix_search"))
     private List<String> tags;
 
     @Field(type = FieldType.Long)

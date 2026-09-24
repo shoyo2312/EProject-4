@@ -64,16 +64,22 @@ class SearchServiceImplTest {
     }
 
     @Test
-    void searchVideos_normalizesHashtagBeforeFilteringOnTags() {
+    void searchVideos_hashtagMatchesTheExactTagPrefixesAndNearMisses() {
         searchService.searchVideos(null, "#Dance ", PageRequest.of(0, 10));
 
-        // The tag is stored lowercased and without the hash, on a keyword field: an un-normalized
-        // term would match nothing at all rather than match loosely.
-        List<String> tagFilters = capturedBool().filter().stream()
-                .filter(q -> q.isTerm() && q.term().field().equals("tags"))
-                .map(q -> q.term().value().stringValue())
-                .toList();
-        assertThat(tagFilters).containsExactly("dance");
+        BoolQuery hashtag = capturedBool().must().get(0).bool();
+        assertThat(hashtag.minimumShouldMatch()).isEqualTo("1");
+        // The exact arm is a term on a keyword field: an un-normalized "#Dance " would match
+        // nothing at all there.
+        assertThat(hashtag.should().stream().filter(Query::isTerm)
+                .map(q -> q.term().value().stringValue())).containsExactly("dance");
+        // The loose arms are what let "#cat" reach #capcut and #car, and captions with them.
+        assertThat(hashtag.should().stream().filter(Query::isMultiMatch)
+                .map(q -> q.multiMatch().fields()))
+                .containsOnly(List.of("tags.prefix^3", "description.prefix"))
+                .hasSize(2);
+        assertThat(hashtag.should().stream().filter(Query::isMultiMatch)
+                .map(q -> q.multiMatch().fuzziness()).filter(Objects::nonNull)).containsExactly("AUTO");
     }
 
     @Test
@@ -91,8 +97,8 @@ class SearchServiceImplTest {
                 .toList();
         assertThat(multiMatchFields).containsExactlyInAnyOrder(
                 List.of("title^3.0", "description"),
-                List.of("title.prefix^3.0", "description.prefix"),
-                List.of("title.prefix^3.0", "description.prefix"));
+                List.of("title.prefix^3.0", "description.prefix", "tags.prefix"),
+                List.of("title.prefix^3.0", "description.prefix", "tags.prefix"));
 
         List<String> fuzziness = bool.should().stream()
                 .filter(Query::isMultiMatch)
