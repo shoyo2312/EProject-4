@@ -423,4 +423,15 @@ class UserProfileServiceImplTest {
         assertThat(userProfileService.searchIds("vmh", 1)).containsExactly(2L);
         assertThat(userProfileService.searchIds(" ", 50)).isEmpty();
     }
+
+    /** The trigram indexes cannot serve these, so each one was a scan of every profile. */
+    @Test
+    void searchIds_refusesTermsTheIndexesCannotServe() {
+        userProfileService.createFromRegisteredEvent(1L, "vmh26122004", null);
+
+        assertThat(userProfileService.searchIds("vm", 50)).isEmpty();
+        assertThat(userProfileService.searchIds(" v ", 50)).isEmpty();
+        assertThat(userProfileService.searchIds("v".repeat(101), 50)).isEmpty();
+        assertThat(userProfileService.searchIds("vmh", 50)).containsExactly(1L);
+    }
 }

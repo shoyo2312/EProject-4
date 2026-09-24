@@ -30,6 +30,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -108,6 +109,37 @@ class SearchServiceImplTest {
         searchService.searchVideos("dance", null, PageRequest.of(0, 10));
 
         assertThat(capturedBool().should()).noneMatch(Query::isTerms);
+    }
+
+    /**
+     * Below three letters the trigram indexes cannot serve user-service's match, so every such
+     * search scanned the profile table — and "a" pulled in the videos of every big account with
+     * an "a" in its name.
+     */
+    @Test
+    void searchVideos_tooShortForAnAuthorLookup_asksNobody() {
+        searchService.searchVideos(" ab ", null, PageRequest.of(0, 10));
+
+        verifyNoInteractions(userDirectoryClient);
+        assertThat(capturedBool().should()).noneMatch(Query::isTerms);
+    }
+
+    @Test
+    void searchVideos_longerThanAnyNameAsksNobodyForAuthors() {
+        searchService.searchVideos("x".repeat(SearchServiceImpl.MAX_AUTHOR_QUERY_LENGTH + 1), null,
+                PageRequest.of(0, 10));
+
+        verifyNoInteractions(userDirectoryClient);
+    }
+
+    @Test
+    void searchVideos_refusesAnOverlongQuery() {
+        String tooLong = "x".repeat(SearchServiceImpl.MAX_QUERY_LENGTH + 1);
+
+        assertThatThrownBy(() -> searchService.searchVideos(tooLong, null, PageRequest.of(0, 10)))
+                .isInstanceOf(BadRequestException.class);
+        assertThatThrownBy(() -> searchService.searchVideos(null, tooLong, PageRequest.of(0, 10)))
+                .isInstanceOf(BadRequestException.class);
     }
 
     @Test

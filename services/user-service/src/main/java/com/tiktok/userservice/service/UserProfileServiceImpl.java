@@ -32,6 +32,12 @@ public class UserProfileServiceImpl implements UserProfileService {
     /** Matches avatar_url in V1__create_user_profiles_table.sql. */
     private static final int MAX_AVATAR_URL_LENGTH = 500;
 
+    /** A trigram is three characters; below that the V8 indexes cannot narrow anything. */
+    static final int MIN_ID_SEARCH_LENGTH = 3;
+
+    /** display_name (V1) and username (V8) are both VARCHAR(100). */
+    static final int MAX_NAME_LENGTH = 100;
+
     private final UserProfileRepository userProfileRepository;
     private final UserBlockRepository userBlockRepository;
     private final UserProfileMapper userProfileMapper;
@@ -131,10 +137,17 @@ public class UserProfileServiceImpl implements UserProfileService {
     @Override
     @Transactional(readOnly = true)
     public List<Long> searchIds(String query, int limit) {
-        if (query == null || query.isBlank()) {
+        if (query == null) {
             return List.of();
         }
-        return userProfileRepository.searchIds(escapeLike(query.strip()), PageRequest.of(0, limit));
+        String term = query.strip();
+        // The trigram indexes (V8) cannot serve a term under three letters, so it scanned and
+        // sorted every profile — once per anonymous video search. Past the name columns' width
+        // nothing can contain it.
+        if (term.length() < MIN_ID_SEARCH_LENGTH || term.length() > MAX_NAME_LENGTH) {
+            return List.of();
+        }
+        return userProfileRepository.searchIds(escapeLike(term), PageRequest.of(0, limit));
     }
 
     /** The query is text to find, not a pattern: {@code _} and {@code %} match themselves. */

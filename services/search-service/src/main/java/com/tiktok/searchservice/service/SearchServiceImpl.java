@@ -61,6 +61,24 @@ public class SearchServiceImpl implements SearchService {
      */
     private static final int MAX_RESULT_WINDOW = 10_000;
 
+    /**
+     * Longer than anything a person types into a search box. The endpoint needs no login, and each
+     * term is run through three multi-matches, one of them fuzzy, so an unbounded one is a cheap
+     * way to make every search slow.
+     */
+    static final int MAX_QUERY_LENGTH = 200;
+
+    /**
+     * The shortest query worth asking user-service for authors. Its {@code %q%} match is served by
+     * trigram indexes, which cannot help a one- or two-letter term: each such search scanned and
+     * sorted every profile. And since one arm is enough to make a result, "a" also listed every
+     * video by the 50 most-followed accounts with an "a" in their name.
+     */
+    static final int MIN_AUTHOR_QUERY_LENGTH = 3;
+
+    /** user-service's username and display-name columns; nothing longer can be contained in one. */
+    static final int MAX_AUTHOR_QUERY_LENGTH = 100;
+
     private final ElasticsearchOperations elasticsearchOperations;
     private final SearchMapper searchMapper;
     private final UserDirectoryClient userDirectoryClient;
@@ -87,6 +105,11 @@ public class SearchServiceImpl implements SearchService {
         if (pageable.getOffset() + pageable.getPageSize() > MAX_RESULT_WINDOW) {
             throw new BadRequestException("PAGE_TOO_DEEP",
                     "Only the first " + MAX_RESULT_WINDOW + " results can be paged through; narrow the search.");
+        }
+        if ((query != null && query.length() > MAX_QUERY_LENGTH)
+                || (hashtag != null && hashtag.length() > MAX_QUERY_LENGTH)) {
+            throw new BadRequestException("QUERY_TOO_LONG",
+                    "Search terms are limited to " + MAX_QUERY_LENGTH + " characters.");
         }
 
         BoolQuery.Builder bool = new BoolQuery.Builder();
@@ -136,9 +159,13 @@ public class SearchServiceImpl implements SearchService {
             bool.should(s -> s.term(t -> t.field(TAGS).value(normalizeHashtag(query)).boost(2f)));
             // The author's name: "vmh" lists vmh26122004's videos even when none of them says
             // "vmh". The index holds only userId, so user-service resolves the name to ids.
-            List<FieldValue> authorIds = userDirectoryClient.findUserIds(query.strip()).stream()
-                    .map(id -> FieldValue.of(id.longValue()))
-                    .toList();
+            String author = query.strip();
+            List<FieldValue> authorIds = author.length() < MIN_AUTHOR_QUERY_LENGTH
+                    || author.length() > MAX_AUTHOR_QUERY_LENGTH
+                    ? List.of()
+                    : userDirectoryClient.findUserIds(author).stream()
+                            .map(id -> FieldValue.of(id.longValue()))
+                            .toList();
             if (!authorIds.isEmpty()) {
                 bool.should(s -> s.terms(t -> t.field("userId").terms(v -> v.value(authorIds)).boost(2f)));
             }
