@@ -9,6 +9,7 @@ import com.tiktok.mediaworker.config.MinioProperties;
 import com.tiktok.mediaworker.config.ModerationProperties;
 import io.minio.DownloadObjectArgs;
 import io.minio.MinioClient;
+import io.minio.errors.ErrorResponseException;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -81,11 +82,7 @@ public class ModerationServiceImpl implements ModerationService {
         Path work = createWorkDirectory(videoId);
         try {
             Path source = work.resolve("playback.mp4");
-            minioClient.downloadObject(DownloadObjectArgs.builder()
-                    .bucket(minioProperties.bucket())
-                    .object(MediaKeys.playback(videoId))
-                    .filename(source.toString())
-                    .build());
+            downloadPlayback(videoId, source);
 
             Path frameDir = Files.createDirectory(work.resolve("frames"));
             List<Path> frames = ffmpeg.sampleFrames(source, frameDir,
@@ -113,6 +110,36 @@ public class ModerationServiceImpl implements ModerationService {
         } finally {
             deleteRecursively(work);
         }
+    }
+
+    /**
+     * The playback file from wherever it is now. A takedown or deletion that lands while the video
+     * is transcoding has already moved the fresh output under {@code quarantine/} by the time this
+     * runs (see {@code VideoEventConsumer}), and reading only the public key failed every attempt:
+     * a REVIEW verdict with no scores, and a video later restored from the takedown landed in the
+     * review queue instead of being published. The quarantined copy is the same bytes.
+     *
+     * <p>A move in the other direction between the two reads fails this attempt, and the retry
+     * around it finds the file where it settled.
+     */
+    private void downloadPlayback(String videoId, Path target) throws Exception {
+        String key = MediaKeys.playback(videoId);
+        try {
+            download(key, target);
+        } catch (ErrorResponseException e) {
+            if (!"NoSuchKey".equals(e.errorResponse().code())) {
+                throw e;
+            }
+            download(MediaQuarantineService.PREFIX + key, target);
+        }
+    }
+
+    private void download(String key, Path target) throws Exception {
+        minioClient.downloadObject(DownloadObjectArgs.builder()
+                .bucket(minioProperties.bucket())
+                .object(key)
+                .filename(target.toString())
+                .build());
     }
 
     /**
