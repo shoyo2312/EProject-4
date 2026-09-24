@@ -65,6 +65,7 @@ public class OAuthServiceImpl implements OAuthService {
         User user;
         if (link.isPresent()) {
             user = ownerOf(link.get());
+            SocialSignInPolicy.requireAllowed(user);
             if (link.get().isNeedsReconfirmation()) {
                 // Attached before the address was proven, and its owner has since taken the
                 // account over — see IdentityReconfirmation. Same answer as a new link to an
@@ -80,6 +81,7 @@ public class OAuthServiceImpl implements OAuthService {
         // A locked account must not be handed a session by the side door. Same answer the password
         // login gives, for the same reason: why the sign-in failed is not the client's business.
         requireStillActive(user);
+        SocialSignInPolicy.requireAllowed(user);
 
         announceAvatar(user, profile);
 
@@ -106,6 +108,7 @@ public class OAuthServiceImpl implements OAuthService {
         User user;
         if (link.isPresent()) {
             user = ownerOf(link.get());
+            SocialSignInPolicy.requireAllowed(user);
             // A link waiting to be confirmed again: the code went to the account's own address,
             // whatever the provider says it is — see SocialLinkChallenge.start.
             if (link.get().isNeedsReconfirmation()) {
@@ -124,6 +127,7 @@ public class OAuthServiceImpl implements OAuthService {
         }
 
         requireStillActive(user);
+        SocialSignInPolicy.requireAllowed(user);
 
         announceAvatar(user, profile);
 

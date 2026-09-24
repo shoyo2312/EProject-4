@@ -13,6 +13,7 @@ import com.tiktok.authservice.event.producer.SocialAvatarEventProducer;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.SocialLinkVerificationRequiredException;
+import com.tiktok.authservice.exception.SocialSignInNotAllowedException;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -263,6 +264,45 @@ class OAuthServiceImplTest {
 
         assertThat(service.confirmLink(AuthProvider.GOOGLE, new SocialLinkRequest(REQUEST.token(), "123456"))
                 .tokens().accessToken()).isEqualTo("access");
+    }
+
+    /**
+     * An admin session costs a password, Turnstile and an emailed code; a provider link to the
+     * admin's account would cost only the mailbox. Refused however the account was reached.
+     */
+    @Test
+    void adminAccountIsNotSignedInThroughAProvider() {
+        User admin = activeUser("admin@example.com");
+        admin.promoteToAdmin();
+        linkedTo(admin);
+
+        assertThatThrownBy(() -> service.login(AuthProvider.GOOGLE, REQUEST))
+                .isInstanceOf(SocialSignInNotAllowedException.class);
+        verify(tokenIssuer, never()).issue(any(), any());
+    }
+
+    @Test
+    void adminAccountIsNotSignedInThroughALinkConfirmationEither() {
+        User admin = activeUser("admin@example.com");
+        admin.promoteToAdmin();
+        linkedTo(admin);
+
+        assertThatThrownBy(() -> service.confirmLink(AuthProvider.GOOGLE,
+                new SocialLinkRequest(REQUEST.token(), "123456")))
+                .isInstanceOf(SocialSignInNotAllowedException.class);
+        verify(tokenIssuer, never()).issue(any(), any());
+    }
+
+    /** A flagged link to an admin must not even cost the admin a mailed code. */
+    @Test
+    void flaggedLinkToAnAdminMailsNothing() {
+        User admin = activeUser("admin@example.com");
+        admin.promoteToAdmin();
+        flaggedLinkTo(admin);
+
+        assertThatThrownBy(() -> service.login(AuthProvider.GOOGLE, REQUEST))
+                .isInstanceOf(SocialSignInNotAllowedException.class);
+        verify(linkChallenge, never()).start(any(), any());
     }
 
     private UserIdentity flaggedLinkTo(User user) {

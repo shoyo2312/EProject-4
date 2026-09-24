@@ -91,6 +91,9 @@ public class SocialLinkChallenge {
         if (owner.getStatus() != UserStatus.ACTIVE) {
             throw new InvalidOtpException();
         }
+        // No challenge is ever started for an admin, but the code proves the same mailbox either
+        // way, and the link it would write is what SocialSignInPolicy exists to keep off.
+        SocialSignInPolicy.requireAllowed(owner);
 
         registrar.claim(owner, profile);
         return owner;
@@ -114,6 +117,7 @@ public class SocialLinkChallenge {
         if (!proven.getId().equals(identity.getUserId()) || proven.getStatus() != UserStatus.ACTIVE) {
             throw new InvalidOtpException();
         }
+        SocialSignInPolicy.requireAllowed(proven);
 
         identity.reconfirm();
         userIdentityRepository.save(identity);

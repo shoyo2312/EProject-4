@@ -8,6 +8,7 @@ import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.entity.VerificationTokenType;
 import com.tiktok.authservice.exception.InvalidOtpException;
+import com.tiktok.authservice.exception.SocialSignInNotAllowedException;
 import com.tiktok.authservice.exception.TooManyOtpRequestsException;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import org.junit.jupiter.api.Test;
@@ -92,6 +93,19 @@ class SocialLinkChallengeTest {
 
         assertThatThrownBy(() -> challenge.confirm(PROFILE, "123456"))
                 .isInstanceOf(InvalidOtpException.class);
+
+        verify(registrar, never()).claim(any(), any());
+    }
+
+    @Test
+    void adminOwnerIsNotLinked() {
+        User admin = activeUser();
+        admin.promoteToAdmin();
+        when(otpService.consume(SocialLinkChallenge.PURPOSE, VerificationTokenType.SOCIAL_LINK,
+                EMAIL, "123456")).thenReturn(admin);
+
+        assertThatThrownBy(() -> challenge.confirm(PROFILE, "123456"))
+                .isInstanceOf(SocialSignInNotAllowedException.class);
 
         verify(registrar, never()).claim(any(), any());
     }

@@ -5,6 +5,7 @@ import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.event.producer.UserEventProducer;
+import com.tiktok.authservice.exception.SocialSignInNotAllowedException;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -171,6 +172,27 @@ class SocialAccountRegistrarTest {
         InOrder order = inOrder(identityReconfirmation, identityRepository);
         order.verify(identityReconfirmation).onMailboxOwnerTakesOver(squatted);
         order.verify(identityRepository).saveAndFlush(any());
+    }
+
+    /**
+     * Google vouching for an admin's address used to link straight to the admin account, and a
+     * Facebook account carrying it got a link code mailed to the admin. Neither may happen.
+     */
+    @Test
+    void addressOfAnAdminAccountNeitherLinksNorStartsAChallenge() {
+        User admin = existing("admin@example.com");
+        admin.promoteToAdmin();
+        when(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("admin@example.com"))
+                .thenReturn(Optional.of(admin));
+
+        assertThatThrownBy(() -> registrar.register(
+                new SocialProfile(AuthProvider.GOOGLE, UID, "admin@example.com", true)))
+                .isInstanceOf(SocialSignInNotAllowedException.class);
+        assertThatThrownBy(() -> registrar.register(facebook("admin@example.com")))
+                .isInstanceOf(SocialSignInNotAllowedException.class);
+
+        verify(identityRepository, never()).saveAndFlush(any());
+        verify(identityReconfirmation, never()).onMailboxOwnerTakesOver(any());
     }
 
     private User savedUser() {

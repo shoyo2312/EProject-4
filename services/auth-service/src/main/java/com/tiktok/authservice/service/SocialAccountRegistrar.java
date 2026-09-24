@@ -48,6 +48,9 @@ public class SocialAccountRegistrar {
                 : userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(email).orElse(null);
 
         if (existing != null) {
+            // Before claiming or mailing a link code: neither may happen for an account a provider
+            // sign-in is never allowed to open. See SocialSignInPolicy.
+            SocialSignInPolicy.requireAllowed(existing);
             if (profile.emailVerified()) {
                 claim(existing, profile);
                 return existing;
