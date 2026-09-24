@@ -63,6 +63,18 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
                              Pageable pageable);
 
     /**
+     * The same match and order as {@link #search}, ids only and with no viewer: search-service
+     * asks it so a video search for "vmh" also finds the videos of vmh26122004, and it has no
+     * idea who is searching, so there are no blocks to apply. No count query either — the caller
+     * wants the best few, not a page.
+     */
+    @Query("select p.userId from UserProfile p where p.deletedAt is null "
+            + "and (lower(p.displayName) like lower(concat('%', :query, '%')) escape '\\' "
+            + "or lower(p.username) like lower(concat('%', :query, '%')) escape '\\') "
+            + "order by p.followerCount desc, p.userId asc")
+    List<Long> searchIds(@Param("query") String query, Pageable pageable);
+
+    /**
      * Points a profile at the copy media-worker made of its provider picture.
      *
      * <p>The WHERE clause is the whole decision, and it is made in the database rather than by

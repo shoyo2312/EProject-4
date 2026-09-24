@@ -69,6 +69,12 @@ public interface UserProfileService {
      */
     Page<UserProfileResponse> search(Long viewerId, String query, Pageable pageable);
 
+    /**
+     * Ids of the profiles {@link #search} would list first, for a caller with no viewer —
+     * search-service matching a video query against authors. Blank query is an empty list.
+     */
+    List<Long> searchIds(String query, int limit);
+
     UserProfileResponse updateOwnProfile(Long userId, UpdateProfileRequest request);
 
     /**

@@ -128,6 +128,15 @@ public class UserProfileServiceImpl implements UserProfileService {
                 .map(userProfileMapper::toResponse);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public List<Long> searchIds(String query, int limit) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        return userProfileRepository.searchIds(escapeLike(query.strip()), PageRequest.of(0, limit));
+    }
+
     /** The query is text to find, not a pattern: {@code _} and {@code %} match themselves. */
     private static String escapeLike(String query) {
         return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");

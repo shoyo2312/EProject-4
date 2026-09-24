@@ -410,4 +410,17 @@ class UserProfileServiceImplTest {
         assertThat(userProfileService.search(99L, "   ", PageRequest.of(0, 20))).isEmpty();
         assertThat(userProfileService.search(99L, null, PageRequest.of(0, 20))).isEmpty();
     }
+
+    /** What search-service asks: a fragment of a handle, most-followed first, capped. */
+    @Test
+    void searchIds_findsAPartialHandleMostFollowedFirst() {
+        userProfileService.createFromRegisteredEvent(1L, "vmh26122004", null);
+        userProfileService.createFromRegisteredEvent(2L, "xvmh", null);
+        userProfileService.createFromRegisteredEvent(3L, "fan", null);
+        followService.follow(3L, 2L);
+
+        assertThat(userProfileService.searchIds("VMH", 50)).containsExactly(2L, 1L);
+        assertThat(userProfileService.searchIds("vmh", 1)).containsExactly(2L);
+        assertThat(userProfileService.searchIds(" ", 50)).isEmpty();
+    }
 }
