@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -29,6 +30,21 @@ public class RecommendationServiceImpl implements RecommendationService {
      * Deliberately below a like: watching is passive and cheap, liking is a decision.
      */
     private static final double WATCH_SCORE = 2.0;
+
+    /**
+     * Raises one viewer's best watched fraction of one video and answers by how much, atomically:
+     * two sessions reported together must not both count the same fraction. Returned as a string
+     * because a Lua number reply is truncated to an integer on its way back.
+     */
+    private static final RedisScript<String> RAISE_BEST_WATCH = RedisScript.of("""
+            local best = tonumber(redis.call('GET', KEYS[1]) or '0')
+            local ratio = tonumber(ARGV[1])
+            if ratio <= best then
+              return '0'
+            end
+            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+            return tostring(ratio - best)
+            """, String.class);
 
     /**
      * How much of one hour's engagement survives into the next. 0.85 over a 24-hour window
@@ -246,8 +262,14 @@ public class RecommendationServiceImpl implements RecommendationService {
     public void recordWatch(String videoId, Long userId, long watchedMs, long durationMs, boolean completed) {
         double ratio = durationMs <= 0 ? 0 : Math.min(1.0, (double) watchedMs / durationMs);
 
-        addEngagement(videoId, WATCH_SCORE * ratio);
+        double raise = raiseBestWatch(videoId, userId, ratio);
+        if (raise > 0) {
+            addEngagement(videoId, WATCH_SCORE * raise);
+        }
 
+        // Every session, as before: these two are features the ranking model is trained on from
+        // every row in watch_events, and counting them per viewer here would serve it a different
+        // number under the same name — see rank-service's features.py.
         redisTemplate.opsForZSet().incrementScore(RecoKeys.VIDEO_WATCHES, videoId, 1);
         if (completed) {
             redisTemplate.opsForZSet().incrementScore(RecoKeys.VIDEO_COMPLETIONS, videoId, 1);
@@ -255,6 +277,28 @@ public class RecommendationServiceImpl implements RecommendationService {
 
         markSeen(userId, videoId);
         learnTags(userId, videoId, ratio);
+    }
+
+    /**
+     * How much of a full watch this session adds to what the viewer already gave the video in the
+     * trending window: only the part past their best so far. Scored per session, a single account
+     * could report a completed watch sixty times an hour — as much as the watch endpoint allows —
+     * and buy a video 120 points an hour, forty viewers' likes; that is the loophole recordShare
+     * closed for shares, still open here. Now one viewer is worth at most one full watch per
+     * video, however many times they watch it, and a skip followed by a real watch still counts
+     * the real one.
+     *
+     * <p>The mark lives as long as a trending bucket, from the last time it was raised. No viewer
+     * means no way to bound it, so it is not scored.
+     */
+    private double raiseBestWatch(String videoId, Long userId, double ratio) {
+        if (userId == null || ratio <= 0) {
+            return 0;
+        }
+        String raised = redisTemplate.execute(RAISE_BEST_WATCH,
+                List.of(RecoKeys.watchedBy(videoId, userId)),
+                String.valueOf(ratio), String.valueOf(RecoKeys.BUCKET_TTL.toSeconds()));
+        return raised == null ? 0 : Double.parseDouble(raised);
     }
 
     /**

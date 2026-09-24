@@ -60,6 +60,14 @@ public final class RecoKeys {
         return "reco:shared:" + videoId + ":" + userId;
     }
 
+    /**
+     * One viewer's best watched fraction of one video already scored in the trending window; see
+     * {@code RecommendationServiceImpl.recordWatch}. Lives {@link #BUCKET_TTL}, as the buckets do.
+     */
+    public static String watchedBy(String videoId, Long userId) {
+        return "reco:watched:" + videoId + ":" + userId;
+    }
+
     /** Decayed union of the window. Rebuilt on a schedule; read by both /trending and /feed. */
     public static final String TRENDING = "reco:trending";
 

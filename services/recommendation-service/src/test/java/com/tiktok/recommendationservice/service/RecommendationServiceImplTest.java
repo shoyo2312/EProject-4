@@ -16,6 +16,7 @@ import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -352,8 +353,11 @@ class RecommendationServiceImplTest {
      */
     @Test
     void recordWatch_scoresEngagementByTheWatchedFraction() {
+        viewersBestWatchRisesBy("0.5");
+
         recommendationService.recordWatch("vid1", 7L, 5_000L, 10_000L, false);
 
+        verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("reco:watched:vid1:7")), eq("0.5"), any());
         verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(1.0));
         verify(zSetOperations).incrementScore("reco:video:watches", "vid1", 1);
         verify(zSetOperations, never()).incrementScore(eq("reco:video:completions"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
@@ -400,7 +404,40 @@ class RecommendationServiceImplTest {
     void recordWatch_zeroDuration_doesNotDivideByIt() {
         recommendationService.recordWatch("vid1", 7L, 0L, 0L, false);
 
-        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(0.0));
+        verify(zSetOperations, never()).incrementScore(startsWith("reco:trend:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * The share loophole, on watches: a completed watch reported sixty times an hour by one
+     * account was sixty full scores. Past the viewer's best, a rewatch adds nothing to trending.
+     */
+    @Test
+    void recordWatch_aViewersRewatchAddsNothingToTrending() {
+        viewersBestWatchRisesBy("1.0", "0");
+
+        recommendationService.recordWatch("vid1", 7L, 10_000L, 10_000L, true);
+        recommendationService.recordWatch("vid1", 7L, 10_000L, 10_000L, true);
+
+        verify(zSetOperations, times(1)).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(2.0));
+        // The model's features still see every session.
+        verify(zSetOperations, times(2)).incrementScore("reco:video:watches", "vid1", 1);
+    }
+
+    /** A skip first and a real watch later is still one real watch, not one skip. */
+    @Test
+    void recordWatch_aLaterFullerWatchCountsTheDifference() {
+        viewersBestWatchRisesBy("0.1", "0.9");
+
+        recommendationService.recordWatch("vid1", 7L, 1_000L, 10_000L, false);
+        recommendationService.recordWatch("vid1", 7L, 10_000L, 10_000L, true);
+
+        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(0.2));
+        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(1.8));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void viewersBestWatchRisesBy(String first, String... then) {
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any())).thenReturn(first, then);
     }
 
     /**
