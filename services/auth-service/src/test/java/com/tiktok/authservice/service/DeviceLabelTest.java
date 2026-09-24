@@ -10,6 +10,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class DeviceLabelTest {
 
+    /**
+     * Both hints are the client's to write. A label past the column failed the INSERT, and the
+     * recorder swallowed that — so an oversized hint kept the sender's own entry out of the log.
+     */
+    @Test
+    void oversizedHintsAreCutToTheColumn() {
+        String label = DeviceLabel.of("Mozilla/5.0 (Linux; Android 15) Chrome/140.0.0.0 Mobile Safari/537.36",
+                "15." + "9".repeat(300), "X".repeat(500));
+
+        assertThat(label).hasSize(DeviceLabel.MAX_LENGTH).startsWith("Chrome on Android 15.");
+    }
+
     @Test
     void chromeIsNotMistakenForSafari() {
         // Chrome's agent ends in "Safari/537.36" and always has — matching on Safari first would

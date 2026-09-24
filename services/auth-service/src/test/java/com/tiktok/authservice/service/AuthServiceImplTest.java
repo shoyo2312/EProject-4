@@ -1135,6 +1135,25 @@ class AuthServiceImplTest {
     }
 
     /**
+     * The hints are the sender's to write. An oversized one used to push the label past its column,
+     * the INSERT failed, and the recorder swallowed that — so the failed attempt was never logged.
+     */
+    @Test
+    void failedSignIn_withOversizedClientHints_isStillRecorded() {
+        UserResponse registered = registerVerified();
+        MockHttpServletRequest request = arriveFrom("203.0.113.9", "Mozilla/5.0 (Linux; Android 15) "
+                + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36");
+        request.addHeader("Sec-CH-UA-Model", "\"" + "X".repeat(500) + "\"");
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpassword")))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getUserId)
+                .containsExactly(tuple(SecurityEventType.LOGIN_FAILED, registered.id()));
+    }
+
+    /**
      * An attempt on a name nobody holds has no account to be filed under, and inventing one keyed
      * on the typed string would turn the log into a way of asking which usernames are real.
      */

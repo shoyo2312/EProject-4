@@ -51,6 +51,15 @@ final class DeviceLabel {
      */
     private static final int WINDOWS_11_PLATFORM_MAJOR = 13;
 
+    /**
+     * The {@code device_label} column (V12). The model and the platform version are copied in from
+     * client hints, which a client sets to whatever it likes; past the column, the INSERT failed and
+     * the recorder — which swallows every failure so a log can never block a sign-in — dropped the
+     * entry. A long {@code Sec-CH-UA-Model} was therefore a way to keep one's own failed sign-ins
+     * out of the account's security log.
+     */
+    static final int MAX_LENGTH = 128;
+
     private DeviceLabel() {
     }
 
@@ -83,7 +92,8 @@ final class DeviceLabel {
             return null;
         }
         // A model with no browser or platform to hang it on is still worth more than nothing.
-        return usableModel(model) ? head + " · " + model.strip() : head;
+        String label = usableModel(model) ? head + " · " + model.strip() : head;
+        return label.length() <= MAX_LENGTH ? label : label.substring(0, MAX_LENGTH);
     }
 
     private static String withVersion(String platform, String platformVersion) {
