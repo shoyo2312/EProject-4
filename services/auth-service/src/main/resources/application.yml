@@ -37,6 +37,13 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # send() blocks the caller while it fetches the topic's metadata, 60s by default. Social
+      # sign-in sends the provider avatar straight to the broker on the request thread
+      # (SocialAvatarEventProducer), so with Kafka down every Google/Facebook login hung for a
+      # minute over a cosmetic picture. The outbox dispatcher shares this producer and only gains:
+      # a record that cannot be queued stays unpublished and the next poll retries it.
+      properties:
+        "[max.block.ms]": 2000
 
   data:
     redis:

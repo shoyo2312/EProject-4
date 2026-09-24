@@ -26,4 +26,19 @@ class ConnectionSettingsTest {
 
         assertThat(environment.getProperty("spring.datasource.url")).contains("pg.internal:6543");
     }
+
+    /**
+     * Social sign-in sends the avatar event on the request thread, and a send waits this long for
+     * broker metadata. Left at Kafka's 60s default, a broker outage hung every provider login.
+     */
+    @Test
+    void aProducerSendCannotHoldASignInForLong() throws Exception {
+        StandardEnvironment environment = new StandardEnvironment();
+        new YamlPropertySourceLoader().load("app", new ClassPathResource("application.yml"))
+                .forEach(environment.getPropertySources()::addLast);
+
+        assertThat(environment.getProperty("spring.kafka.producer.properties[max.block.ms]", Long.class))
+                .isNotNull()
+                .isLessThanOrEqualTo(5_000L);
+    }
 }
