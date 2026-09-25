@@ -74,6 +74,22 @@ class GatewaySecurityRulesTest {
         }
     }
 
+    /**
+     * interaction-service's internal prefix answers without a token — notification-service asks it
+     * off a Kafka event — and names the author of any comment, removed ones included.
+     */
+    @Test
+    void internalInteractionEndpoints_areRefusedWithAndWithoutAToken() {
+        String uri = "/api/v1/interactions/internal/videos/1/comments/2/author";
+        client.get().uri(uri)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                .exchange()
+                .expectStatus().isForbidden();
+        client.get().uri(uri)
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
     @Test
     void ordinaryUserEndpoints_stillPassForASignedInCaller() {
         client.get().uri("/api/v1/users/42")
@@ -110,7 +126,8 @@ class GatewaySecurityRulesTest {
 
         @GetMapping({"/api/v1/users/internal/blocks", "/api/v1/users/internal/settings",
                 "/api/v1/users/internal/friendship", "/api/v1/users/42",
-                "/api/v1/videos/123/policy", "/api/v1/videos/123"})
+                "/api/v1/videos/123/policy", "/api/v1/videos/123",
+                "/api/v1/interactions/internal/videos/1/comments/2/author"})
         Mono<String> ok() {
             return Mono.just("ok");
         }

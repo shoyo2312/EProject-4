@@ -3,9 +3,12 @@ package com.tiktok.interactionservice.service;
 import com.tiktok.interactionservice.dto.request.AdminCommentFilter;
 import com.tiktok.interactionservice.dto.response.AdminCommentPageResponse;
 import com.tiktok.interactionservice.dto.response.AdminCommentResponse;
+import com.tiktok.interactionservice.dto.response.CommentAuthorResponse;
 import com.tiktok.interactionservice.entity.CommentByVideo;
+import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.entity.CommentCounters;
 import com.tiktok.interactionservice.entity.CommentIndex;
+import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
 import com.tiktok.interactionservice.repository.CommentCountersRepository;
@@ -194,6 +197,19 @@ public class AdminCommentDirectory {
                 items,
                 hasMore ? CassandraCursors.encode((CassandraPageRequest) slice.nextPageable()) : null,
                 hasMore);
+    }
+
+    /**
+     * Who wrote one comment, for a moderation decision that has to reach them — a warning filed
+     * against a comment names the comment, not its author. Removed comments answer too: a
+     * warning is as likely to follow a removal as to replace one, and the author is the same
+     * either way.
+     */
+    public CommentAuthorResponse authorOf(Long videoId, Long commentId) {
+        CommentByVideo comment = commentByVideoRepository
+                .findById(CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build())
+                .orElseThrow(() -> new CommentNotFoundException(commentId));
+        return new CommentAuthorResponse(videoId, commentId, comment.getUserId());
     }
 
     /**

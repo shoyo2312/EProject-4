@@ -7,6 +7,7 @@ import com.tiktok.interactionservice.dto.request.AdminCommentFilter;
 import com.tiktok.interactionservice.dto.response.AdminCommentPageResponse;
 import com.tiktok.interactionservice.dto.response.AdminCommentResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
+import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
 import com.tiktok.interactionservice.repository.CommentIndexRepository;
@@ -249,6 +250,29 @@ class AdminCommentDirectoryTest extends AbstractInteractionServiceIT {
                     assertThat(comment.deletedAt()).isNotNull();
                 });
         assertThat(adminCommentDirectory.listByIds(72L, List.of())).isEmpty();
+    }
+
+    /**
+     * A warning filed against a comment has to reach whoever wrote it, and a warning is as likely
+     * to follow a removal as to replace one — so a removed comment still answers.
+     */
+    @Test
+    void authorOf_namesTheWriter_ofALiveOrARemovedComment() {
+        CommentResponse live = commentService.addComment(73L, 5L, "still up");
+        CommentResponse removed = commentService.addComment(73L, 6L, "taken down");
+        commentService.deleteComment(73L, removed.commentId(), 6L);
+
+        assertThat(adminCommentDirectory.authorOf(73L, live.commentId()).userId()).isEqualTo(5L);
+        assertThat(adminCommentDirectory.authorOf(73L, removed.commentId()).userId()).isEqualTo(6L);
+    }
+
+    /** A comment id that was never stored — or stored under another video — is a 404, not a guess. */
+    @Test
+    void authorOf_anUnknownComment_isNotFound() {
+        CommentResponse elsewhere = commentService.addComment(74L, 5L, "on another video");
+
+        assertThatThrownBy(() -> adminCommentDirectory.authorOf(75L, elsewhere.commentId()))
+                .isInstanceOf(CommentNotFoundException.class);
     }
 
     /** A made-up cursor is the client's typo — a 400, not the 500 the catch-all would report. */

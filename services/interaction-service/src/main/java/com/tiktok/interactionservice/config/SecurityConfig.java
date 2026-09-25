@@ -30,6 +30,8 @@ public class SecurityConfig {
                         // removed comments and every comment on a video regardless of who posted
                         // it — a moderation view, not the public thread.
                         .requestMatchers("/api/v1/interactions/admin/**").hasRole("ADMIN")
+                        // Service-to-service only; api-gateway denies this prefix outright.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/interactions/internal/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/like-status").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/comments").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/counts/batch").permitAll()

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserWarnedEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
+import com.tiktok.notificationservice.client.CommentAuthorClient;
+import com.tiktok.notificationservice.client.CommentAuthorClient.CommentTarget;
 import com.tiktok.notificationservice.client.VideoOwnerClient;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.service.NotificationService;
@@ -41,6 +43,7 @@ public class AdminModerationEventConsumer {
     private final IdempotentEventProcessor idempotentEventProcessor;
     private final NotificationService notificationService;
     private final VideoOwnerClient videoOwnerClient;
+    private final CommentAuthorClient commentAuthorClient;
     private final ObjectMapper objectMapper;
 
     @KafkaListener(topics = "admin.moderation-events", groupId = "notification-service")
@@ -67,7 +70,7 @@ public class AdminModerationEventConsumer {
                 UserWarnedEvent event = objectMapper.readValue(payload, UserWarnedEvent.class);
                 notify(event.eventId(), USER_WARNED, recipientOf(event), "A warning from moderation",
                         body(event.reason(), "An admin reviewed something you posted."),
-                        "VIDEO".equals(event.targetType()) ? event.targetId() : null);
+                        referenceOf(event));
             }
             case "" -> log.warn("Moderation event without an eventType header, dropped: {}", payload);
             default -> log.debug("Ignoring moderation eventType={}", eventType);
@@ -77,17 +80,33 @@ public class AdminModerationEventConsumer {
     /**
      * Who a warning is addressed to. A warning may be filed over any kind of report, so the
      * target is whatever was reported: an account is already the person, a video is its owner,
-     * and a comment is neither — this service has no way to reach interaction-service for the
-     * author, so those warnings stay audit-only until it does.
+     * and a comment is its author. The comment case used to answer nobody, so a warning over a
+     * comment report — the commonest thing to warn over — reached only the audit log.
      */
     private Long recipientOf(UserWarnedEvent event) {
         return switch (event.targetType() == null ? "" : event.targetType()) {
             case "USER" -> Long.valueOf(event.targetId());
             case "VIDEO" -> videoOwnerClient.ownerOf(event.targetId());
+            case "COMMENT" -> commentAuthorClient.authorOf(event.targetId());
             default -> {
                 log.debug("No recipient for a warning against a {}", event.targetType());
                 yield null;
             }
+        };
+    }
+
+    /**
+     * Where the notice opens: the video that was reported, or the one the reported comment is on.
+     * A warning over an account has nowhere more specific to go.
+     */
+    private String referenceOf(UserWarnedEvent event) {
+        return switch (event.targetType() == null ? "" : event.targetType()) {
+            case "VIDEO" -> event.targetId();
+            case "COMMENT" -> {
+                CommentTarget comment = CommentTarget.parse(event.targetId());
+                yield comment == null ? null : String.valueOf(comment.videoId());
+            }
+            default -> null;
         };
     }
 

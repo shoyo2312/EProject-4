@@ -29,6 +29,20 @@ public class DownstreamRestClientConfig {
         return RestClient.builder().baseUrl(videoServiceUri).requestFactory(requestFactory).build();
     }
 
+    /**
+     * For {@code CommentAuthorClient}: who wrote a comment an admin warned over, on
+     * interaction-service's internal prefix — same no-auth reasoning as above.
+     */
+    @Bean
+    public RestClient interactionServiceRestClient(
+            @Value("${downstream.interaction-service-uri}") String interactionServiceUri,
+            @Value("${downstream.timeout-millis:1000}") long timeoutMillis) {
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofMillis(timeoutMillis));
+        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
+        return RestClient.builder().baseUrl(interactionServiceUri).requestFactory(requestFactory).build();
+    }
+
     /** For {@code BlockClient}: user-service's internal block check, same no-auth reasoning as above. */
     @Bean
     public RestClient userServiceRestClient(@Value("${downstream.user-service-uri}") String userServiceUri,
