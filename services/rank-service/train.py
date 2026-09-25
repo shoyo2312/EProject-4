@@ -97,7 +97,7 @@ def user_tag_affinity(watches: pd.DataFrame, tags: pd.DataFrame) -> pd.DataFrame
             .head(TOP_TAGS))
 
 
-def candidate_tags(tags: pd.DataFrame) -> pd.DataFrame:
+def candidate_tags(tags: pd.DataFrame, as_of: datetime) -> pd.DataFrame:
     """The (video, tag) pairs a tag can actually offer the feed, offline twin of videosTagged.
 
     Serving reaches candidates through reco:tag:{tag}, read newest-first and PER_TAG deep, so a
@@ -105,10 +105,16 @@ def candidate_tags(tags: pd.DataFrame) -> pd.DataFrame:
     online however good a match it is — it can still reach the pool as a trending candidate, and
     then it arrives with the feature at zero. Joining over the whole of video_tags gives that same
     candidate a real value offline, and the model learns to lean on a signal it is never served.
+
+    The window is the one that stood at `as_of`, not the one standing now. video_tags holds every
+    upload up to the day this script runs, and the newest PER_TAG of those is a later window than
+    any viewer in the dataset was served: uploads that came after pushed out videos that were
+    still in it. build_dataset passes the end of the label window — every labelled watch happened
+    before it, and no later upload is counted.
     """
     if tags.empty:
         return tags
-    return (tags
+    return (tags[tags["published_at"] < as_of]
             .sort_values("published_at", ascending=False)
             .groupby("tag", as_index=False)
             .head(PER_TAG))
@@ -198,7 +204,7 @@ def build_dataset(client, cutoff: datetime) -> pd.DataFrame:
         # Cut to the candidate window before the dataset filter, not after: the window is the
         # newest PER_TAG videos carrying the tag, not the newest PER_TAG of the ones that happen
         # to be in this frame.
-        tags = candidate_tags(tags)
+        tags = candidate_tags(tags, label_end)
         tags = tags[tags["video_id"].isin(data["video_id"].unique())]
 
         # One tag set feeds both columns, because serving derives both from the same five tags:
