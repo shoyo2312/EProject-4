@@ -314,7 +314,7 @@ Consumer của `video.video-events`: media-worker, search-service, recommendatio
 
 ### Tiêu thụ (consumer) — cập nhật counter & trạng thái
 
-Mọi consumer idempotent qua `IdempotentEventProcessor` (bảng `processed_events`, TTL index). Counter cập nhật bằng `$inc` nguyên tử (không load-modify-save) và **bỏ qua video `deletedAt != null` hoặc `status = TAKEN_DOWN`**; `unlike`/`comment deleted` còn thêm điều kiện `count > 0` (chống `$inc` âm vĩnh viễn).
+Mọi consumer idempotent qua `IdempotentEventProcessor` (bảng `processed_events`, TTL index). Counter cập nhật bằng `$inc` nguyên tử (không load-modify-save) và **bỏ qua video `deletedAt != null`**; `unlike`/`comment deleted` còn thêm điều kiện `count > 0` (chống `$inc` âm vĩnh viễn). Video `TAKEN_DOWN` **vẫn được đếm**: restore đưa nó trở lại, và interaction-service đếm xuyên qua takedown — unlike và xoá comment không cần video hiển thị, còn like gửi ngay trước takedown có thể tới sau nó. Bỏ qua chúng làm video sau restore hiện số like/comment cao hơn thật.
 
 | Topic | Event | Tác dụng |
 |---|---|---|

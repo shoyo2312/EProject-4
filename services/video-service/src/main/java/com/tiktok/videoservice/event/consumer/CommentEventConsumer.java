@@ -4,7 +4,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.videoservice.entity.Video;
-import com.tiktok.videoservice.entity.VideoStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -61,19 +60,18 @@ public class CommentEventConsumer {
     }
 
     private void applyCreated(CommentCreatedEvent event) {
-        // Skips soft-deleted and taken-down videos, same reasoning as VideoLikeEventConsumer:
-        // both are off every read path, so the comments still arriving are stale clients, and the
-        // count they build stays invisible right up until a restore puts the video back showing a
-        // number nobody can account for.
+        // Skips soft-deleted videos but not taken-down ones, same reasoning as
+        // VideoLikeEventConsumer: a takedown is lifted by a restore, and interaction-service keeps
+        // counting through it — a comment deleted while the video is down, or one posted just
+        // before the takedown that lands after it, is part of the number the restored video shows.
         Criteria target = where("_id").is(String.valueOf(event.videoId()))
-                .and("deletedAt").is(null)
-                .and("status").ne(VideoStatus.TAKEN_DOWN);
+                .and("deletedAt").is(null);
 
         var result = mongoTemplate.updateFirst(
                 Query.query(target), new Update().inc("commentCount", 1), Video.class);
 
         if (result.getMatchedCount() == 0) {
-            log.warn("CommentCreatedEvent for unknown, deleted or taken-down videoId={}", event.videoId());
+            log.warn("CommentCreatedEvent for unknown or deleted videoId={}", event.videoId());
         }
     }
 
@@ -85,14 +83,13 @@ public class CommentEventConsumer {
     private void applyDeleted(CommentDeletedEvent event) {
         Criteria target = where("_id").is(String.valueOf(event.videoId()))
                 .and("deletedAt").is(null)
-                .and("status").ne(VideoStatus.TAKEN_DOWN)
                 .and("commentCount").gt(0);
 
         var result = mongoTemplate.updateFirst(
                 Query.query(target), new Update().inc("commentCount", -1), Video.class);
 
         if (result.getMatchedCount() == 0) {
-            log.warn("CommentDeletedEvent matched nothing: videoId={} is unknown, deleted, taken down, "
+            log.warn("CommentDeletedEvent matched nothing: videoId={} is unknown, deleted, "
                             + "or already at zero comments", event.videoId());
         }
     }

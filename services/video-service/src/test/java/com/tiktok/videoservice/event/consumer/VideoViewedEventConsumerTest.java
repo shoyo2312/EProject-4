@@ -104,12 +104,11 @@ class VideoViewedEventConsumerTest {
     }
 
     /**
-     * A moderated video is off every read path, so the views still arriving are stale clients.
-     * Counting them builds a number nobody can see and nobody can account for the moment a
-     * restore puts the video back.
+     * A takedown is lifted by a restore, so a view interaction-service counted just before it —
+     * and delivered just after — belongs in the number the restored video shows.
      */
     @Test
-    void onMessage_takenDownVideo_leavesTheCountAlone() throws Exception {
+    void onMessage_takenDownVideo_stillCounts() throws Exception {
         Video video = publishedVideo();
         video.markTakenDown("policy violation");
         videoRepository.save(video);
@@ -117,7 +116,7 @@ class VideoViewedEventConsumerTest {
         consumer.onMessage(objectMapper.writeValueAsString(
                 VideoViewedEvent.of(Long.valueOf(video.getId()), 1L)));
 
-        assertThat(videoRepository.findById(video.getId()).orElseThrow().getViewCount()).isZero();
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getViewCount()).isEqualTo(1);
     }
 
     @Test

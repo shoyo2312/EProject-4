@@ -152,20 +152,23 @@ class VideoLikeEventConsumerTest {
     }
 
     /**
-     * Same reason as the soft-deleted case above: a moderated video is off every read path, so
-     * likes still arriving are stale clients, and the count they build stays invisible right up
-     * until a restore puts the video back showing a number nobody can account for.
+     * Unlike a deletion, a takedown is lifted by a restore, and interaction-service keeps counting
+     * through it: an unlike is accepted on a taken-down video, and a like sent just before the
+     * takedown lands just after it. Skipping both dropped every unlike, so the restored video
+     * came back showing likes it no longer had.
      */
     @Test
-    void onMessage_takenDownVideo_leavesTheCountAlone() throws Exception {
+    void onMessage_takenDownVideo_stillCountsLikesAndUnlikes() throws Exception {
         Video video = publishedVideo();
         video.markTakenDown("policy violation");
         videoRepository.save(video);
+        Long videoId = Long.valueOf(video.getId());
 
-        consumer.onMessage(objectMapper.writeValueAsString(
-                VideoLikeEvent.of(Long.valueOf(video.getId()), 1L, true)));
+        consumer.onMessage(objectMapper.writeValueAsString(VideoLikeEvent.of(videoId, 1L, true)));
+        consumer.onMessage(objectMapper.writeValueAsString(VideoLikeEvent.of(videoId, 2L, true)));
+        consumer.onMessage(objectMapper.writeValueAsString(VideoLikeEvent.of(videoId, 1L, false)));
 
-        assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isZero();
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isEqualTo(1);
     }
 
     private Video publishedVideo() {

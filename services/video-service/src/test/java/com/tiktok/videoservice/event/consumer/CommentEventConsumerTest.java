@@ -107,6 +107,26 @@ class CommentEventConsumerTest {
         assertThat(videoRepository.findById(video.getId()).orElseThrow().getCommentCount()).isEqualTo(0);
     }
 
+    /**
+     * interaction-service takes a comment deletion on a taken-down video — deleteComment needs no
+     * visibility — and moves its own count. Skipping it here left the restored video showing a
+     * comment that no longer exists.
+     */
+    @Test
+    void onMessage_deleted_onATakenDownVideo_stillDecrements() throws Exception {
+        Video video = videoRepository.save(publishedVideo());
+        consumer.onMessage(objectMapper.writeValueAsString(
+                CommentCreatedEvent.of(1L, Long.valueOf(video.getId()), 1L, "nice video")), CREATED_HEADER);
+        Video down = videoRepository.findById(video.getId()).orElseThrow();
+        down.markTakenDown("policy violation");
+        videoRepository.save(down);
+
+        consumer.onMessage(objectMapper.writeValueAsString(
+                CommentDeletedEvent.of(1L, Long.valueOf(video.getId()), 1L)), DELETED_HEADER);
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getCommentCount()).isZero();
+    }
+
     @Test
     void onMessage_deleted_decrementsCommentCount() throws Exception {
         Video video = videoRepository.save(publishedVideo());
