@@ -87,12 +87,15 @@ public class VideoOwnershipClient {
     }
 
     /**
-     * Whether the owner has switched comments off for this video. Fails open — a missing video or
-     * an unreachable video-service answers false, so a dependency outage never blocks commenting.
+     * Whether comments on this video are off for everyone: its own switch, or an owner whose
+     * account accepts comments from no one — which closes every video they own the same way.
+     * Fails open — a missing video or an unreachable video-service answers false, so a dependency
+     * outage never blocks commenting.
      */
     public boolean areCommentsDisabled(Long videoId) {
         VideoPolicyView view = fetch(videoId);
-        return view != null && view.commentsDisabled();
+        return view != null
+                && (view.commentsDisabled() || audienceOf(view.commentAudience()) == CommentAudience.NO_ONE);
     }
 
     /**

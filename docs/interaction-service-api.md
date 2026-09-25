@@ -123,7 +123,7 @@ Response **không kèm thông tin user** (tên, avatar) — service này chỉ g
 - `COMMENTS_DISABLED` — chủ video **tắt comment cho video này**. Hiện "Comments are turned off for this video". Chủ video cũng không comment được trên video đã tắt.
 - `COMMENTS_NOT_ALLOWED` — cài đặt **tài khoản** của chủ video không nhận comment từ người gọi: `commentAudience = NO_ONE`, hoặc `FRIENDS` mà hai bên không follow lẫn nhau (xem `user-service-api.md` mục 3.15). Hiện "This account doesn't accept comments from you". Dùng chung copy với `COMMENTS_DISABLED` sẽ nói với người xem friends-only rằng một thread họ đang đọc bị khoá với tất cả mọi người.
 
-Cờ từng video và cài đặt tài khoản **đều là hạn chế**, không phía nào override phía nào: video đã tắt comment thì vẫn tắt dù cài đặt tài khoản có thoáng đến đâu, và tài khoản đặt `NO_ONE` thì khoá cả những video chưa từng chạm vào cờ đó. Chủ video luôn comment được trên video của mình — nhưng chỉ với luật audience, không vượt qua được cờ tắt comment.
+Cờ từng video và cài đặt tài khoản **đều là hạn chế**, không phía nào override phía nào: video đã tắt comment thì vẫn tắt dù cài đặt tài khoản có thoáng đến đâu, và tài khoản đặt `NO_ONE` thì khoá cả những video chưa từng chạm vào cờ đó. `NO_ONE` chặn **cả chủ video**: tài khoản đặt `NO_ONE` thì mọi video của họ coi như đã tắt comment, y như cờ từng video (video-service trả `accountCommentsOff: true` và `commentCount: null`). Chủ video chỉ được miễn luật `FRIENDS`.
 
 Nếu video-service không trả lời được thì comment **vẫn đi qua** (fail-open) — một sự cố ở video-service không được phép chặn toàn bộ comment của hệ thống. Riêng nhánh `FRIENDS` thì fail-closed: không xác nhận được quan hệ follow là từ chối, vì "chỉ bạn bè" không được phép biến thành "tất cả mọi người" lúc user-service chết.
 
@@ -145,7 +145,7 @@ Lỗi: `VALIDATION_ERROR` (400), `COMMENTS_DISABLED` (403), `COMMENTS_NOT_ALLOWE
 | `NO_ONE` | Tài khoản chủ video không nhận comment từ ai | `COMMENTS_NOT_ALLOWED` | Như tắt comment — với người xem, kết quả giống hệt |
 | `FRIENDS_ONLY` | Chỉ bạn bè (follow lẫn nhau), người gọi không phải | `COMMENTS_NOT_ALLOWED` | "You cannot comment on this video" |
 
-Chủ video luôn nhận `null` với `NO_ONE`/`FRIENDS_ONLY` (được miễn luật audience) nhưng vẫn nhận `COMMENTS_DISABLED` nếu đã tắt comment video đó. Fail-open/fail-closed y như 3.4: video-service không trả lời được → `null`; không xác nhận được quan hệ bạn bè → `FRIENDS_ONLY`.
+Chủ video được miễn `FRIENDS_ONLY` nhưng vẫn nhận `COMMENTS_DISABLED` (tắt comment video đó) và `NO_ONE` (tài khoản không nhận comment từ ai). Hai trường hợp đó client đã biết sẵn từ `commentsDisabled` / `accountCommentsOff` trên video, nên thực tế chỉ cần gọi endpoint này cho `FRIENDS_ONLY`. Fail-open/fail-closed y như 3.4: video-service không trả lời được → `null`; không xác nhận được quan hệ bạn bè → `FRIENDS_ONLY`.
 
 Đây chỉ là gợi ý cho UI — server **vẫn** kiểm tra lại ở 3.4, và audience được cache ~30 giây, nên client vẫn phải xử lý hai mã 403 kia.
 
@@ -327,7 +327,7 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `content` rỗng/quá 1000 ký tự (mục 3.4); thiếu `watchedMs`/`durationMs`, `watchedMs` âm, `durationMs` <= 0 (mục 3.9) |
 | `NOT_COMMENT_OWNER` | 403 | Xoá bình luận của người khác (mục 3.6) |
-| `COMMENTS_DISABLED` | 403 | Chủ video đã tắt comment cho **video đó** (mục 3.4). Listing (mục 3.5) không lỗi mà trả trang rỗng |
+| `COMMENTS_DISABLED` | 403 | Chủ video đã tắt comment cho **video đó** (mục 3.4). Listing (mục 3.5) không lỗi mà trả trang rỗng — tài khoản đặt `NO_ONE` cũng trả trang rỗng như vậy |
 | `COMMENTS_NOT_ALLOWED` | 403 | Cài đặt **tài khoản** của chủ video không nhận comment từ người gọi — `NO_ONE`, hoặc `FRIENDS` mà không follow lẫn nhau (mục 3.4) |
 | `COMMENT_NOT_FOUND` | 404 | Bình luận không tồn tại, đã xoá, hoặc `videoId` trên URL không khớp với bình luận đó |
 | `INTERACTION_CONFLICT` | 409 | Ghi vào Cassandra không xác nhận được kết quả sau 3 lần thử (like/unlike ở mục 3.1–3.2, view ở mục 3.8). Xem bên dưới |

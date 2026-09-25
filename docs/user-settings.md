@@ -248,8 +248,8 @@ Resulting precedence, top to bottom:
 | Condition | Outcome |
 |---|---|
 | `video.commentsDisabled` | `COMMENTS_DISABLED` (403) — existing code, unchanged |
+| `commentAudience == NO_ONE` | `COMMENTS_NOT_ALLOWED` (403) — **the owner included** |
 | commenter is the video owner | allowed |
-| `commentAudience == NO_ONE` | `COMMENTS_NOT_ALLOWED` (403) — new |
 | `commentAudience == FRIENDS` and not mutual | `COMMENTS_NOT_ALLOWED` (403) |
 | otherwise | allowed |
 
@@ -258,6 +258,11 @@ The switch already refuses the owner today, and "existing code, unchanged" on th
 stronger commitment: an owner exemption above it would quietly change shipped behaviour, letting
 a creator comment on a video whose comments they had turned off. The exemption is from the
 audience rules, which is what the test checklist below asks for.
+
+`NO_ONE` was later moved **above** the owner row as well: an account open to no one reads as
+comments off on every video it owns — the same as the per-video switch, owner included — and
+video-service says so on every `VideoResponse` (`accountCommentsOff`, with `commentCount` withheld)
+so clients hide the box and the count without asking. The owner is exempt from `FRIENDS` only.
 
 The per-video switch and the account default are **both** restrictions, never an override in
 either direction: a video with comments off stays off however permissive the account setting is,

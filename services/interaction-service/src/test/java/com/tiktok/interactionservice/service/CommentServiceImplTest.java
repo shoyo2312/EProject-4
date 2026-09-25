@@ -222,14 +222,23 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     }
 
     /**
-     * "Nobody" never means the owner: an account that accepts comments from no one can still reply
-     * on its own videos, which is how the setting behaves on the real product.
+     * "Nobody" includes the owner: an account that accepts comments from no one reads as comments
+     * off on every video it owns, the same as the per-video switch — which binds the owner too.
      */
     @Test
-    void addComment_byTheOwnerOfANoOneVideo_isAllowed() {
+    void addComment_byTheOwnerOfANoOneVideo_isRefusedToo() {
         when(videoOwnershipClient.commentPolicy(62L)).thenReturn(ownedBy(9L, CommentAudience.NO_ONE));
 
-        assertThat(commentService.addComment(62L, 9L, "my own video").content()).isEqualTo("my own video");
+        assertThatThrownBy(() -> commentService.addComment(62L, 9L, "my own video"))
+                .isInstanceOf(CommentsNotAllowedException.class);
+    }
+
+    /** Friends-only is the one rule the owner is exempt from — nobody is their own friend. */
+    @Test
+    void addComment_byTheOwnerOfAFriendsOnlyVideo_isAllowed() {
+        when(videoOwnershipClient.commentPolicy(69L)).thenReturn(ownedBy(9L, CommentAudience.FRIENDS));
+
+        assertThat(commentService.addComment(69L, 9L, "my own video").content()).isEqualTo("my own video");
     }
 
     @Test
@@ -271,7 +280,7 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(commentService.commentPermission(65L, 9L).restriction())
                 .isEqualTo(Restriction.COMMENTS_DISABLED);
         assertThat(commentService.commentPermission(66L, 1L).restriction()).isEqualTo(Restriction.NO_ONE);
-        assertThat(commentService.commentPermission(66L, 9L).restriction()).isNull();
+        assertThat(commentService.commentPermission(66L, 9L).restriction()).isEqualTo(Restriction.NO_ONE);
         assertThat(commentService.commentPermission(67L, 1L).restriction()).isNull();
         assertThat(commentService.commentPermission(67L, 2L).restriction())
                 .isEqualTo(Restriction.FRIENDS_ONLY);

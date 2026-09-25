@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.common.id.SnowflakeIdGenerator;
+import com.tiktok.interactionservice.client.CommentAudience;
 import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
@@ -181,9 +182,9 @@ public class CommentServiceImpl implements CommentService {
      * <p>The per-video switch and the owner's account-level audience are both restrictions, never
      * an override in either direction: a video with comments off stays off however permissive the
      * account is, and an account set to NO_ONE closes videos whose own switch was never touched.
-     * The switch is checked first, so it binds the owner too; the audience rules are what the
-     * owner is exempt from — an account that accepts comments from nobody can still reply on its
-     * own videos, which is how the setting behaves on the real product.
+     * Both bind the owner too — NO_ONE reads as comments off on every video the account owns, the
+     * same as the switch, and is shown that way. FRIENDS is the one rule the owner is exempt from:
+     * nobody is their own friend, and it is still their thread.
      *
      * <p>An unknown owner (video-service unreachable) passes: at that point there is no audience
      * to enforce, and this guard fails open by design.
@@ -191,6 +192,9 @@ public class CommentServiceImpl implements CommentService {
     private Restriction restrictionFor(CommentPolicy policy, Long commenterId) {
         if (policy.commentsDisabled()) {
             return Restriction.COMMENTS_DISABLED;
+        }
+        if (policy.commentAudience() == CommentAudience.NO_ONE) {
+            return Restriction.NO_ONE;
         }
         if (policy.ownerId() == null || policy.ownerId().equals(commenterId)) {
             return null;
