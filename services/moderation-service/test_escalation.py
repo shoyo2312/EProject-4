@@ -54,3 +54,50 @@ def test_disabled_without_credentials(monkeypatch):
     assert not escalation.enabled()
     # And asking anyway is not an error, just an answer that changes nothing.
     assert escalation.second_opinion(["frame"]).verdict is None
+
+
+def test_a_second_opinion_stops_asking_once_its_budget_is_spent(monkeypatch):
+    # media-worker stops waiting at 30s and retries from scratch, billing the same frames again. A
+    # second opinion that keeps asking past its budget is an answer nobody reads.
+    import httpx
+
+    clock = [0.0]
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        clock[0] += 6.0  # each answer takes six seconds
+        return httpx.Response(200, json={"categoriesAnalysis": [{"category": "Sexual", "severity": 2}]})
+
+    real_client = httpx.Client
+    monkeypatch.setattr(escalation, "ENDPOINT", "https://azure.example")
+    monkeypatch.setattr(escalation, "KEY", "key")
+    monkeypatch.setattr(escalation, "BUDGET_SECONDS", 10.0)
+    monkeypatch.setattr(escalation, "_now", lambda: clock[0])
+    monkeypatch.setattr(escalation.httpx, "Client",
+                        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
+
+    opinion = escalation.second_opinion(["a", "b", "c"])
+
+    # Frames one and two fit in ten seconds; by the third, twelve have gone.
+    assert len(requests) == 2
+    assert opinion.verdict is None
+    assert opinion.code == "azure-slow"
+
+
+def test_a_second_opinion_inside_its_budget_still_decides(monkeypatch):
+    import httpx
+
+    def handler(request):
+        return httpx.Response(200, json={"categoriesAnalysis": [{"category": "Sexual", "severity": 0}]})
+
+    real_client = httpx.Client
+    monkeypatch.setattr(escalation, "ENDPOINT", "https://azure.example")
+    monkeypatch.setattr(escalation, "KEY", "key")
+    monkeypatch.setattr(escalation.httpx, "Client",
+                        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs))
+
+    opinion = escalation.second_opinion(["a", "b", "c"])
+
+    assert opinion.verdict == "APPROVED"
+    assert opinion.code == "azure-sev0"

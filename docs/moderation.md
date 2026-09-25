@@ -153,6 +153,7 @@ only the frames that made them uncertain, stretches the same quota across far mo
 | `AZURE_CONTENT_SAFETY_ENDPOINT` | *(blank)* | Blank turns the whole feature off |
 | `AZURE_CONTENT_SAFETY_KEY` | *(blank)* | Blank turns the whole feature off |
 | `MODERATION_ESCALATE_FRAMES` | `3` | Frames per escalated video, highest local score first |
+| `MODERATION_ESCALATE_BUDGET` | `10` | Seconds for the whole second opinion. Out of time is no verdict — `REVIEW`, recorded as `+azure-slow`. Keep it at most a third of media-worker's `MODERATION_TIMEOUT_MILLIS` (30s): past that, media-worker stops waiting, retries from scratch and bills the same frames again |
 | `MODERATION_AZURE_REJECT_SEVERITY` | `4` | Azure's scale is 0/2/4/6 |
 | `MODERATION_AZURE_APPROVE_SEVERITY` | `0` | Anything between the two still gets a human |
 | `MODERATION_AZURE_CATEGORIES` | `Sexual,Violence,SelfHarm,Hate` | All four come back in one call at no extra quota |
