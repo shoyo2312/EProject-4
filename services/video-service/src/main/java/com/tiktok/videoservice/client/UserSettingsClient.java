@@ -21,7 +21,8 @@ import java.util.List;
  * load while a settings change is rare. {@link UserSettingsCache} holds the bound on staleness.
  *
  * <p>No token: the internal prefix is denied at the gateway and {@code permitAll} in user-service,
- * the same arrangement {@link BlockClient} uses.
+ * the same arrangement {@link BlockClient} uses. Its own client, on a timeout well under the one
+ * {@code /policy}'s callers allow — see {@code DownstreamRestClientConfig.userSettingsRestClient}.
  *
  * <p><b>Fails open</b> — an unreachable user-service answers null, which the comment guard reads
  * as no restriction. That matches the guard it sits next to: {@code commentsDisabled} already
@@ -34,7 +35,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class UserSettingsClient {
 
-    private final RestClient userServiceRestClient;
+    private final RestClient userSettingsRestClient;
     private final UserSettingsCache userSettingsCache;
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -53,7 +54,7 @@ public class UserSettingsClient {
         }
 
         try {
-            ApiResponse<List<SettingsPolicyView>> response = userServiceRestClient.get()
+            ApiResponse<List<SettingsPolicyView>> response = userSettingsRestClient.get()
                     .uri(uri -> uri.path("/api/v1/users/internal/settings")
                             .queryParam("ids", userId)
                             .build())

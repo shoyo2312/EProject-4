@@ -3,6 +3,9 @@ package com.tiktok.videoservice.config;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.core.env.StandardEnvironment;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 
@@ -46,4 +49,41 @@ class DownstreamRestClientConfigTest {
                 .isInstanceOf(ResourceAccessException.class);
         assertThat((System.nanoTime() - started) / 1_000_000).isLessThan(2_000);
     }
+
+    /**
+     * The comment-audience lookup sits inside {@code /policy}, which interaction- and
+     * notification-service give one second. On the same second as its callers, a slow
+     * user-service timed the whole answer out at the caller, and the caller then failed open on
+     * the comments switch, owner deletes and notifications as well as the audience. The deployed
+     * value has to give up with most of that second still left.
+     */
+    @Test
+    void theSettingsLookupGivesUpWellInsideTheSecondPolicysCallersAllow() throws Exception {
+        hungServer = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
+        hungServer.createContext("/", exchange -> {
+            try {
+                Thread.sleep(2_500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.close();
+        });
+        hungServer.start();
+
+        StandardEnvironment environment = new StandardEnvironment();
+        new YamlPropertySourceLoader().load("app", new ClassPathResource("application.yml"))
+                .forEach(environment.getPropertySources()::addLast);
+        long configured = environment.getRequiredProperty("downstream.settings-timeout-millis", Long.class);
+
+        RestClient client = new DownstreamRestClientConfig()
+                .userSettingsRestClient("http://localhost:" + hungServer.getAddress().getPort(), configured);
+
+        long started = System.nanoTime();
+        assertThatThrownBy(() -> client.get().uri("/anything").retrieve().toBodilessEntity())
+                .isInstanceOf(ResourceAccessException.class);
+        assertThat((System.nanoTime() - started) / 1_000_000).isLessThan(POLICY_CALLER_TIMEOUT_MILLIS / 2);
+    }
+
+    /** interaction-service's and notification-service's {@code downstream.timeout-millis} default. */
+    private static final long POLICY_CALLER_TIMEOUT_MILLIS = 1_000;
 }

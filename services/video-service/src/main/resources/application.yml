@@ -101,6 +101,11 @@ downstream:
   # owner's comment audience. The friendship call forwards the viewer's own JWT; the settings call
   # goes to the internal prefix, which takes no token — so no service credential either way.
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
+  # The comment-audience lookup inside GET /videos/{id}/policy. Must stay well under the timeout
+  # the callers of /policy hold it to (interaction- and notification-service, 1s by default): at
+  # the same value a slow user-service times the whole answer out at the caller, which then fails
+  # open on the comments switch, owner deletes and notifications too. See DownstreamRestClientConfig.
+  settings-timeout-millis: ${USER_SETTINGS_TIMEOUT_MILLIS:250}
 
 springdoc:
   api-docs:
