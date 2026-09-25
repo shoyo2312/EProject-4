@@ -140,16 +140,15 @@ class ConversationServiceImplTest {
         assertThatThrownBy(() -> conversationService.getOrCreate(1L, 2L))
                 .isInstanceOf(MessagingNotAllowedException.class);
 
+        verify(conversationRepository, never()).save(any());
+
         when(friendshipClient.areFriends(1L, 2L)).thenReturn(true);
-        String key = Conversation.buildParticipantKey(1L, 2L);
-        Conversation existing = Conversation.builder().id("c1").participantIds(List.of(1L, 2L))
-                .participantKey(key).build();
-        when(conversationRepository.findByParticipantKeyAndDeletedAtIsNull(key))
-                .thenReturn(Optional.of(existing));
-        when(conversationMapper.toResponse(existing, 1L))
+        when(conversationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(conversationMapper.toResponse(any(Conversation.class), eq(1L)))
                 .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, false));
 
         assertThat(conversationService.getOrCreate(1L, 2L).id()).isEqualTo("c1");
+        verify(conversationRepository).save(any());
     }
 
     /**
@@ -160,6 +159,21 @@ class ConversationServiceImplTest {
     @Test
     void getOrCreate_neverConsultsTheSendersOwnAudience() {
         when(settingsClient.dmAudience(2L)).thenReturn(DmAudience.EVERYONE);
+        when(conversationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        conversationService.getOrCreate(1L, 2L);
+
+        verify(settingsClient).dmAudience(2L);
+        verify(settingsClient, never()).dmAudience(1L);
+    }
+
+    /**
+     * The audience decides whether a thread may be started, not whether one that exists may be
+     * reopened. The Message button on a profile goes through here, and it used to be refused for a
+     * thread the inbox still sent in — including one the recipient had started themselves.
+     */
+    @Test
+    void getOrCreate_anExistingConversation_reopensWhateverTheRecipientsAudienceNowSays() {
         String key = Conversation.buildParticipantKey(1L, 2L);
         Conversation existing = Conversation.builder().id("c1").participantIds(List.of(1L, 2L))
                 .participantKey(key).build();
@@ -168,9 +182,19 @@ class ConversationServiceImplTest {
         when(conversationMapper.toResponse(existing, 1L))
                 .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, false));
 
-        conversationService.getOrCreate(1L, 2L);
+        assertThat(conversationService.getOrCreate(1L, 2L).id()).isEqualTo("c1");
+        verify(settingsClient, never()).dmAudience(any());
+        verify(friendshipClient, never()).areFriends(any(), any());
+    }
 
-        verify(settingsClient, never()).dmAudience(1L);
+    /** A block still stops a reopen: it is checked before the conversation is looked up. */
+    @Test
+    void getOrCreate_anExistingConversationAcrossABlock_isStillRefused() {
+        doThrow(new MessagingBlockedException()).when(blockClient).requireNotBlocked(1L, 2L);
+
+        assertThatThrownBy(() -> conversationService.getOrCreate(1L, 2L))
+                .isInstanceOf(MessagingBlockedException.class);
+        verify(conversationRepository, never()).findByParticipantKeyAndDeletedAtIsNull(any());
     }
 
     /**

@@ -300,10 +300,14 @@ from `RestClientConfig`:
 Failing closed matches `BlockCheckUnavailableException` right above it: chat already pauses rather
 than guess, and a privacy setting is not the place to start guessing.
 
-**Enforced at conversation open only, not per message.** An already-open conversation keeps working
-when the other side tightens their setting — the same shape as "existing followers won't be
-affected" on private account. Enforcing per message would also put a user-service call on the hot
-send path. `MessageServiceImpl` keeps its block check and gains nothing.
+**Enforced when a conversation is created only — not per message, and not on a reopen.** An
+already-open conversation keeps working when the other side tightens their setting — the same shape
+as "existing followers won't be affected" on private account. `getOrCreate` therefore looks the
+pair's conversation up before it asks for the audience, and hands back one that exists without
+consulting it: `POST /conversations` is also how a client reopens a thread (the Message button on a
+profile), and checking first refused that for a thread the inbox still sent in. Enforcing per
+message would also put a user-service call on the hot send path. `MessageServiceImpl` keeps its
+block check and gains nothing; the block check in `getOrCreate` still runs first, reopen or not.
 
 ### 4.3 Stored, not enforced
 
@@ -377,7 +381,8 @@ interaction-service:
 
 chat-service:
 - `EVERYONE` opens; `NO_ONE` refuses; `FRIENDS` mutual opens and one-way refuses
-- a conversation opened before the setting tightened still accepts messages
+- a conversation opened before the setting tightened still accepts messages, and reopens through
+  `POST /conversations` without the audience being consulted
 - user-service unreachable → `DM_SETTINGS_UNAVAILABLE`, not a silent open
 
 api-gateway:
