@@ -4,6 +4,7 @@ import com.tiktok.common.response.ApiResponse;
 import com.tiktok.interactionservice.dto.request.AddCommentRequest;
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
+import com.tiktok.interactionservice.dto.response.CommentPermissionResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.service.CommentService;
 import jakarta.validation.Valid;
@@ -54,6 +55,18 @@ public class CommentController {
             @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success(commentService.listComments(
                 videoId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE), currentUserId));
+    }
+
+    /**
+     * Whether the caller may comment here, so the client can show why instead of a comment box
+     * that only fails on send. Not under {@code /comments/}, where the segment after it is a
+     * comment id.
+     */
+    @GetMapping("/videos/{videoId}/comment-permission")
+    public ApiResponse<CommentPermissionResponse> commentPermission(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long videoId) {
+        return ApiResponse.success(commentService.commentPermission(videoId, currentUserId));
     }
 
     /**

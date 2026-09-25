@@ -5,6 +5,8 @@ import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
+import com.tiktok.interactionservice.dto.response.CommentPermissionResponse;
+import com.tiktok.interactionservice.dto.response.CommentPermissionResponse.Restriction;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.entity.CommentByVideo;
@@ -82,15 +84,13 @@ public class CommentServiceImpl implements CommentService {
         // Fails open (see commentPolicy) — an unreachable video-service lets the comment through
         // rather than blocking every comment site-wide. Note this is the opposite of chat's block
         // and DM checks, which fail closed; the asymmetry is deliberate on both sides.
-        CommentPolicy policy = videoOwnershipClient.commentPolicy(videoId);
-
-        // The switch is checked before the owner exemption below, so a video with comments off
-        // stays off for its owner too — that is the behaviour this guard already had, and the
-        // audience rules are what the owner is exempt from.
-        if (policy.commentsDisabled()) {
+        Restriction restriction = restrictionFor(videoOwnershipClient.commentPolicy(videoId), currentUserId);
+        if (restriction == Restriction.COMMENTS_DISABLED) {
             throw new CommentsDisabledException(videoId);
         }
-        requireAudienceAccepts(policy, currentUserId, videoId);
+        if (restriction != null) {
+            throw new CommentsNotAllowedException(videoId);
+        }
 
         // A reply points at its top-level comment. Replying to a reply flattens onto that reply's
         // own parent, so the thread is always one level deep (as on TikTok) and no reply is ever
@@ -166,34 +166,45 @@ public class CommentServiceImpl implements CommentService {
         return commentMapper.toResponse(comment);
     }
 
+    @Override
+    public CommentPermissionResponse commentPermission(Long videoId, Long currentUserId) {
+        videoOwnershipClient.requireVisible(videoId);
+        return new CommentPermissionResponse(
+                restrictionFor(videoOwnershipClient.commentPolicy(videoId), currentUserId));
+    }
+
     /**
-     * The owner's account-level audience, which is a restriction on top of the per-video switch
-     * and never an override of it: a video with comments off stays off however permissive the
+     * Why {@code commenterId} may not comment, or null when they may — the one rule both
+     * {@link #addComment} and {@link #commentPermission} read, so the comment box a client hides
+     * and the 403 it would otherwise meet can never disagree.
+     *
+     * <p>The per-video switch and the owner's account-level audience are both restrictions, never
+     * an override in either direction: a video with comments off stays off however permissive the
      * account is, and an account set to NO_ONE closes videos whose own switch was never touched.
+     * The switch is checked first, so it binds the owner too; the audience rules are what the
+     * owner is exempt from — an account that accepts comments from nobody can still reply on its
+     * own videos, which is how the setting behaves on the real product.
      *
-     * <p>The owner always passes — an account that accepts comments from nobody can still reply on
-     * its own videos, which is how the setting behaves on the real product.
-     *
-     * <p>An unknown owner (video-service unreachable) passes too: at that point there is no
-     * audience to enforce, and this guard fails open by design.
+     * <p>An unknown owner (video-service unreachable) passes: at that point there is no audience
+     * to enforce, and this guard fails open by design.
      */
-    private void requireAudienceAccepts(CommentPolicy policy, Long commenterId, Long videoId) {
+    private Restriction restrictionFor(CommentPolicy policy, Long commenterId) {
+        if (policy.commentsDisabled()) {
+            return Restriction.COMMENTS_DISABLED;
+        }
         if (policy.ownerId() == null || policy.ownerId().equals(commenterId)) {
-            return;
+            return null;
         }
 
-        switch (policy.commentAudience()) {
-            case NO_ONE -> throw new CommentsNotAllowedException(videoId);
-            case FRIENDS -> {
-                // Fails closed, unlike the audience lookup: "only my friends" must not become
-                // "everyone" because user-service could not be reached. See FriendshipClient.
-                if (!friendshipClient.areFriends(policy.ownerId(), commenterId)) {
-                    throw new CommentsNotAllowedException(videoId);
-                }
-            }
-            case EVERYONE -> {
-            }
-        }
+        return switch (policy.commentAudience()) {
+            case NO_ONE -> Restriction.NO_ONE;
+            // Fails closed, unlike the audience lookup: "only my friends" must not become
+            // "everyone" because user-service could not be reached. See FriendshipClient.
+            case FRIENDS -> friendshipClient.areFriends(policy.ownerId(), commenterId)
+                    ? null
+                    : Restriction.FRIENDS_ONLY;
+            case EVERYONE -> null;
+        };
     }
 
     @Override

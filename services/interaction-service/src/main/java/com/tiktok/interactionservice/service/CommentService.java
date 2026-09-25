@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
+import com.tiktok.interactionservice.dto.response.CommentPermissionResponse;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 
@@ -32,6 +33,13 @@ public interface CommentService {
     default CommentPageResponse listReplies(Long videoId, Long parentId, String cursor, int size) {
         return listReplies(videoId, parentId, cursor, size, null);
     }
+
+    /**
+     * Whether {@code currentUserId} may comment on this video, and if not why — read off the same
+     * rule {@link #addComment} enforces, so a client can hide the comment box instead of letting
+     * the viewer run into the refusal.
+     */
+    CommentPermissionResponse commentPermission(Long videoId, Long currentUserId);
 
     void deleteComment(Long videoId, Long commentId, Long currentUserId);
 

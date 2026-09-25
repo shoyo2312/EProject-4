@@ -129,6 +129,28 @@ Nếu video-service không trả lời được thì comment **vẫn đi qua** (
 
 Lỗi: `VALIDATION_ERROR` (400), `COMMENTS_DISABLED` (403), `COMMENTS_NOT_ALLOWED` (403), `COMMENT_NOT_FOUND` (404 — `parentId` không hợp lệ), `401`.
 
+### 3.4a `GET /videos/{videoId}/comment-permission` — người gọi có được bình luận không
+**Bắt buộc token.** Trả `200 OK`, `data` → `CommentPermissionResponse`:
+
+```json
+{ "restriction": null }   // null = được bình luận
+```
+
+`restriction` đọc **đúng luật** mà mục 3.4 dùng để từ chối, nên ô nhập mà client ẩn đi và mã 403 mà người xem sẽ gặp không bao giờ lệch nhau:
+
+| `restriction` | Nghĩa | Tương ứng lỗi ở 3.4 | Gợi ý hiển thị |
+|---|---|---|---|
+| `null` | Được bình luận | — | Hiện ô nhập như thường |
+| `COMMENTS_DISABLED` | Chủ video tắt comment cho **video này** (ràng cả chủ video) | `COMMENTS_DISABLED` | "This creator has turned off commenting" |
+| `NO_ONE` | Tài khoản chủ video không nhận comment từ ai | `COMMENTS_NOT_ALLOWED` | Như tắt comment — với người xem, kết quả giống hệt |
+| `FRIENDS_ONLY` | Chỉ bạn bè (follow lẫn nhau), người gọi không phải | `COMMENTS_NOT_ALLOWED` | "You cannot comment on this video" |
+
+Chủ video luôn nhận `null` với `NO_ONE`/`FRIENDS_ONLY` (được miễn luật audience) nhưng vẫn nhận `COMMENTS_DISABLED` nếu đã tắt comment video đó. Fail-open/fail-closed y như 3.4: video-service không trả lời được → `null`; không xác nhận được quan hệ bạn bè → `FRIENDS_ONLY`.
+
+Đây chỉ là gợi ý cho UI — server **vẫn** kiểm tra lại ở 3.4, và audience được cache ~30 giây, nên client vẫn phải xử lý hai mã 403 kia.
+
+Lỗi: `VIDEO_NOT_FOUND` (404 — video không tồn tại hoặc người gọi không được xem), `401`.
+
 ### 3.5 `GET /videos/{videoId}/comments` — danh sách bình luận
 Không cần token. **Phân trang bằng cursor.** Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CommentPageResponse`:
 

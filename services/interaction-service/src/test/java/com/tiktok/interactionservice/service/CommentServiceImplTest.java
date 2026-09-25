@@ -6,6 +6,7 @@ import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
+import com.tiktok.interactionservice.dto.response.CommentPermissionResponse.Restriction;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.CommentsDisabledException;
@@ -252,6 +253,29 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
         when(videoOwnershipClient.commentPolicy(64L)).thenReturn(FAILED_OPEN);
 
         assertThat(commentService.addComment(64L, 1L, "still posts").content()).isEqualTo("still posts");
+    }
+
+    /**
+     * The permission read answers with the same rule the post path enforces — every case above,
+     * as a reason instead of an exception, so a client can hide the comment box up front.
+     */
+    @Test
+    void commentPermission_namesTheSameRestrictionAddCommentWouldEnforce() {
+        when(videoOwnershipClient.commentPolicy(65L))
+                .thenReturn(new CommentPolicy(9L, true, CommentAudience.EVERYONE));
+        when(videoOwnershipClient.commentPolicy(66L)).thenReturn(ownedBy(9L, CommentAudience.NO_ONE));
+        when(videoOwnershipClient.commentPolicy(67L)).thenReturn(ownedBy(9L, CommentAudience.FRIENDS));
+        when(friendshipClient.areFriends(9L, 1L)).thenReturn(true);
+        when(friendshipClient.areFriends(9L, 2L)).thenReturn(false);
+
+        assertThat(commentService.commentPermission(65L, 9L).restriction())
+                .isEqualTo(Restriction.COMMENTS_DISABLED);
+        assertThat(commentService.commentPermission(66L, 1L).restriction()).isEqualTo(Restriction.NO_ONE);
+        assertThat(commentService.commentPermission(66L, 9L).restriction()).isNull();
+        assertThat(commentService.commentPermission(67L, 1L).restriction()).isNull();
+        assertThat(commentService.commentPermission(67L, 2L).restriction())
+                .isEqualTo(Restriction.FRIENDS_ONLY);
+        assertThat(commentService.commentPermission(68L, 2L).restriction()).isNull();
     }
 
     @Test
