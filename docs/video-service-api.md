@@ -134,12 +134,16 @@ Response `data` → `VideoResponse`:
   "visibility": "PUBLIC",
   "viewCount": 0,
   "likeCount": 0,
-  "commentCount": 0,
+  "commentCount": 0,              // null khi commentsDisabled HOẶC accountCommentsOff
+  "commentsDisabled": false,      // công tắc tắt comment của RIÊNG video này (chủ video bật/tắt)
+  "accountCommentsOff": false,    // tài khoản chủ video đặt "Ai được bình luận" = No one → mọi video của họ coi như tắt comment, kể cả với chính chủ
   "tags": ["dance", "food"],      // đã chuẩn hoá, có thể rỗng nhưng không bao giờ null
   "createdAt": "2026-08-12T10:00:00Z",
   "failureReason": null           // chuỗi giải thích khi status = FAILED; null ở mọi trạng thái khác
 }
 ```
+
+> **Comment tắt khi `commentsDisabled || accountCommentsOff`.** Khi một trong hai là `true`: ẩn ô nhập, ẩn số comment (server đã trả `commentCount: null`), hiện "This creator has turned off commenting". Chỉ công tắc "Allow comments" của chủ video mới đọc riêng `commentsDisabled` — `accountCommentsOff` là cài đặt tài khoản, không phải trạng thái công tắc đó.
 
 > **`id` là `String`, không phải `int`.** Khai báo `String id` trong model Dart. Đây là Snowflake id 19 chữ số — parse thành số vẫn vừa `int` 64-bit của Dart native, nhưng **tràn trên Flutter Web** (JS number chỉ chính xác tới 2^53) và sẽ sai âm thầm. Riêng `userId` thì server trả về dạng số.
 

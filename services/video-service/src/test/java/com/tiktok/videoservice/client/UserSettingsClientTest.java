@@ -66,6 +66,25 @@ class UserSettingsClientTest {
         server.verify();
     }
 
+    /**
+     * A feed page asks about every owner on it at once: cache hits answer themselves, and only
+     * the misses go to user-service — in one call, not one per owner.
+     */
+    @Test
+    void closedToComments_asksUserServiceOnceForTheMissesOnly() {
+        when(cache.getCommentAudience(7L)).thenReturn(Optional.empty());
+        when(cache.getCommentAudience(8L)).thenReturn(Optional.of("EVERYONE"));
+        when(cache.getCommentAudience(9L)).thenReturn(Optional.of("NO_ONE"));
+        server.expect(requestTo("http://user-service/api/v1/users/internal/settings?ids=7"))
+                .andRespond(withSuccess(ONE_POLICY, MediaType.APPLICATION_JSON));
+
+        assertThat(client.closedToComments(java.util.List.of(7L, 8L, 9L, 9L)))
+                .containsExactlyInAnyOrder(7L, 9L);
+
+        verify(cache).putCommentAudience(7L, "NO_ONE");
+        server.verify();
+    }
+
     /** No owner, no question to ask — an unmapped video should not cost a round trip. */
     @Test
     void commentAudience_withNoUserId_asksNobody() {

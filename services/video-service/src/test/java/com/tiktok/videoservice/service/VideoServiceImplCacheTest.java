@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -153,7 +154,7 @@ class VideoServiceImplCacheTest {
     void getByIds_filtersAPrivateCachedVideoOutForAStranger() {
         VideoResponse privateVideo = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, null, 10, 1080, 1920, VideoStatus.PUBLISHED,
-                VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null);
+                VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
 
         when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", privateVideo));
 
@@ -170,7 +171,7 @@ class VideoServiceImplCacheTest {
     void friendsVideo_isVisibleOnlyToAConfirmedFriend() {
         VideoResponse friendsVideo = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, null, 10, 1080, 1920, VideoStatus.PUBLISHED,
-                VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null);
+                VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
         when(videoCache.get("A")).thenReturn(Optional.of(friendsVideo));
 
         when(friendshipClient.areFriends(OWNER, 7L)).thenReturn(true);
@@ -204,6 +205,26 @@ class VideoServiceImplCacheTest {
         when(userSettingsClient.commentAudience(OWNER)).thenReturn("FRIENDS");
 
         assertThat(videoService.getPolicy(VIDEO_ID).commentAudience()).isEqualTo("FRIENDS");
+    }
+
+    /**
+     * An owner who accepts comments from no one closes every video they own, so the video reads
+     * as comments off — flag set, total withheld — while its own switch keeps what the owner set.
+     * Laid on after the cache: the shared entry itself stays the video's own state.
+     */
+    @Test
+    void getById_whenTheOwnerAcceptsCommentsFromNoOne_readsAsCommentsOff() {
+        VideoResponse cached = publicVideo(VIDEO_ID);
+        when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(cached));
+        when(userSettingsClient.closedToComments(List.of(OWNER))).thenReturn(Set.of(OWNER));
+
+        VideoResponse response = videoService.getById(999L, VIDEO_ID);
+
+        assertThat(response.accountCommentsOff()).isTrue();
+        assertThat(response.commentCount()).isNull();
+        assertThat(response.commentsDisabled()).isFalse();
+        assertThat(cached.accountCommentsOff()).isFalse();
+        verify(videoCache, org.mockito.Mockito.never()).put(any());
     }
 
     /** Nobody could say, so the policy says nothing and the guard downstream lets comments through. */
@@ -271,7 +292,7 @@ class VideoServiceImplCacheTest {
         VideoResponse inReview = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, "http://localhost:9000/video-media/hls/A/source.mp4",
                 10, 1080, 1920, VideoStatus.PENDING_REVIEW, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
-                Instant.now(), null, null, null, null, null, null, null, null);
+                Instant.now(), null, null, null, null, null, null, null, null, false);
         when(videoCache.get("A")).thenReturn(Optional.of(inReview));
         when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
 
@@ -290,6 +311,6 @@ class VideoServiceImplCacheTest {
     private static VideoResponse publicVideo(String id) {
         return new VideoResponse(
                 id, OWNER, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
-                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null);
+                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
     }
 }

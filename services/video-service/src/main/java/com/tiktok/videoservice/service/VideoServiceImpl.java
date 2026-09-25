@@ -32,6 +32,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -44,6 +45,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -172,7 +174,7 @@ public class VideoServiceImpl implements VideoService {
                 .build();
 
         try {
-            return videoMapper.toResponse(videoRepository.save(video));
+            return withAccountComments(videoMapper.toResponse(videoRepository.save(video)));
         } catch (DuplicateKeyException e) {
             // raw_file_idx. The only unique index on this collection besides _id, and _id is a
             // fresh Snowflake generated a few lines above. rawFileUrl is rebuilt from the key, so
@@ -269,7 +271,8 @@ public class VideoServiceImpl implements VideoService {
     public VideoResponse getById(Long requesterId, String videoId) {
         VideoResponse video = requireVisible(requesterId, load(videoId), videoId);
         // After the cache, never into it: a signed URL expires, and the entry serves everyone.
-        return isSelf(requesterId, video.userId()) ? quarantinedMediaUrls.forOwner(video) : video;
+        return withAccountComments(
+                isSelf(requesterId, video.userId()) ? quarantinedMediaUrls.forOwner(video) : video);
     }
 
     /**
@@ -306,6 +309,32 @@ public class VideoServiceImpl implements VideoService {
         VideoResponse response = videoMapper.toResponse(video);
         videoCache.put(response);
         return response;
+    }
+
+    /**
+     * Marks the videos whose owner accepts comments from no one. On the way out, never into the
+     * cache: a cached entry is the video's own state and serves every caller, while the account
+     * setting changes on its own clock — {@link UserSettingsCache} already bounds how stale that
+     * may be, and baking it into the video entry would stack the video cache's TTL on top.
+     */
+    private List<VideoResponse> withAccountComments(List<VideoResponse> videos) {
+        if (videos.isEmpty()) {
+            return videos;
+        }
+        Set<Long> closed = userSettingsClient.closedToComments(
+                videos.stream().map(VideoResponse::userId).toList());
+        return closed.isEmpty() ? videos : videos.stream()
+                .map(video -> closed.contains(video.userId()) ? video.withAccountCommentsOff() : video)
+                .toList();
+    }
+
+    private VideoResponse withAccountComments(VideoResponse video) {
+        return withAccountComments(List.of(video)).get(0);
+    }
+
+    private Page<VideoResponse> withAccountComments(Page<VideoResponse> page) {
+        return new PageImpl<>(withAccountComments(page.getContent()), page.getPageable(),
+                page.getTotalElements());
     }
 
     /**
@@ -352,11 +381,11 @@ public class VideoServiceImpl implements VideoService {
 
         // Filtered after the lookup, not during it, so the cache holds one entry per video
         // rather than one per (video, viewer) — see getById.
-        return wanted.stream()
+        return withAccountComments(wanted.stream()
                 .map(found::get)
                 .filter(Objects::nonNull)
                 .filter(video -> isVisibleTo(requesterId, video))
-                .toList();
+                .toList());
     }
 
     private int maxBatchSize() {
@@ -414,7 +443,8 @@ public class VideoServiceImpl implements VideoService {
         // guessing otherwise would need the count this method exists to avoid.
         String nextCursor = hasMore ? FeedCursor.of(page.get(page.size() - 1)).encode() : null;
 
-        return new CursorPage<>(page.stream().map(videoMapper::toResponse).toList(), nextCursor);
+        return new CursorPage<>(
+                withAccountComments(page.stream().map(videoMapper::toResponse).toList()), nextCursor);
     }
 
     /**
@@ -439,9 +469,10 @@ public class VideoServiceImpl implements VideoService {
     @Override
     public Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable) {
         if (isSelf(requesterId, userId)) {
-            return videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
-                    .map(videoMapper::toResponse)
-                    .map(quarantinedMediaUrls::forOwner);
+            return withAccountComments(
+                    videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
+                            .map(videoMapper::toResponse)
+                            .map(quarantinedMediaUrls::forOwner));
         }
 
         Page<Video> videos;
@@ -456,7 +487,7 @@ public class VideoServiceImpl implements VideoService {
                     userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
         }
 
-        return videos.map(videoMapper::toResponse);
+        return withAccountComments(videos.map(videoMapper::toResponse));
     }
 
     /**
@@ -527,7 +558,7 @@ public class VideoServiceImpl implements VideoService {
         videoRepository.updateVisibility(video);
         videoCache.evict(videoId);
 
-        return videoMapper.toResponse(video);
+        return withAccountComments(videoMapper.toResponse(video));
     }
 
     /**
@@ -548,7 +579,7 @@ public class VideoServiceImpl implements VideoService {
         videoRepository.updateCommentsDisabled(video);
         videoCache.evict(videoId);
 
-        return videoMapper.toResponse(video);
+        return withAccountComments(videoMapper.toResponse(video));
     }
 
     /**

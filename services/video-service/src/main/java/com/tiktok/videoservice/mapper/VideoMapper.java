@@ -20,6 +20,9 @@ public interface VideoMapper {
     @Mapping(target = "deletedAt", ignore = true)
     // Internal outbox bookkeeping, same reasoning as deletedAt just above.
     @Mapping(target = "purgeEventPublishedAt", ignore = true)
+    // Not the video's own state: the owner's account setting, laid on per request after the
+    // cache by VideoServiceImpl.withAccountComments.
+    @Mapping(target = "accountCommentsOff", ignore = true)
     VideoResponse toResponse(Video video);
 
     /**
@@ -28,5 +31,6 @@ public interface VideoMapper {
      */
     @Mapping(target = "commentCount",
             expression = "java(video.isCommentsDisabled() ? null : video.getCommentCount())")
+    @Mapping(target = "accountCommentsOff", ignore = true)
     VideoResponse toAdminResponse(Video video);
 }
