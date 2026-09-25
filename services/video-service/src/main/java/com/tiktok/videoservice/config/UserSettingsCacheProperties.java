@@ -11,11 +11,13 @@ import java.time.Duration;
  * @param enabled false asks user-service on every {@code /policy} read. Here for the same reason
  *                as {@link VideoCacheProperties#enabled()}: on the day a stale audience is the
  *                leading suspect, turning the cache off should not need a code change.
- * @param ttl     this is the bound on how long a tightened comment audience keeps letting comments
- *                through, so it is deliberately short. No event invalidates it — user-service
- *                publishes nothing when settings change (see docs/user-settings.md §5), and one
- *                minute of staleness on a comment guard is not worth an outbox row, a consumer and
- *                an ordering question. Raise this and that window grows with it.
+ * @param ttl     the bound on how long a changed comment audience takes to show. It used to be
+ *                30s, which was fine for the comment guard alone — but every video now carries
+ *                {@code accountCommentsOff}, so a stale entry is visible to the owner who has just
+ *                changed the setting and reloads to check, and half a minute of that reads as a
+ *                bug. A few seconds still collapses the burst of reads one page load makes. No
+ *                event invalidates it: user-service's outbox polls every 5s, so an event would not
+ *                arrive sooner than this expires (see docs/user-settings.md §5).
  */
 @ConfigurationProperties(prefix = "app.cache.user-settings")
 public record UserSettingsCacheProperties(

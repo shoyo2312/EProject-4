@@ -147,7 +147,7 @@ Lỗi: `VALIDATION_ERROR` (400), `COMMENTS_DISABLED` (403), `COMMENTS_NOT_ALLOWE
 
 Chủ video được miễn `FRIENDS_ONLY` nhưng vẫn nhận `COMMENTS_DISABLED` (tắt comment video đó) và `NO_ONE` (tài khoản không nhận comment từ ai). Hai trường hợp đó client đã biết sẵn từ `commentsDisabled` / `accountCommentsOff` trên video, nên thực tế chỉ cần gọi endpoint này cho `FRIENDS_ONLY`. Fail-open/fail-closed y như 3.4: video-service không trả lời được → `null`; không xác nhận được quan hệ bạn bè → `FRIENDS_ONLY`.
 
-Đây chỉ là gợi ý cho UI — server **vẫn** kiểm tra lại ở 3.4, và audience được cache ~30 giây, nên client vẫn phải xử lý hai mã 403 kia.
+Đây chỉ là gợi ý cho UI — server **vẫn** kiểm tra lại ở 3.4, và audience được cache vài giây (~3s), nên client vẫn phải xử lý hai mã 403 kia.
 
 Lỗi: `VIDEO_NOT_FOUND` (404 — video không tồn tại hoặc người gọi không được xem), `401`.
 

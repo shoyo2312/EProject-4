@@ -262,7 +262,7 @@ Validate:
 
 - `commentAudience` do **interaction-service** enforce khi post comment: `NO_ONE` chặn tất cả, `FRIENDS` chỉ cho người follow lẫn nhau → `COMMENTS_NOT_ALLOWED` (403). Cờ tắt comment của **từng video** vẫn thắng cài đặt tài khoản: video đã tắt comment thì tắt hẳn, và trả mã riêng `COMMENTS_DISABLED`. `NO_ONE` chặn cả chủ video — mọi video của tài khoản đó coi như đã tắt comment (ẩn ô nhập, ẩn số comment, ẩn danh sách). Chủ video chỉ được miễn `FRIENDS`.
 - `dmAudience` do **chat-service** enforce **lúc mở cuộc hội thoại**, không phải mỗi tin nhắn → `MESSAGING_NOT_ALLOWED` (403). Hội thoại đã mở trước khi người kia siết cài đặt thì vẫn gửi được (giống "người đang follow không bị ảnh hưởng" của private account). Chỉ cài đặt của **người nhận** được xét: người gửi dù đặt `NO_ONE` vẫn chủ động mở được hội thoại.
-- Đổi `commentAudience` có thể mất tới ~30 giây mới có tác dụng: video-service cache cài đặt của chủ video trong Redis với TTL ngắn. Không có event invalidate.
+- Đổi `commentAudience` có thể mất tới ~3 giây mới có tác dụng (kể cả `accountCommentsOff` trên video): video-service cache cài đặt của chủ video trong Redis với TTL ngắn (`USER_SETTINGS_CACHE_TTL`, mặc định 3s). Không có event invalidate.
 
 ## 4. Enums
 

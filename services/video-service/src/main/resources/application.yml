@@ -64,11 +64,11 @@ app:
       ttl: ${VIDEO_CACHE_TTL:60s}
 
     user-settings:
-      # A video owner's comment audience, read from user-service for GET /videos/{id}/policy.
-      # The TTL is the bound on how long a tightened audience keeps letting comments through —
-      # nothing invalidates it, see UserSettingsCacheProperties.
+      # A video owner's comment audience, read from user-service for GET /videos/{id}/policy and
+      # for accountCommentsOff on every VideoResponse. The TTL is how long a changed setting takes
+      # to show — nothing invalidates it, see UserSettingsCacheProperties.
       enabled: ${USER_SETTINGS_CACHE_ENABLED:true}
-      ttl: ${USER_SETTINGS_CACHE_TTL:30s}
+      ttl: ${USER_SETTINGS_CACHE_TTL:3s}
 
   upload:
     # max-bytes is signed into the upload POST policy; media-worker enforces both as a backstop.

@@ -342,6 +342,10 @@ short TTL handles that — a comment audience that takes up to a minute to tight
 correctness problem, and the outbox row plus a consumer plus the ordering question is a lot of
 machinery to avoid one minute of staleness.
 
+The TTL was later cut from 30s to 3s: once every `VideoResponse` carried `accountCommentsOff`, a
+stale entry became something the owner sees right after changing the setting, and half a minute of
+it read as a bug. An event would not have been faster — user-service's outbox polls every 5s.
+
 `UserSettingsChangedEvent` becomes genuinely necessary in tier 3, when private-account state has to
 be denormalised onto video documents and the search index. Add it then, through the existing
 `OutboxPublisher`/`UserEventPublisher` pair in user-service, keyed on `userId` so one account's
