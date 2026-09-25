@@ -93,6 +93,12 @@ public class RecommendationServiceImpl implements RecommendationService {
 
     @Override
     public void recordVideoReady(String videoId) {
+        // A verdict for a video its owner deleted while it was still in the pipeline. Everything
+        // below would record it as a fresh publication — its age, a publish score in the current
+        // hour — with nothing left to take it back out.
+        if (isDeleted(videoId)) {
+            return;
+        }
         double publishedAt = Instant.now().getEpochSecond();
         // Recorded for every video, not only tagged ones: the ranking model asks how old a video
         // is whether or not this viewer has any interest in its tags. Hidden ones too, so that
@@ -165,7 +171,12 @@ public class RecommendationServiceImpl implements RecommendationService {
     private boolean isHidden(String videoId) {
         return Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_PRIVATE, videoId))
                 || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_TAKEN_DOWN, videoId))
-                || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_HELD, videoId));
+                || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_HELD, videoId))
+                || isDeleted(videoId);
+    }
+
+    private boolean isDeleted(String videoId) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(RecoKeys.videoDeleted(videoId)));
     }
 
     /**
@@ -212,6 +223,9 @@ public class RecommendationServiceImpl implements RecommendationService {
      */
     @Override
     public void recordVideoDeleted(String videoId) {
+        // First, so an event racing this one on another topic already sees the video as gone.
+        redisTemplate.opsForValue().set(RecoKeys.videoDeleted(videoId), "1", RecoKeys.DELETED_TTL);
+
         Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
         if (tags != null) {
             for (String tag : tags) {

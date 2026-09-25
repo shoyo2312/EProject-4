@@ -171,6 +171,47 @@ class RecommendationServiceImplTest {
         verify(redisTemplate, never()).delete("reco:video:tags:vid1");
     }
 
+    /**
+     * A deletion clears every other marker the video had, so it leaves one of its own — outliving
+     * the broker's retention, since that is how late an event about the video can still arrive.
+     */
+    @Test
+    void recordVideoDeleted_leavesATombstoneThatOutlivesAnyDelivery() {
+        recommendationService.recordVideoDeleted("vid1");
+
+        verify(valueOperations).set("reco:video:deleted:vid1", "1", RecoKeys.DELETED_TTL);
+        assertThat(RecoKeys.DELETED_TTL).isGreaterThan(java.time.Duration.ofDays(7));
+    }
+
+    /**
+     * Likes arrive on another topic than the deletion, so one consumed late landed in the current
+     * hour's bucket and the next rebuild put the deleted video back into trending for a day.
+     */
+    @Test
+    void engagementArrivingAfterTheDeletion_doesNotPutTheVideoBackIntoTrending() {
+        when(redisTemplate.hasKey("reco:video:deleted:vid1")).thenReturn(true);
+
+        recommendationService.recordLike("vid1", true);
+        recommendationService.recordComment("vid1", true);
+
+        verify(zSetOperations, never()).incrementScore(startsWith("reco:trend:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * A video deleted while it was still transcoding or in moderation gets its verdict afterwards,
+     * and an approval scored and indexed it as a fresh publication.
+     */
+    @Test
+    void recordVideoReady_forADeletedVideo_recordsNothing() {
+        when(redisTemplate.hasKey("reco:video:deleted:vid1")).thenReturn(true);
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordVideoReady("vid1");
+
+        verify(zSetOperations, never()).add(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations, never()).incrementScore(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
     /** Otherwise the owner's own likes on a hidden video walk it back into trending. */
     @Test
     void engagementOnAHiddenVideo_doesNotPutItBackIntoTrending() {

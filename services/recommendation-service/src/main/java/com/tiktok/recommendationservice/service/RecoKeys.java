@@ -148,4 +148,22 @@ public final class RecoKeys {
      * apart from the end of a takedown.
      */
     public static final String VIDEO_HELD = "reco:video:held";
+
+    /**
+     * Present for a while after a video is deleted. recordVideoDeleted clears every other marker
+     * the video had, so without this nothing says it is gone — and events already on their way
+     * put it straight back: a like consumed late lands in the current hour's bucket and the next
+     * rebuild returns it to trending, and a moderation verdict for a video deleted mid-pipeline
+     * scores and indexes it as newly published. Those events arrive on other topics than the
+     * deletion, so nothing orders them after it.
+     */
+    public static String videoDeleted(String videoId) {
+        return "reco:video:deleted:" + videoId;
+    }
+
+    /**
+     * Past the broker's retention (KAFKA_LOG_RETENTION_HOURS, seven days): no event about the
+     * video can still be delivered once this has expired.
+     */
+    public static final Duration DELETED_TTL = Duration.ofDays(8);
 }

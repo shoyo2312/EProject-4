@@ -127,7 +127,7 @@ Mọi consumer idempotent qua `InboxService.runOnce(eventId, ...)`.
 |---|---|---|---|
 | `video.video-events` | `VideoPublishedEvent` | `VideoPublishedEvent` (vắng ⇒ coi là Published) | **Chỉ lưu tag của video**, chưa đưa vào candidate pool — lúc event này phát video vẫn đang `PROCESSING` (media-worker cần chính event đó để transcode) |
 | `media.video-transcoded-events` | `VideoTranscodedEvent` | — | `success=true`: đưa video vào candidate pool + tag index, ghi `publishedAt` cho feature `age_hours`. `success=false`: gỡ sạch như một lần xoá — transcode fail là vĩnh viễn, không có event nào tới sau nữa |
-| `video.video-events` | `VideoDeletedEvent` | `VideoDeletedEvent` | Gỡ video khỏi trending + mọi tag index (ZREM) |
+| `video.video-events` | `VideoDeletedEvent` | `VideoDeletedEvent` | Gỡ video khỏi trending + mọi tag index (ZREM), và để lại `reco:video:deleted:{videoId}` (TTL 8 ngày, dài hơn retention của broker): like/comment/watch tới muộn trên topic khác và verdict của video bị xoá giữa pipeline đều bỏ qua video này, thay vì đưa nó trở lại trending |
 | `interaction.like-events` | `VideoLikeEvent` | — | Cộng/trừ điểm engagement trending |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` | route theo header (vắng ⇒ Created) | Cộng khi tạo, **trừ** khi xoá — nếu đọc payload không xét header thì `CommentDeletedEvent` parse nhầm thành Created và xoá comment lại đẩy video lên trending |
 | `interaction.share-events` | `VideoSharedEvent` | — | Cộng điểm engagement trending — **chỉ lượt share đầu tiên** của mỗi user cho mỗi video trong cửa sổ trending 24h (key `reco:shared:{videoId}:{userId}`); share lặp lại vẫn tăng `shareCount` nhưng không cộng điểm |
