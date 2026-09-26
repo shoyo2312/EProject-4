@@ -497,6 +497,83 @@ class AdminServiceImplTest {
         assertThat(group.priority()).isEqualTo(120L);
     }
 
+    @Test
+    void submitReport_newPendingReport_isAnnouncedToTheConsole() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content"));
+
+        ArgumentCaptor<Report> saved = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(saved.capture());
+        verify(adminEventProducer).publishReportSubmitted(saved.getValue());
+    }
+
+    @Test
+    void submitReport_repeatSubmission_announcesNothing() {
+        Report standing = Report.builder()
+                .id(3L)
+                .reporterId(10L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("v1")
+                .reason("spam content")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.of(standing));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content"));
+
+        verify(adminEventProducer, never()).publishReportSubmitted(any());
+    }
+
+    @Test
+    void submitReport_targetAlreadyEnforced_announcesNothing() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        standingAction(ModerationActionType.TAKEDOWN_VIDEO);
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "Nudity and sexual content"));
+
+        // Closed on arrival: no admin will ever see it in the queue, so it is not news.
+        verify(adminEventProducer, never()).publishReportSubmitted(any());
+    }
+
+    @Test
+    void resolveReport_dismissAnnouncesTheClosedReports() {
+        Report pending = Report.builder()
+                .id(8L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("p1")
+                .reason("false report")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(8L)).thenReturn(Optional.of(pending));
+
+        adminService.resolveReport(2L, 8L,
+                new ResolveReportRequest(ModerationActionType.DISMISS_REPORT, "not a violation", null));
+
+        // DISMISS_REPORT writes no moderation event, so without this another admin's bell keeps it.
+        verify(adminEventProducer).publishReportsResolved(ReportTargetType.VIDEO, "p1");
+    }
+
+    @Test
+    void moderate_answeringActionAnnouncesTheClosedReports() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.TAKEDOWN_VIDEO, "policy violation");
+
+        verify(adminEventProducer).publishReportsResolved(ReportTargetType.VIDEO, "v1");
+    }
+
+    @Test
+    void moderate_purgeAnnouncesNoReportChange() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.PURGE_VIDEO, "owner asked");
+
+        verify(adminEventProducer, never()).publishReportsResolved(any(), any());
+    }
+
     /** The newest decision that moved this target in or out of enforcement. */
     private void standingAction(ModerationActionType actionType) {
         when(moderationActionRepository.findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(

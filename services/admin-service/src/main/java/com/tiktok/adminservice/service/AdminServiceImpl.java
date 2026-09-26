@@ -82,11 +82,12 @@ public class AdminServiceImpl implements AdminService {
                 .resolvedAt(alreadyEnforced ? Instant.now() : null)
                 .build();
 
+        Report saved;
         try {
             // Flushed here so the unique index answers inside this method. Left to commit time it
             // would surface as a raw DataIntegrityViolationException from the transaction proxy
             // and be served as a 500.
-            return adminMapper.toResponse(reportRepository.saveAndFlush(report));
+            saved = reportRepository.saveAndFlush(report);
         } catch (DataIntegrityViolationException e) {
             // Lost the race with a concurrent submit of the same report. 409 rather than the
             // other request's row, because that row cannot be read from this transaction any more.
@@ -98,6 +99,11 @@ public class AdminServiceImpl implements AdminService {
             }
             throw e;
         }
+
+        if (!alreadyEnforced) {
+            adminEventProducer.publishReportSubmitted(saved);
+        }
+        return adminMapper.toResponse(saved);
     }
 
     @Override
@@ -161,6 +167,7 @@ public class AdminServiceImpl implements AdminService {
         // history — the admin who takes it next sees a video already down and decides it again.
         reportRepository.closePendingFor(report.getTargetType(), report.getTargetId(),
                 finalStatus, adminId, report.getId(), Instant.now());
+        adminEventProducer.publishReportsResolved(report.getTargetType(), report.getTargetId());
 
         return adminMapper.toResponse(report);
     }
@@ -199,6 +206,7 @@ public class AdminServiceImpl implements AdminService {
         if (actionType.answersReports()) {
             reportRepository.closePendingFor(targetType, targetId, actionType.resolutionStatus(),
                     adminId, null, Instant.now());
+            adminEventProducer.publishReportsResolved(targetType, targetId);
         }
 
         return adminMapper.toResponse(action);

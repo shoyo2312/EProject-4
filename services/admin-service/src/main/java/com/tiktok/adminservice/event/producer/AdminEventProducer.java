@@ -5,9 +5,13 @@ import com.tiktok.adminservice.entity.CommentTarget;
 import com.tiktok.adminservice.entity.ModerationAction;
 import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.OutboxEvent;
+import com.tiktok.adminservice.entity.Report;
+import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.repository.OutboxEventRepository;
 import com.tiktok.event.DomainEvent;
 import com.tiktok.event.admin.CommentRemovedEvent;
+import com.tiktok.event.admin.ReportResolvedEvent;
+import com.tiktok.event.admin.ReportSubmittedEvent;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.UserWarnedEvent;
@@ -29,6 +33,8 @@ import org.springframework.stereotype.Component;
 public class AdminEventProducer {
 
     private static final String AGGREGATE_TYPE = "MODERATION_ACTION";
+    /** Read by OutboxPublisher to send these to admin.report-events instead. */
+    static final String REPORT_AGGREGATE = "REPORT";
 
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -38,7 +44,16 @@ public class AdminEventProducer {
         if (event == null) {
             return;
         }
-        writeToOutbox(action.getTargetId(), event);
+        writeToOutbox(AGGREGATE_TYPE, action.getTargetId(), event);
+    }
+
+    public void publishReportSubmitted(Report report) {
+        writeToOutbox(REPORT_AGGREGATE, report.getTargetId(),
+                ReportSubmittedEvent.of(report.getId(), report.getTargetType().name(), report.getTargetId()));
+    }
+
+    public void publishReportsResolved(ReportTargetType targetType, String targetId) {
+        writeToOutbox(REPORT_AGGREGATE, targetId, ReportResolvedEvent.of(targetType.name(), targetId));
     }
 
     private DomainEvent toEvent(ModerationAction action) {
@@ -64,9 +79,9 @@ public class AdminEventProducer {
     }
 
     @SneakyThrows
-    private void writeToOutbox(String aggregateId, DomainEvent event) {
+    private void writeToOutbox(String aggregateType, String aggregateId, DomainEvent event) {
         OutboxEvent outboxEvent = OutboxEvent.builder()
-                .aggregateType(AGGREGATE_TYPE)
+                .aggregateType(aggregateType)
                 .aggregateId(aggregateId)
                 .eventType(event.getClass().getSimpleName())
                 .payload(objectMapper.writeValueAsString(event))
