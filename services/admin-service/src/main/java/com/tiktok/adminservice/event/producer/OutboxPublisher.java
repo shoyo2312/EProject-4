@@ -16,9 +16,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * admin.moderation-events mixes several event types (UserBanned, VideoTakenDown, ...) with no
- * type field in the JSON payload itself, so the eventType header is the only way a consumer can
- * tell them apart.
+ * Report events go to admin.report-events, everything else to admin.moderation-events. Both mix
+ * several event types with no type field in the JSON payload itself, so the eventType header is
+ * the only way a consumer can tell them apart.
  *
  * <p>Marking is delegated to {@link OutboxDispatcher} so a row is only marked published once
  * the broker acknowledges it — see that class for why doing it inline loses events.
@@ -28,7 +28,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class OutboxPublisher {
 
-    private static final String TOPIC = "admin.moderation-events";
+    private static final String MODERATION_TOPIC = "admin.moderation-events";
+    private static final String REPORT_TOPIC = "admin.report-events";
     private static final String EVENT_TYPE_HEADER = "eventType";
 
     private final OutboxEventRepository outboxEventRepository;
@@ -39,7 +40,7 @@ public class OutboxPublisher {
      * transaction around that wait held a pooled connection for all of it whenever Kafka was slow
      * or down. The acknowledged rows are marked afterwards in one short update of their own.
      */
-    @Scheduled(fixedDelay = 5000)
+    @Scheduled(fixedDelayString = "${admin.outbox.poll-millis}")
     public void publishPending() {
         List<OutboxEvent> pending = outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
         if (pending.isEmpty()) {
@@ -60,9 +61,13 @@ public class OutboxPublisher {
 
     private ProducerRecord<String, String> toRecord(OutboxEvent event) {
         ProducerRecord<String, String> record = new ProducerRecord<>(
-                TOPIC, event.getAggregateId(), event.getPayload());
+                topicFor(event), event.getAggregateId(), event.getPayload());
         record.headers().add(new RecordHeader(
                 EVENT_TYPE_HEADER, event.getEventType().getBytes(StandardCharsets.UTF_8)));
         return record;
+    }
+
+    static String topicFor(OutboxEvent event) {
+        return AdminEventProducer.REPORT_AGGREGATE.equals(event.getAggregateType()) ? REPORT_TOPIC : MODERATION_TOPIC;
     }
 }
