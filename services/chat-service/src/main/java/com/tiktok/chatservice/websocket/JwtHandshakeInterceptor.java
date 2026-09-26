@@ -33,6 +33,8 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
     private static final String TOKEN_PARAM = "token";
     static final String USER_ID_ATTRIBUTE = "userId";
     static final String TOKEN_ATTRIBUTE = "accessToken";
+    static final String ROLE_ATTRIBUTE = "role";
+    private static final String ROLE_CLAIM = "role";
 
     private final JwtProvider jwtProvider;
     private final RevokedTokenChecker revokedTokenChecker;
@@ -54,6 +56,10 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
 
         attributes.put(USER_ID_ATTRIBUTE, jwtProvider.extractSubject(token));
         attributes.put(TOKEN_ATTRIBUTE, token);
+        Object role = jwtProvider.extractClaims(token).get(ROLE_CLAIM);
+        if (role != null) {
+            attributes.put(ROLE_ATTRIBUTE, role.toString());
+        }
         return true;
     }
 

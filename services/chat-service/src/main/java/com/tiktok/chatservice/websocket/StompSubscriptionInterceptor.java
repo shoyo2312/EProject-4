@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.security.Principal;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,6 +42,9 @@ import java.util.regex.Pattern;
  * "Public comments" is kept true on the sending side, not here: VideoStatsFanout sends a comment
  * frame only for a video anyone may see, which also covers a video made private after somebody
  * subscribed.
+ *
+ * <p>{@code /topic/admin} is the one role-gated destination: the handshake keeps the token's role,
+ * and only {@code ADMIN} may subscribe.
  */
 @Slf4j
 @Component
@@ -48,6 +52,8 @@ import java.util.regex.Pattern;
 public class StompSubscriptionInterceptor implements ChannelInterceptor {
 
     private static final String APPLICATION_PREFIX = "/app/";
+
+    private static final String ADMIN_TOPIC = "/topic/admin";
 
     private static final Pattern CONVERSATION = Pattern.compile("^/topic/conversations/([0-9A-Za-z_-]+)$");
 
@@ -86,6 +92,14 @@ public class StompSubscriptionInterceptor implements ChannelInterceptor {
             throw new IllegalArgumentException("Subscription without a destination");
         }
         if (PUBLIC_DESTINATIONS.stream().anyMatch(allowed -> allowed.matcher(destination).matches())) {
+            return message;
+        }
+        if (ADMIN_TOPIC.equals(destination)) {
+            Map<String, Object> session = accessor.getSessionAttributes();
+            if (session == null || !"ADMIN".equals(session.get(JwtHandshakeInterceptor.ROLE_ATTRIBUTE))) {
+                log.warn("Refused non-admin subscription to {}", destination);
+                throw new IllegalArgumentException("Subscription to " + destination + " is not allowed");
+            }
             return message;
         }
 
