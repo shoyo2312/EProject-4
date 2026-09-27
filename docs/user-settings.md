@@ -21,12 +21,10 @@ purpose rather than pretending to save.
 This document covers the tier that is **one table, two public endpoints and one internal
 endpoint**. It deliberately stops short of:
 
-- **Private account** — not a boolean. It needs follow requests (`user_follow_requests`, an
-  approve/reject flow, `POST /users/{id}/follow` returning `202 PENDING`) and an enforcement pass
-  across five services. Critically, `VideoServiceImpl.isVisibleTo` reads only `VideoVisibility`, so
-  a private account's PUBLIC videos stay in the global feed; fixing that means denormalising
-  `ownerPrivate` onto the video document, because the feed query cannot call user-service per row.
-  Own document, own sprint.
+- **Private account** — built on its own, see
+  `docs/superpowers/specs/2026-09-26-private-account-design.md`. The switch is written through
+  `PATCH /me/settings` like the rest, but the flag lives on `user_profiles` (V11) because every
+  viewer reads it; follow requests are `user_follow_requests` (V12).
 - **Notification preferences** — belongs in notification-service (Mongo, `_id = userId`), gated in
   `NotificationServiceImpl.create` where `BlockClient` is already consulted.
 - **Keyword filters, data export, business verification.**

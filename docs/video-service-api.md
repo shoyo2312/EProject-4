@@ -137,6 +137,7 @@ Response `data` → `VideoResponse`:
   "commentCount": 0,              // null khi commentsDisabled HOẶC accountCommentsOff
   "commentsDisabled": false,      // công tắc tắt comment của RIÊNG video này (chủ video bật/tắt)
   "accountCommentsOff": false,    // tài khoản chủ video đặt "Ai được bình luận" = No one → mọi video của họ coi như tắt comment, kể cả với chính chủ
+  "ownerPrivate": false,          // tài khoản chủ video đang riêng tư → video PUBLIC chỉ follower xem được; hiện ổ khoá. `visibility` vẫn là lựa chọn của chủ video
   "tags": ["dance", "food"],      // đã chuẩn hoá, có thể rỗng nhưng không bao giờ null
   "createdAt": "2026-08-12T10:00:00Z",
   "failureReason": null           // chuỗi giải thích khi status = FAILED; null ở mọi trạng thái khác
@@ -176,7 +177,7 @@ Vì sao bỏ `?page=`: feed là danh sách vô hạn, mà `page=500` bắt Mongo
 
 > **Feed đổi trong lúc user đang cuộn là bình thường.** Cursor neo vào video cuối của trang trước, nên video mới đăng sau đó **không** chen vào giữa và **không** gây lặp/nhảy item như `page` cũ. Muốn thấy video mới thì kéo-để-làm-mới, tức gọi lại mà không kèm `cursor`.
 
-Chỉ trả video **`PUBLISHED` + `PUBLIC`** và chưa bị xoá. Video của chính mình đang `PROCESSING`/`PRIVATE` **không** xuất hiện ở đây kể cả khi có gửi token — muốn xem video của mình thì dùng mục 3.5.
+Chỉ trả video **`PUBLISHED` + `PUBLIC`**, chưa bị xoá, của tài khoản **không riêng tư**. Video của chính mình đang `PROCESSING`/`PRIVATE` **không** xuất hiện ở đây kể cả khi có gửi token — muốn xem video của mình thì dùng mục 3.5. Video của tài khoản riêng tư không bao giờ lên feed này, kể cả với follower — follower thấy chúng ở tab Following (mục 3.3b).
 
 Lỗi: `INVALID_FEED_CURSOR` (400 — cursor không phải do server này cấp, thường do client tự sửa hoặc lưu nhầm). Xử lý: bỏ cursor đang giữ và tải lại từ đầu.
 
@@ -191,7 +192,7 @@ Query param: `?followedUserIds=1,2,3&cursor=<nextCursor>&size=20`.
 - Tối đa **500** id một request; quá thì `TOO_MANY_FOLLOWED_USERS` (400) chứ không cắt bớt im lặng — một feed thiếu hẳn vài creator là feed sai mà không ai nhìn ra được.
 - Id trùng nhau được khử ở server, client không cần lọc trước.
 
-Bộ lọc hiển thị **y hệt mục 3.3**: chỉ `PUBLISHED` + `PUBLIC` và chưa xoá. Follow một người không cho bạn thấy video `PRIVATE`, video đang `PROCESSING`, hay video bị `TAKEN_DOWN` của họ. Vì thế endpoint không cần token và việc khai một `userId` mình không thực sự follow cũng không lộ thêm gì so với `GET /users/{userId}` ở mục 3.5.
+Bộ lọc hiển thị giống mục 3.3: chỉ `PUBLISHED` + `PUBLIC` và chưa xoá. Follow một người không cho bạn thấy video `PRIVATE`, video đang `PROCESSING`, hay video bị `TAKEN_DOWN` của họ. Khác mục 3.3 ở một chỗ: video của tài khoản **riêng tư** có xuất hiện ở đây — nhưng chỉ với follower của họ. Vì danh sách id do client tự khai, server kiểm tra lại: tài khoản riêng tư trong `followedUserIds` mà người gọi không follow bị **bỏ khỏi danh sách trước khi truy vấn** (trang không bị hụt, cursor không lệch). **Gửi token nếu đã đăng nhập** — không có token thì mọi tài khoản riêng tư đều bị bỏ.
 
 Lỗi: `INVALID_FEED_CURSOR` (400) như mục 3.3, và `TOO_MANY_FOLLOWED_USERS` (400).
 
@@ -200,7 +201,7 @@ Không bắt buộc token, **nhưng nên gửi nếu đã đăng nhập**. Trả
 
 Quy tắc hiển thị:
 - **Chủ video** (token khớp `userId` của video): xem được ở mọi trạng thái — `PROCESSING`, `PRIVATE`, `FAILED`, `TAKEN_DOWN`.
-- **Người khác / không có token**: chỉ xem được video `PUBLISHED` + `PUBLIC`.
+- **Người khác / không có token**: chỉ xem được video `PUBLISHED` + `PUBLIC`. Nếu chủ video để tài khoản **riêng tư** (`ownerPrivate = true`) thì video `PUBLIC` chỉ follower của họ xem được; người khác nhận `VIDEO_NOT_FOUND` như với video `PRIVATE`. Video `FRIENDS` vẫn theo luật bạn bè (follow lẫn nhau).
 
 Lỗi: `VIDEO_NOT_FOUND` (404) — dùng chung cho **cả 4 trường hợp**: id không tồn tại, video đã bị xoá, video `PRIVATE` của người khác, hoặc video chưa/không còn `PUBLISHED` (đang `PROCESSING`, `FAILED`, hoặc bị `TAKEN_DOWN`). Ngoài ra, nếu người gọi và chủ video **đang chặn nhau** (bất kể chiều nào) thì cũng là 404 — interaction-service hỏi đúng endpoint này trước mỗi like/comment/save/repost/share/view, nên đây là chỗ chặn tài khoản bị block tương tác với video của người đã block. Server **cố tình** không phân biệt để không lộ sự tồn tại của video riêng tư. Hệ quả phía client: **404 ở đây không chứng minh video không tồn tại** — nếu đang poll sau khi upload mà nhận 404, khả năng cao là quên gửi token chứ không phải video biến mất.
 
@@ -228,6 +229,7 @@ Danh sách video của 1 user. Không bắt buộc token. **Phân trang bằng `
 
 - Gọi **chính mình** (token khớp `userId`): trả **tất cả** video chưa xoá, gồm cả `PROCESSING`, `PRIVATE`, `FAILED`, `TAKEN_DOWN`. Đây là endpoint cho màn "Video của tôi".
 - Gọi user khác (hoặc không token): chỉ `PUBLISHED` + `PUBLIC`.
+- Tài khoản **riêng tư**, người gọi không phải follower (hoặc không token): `PRIVATE_ACCOUNT` (403) — UI hiện "This account is private" thay vì lưới trống. Follower xem lưới như bình thường. `GET /users/{userId}/stats` vẫn công khai (các con số trên header profile).
 
 Không có lỗi `USER_NOT_FOUND` — `userId` không tồn tại chỉ trả về trang rỗng (`content: []`), vì video-service không giữ dữ liệu user.
 
@@ -285,6 +287,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `INVALID_FEED_CURSOR` | 400 | `cursor` ở mục 3.3 không phải do server cấp. Bỏ cursor đang giữ, tải lại feed từ đầu |
 | `TOO_MANY_FOLLOWED_USERS` | 400 | `followedUserIds` ở mục 3.3b quá 500 id. Cắt danh sách following theo trang thay vì gửi hết một lần |
 | `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
+| `PRIVATE_ACCOUNT` | 403 | Lưới video (mục 3.5) của tài khoản riêng tư mà người gọi không follow |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 | `UPLOAD_URL_UNAVAILABLE` | 503 | Không ký được presigned URL ở mục 3.1. Cấu hình storage sai hoặc storage chết — retry được, nhưng sửa request không giúp gì |
@@ -309,10 +312,14 @@ Cả hai loại đi chung topic **`video.video-events`**, key = `videoId`, nên 
 
 | eventType header | Event | Payload | Khi nào |
 |---|---|---|---|
-| `VideoPublishedEvent` | `VideoPublishedEvent` | `eventId, occurredAt, videoId, userId, title, description, rawFileUrl, tags[]` | Sau `POST /` — `eventId` derive từ `videoId` (publish đúng 1 lần dù outbox retry) |
+| `VideoPublishedEvent` | `VideoPublishedEvent` | `eventId, occurredAt, videoId, userId, title, description, rawFileUrl, visibility, tags[]` | Sau `POST /` — `eventId` derive từ `videoId` (publish đúng 1 lần dù outbox retry) |
 | `VideoDeletedEvent` | `VideoDeletedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Sau `DELETE /{id}`. Phát cả khi video bị xoá trước lúc `VideoPublishedEvent` kịp đi (media-worker vẫn cần dọn file raw) |
 
 `description` và `tags` được mang trên `VideoPublishedEvent` vì `search-service`/`recommendation-service` không có đường đọc vào Mongo của video-service. `tags` không bao giờ null (list rỗng).
+
+`visibility` trên `VideoPublishedEvent` và `VideoVisibilityChangedEvent` là **audience thực tế**, không phải giá trị lưu: video `PUBLIC` của tài khoản riêng tư đi ra là `FOLLOWERS`. Mọi consumer giữ bản sao (search, recommendation, chat) coi mọi thứ khác `PUBLIC` là ẩn, nên video đó rời khỏi tìm kiếm, For You và trending mà các service kia không phải sửa gì. `VideoResponse.visibility` vẫn là giá trị lưu (`PUBLIC`/`FRIENDS`/`PRIVATE`) để chủ video thấy đúng lựa chọn của mình. chat-service chuyển nguyên chữ này xuống trình duyệt trong frame `state` — client phải hiểu `FOLLOWERS` là "không công khai" và không ghi nó vào công tắc visibility của chủ video.
+
+`VideoVisibilityChangedEvent` chỉ được gửi sau khi `VideoPublishedEvent` của chính video đó đã được ack: hai poll chạy trên hai thread riêng, và không có điều kiện này thì event visibility có thể tới partition trước chính video.
 
 Consumer của `video.video-events`: media-worker, search-service, recommendation-service. (analytics-service cũng nghe — ngoài phạm vi doc này.)
 
@@ -327,6 +334,7 @@ Mọi consumer idempotent qua `IdempotentEventProcessor` (bảng `processed_even
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (route theo header; vắng ⇒ Created) | `commentCount ± 1` |
 | `interaction.view-events` | `VideoViewedEvent` | `viewCount += 1` (chỉ view đã qua dedupe của interaction-service) |
 | `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` (route theo header; **bắt buộc** có header, thiếu → drop + warn) | `status = TAKEN_DOWN` / restore: video đang TAKEN_DOWN thì về trạng thái trước takedown; đang `PENDING_REVIEW`/`REJECTED` thì là admin duyệt → `PUBLISHED`; trạng thái khác (PROCESSING, FAILED, PENDING_MODERATION, PUBLISHED) thì không làm gì |
+| `user.privacy-events` | `UserPrivacyChangedEvent` | Ghi `owner_privacy` (`_id = userId`) nếu event không cũ hơn bản đang có; đánh dấu `ownerPrivate` trên mọi video chưa xoá của user, xếp hàng `VideoVisibilityChangedEvent` cho từng video, xoá cache. Event cũ tới sau (replay từ DLT) không làm gì |
 
 `kafka-lib` error handler: retry 3 lần → `<topic>.DLT`.
 

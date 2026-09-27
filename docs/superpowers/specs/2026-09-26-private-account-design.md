@@ -1,6 +1,6 @@
 # Private account — design
 
-Date: 2026-09-26 · Branch: `feat/private-account` · Status: draft for review
+Date: 2026-09-26 · Branch: `feat/private-account` · Status: approved
 
 ## 1. Problem
 
