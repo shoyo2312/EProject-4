@@ -50,4 +50,30 @@ class FollowEventConsumerTest {
 
         verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
+
+    /** The owner approved it themselves, so the requester is the one told — and the owner is not. */
+    @Test
+    void onMessage_anApprovedRequest_tellsTheRequesterAndNotTheOwner() throws Exception {
+        when(processedEventRepository.tryClaim(anyString(), anyString())).thenReturn(true);
+
+        consumer().onMessage(objectMapper.writeValueAsString(UserFollowChangedEvent.of(9L, 50L, true, true)));
+
+        verify(notificationService).create(
+                eq(9L), eq(50L), eq(NotificationType.FOLLOW_REQUEST_ACCEPTED), any(), any(), eq("50"));
+        verify(notificationService, never()).create(
+                any(), any(), eq(NotificationType.NEW_FOLLOWER), any(), any(), any());
+    }
+
+    /** Events written before requestApproved existed carry no such key, and read as a plain follow. */
+    @Test
+    void onMessage_aPayloadFromBeforeFollowRequests_isAPlainFollow() throws Exception {
+        when(processedEventRepository.tryClaim(anyString(), anyString())).thenReturn(true);
+
+        consumer().onMessage("""
+                {"eventId": "e-1", "occurredAt": "2026-09-01T10:00:00Z", "followerId": 9, "followingId": 50, "followed": true}
+                """);
+
+        verify(notificationService).create(
+                eq(50L), eq(9L), eq(NotificationType.NEW_FOLLOWER), any(), any(), eq("9"));
+    }
 }
