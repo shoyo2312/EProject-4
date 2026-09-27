@@ -434,4 +434,24 @@ class UserProfileServiceImplTest {
         assertThat(userProfileService.searchIds("v".repeat(101), 50)).isEmpty();
         assertThat(userProfileService.searchIds("vmh", 50)).containsExactly(1L);
     }
+
+    @Test
+    @Transactional
+    void privateAccount_startsFalse_andFollowsTheColumn() {
+        userProfileService.createFromRegisteredEvent(70L, "vera", null);
+        assertThat(userProfileService.getByUserId(70L, 70L).privateAccount()).isFalse();
+        long versionBefore = userProfileRepository.findByUserIdAndDeletedAtIsNull(70L).orElseThrow().getVersion();
+
+        assertThat(userProfileRepository.updatePrivateAccount(70L, true)).isEqualTo(1);
+
+        assertThat(userProfileService.getByUserId(70L, 70L).privateAccount()).isTrue();
+        // The version moves with the flag, so an edit of the same profile that read it before the
+        // switch fails on its version instead of writing the old value back.
+        assertThat(userProfileRepository.findByUserIdAndDeletedAtIsNull(70L).orElseThrow().getVersion())
+                .isGreaterThan(versionBefore);
+        // Conditional on the stored value: a repeat changes nothing and says so, which is what
+        // keeps two racing PATCHes down to one announcement.
+        assertThat(userProfileRepository.updatePrivateAccount(70L, true)).isZero();
+        assertThat(userProfileRepository.updatePrivateAccount(999L, true)).isZero();
+    }
 }

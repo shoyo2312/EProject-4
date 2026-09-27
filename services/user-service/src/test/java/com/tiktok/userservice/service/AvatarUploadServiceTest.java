@@ -138,6 +138,6 @@ class AvatarUploadServiceTest {
     }
 
     private static UserProfileResponse profileWith(String avatarUrl) {
-        return new UserProfileResponse(USER_ID, "handle", "Name", null, avatarUrl, 0, 0);
+        return new UserProfileResponse(USER_ID, "handle", "Name", null, avatarUrl, 0, 0, false);
     }
 }

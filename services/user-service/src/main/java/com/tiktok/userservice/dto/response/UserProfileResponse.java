@@ -11,6 +11,11 @@ public record UserProfileResponse(
         String bio,
         String avatarUrl,
         long followerCount,
-        long followingCount
+        long followingCount,
+        /**
+         * Only approved followers see this account's videos, followers/following lists and
+         * reposts. The profile itself and its counters stay public.
+         */
+        boolean privateAccount
 ) {
 }

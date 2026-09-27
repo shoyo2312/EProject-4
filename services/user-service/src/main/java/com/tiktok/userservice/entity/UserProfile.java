@@ -49,6 +49,14 @@ public class UserProfile extends BaseEntity {
     private long followingCount = 0L;
 
     /**
+     * Only approved followers see this account's videos, lists and reposts. Switched only by
+     * UserProfileRepository.updatePrivateAccount, which also moves the version — see there.
+     */
+    @Builder.Default
+    @Column(name = "private_account", nullable = false)
+    private boolean privateAccount = false;
+
+    /**
      * Partial update: null arguments leave the current value alone, matching the PATCH semantics
      * of UpdateProfileRequest. Blank strings clear the optional fields — that is the only way a
      * client can erase a bio or avatar, since null already means "not sent".
