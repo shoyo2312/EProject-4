@@ -3,10 +3,17 @@ package com.tiktok.userservice.service;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
+import com.tiktok.userservice.entity.OutboxEvent;
 import com.tiktok.userservice.entity.SettingsAudience;
 import com.tiktok.userservice.exception.InvalidUserSettingsException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
+import com.tiktok.userservice.exception.UserProfileNotFoundException;
+import com.tiktok.userservice.repository.FollowRequestRepository;
+import com.tiktok.userservice.repository.OutboxEventRepository;
+import com.tiktok.userservice.repository.UserFollowRepository;
+import com.tiktok.userservice.repository.UserProfileRepository;
 import com.tiktok.userservice.repository.UserSettingsRepository;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -24,11 +31,14 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @Testcontainers
@@ -49,9 +59,34 @@ class UserSettingsServiceImplTest {
     @SpyBean
     private UserSettingsRepository userSettingsRepository;
 
+    @Autowired
+    private UserProfileService userProfileService;
+
+    @Autowired
+    private UserProfileRepository userProfileRepository;
+
+    @Autowired
+    private FollowService followService;
+
+    @Autowired
+    private FollowRequestRepository followRequestRepository;
+
+    @Autowired
+    private UserFollowRepository userFollowRepository;
+
+    @Autowired
+    private OutboxEventRepository outboxEventRepository;
+
     @BeforeEach
     void setUp() {
         userSettingsRepository.deleteAll();
+        outboxEventRepository.deleteAll();
+        followRequestRepository.deleteAll();
+        userFollowRepository.deleteAll();
+        userProfileRepository.deleteAll();
+        // The outbox is drained on a schedule in tests too, and the dispatcher waits on the future
+        // the template hands back.
+        when(kafkaTemplate.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(null));
     }
 
     /**
@@ -216,5 +251,112 @@ class UserSettingsServiceImplTest {
 
         assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, second))
                 .isInstanceOf(OptimisticLockingFailureException.class);
+    }
+
+    private static UpdateUserSettingsRequest privacy(Boolean privateAccount) {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        request.setPrivateAccount(privateAccount);
+        return request;
+    }
+
+    private List<OutboxEvent> privacyEvents() {
+        return outboxEventRepository.findAll().stream()
+                .filter(event -> "UserPrivacyChangedEvent".equals(event.getEventType()))
+                .toList();
+    }
+
+    /** Off the profile, where every viewer reads it — and false before the profile exists. */
+    @Test
+    void read_answersPrivateAccountOffTheProfile_andFalseWithoutOne() {
+        assertThat(userSettingsService.getOwnSettings(1L).privateAccount()).isFalse();
+
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userSettingsService.updateOwnSettings(1L, privacy(true));
+
+        assertThat(userSettingsService.getOwnSettings(1L).privateAccount()).isTrue();
+    }
+
+    /** A value equal to the stored one queues nothing, whatever else the same PATCH changes. */
+    @Test
+    void privacy_queuesOneEventPerChange_andNoneWhenUnchanged() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+
+        assertThat(userSettingsService.updateOwnSettings(1L, privacy(true)).privateAccount()).isTrue();
+        userSettingsService.updateOwnSettings(1L, privacy(true));
+        UpdateUserSettingsRequest unrelated = new UpdateUserSettingsRequest();
+        unrelated.setCommentAudience("FRIENDS");
+        assertThat(userSettingsService.updateOwnSettings(1L, unrelated).privateAccount()).isTrue();
+
+        assertThat(privacyEvents())
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.getAggregateId()).isEqualTo("1");
+                    assertThat(event.getPayload()).contains("\"privateAccount\":true");
+                });
+    }
+
+    @Test
+    void privacy_explicitNull_isRejected() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, privacy(null)))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("privateAccount");
+    }
+
+    /** No profile, nothing to put the flag on — and the settings row the same PATCH wrote goes too. */
+    @Test
+    void privacy_withNoProfile_isNotFound() {
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, privacy(true)))
+                .isInstanceOf(UserProfileNotFoundException.class);
+
+        assertThat(userSettingsRepository.findByUserIdAndDeletedAtIsNull(1L)).isEmpty();
+    }
+
+    /** Nothing gates following any more, and these people already asked. */
+    @Test
+    void goingPublic_approvesEveryPendingRequest() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        userSettingsService.updateOwnSettings(1L, privacy(true));
+        followService.follow(2L, 1L);
+        followService.follow(3L, 1L);
+
+        userSettingsService.updateOwnSettings(1L, privacy(false));
+
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(2L, 1L)).isPresent();
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(3L, 1L)).isPresent();
+        assertThat(followRequestRepository.findByTargetIdAndDeletedAtIsNull(1L)).isEmpty();
+        assertThat(userProfileRepository.findByUserIdAndDeletedAtIsNull(1L).orElseThrow().getFollowerCount())
+                .isEqualTo(2);
+    }
+
+    /** "Your existing followers won't be affected." */
+    @Test
+    void goingPrivate_leavesExistingFollowersAlone() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
+        followService.follow(2L, 1L);
+
+        userSettingsService.updateOwnSettings(1L, privacy(true));
+
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(2L, 1L)).isPresent();
+        assertThat(userProfileRepository.findByUserIdAndDeletedAtIsNull(1L).orElseThrow().getFollowerCount())
+                .isEqualTo(1);
+    }
+
+    /** One transaction: a PATCH refused for any key leaves the switch, and its announcement, where they were. */
+    @Test
+    void privacy_inAPatchThatFailsValidation_changesNothing() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        UpdateUserSettingsRequest request = privacy(true);
+        request.setSleepHoursStart(LocalTime.of(22, 0));
+
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, request))
+                .isInstanceOf(InvalidUserSettingsException.class);
+
+        assertThat(userSettingsService.getOwnSettings(1L).privateAccount()).isFalse();
+        assertThat(privacyEvents()).isEmpty();
     }
 }
