@@ -13,6 +13,8 @@ import com.tiktok.userservice.exception.CannotFollowBlockedUserException;
 import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.FollowRequestNotFoundException;
 import com.tiktok.userservice.exception.NotFollowingException;
+import com.tiktok.userservice.exception.PrivateAccountException;
+import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
@@ -26,6 +28,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 @Service
@@ -99,19 +102,39 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional(readOnly = true)
     public FriendshipResponse friendship(Long viewerId, Long otherUserId) {
-        // Read-only and edge-only: a non-existent user simply has no follow rows, so it answers
-        // false rather than 404 — the caller (video-service's FRIENDS visibility check) only ever
-        // needs the boolean, and self is never a friend.
-        boolean friends = !viewerId.equals(otherUserId)
-                && hasEdge(viewerId, otherUserId)
-                && hasEdge(otherUserId, viewerId);
-        return new FriendshipResponse(otherUserId, friends);
+        // Read-only and edge-only: a non-existent user has no follow rows and no profile, so it
+        // answers all false rather than 404, and self is never a friend.
+        boolean privateAccount = isPrivate(otherUserId);
+        if (viewerId == null || viewerId.equals(otherUserId)) {
+            return new FriendshipResponse(otherUserId, false, false, false, privateAccount);
+        }
+
+        boolean following = hasEdge(viewerId, otherUserId);
+        boolean friends = following && hasEdge(otherUserId, viewerId);
+        boolean requested = !following && followRequestRepository
+                .findByRequesterIdAndTargetIdAndDeletedAtIsNull(viewerId, otherUserId).isPresent();
+        return new FriendshipResponse(otherUserId, friends, following, requested, privateAccount);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<Long> followingAmong(Long followerId, List<Long> userIds) {
+        // Against the raw list, before the distinct below, like UserProfileService.getByUserIds:
+        // what the cap guards is the query string being parsed and bound.
+        if (userIds.size() > UserProfileService.MAX_BATCH_IDS) {
+            throw new TooManyProfileIdsException(UserProfileService.MAX_BATCH_IDS);
+        }
+
+        List<Long> distinctIds = userIds.stream().filter(Objects::nonNull).distinct().toList();
+        return distinctIds.isEmpty()
+                ? List.of()
+                : userFollowRepository.findFollowingIdsAmong(followerId, distinctIds);
     }
 
     @Override
     @Transactional(readOnly = true)
     public Page<UserProfileResponse> listFollowers(Long viewerId, Long userId, Pageable pageable) {
-        profileVisibilityGuard.requireVisible(viewerId, userId);
+        requireListVisible(viewerId, userId);
 
         // Visible-to rather than the plain lookup: the guard above answers whether this list may be
         // read, the query answers who in it may be shown. Someone who blocked the viewer is neither.
@@ -122,7 +145,7 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional(readOnly = true)
     public Page<UserProfileResponse> listFollowing(Long viewerId, Long userId, Pageable pageable) {
-        profileVisibilityGuard.requireVisible(viewerId, userId);
+        requireListVisible(viewerId, userId);
 
         return profileBatchAssembler.toResponses(
                 userFollowRepository.findFollowingIdsVisibleTo(viewerId, userId, pageable));
@@ -230,6 +253,23 @@ public class FollowServiceImpl implements FollowService {
                 addEdge(request.getRequesterId(), request.getTargetId(), true);
             }
         }
+    }
+
+    /**
+     * The block guard first — still a 404 — then the private-account rule: a private account's
+     * lists are for its followers.
+     */
+    private void requireListVisible(Long viewerId, Long userId) {
+        profileVisibilityGuard.requireVisible(viewerId, userId);
+        if (!viewerId.equals(userId) && isPrivate(userId) && !hasEdge(viewerId, userId)) {
+            throw new PrivateAccountException();
+        }
+    }
+
+    private boolean isPrivate(Long userId) {
+        return userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .map(UserProfile::isPrivateAccount)
+                .orElse(false);
     }
 
     private boolean hasEdge(Long followerId, Long followingId) {

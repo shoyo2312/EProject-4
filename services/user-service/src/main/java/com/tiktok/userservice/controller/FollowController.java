@@ -51,8 +51,10 @@ public class FollowController {
      * The tokenless sibling of this, for services with no bearer token to forward, is
      * {@link InternalFollowController} — keep the two answering the same question.
      */
-    @Operation(summary = "Whether the viewer and this user follow each other",
-            description = "Edge-only: an id with no account is simply not a friend, not a 404.")
+    @Operation(summary = "The viewer's relationship to this user",
+            description = "following, requested (a pending follow request), friends (mutual) and "
+                    + "whether the account is private — everything a Follow button needs. "
+                    + "Edge-only: an id with no account is all false, not a 404.")
     @GetMapping("/friendship")
     public ApiResponse<FriendshipResponse> friendship(
             @AuthenticationPrincipal Long currentUserId,
@@ -62,7 +64,9 @@ public class FollowController {
 
     @Operation(summary = "Who follows this user",
             description = "404 USER_PROFILE_NOT_FOUND if a block hides the account from the "
-                    + "viewer. Accounts that blocked the viewer are absent from the page.")
+                    + "viewer. 403 PRIVATE_ACCOUNT if the account is private and the viewer "
+                    + "neither owns nor follows it. Accounts that blocked the viewer are absent "
+                    + "from the page.")
     @GetMapping("/followers")
     public ApiResponse<Page<UserProfileResponse>> listFollowers(
             @AuthenticationPrincipal Long currentUserId,

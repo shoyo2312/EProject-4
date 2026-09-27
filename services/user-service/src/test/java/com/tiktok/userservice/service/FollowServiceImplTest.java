@@ -1,12 +1,15 @@
 package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.response.FollowResponse;
+import com.tiktok.userservice.dto.response.FriendshipResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.exception.AlreadyFollowingException;
 import com.tiktok.userservice.exception.AlreadyRequestedException;
 import com.tiktok.userservice.exception.CannotFollowSelfException;
 import com.tiktok.userservice.exception.FollowRequestNotFoundException;
 import com.tiktok.userservice.exception.NotFollowingException;
+import com.tiktok.userservice.exception.PrivateAccountException;
+import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.entity.OutboxEvent;
 import com.tiktok.userservice.repository.FollowRequestRepository;
@@ -30,7 +33,9 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -427,5 +432,72 @@ class FollowServiceImplTest {
 
         assertThat(followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 2L)).isEmpty();
         assertThat(userProfileService.getByUserId(2L, 2L).followerCount()).isEqualTo(1);
+    }
+
+    @Test
+    @Transactional
+    void friendship_saysFollowingRequestedAndPrivate() {
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+
+        FriendshipResponse requested = followService.friendship(1L, 2L);
+        assertThat(requested.following()).isFalse();
+        assertThat(requested.requested()).isTrue();
+        assertThat(requested.privateAccount()).isTrue();
+
+        followService.approveFollowRequest(2L, 1L);
+
+        FriendshipResponse following = followService.friendship(1L, 2L);
+        assertThat(following.following()).isTrue();
+        assertThat(following.requested()).isFalse();
+        assertThat(following.friends()).isFalse();
+    }
+
+    /** chat-service and interaction-service ask for anonymous viewers too; only the flag can be true. */
+    @Test
+    @Transactional
+    void friendship_forAnAnonymousViewer_onlySaysWhetherTheAccountIsPrivate() {
+        makePrivate(2L);
+
+        FriendshipResponse anonymous = followService.friendship(null, 2L);
+
+        assertThat(anonymous.privateAccount()).isTrue();
+        assertThat(anonymous.following()).isFalse();
+        assertThat(anonymous.requested()).isFalse();
+        assertThat(anonymous.friends()).isFalse();
+    }
+
+    @Test
+    @Transactional
+    void followingAmong_answersTheSubsetFollowed() {
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        followService.follow(1L, 2L);
+
+        assertThat(followService.followingAmong(1L, List.of(2L, 3L, 999L))).containsExactly(2L);
+    }
+
+    @Test
+    void followingAmong_overTheBatchCap_isRejected() {
+        List<Long> ids = LongStream.rangeClosed(1, UserProfileService.MAX_BATCH_IDS + 1).boxed().toList();
+
+        assertThatThrownBy(() -> followService.followingAmong(1L, ids))
+                .isInstanceOf(TooManyProfileIdsException.class);
+    }
+
+    /** A private account's lists are for its followers: 403 to a stranger; the owner and followers pass. */
+    @Test
+    @Transactional
+    void lists_ofAPrivateAccount_refuseAStrangerButNotAFollowerOrTheOwner() {
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        followService.follow(1L, 2L);
+        makePrivate(2L);
+
+        assertThat(followService.listFollowers(1L, 2L, PageRequest.of(0, 10)).getContent())
+                .extracting(UserProfileResponse::userId).containsExactly(1L);
+        assertThat(followService.listFollowing(2L, 2L, PageRequest.of(0, 10)).getContent()).isEmpty();
+        assertThatThrownBy(() -> followService.listFollowers(3L, 2L, PageRequest.of(0, 10)))
+                .isInstanceOf(PrivateAccountException.class);
+        assertThatThrownBy(() -> followService.listFollowing(3L, 2L, PageRequest.of(0, 10)))
+                .isInstanceOf(PrivateAccountException.class);
     }
 }

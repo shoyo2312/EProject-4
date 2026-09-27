@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 
 public interface UserFollowRepository extends JpaRepository<UserFollow, Long> {
@@ -45,4 +47,13 @@ public interface UserFollowRepository extends JpaRepository<UserFollow, Long> {
     Page<Long> findFollowingIdsVisibleTo(@Param("viewerId") Long viewerId,
                                          @Param("userId") Long userId,
                                          Pageable pageable);
+
+    /**
+     * The subset of {@code userIds} that {@code followerId} follows, in one query — the batch
+     * follow check video-service asks once per page. No block filter: a block severs the edges.
+     */
+    @Query("select f.followingId from UserFollow f where f.followerId = :followerId "
+            + "and f.followingId in :userIds and f.deletedAt is null")
+    List<Long> findFollowingIdsAmong(@Param("followerId") Long followerId,
+                                     @Param("userIds") Collection<Long> userIds);
 }
