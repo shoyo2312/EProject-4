@@ -299,6 +299,23 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
+    public List<String> markOwnerPrivacy(Long userId, boolean privateAccount, Instant pendingAt) {
+        mongoTemplate.updateMulti(
+                Query.query(where("userId").is(userId).and("deletedAt").is(null)),
+                new Update()
+                        .set("ownerPrivate", privateAccount)
+                        .set("visibilityEventPendingAt", pendingAt)
+                        .set("updatedAt", Instant.now()),
+                Video.class);
+
+        // Read after the write, so a video inserted in between is evicted too — harmless — rather
+        // than missed.
+        Query owned = Query.query(where("userId").is(userId).and("deletedAt").is(null));
+        owned.fields().include("_id");
+        return mongoTemplate.find(owned, Video.class).stream().map(Video::getId).toList();
+    }
+
+    @Override
     public void updateCommentsDisabled(Video video) {
         update(video.getId(), new Update().set("commentsDisabled", video.isCommentsDisabled()));
     }

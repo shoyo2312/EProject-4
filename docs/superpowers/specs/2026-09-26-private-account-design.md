@@ -213,8 +213,9 @@ them could be private.
 **`UserPrivacyEventConsumer`** on `user.privacy-events`, group `video-service`, claimed through
 `IdempotentEventProcessor` like the other consumers:
 
-1. Upsert `owner_privacy` only where `changedAt < event.occurredAt`. An older event replayed from
-   the DLT after a newer one changes nothing, and stops here.
+1. Upsert `owner_privacy` only where `changedAt <= event.occurredAt`. An older event replayed from
+   the DLT after a newer one changes nothing, and stops here. `<=` rather than `<`: a redelivery of
+   the same event, whose first attempt failed after this step, must still reach steps 2 and 3.
 2. `updateMulti` the owner's undeleted videos: `ownerPrivate = event.privateAccount`,
    `visibilityEventPendingAt = now` — the per-video visibility outbox (§5.3) re-announces each one.
 3. Evict each of those videos from `VideoCache`. Same ceiling as every other eviction: a reader

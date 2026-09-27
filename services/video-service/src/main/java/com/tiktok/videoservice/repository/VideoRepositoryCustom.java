@@ -247,6 +247,18 @@ public interface VideoRepositoryCustom {
     boolean clearVisibilityEventPending(String videoId, java.time.Instant announced);
 
     /**
+     * An owner's account switched between private and public: stamps the flag on every live video
+     * they own and queues each one's visibility announcement, in one write.
+     *
+     * <p>Every video, not only the PUBLIC ones whose audience actually changes: consumers take a
+     * repeated audience as the no-op it is, and one update keeps the flag and its announcement
+     * together.
+     *
+     * @return the ids of those videos, for the caller to evict
+     */
+    List<String> markOwnerPrivacy(Long userId, boolean privateAccount, Instant pendingAt);
+
+    /**
      * The owner turning comments on/off from the detail page. Unconditional, same reasoning as
      * {@link #updateVisibility}: owner-driven and not contended by the Kafka consumers.
      */
