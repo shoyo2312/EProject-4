@@ -12,20 +12,24 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Drains the outbox to user.follow-events. Marking is delegated to {@link OutboxDispatcher} so a
- * row is only marked published once the broker acknowledges it — see that class for why doing it
- * inline loses events.
+ * Drains the outbox to Kafka, one topic per aggregate type. Marking is delegated to
+ * {@link OutboxDispatcher} so a row is only marked published once the broker acknowledges it — see
+ * that class for why doing it inline loses events.
  *
- * <p>The topic carries one event type, so no eventType header: the consumer has nothing to route.
+ * <p>Each topic carries one event type, so no eventType header: no consumer has anything to route.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class OutboxPublisher {
 
-    private static final String TOPIC = "user.follow-events";
+    private static final Map<String, String> TOPICS = Map.of(
+            UserEventPublisher.FOLLOW_AGGREGATE, "user.follow-events",
+            UserEventPublisher.FOLLOW_REQUEST_AGGREGATE, "user.follow-request-events",
+            UserEventPublisher.PRIVACY_AGGREGATE, "user.privacy-events");
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxDispatcher outboxDispatcher;
@@ -55,6 +59,12 @@ public class OutboxPublisher {
     }
 
     private ProducerRecord<String, String> toRecord(OutboxEvent event) {
-        return new ProducerRecord<>(TOPIC, event.getAggregateId(), event.getPayload());
+        String topic = TOPICS.get(event.getAggregateType());
+        if (topic == null) {
+            // Thrown, not guessed: the dispatcher leaves the row pending for an instance that knows
+            // the type — the normal state of affairs halfway through a rolling deploy.
+            throw new IllegalStateException("No topic for outbox aggregate type " + event.getAggregateType());
+        }
+        return new ProducerRecord<>(topic, event.getAggregateId(), event.getPayload());
     }
 }
