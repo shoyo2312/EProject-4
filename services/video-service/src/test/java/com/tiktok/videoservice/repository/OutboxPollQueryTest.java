@@ -288,4 +288,25 @@ class OutboxPollQueryTest {
         }
         return videoRepository.save(video);
     }
+
+    /**
+     * The two polls run on separate threads. Without this, a visibility change queued before the
+     * publication went out — routine once an owner's privacy switch stamps every video they have —
+     * could reach the partition ahead of the video it is about.
+     */
+    @Test
+    void visibilityPoll_waitsForThePublicationToBeAnnounced() {
+        Video unannounced = save(false);
+        unannounced.changeVisibility(VideoVisibility.PRIVATE);
+        videoRepository.save(unannounced);
+        Video announced = save(false);
+        announced.markEventPublished();
+        announced.changeVisibility(VideoVisibility.PRIVATE);
+        videoRepository.save(announced);
+
+        assertThat(videoRepository
+                .findTop100ByVisibilityEventPendingAtIsNotNullAndEventPublishedAtIsNotNullOrderByVisibilityEventPendingAtAsc())
+                .extracting(Video::getId)
+                .containsExactly(announced.getId());
+    }
 }

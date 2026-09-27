@@ -154,7 +154,7 @@ class VideoServiceImplCacheTest {
     void getByIds_filtersAPrivateCachedVideoOutForAStranger() {
         VideoResponse privateVideo = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, null, 10, 1080, 1920, VideoStatus.PUBLISHED,
-                VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
+                VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
 
         when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", privateVideo));
 
@@ -171,7 +171,7 @@ class VideoServiceImplCacheTest {
     void friendsVideo_isVisibleOnlyToAConfirmedFriend() {
         VideoResponse friendsVideo = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, null, 10, 1080, 1920, VideoStatus.PUBLISHED,
-                VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
+                VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
         when(videoCache.get("A")).thenReturn(Optional.of(friendsVideo));
 
         when(friendshipClient.areFriends(OWNER, 7L)).thenReturn(true);
@@ -292,7 +292,7 @@ class VideoServiceImplCacheTest {
         VideoResponse inReview = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, "http://localhost:9000/video-media/hls/A/source.mp4",
                 10, 1080, 1920, VideoStatus.PENDING_REVIEW, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
-                Instant.now(), null, null, null, null, null, null, null, null, false);
+                Instant.now(), null, null, null, null, null, null, null, null, false, false);
         when(videoCache.get("A")).thenReturn(Optional.of(inReview));
         when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
 
@@ -311,6 +311,6 @@ class VideoServiceImplCacheTest {
     private static VideoResponse publicVideo(String id) {
         return new VideoResponse(
                 id, OWNER, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
-                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
+                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
     }
 }

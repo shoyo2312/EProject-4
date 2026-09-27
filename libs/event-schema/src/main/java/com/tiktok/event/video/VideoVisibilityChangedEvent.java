@@ -7,7 +7,8 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * The owner moved a video between PUBLIC, FRIENDS and PRIVATE. Published on the same topic and
+ * The owner moved a video between PUBLIC, FRIENDS and PRIVATE, or switched their account between
+ * private and public — which moves a PUBLIC video to FOLLOWERS and back. Published on the same topic and
  * under the same key as {@link VideoPublishedEvent}, so Kafka orders the two per video and a
  * consumer never applies a visibility change to a video it has not been told about.
  *
@@ -20,7 +21,7 @@ public record VideoVisibilityChangedEvent(
         Instant occurredAt,
         String videoId,
         Long userId,
-        /** PUBLIC, FRIENDS or PRIVATE, as video-service's VideoVisibility names them. */
+        /** PUBLIC, FRIENDS, PRIVATE or FOLLOWERS — see {@link VideoPublishedEvent#visibility()}. */
         String visibility
 ) implements DomainEvent {
 

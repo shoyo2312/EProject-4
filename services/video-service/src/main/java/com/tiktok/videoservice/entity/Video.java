@@ -156,6 +156,15 @@ public class Video {
     private boolean commentsDisabled;
 
     /**
+     * The owner's account is private, so a PUBLIC video is for their followers only. Copied from
+     * owner_privacy when the video is published, and rewritten by UserPrivacyEventConsumer when the
+     * owner switches: the public feed query filters on it and cannot ask user-service per row.
+     * Absent on documents written before this field existed, which Mongo maps to {@code false} —
+     * right for all of them, since no account could be private then.
+     */
+    private boolean ownerPrivate;
+
+    /**
      * Normalised at publish time and indexed because tag affinity is the only content signal
      * recommendation has: every other thing it knows about a video is engagement, which is the
      * thing it is trying to predict. Multikey — Mongo indexes each element — so a lookup by one

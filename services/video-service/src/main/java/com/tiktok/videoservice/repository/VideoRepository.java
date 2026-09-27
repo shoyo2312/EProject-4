@@ -74,8 +74,14 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      * private and then deleted still has to have the visibility change announced, because the
      * deletion event only reaches consumers that keep the video at all — and the change may be
      * the one that removes it from a read path the deletion would otherwise race.
+     *
+     * <p>Only videos whose publication the broker has acknowledged. The two polls run on separate
+     * threads, and a change queued before the publication went out — routine once an owner's
+     * privacy switch stamps every video they have — could otherwise reach the partition ahead of
+     * the video it is about. The publication, built from the document when it is sent, already
+     * carries the current audience.
      */
-    List<Video> findTop100ByVisibilityEventPendingAtIsNotNullOrderByVisibilityEventPendingAtAsc();
+    List<Video> findTop100ByVisibilityEventPendingAtIsNotNullAndEventPublishedAtIsNotNullOrderByVisibilityEventPendingAtAsc();
 
     /**
      * Early-purge outbox poll: trashed videos an admin asked to erase now — see

@@ -72,7 +72,8 @@ public class QuarantinedMediaUrls {
                 video.viewCount(), video.likeCount(), video.commentCount(), video.commentsDisabled(),
                 video.tags(), video.createdAt(), video.updatedAt(), video.publishedAt(), video.rawFileUrl(),
                 video.failureReason(), video.takedownReason(), video.deletedAt(),
-                video.purgeEventPublishedAt(), video.moderation(), video.accountCommentsOff());
+                video.purgeEventPublishedAt(), video.moderation(), video.accountCommentsOff(),
+                video.ownerPrivate());
     }
 
     private String signed(String url) {

@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.tiktok.videoservice.config.VideoCacheProperties;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -159,6 +160,20 @@ class VideoCacheTest {
         return new VideoResponse(
                 id, 42L, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
                 10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 1, 2, 3L, false,
-                List.of("tag"), Instant.parse("2026-08-27T10:00:00Z"), null, null, null, null, null, null, null, null, false);
+                List.of("tag"), Instant.parse("2026-08-27T10:00:00Z"), null, null, null, null, null, null, null, null, false, false);
+    }
+
+    /**
+     * Entries written before ownerPrivate existed stay in Redis for up to a TTL after the deploy.
+     * They must read as a public owner's video — which is what they were — not fail to parse.
+     */
+    @Test
+    void get_anEntryCachedBeforeOwnerPrivateExisted_readsAsAPublicOwners() throws Exception {
+        ObjectNode old = objectMapper.valueToTree(video("A"));
+        old.remove("ownerPrivate");
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get("video:A")).thenReturn(objectMapper.writeValueAsString(old));
+
+        assertThat(cache().get("A")).hasValueSatisfying(video -> assertThat(video.ownerPrivate()).isFalse());
     }
 }
