@@ -2,6 +2,7 @@ package com.tiktok.videoservice.service;
 
 import com.tiktok.common.storage.ObjectKeys;
 import com.tiktok.videoservice.client.BlockClient;
+import com.tiktok.videoservice.client.FollowClient;
 import com.tiktok.videoservice.client.FriendshipClient;
 import com.tiktok.videoservice.client.UserSettingsClient;
 import com.tiktok.videoservice.config.MinioProperties;
@@ -47,6 +48,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -107,6 +109,7 @@ public class VideoServiceImpl implements VideoService {
     private final QuarantinedMediaUrls quarantinedMediaUrls;
     private final BlockClient blockClient;
     private final UserSettingsClient userSettingsClient;
+    private final FollowClient followClient;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -381,10 +384,13 @@ public class VideoServiceImpl implements VideoService {
 
         // Filtered after the lookup, not during it, so the cache holds one entry per video
         // rather than one per (video, viewer) — see getById.
-        return withAccountComments(wanted.stream()
+        List<VideoResponse> ordered = wanted.stream()
                 .map(found::get)
                 .filter(Objects::nonNull)
-                .filter(video -> isVisibleTo(requesterId, video))
+                .toList();
+        Set<Long> followed = followedPrivateOwners(requesterId, ordered);
+        return withAccountComments(ordered.stream()
+                .filter(video -> isVisibleTo(requesterId, video, followed))
                 .toList());
     }
 
@@ -592,7 +598,8 @@ public class VideoServiceImpl implements VideoService {
      * user-service call per video. Needs a batch block endpoint if feeds must hide them too.
      */
     private VideoResponse requireVisible(Long requesterId, VideoResponse video, String videoId) {
-        if (!isVisibleTo(requesterId, video) || blockClient.isBlockedBetween(video.userId(), requesterId)) {
+        if (!isVisibleTo(requesterId, video, followedPrivateOwners(requesterId, List.of(video)))
+                || blockClient.isBlockedBetween(video.userId(), requesterId)) {
             throw new VideoNotFoundException(videoId);
         }
         return video;
@@ -600,11 +607,14 @@ public class VideoServiceImpl implements VideoService {
 
     /**
      * Decided from the response rather than the entity, because by this point the value may have
-     * come from Redis and there is no entity. The three fields it reads — userId, status,
-     * visibility — are on both, and a video the requester does not own is only theirs to see once
-     * it is both PUBLISHED and PUBLIC.
+     * come from Redis and there is no entity. The fields it reads — userId, status, visibility,
+     * ownerPrivate — are on both, and a video the requester does not own is only theirs to see
+     * once it is PUBLISHED and its audience takes them in.
+     *
+     * @param followedPrivateOwners the private owners on this request the requester follows — see
+     *                              {@link #followedPrivateOwners}
      */
-    private boolean isVisibleTo(Long requesterId, VideoResponse video) {
+    private boolean isVisibleTo(Long requesterId, VideoResponse video, Set<Long> followedPrivateOwners) {
         if (isSelf(requesterId, video.userId())) {
             return true;
         }
@@ -612,13 +622,28 @@ public class VideoServiceImpl implements VideoService {
             return false;
         }
         return switch (video.visibility()) {
-            case PUBLIC -> true;
+            case PUBLIC -> !video.ownerPrivate() || followedPrivateOwners.contains(video.userId());
             // ponytail: one user-service call per FRIENDS video the requester does not own. PUBLIC
             // videos short-circuit above, so a normal feed/batch makes none; a list that is mostly
             // FRIENDS videos (rare) would. Add a batch friendship endpoint if that ever shows up.
+            // A private owner changes nothing here: a mutual follow already implies following.
             case FRIENDS -> friendshipClient.areFriends(video.userId(), requesterId);
             case PRIVATE -> false;
         };
+    }
+
+    /**
+     * The owners on this request whose PUBLIC videos the requester may see only as a follower,
+     * narrowed to the ones they do follow. One call for all of them, and none when nothing on the
+     * request belongs to a private owner — every page from accounts nobody made private.
+     */
+    private Set<Long> followedPrivateOwners(Long requesterId, List<VideoResponse> videos) {
+        Set<Long> privateOwners = videos.stream()
+                .filter(video -> video.ownerPrivate() && video.visibility() == VideoVisibility.PUBLIC)
+                .map(VideoResponse::userId)
+                .filter(owner -> !isSelf(requesterId, owner))
+                .collect(Collectors.toSet());
+        return privateOwners.isEmpty() ? Set.of() : followClient.followedAmong(requesterId, privateOwners);
     }
 
     private boolean isOwner(Long requesterId, Video video) {
