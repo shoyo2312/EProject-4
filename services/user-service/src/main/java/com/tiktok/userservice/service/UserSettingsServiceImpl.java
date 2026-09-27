@@ -4,7 +4,6 @@ import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
 import com.tiktok.userservice.entity.SettingsAudience;
-import com.tiktok.userservice.entity.UserProfile;
 import com.tiktok.userservice.entity.UserSettings;
 import com.tiktok.userservice.event.producer.UserEventPublisher;
 import com.tiktok.userservice.exception.InvalidUserSettingsException;
@@ -41,7 +40,8 @@ public class UserSettingsServiceImpl implements UserSettingsService {
     @Override
     @Transactional(readOnly = true)
     public UserSettingsResponse getOwnSettings(Long userId) {
-        return userSettingsMapper.toResponse(currentOrDefaults(userId), isPrivate(userId));
+        return userSettingsMapper.toResponse(currentOrDefaults(userId),
+                userProfileRepository.existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(userId));
     }
 
     @Override
@@ -98,7 +98,9 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         // After the settings row, never before it: the flag's bulk update clears the persistence
         // context, which would detach the row mid-write. One transaction either way, so a failure
         // on either side leaves both where they were.
-        boolean isPrivate = privateAccount == null ? isPrivate(userId) : changePrivacy(userId, privateAccount);
+        boolean isPrivate = privateAccount == null
+                ? userProfileRepository.existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(userId)
+                : changePrivacy(userId, privateAccount);
         return userSettingsMapper.toResponse(saved, isPrivate);
     }
 
@@ -155,13 +157,6 @@ public class UserSettingsServiceImpl implements UserSettingsService {
             followService.approveAllFollowRequests(userId);
         }
         return privateAccount;
-    }
-
-    /** Off the profile, where every viewer reads it; false until the profile row exists. */
-    private boolean isPrivate(Long userId) {
-        return userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
-                .map(UserProfile::isPrivateAccount)
-                .orElse(false);
     }
 
     /**

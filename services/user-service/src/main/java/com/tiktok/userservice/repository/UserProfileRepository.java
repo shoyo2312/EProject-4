@@ -111,6 +111,12 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
             + "where p.userId = :userId and p.deletedAt is null and p.privateAccount <> :privateAccount")
     int updatePrivateAccount(@Param("userId") Long userId, @Param("privateAccount") boolean privateAccount);
 
+    /**
+     * Off the profile, where every viewer reads it. A missing or deleted profile answers false,
+     * which is right: nothing can make an account private before its profile row exists.
+     */
+    boolean existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(Long userId);
+
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update UserProfile p set p.followerCount = p.followerCount + 1 where p.userId = :userId")
     void incrementFollowerCount(@Param("userId") Long userId);

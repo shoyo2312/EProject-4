@@ -104,7 +104,7 @@ public class FollowServiceImpl implements FollowService {
     public FriendshipResponse friendship(Long viewerId, Long otherUserId) {
         // Read-only and edge-only: a non-existent user has no follow rows and no profile, so it
         // answers all false rather than 404, and self is never a friend.
-        boolean privateAccount = isPrivate(otherUserId);
+        boolean privateAccount = userProfileRepository.existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(otherUserId);
         if (viewerId == null || viewerId.equals(otherUserId)) {
             return new FriendshipResponse(otherUserId, false, false, false, privateAccount);
         }
@@ -261,15 +261,11 @@ public class FollowServiceImpl implements FollowService {
      */
     private void requireListVisible(Long viewerId, Long userId) {
         profileVisibilityGuard.requireVisible(viewerId, userId);
-        if (!viewerId.equals(userId) && isPrivate(userId) && !hasEdge(viewerId, userId)) {
+        if (!viewerId.equals(userId)
+                && userProfileRepository.existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(userId)
+                && !hasEdge(viewerId, userId)) {
             throw new PrivateAccountException();
         }
-    }
-
-    private boolean isPrivate(Long userId) {
-        return userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
-                .map(UserProfile::isPrivateAccount)
-                .orElse(false);
     }
 
     private boolean hasEdge(Long followerId, Long followingId) {
