@@ -74,7 +74,8 @@ class VideoServiceImplCacheTest {
                     "video-media", "us-east-1", Duration.ofMinutes(15))),
                 blockClient,
                 userSettingsClient,
-                followClient);
+                followClient,
+                mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class));
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {

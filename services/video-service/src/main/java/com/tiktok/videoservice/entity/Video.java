@@ -284,6 +284,16 @@ public class Video {
     }
 
     /**
+     * The owner's account switched while this video was being published — see
+     * VideoServiceImpl.publish. Queues the announcement like {@link #changeVisibility}, since the
+     * audience the read paths hold follows from this flag too.
+     */
+    public void changeOwnerPrivacy(boolean ownerPrivate) {
+        this.ownerPrivate = ownerPrivate;
+        this.visibilityEventPendingAt = Instant.now();
+    }
+
+    /**
      * Transcode succeeded. This does not publish the video by itself: without a verdict it goes to
      * PENDING_MODERATION and waits for one, so nothing reaches a viewer before it has been
      * screened. A video that stops there is a video moderation never answered about, which is a

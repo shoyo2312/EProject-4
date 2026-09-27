@@ -56,7 +56,7 @@ public interface VideoRepositoryCustom {
      * would be a second place to keep those three in step.
      *
      * @param userIds         restrict to these authors — the Following feed — or null for the
-     *                        public feed, which is every author
+     *                        public feed, which is every author whose account is not private
      * @param beforeCreatedAt null for the first page, together with {@code beforeId}
      * @param limit           ask for one more than the page holds — a row beyond it is how the
      *                        caller learns there is a next page without counting anything
@@ -257,6 +257,12 @@ public interface VideoRepositoryCustom {
      * @return the ids of those videos, for the caller to evict
      */
     List<String> markOwnerPrivacy(Long userId, boolean privateAccount, Instant pendingAt);
+
+    /**
+     * One video's copy of its owner's privacy, found stale by the second read in
+     * {@code VideoServiceImpl.publish}. Both fields in one write, like {@link #updateVisibility}.
+     */
+    void updateOwnerPrivacy(Video video);
 
     /**
      * The owner turning comments on/off from the detail page. Unconditional, same reasoning as
