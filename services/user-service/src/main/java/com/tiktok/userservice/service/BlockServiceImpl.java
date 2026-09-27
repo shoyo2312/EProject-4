@@ -2,12 +2,14 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.response.BlockResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
+import com.tiktok.userservice.entity.FollowRequest;
 import com.tiktok.userservice.entity.UserBlock;
 import com.tiktok.userservice.event.producer.UserEventPublisher;
 import com.tiktok.userservice.exception.AlreadyBlockedException;
 import com.tiktok.userservice.exception.CannotBlockSelfException;
 import com.tiktok.userservice.exception.NotBlockedException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
+import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
@@ -24,6 +26,7 @@ public class BlockServiceImpl implements BlockService {
 
     private final UserBlockRepository userBlockRepository;
     private final UserFollowRepository userFollowRepository;
+    private final FollowRequestRepository followRequestRepository;
     private final UserProfileRepository userProfileRepository;
     private final UserProfileBatchAssembler profileBatchAssembler;
     private final UserEventPublisher userEventPublisher;
@@ -59,6 +62,10 @@ public class BlockServiceImpl implements BlockService {
         // side keeps showing up in the other's followers/following list after the block.
         removeFollowIfPresent(blockerId, blockedId);
         removeFollowIfPresent(blockedId, blockerId);
+        // Pending requests go with the edges: a blocked account must not sit in the requests list,
+        // and approving one would create a follow across the block.
+        removeFollowRequestIfPresent(blockerId, blockedId);
+        removeFollowRequestIfPresent(blockedId, blockerId);
 
         return new BlockResponse(blockerId, blockedId);
     }
@@ -95,5 +102,10 @@ public class BlockServiceImpl implements BlockService {
                     // Same announcement unfollow makes: a follow ended, whichever path ended it.
                     userEventPublisher.publishFollowChanged(followerId, followingId, false);
                 });
+    }
+
+    private void removeFollowRequestIfPresent(Long requesterId, Long targetId) {
+        followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(requesterId, targetId)
+                .ifPresent(FollowRequest::markDeleted);
     }
 }

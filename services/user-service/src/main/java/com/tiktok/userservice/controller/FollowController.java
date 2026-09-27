@@ -23,9 +23,11 @@ public class FollowController {
     private final FollowService followService;
 
     @Operation(summary = "Follow a user",
-            description = "400 CANNOT_FOLLOW_SELF, 404 USER_PROFILE_NOT_FOUND when either side "
-                    + "has no profile, 409 ALREADY_FOLLOWING, 409 CANNOT_FOLLOW_BLOCKED_USER "
-                    + "when a block exists in either direction.")
+            description = "201 either way: status FOLLOWING, or REQUESTED when the account is "
+                    + "private and its owner has to approve. 400 CANNOT_FOLLOW_SELF, "
+                    + "404 USER_PROFILE_NOT_FOUND when either side has no profile, 403 USER_BLOCKED "
+                    + "when a block exists in either direction, 409 ALREADY_FOLLOWING, "
+                    + "409 ALREADY_REQUESTED.")
     @PostMapping("/follow")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<FollowResponse> follow(
@@ -34,7 +36,9 @@ public class FollowController {
         return ApiResponse.success(followService.follow(currentUserId, userId));
     }
 
-    @Operation(summary = "Unfollow a user", description = "404 NOT_FOLLOWING when there is no edge.")
+    @Operation(summary = "Unfollow a user",
+            description = "Removes the edge, or withdraws a pending request when there is none. "
+                    + "404 NOT_FOLLOWING when there is neither.")
     @DeleteMapping("/follow")
     public ApiResponse<Void> unfollow(
             @AuthenticationPrincipal Long currentUserId,

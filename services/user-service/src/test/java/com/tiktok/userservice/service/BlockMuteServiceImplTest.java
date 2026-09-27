@@ -2,6 +2,7 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.entity.OutboxEvent;
+import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.OutboxEventRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
@@ -58,6 +59,7 @@ class BlockMuteServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        followRequestRepository.deleteAll();
         userFollowRepository.deleteAll();
         userBlockRepository.deleteAll();
         userMuteRepository.deleteAll();
@@ -128,5 +130,23 @@ class BlockMuteServiceImplTest {
                 .extracting(OutboxEvent::getPayload)
                 .hasSize(2)
                 .allSatisfy(payload -> assertThat(payload).contains("\"followed\":false"));
+    }
+
+    @Autowired
+    private FollowRequestRepository followRequestRepository;
+
+    /** Pending requests go with the edges, both ways — approving one later would follow across the block. */
+    @Test
+    @Transactional
+    void block_endsPendingFollowRequestsBothWays() {
+        userProfileRepository.updatePrivateAccount(1L, true);
+        userProfileRepository.updatePrivateAccount(2L, true);
+        followService.follow(1L, 2L);
+        followService.follow(2L, 1L);
+
+        blockService.block(1L, 2L);
+
+        assertThat(followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 2L)).isEmpty();
+        assertThat(followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(2L, 1L)).isEmpty();
     }
 }

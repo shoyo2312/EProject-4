@@ -271,7 +271,7 @@ class UserProfileControllerTest {
 
     @Test
     void follow_withValidToken_createsFollowAndReturns201() throws Exception {
-        when(followService.follow(1L, 2L)).thenReturn(new FollowResponse(1L, 2L));
+        when(followService.follow(1L, 2L)).thenReturn(new FollowResponse(1L, 2L, FollowResponse.Status.FOLLOWING));
 
         mockMvc.perform(post("/api/v1/users/2/follow")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
