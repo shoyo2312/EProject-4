@@ -24,9 +24,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * Translates a moderation decision into the matching admin.* domain event and writes it to
- * the outbox. DISMISS_REPORT has no downstream event — nothing happened, so there is nothing to
- * tell anyone. A warning does: it changes no state anywhere, and telling the person is the only
- * effect it can have.
+ * the outbox. DISMISS_REPORT has no moderation event — nothing happened to the target, so no
+ * service has anything to change — though the reports it closes still go out through
+ * {@link #publishReportsResolved}, as for every decision that answers reports. A warning does
+ * get one: it changes no state anywhere, and telling the person is the only effect it can have.
  */
 @Component
 @RequiredArgsConstructor

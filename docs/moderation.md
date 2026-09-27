@@ -33,7 +33,7 @@ separately.
 | Topic | Producer | Consumers |
 |---|---|---|
 | `media.video-transcoded-events` | media-worker | video-service (`video-service`), media-worker (`media-worker-moderation`) |
-| `media.video-moderation-events` | media-worker | video-service (`video-service`) |
+| `media.video-moderation-events` | media-worker | video-service (`video-service`), chat-service (`realtime-<uuid>`, `admin-realtime-<uuid>`) |
 
 ## Statuses
 
