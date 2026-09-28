@@ -62,7 +62,10 @@ public class OutboxPublisher {
         String topic = TOPICS.get(event.getAggregateType());
         if (topic == null) {
             // Thrown, not guessed: the dispatcher leaves the row pending for an instance that knows
-            // the type — the normal state of affairs halfway through a rolling deploy.
+            // the type — the normal state of affairs halfway through a rolling deploy. The reverse
+            // is not covered: an instance from before this map sends every row to
+            // user.follow-events and marks it published, so the deploy that brings the map in has
+            // to stop every old replica before starting a new one.
             throw new IllegalStateException("No topic for outbox aggregate type " + event.getAggregateType());
         }
         return new ProducerRecord<>(topic, event.getAggregateId(), event.getPayload());

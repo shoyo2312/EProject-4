@@ -334,7 +334,7 @@ Mọi consumer idempotent qua `IdempotentEventProcessor` (bảng `processed_even
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (route theo header; vắng ⇒ Created) | `commentCount ± 1` |
 | `interaction.view-events` | `VideoViewedEvent` | `viewCount += 1` (chỉ view đã qua dedupe của interaction-service) |
 | `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` (route theo header; **bắt buộc** có header, thiếu → drop + warn) | `status = TAKEN_DOWN` / restore: video đang TAKEN_DOWN thì về trạng thái trước takedown; đang `PENDING_REVIEW`/`REJECTED` thì là admin duyệt → `PUBLISHED`; trạng thái khác (PROCESSING, FAILED, PENDING_MODERATION, PUBLISHED) thì không làm gì |
-| `user.privacy-events` | `UserPrivacyChangedEvent` | Ghi `owner_privacy` (`_id = userId`) nếu event không cũ hơn bản đang có; đánh dấu `ownerPrivate` trên mọi video chưa xoá của user, xếp hàng `VideoVisibilityChangedEvent` cho từng video, xoá cache. Event cũ tới sau (replay từ DLT) không làm gì |
+| `user.privacy-events` | `UserPrivacyChangedEvent` | Ghi `owner_privacy` (`_id = userId`) nếu event không cũ hơn bản đang có; đánh dấu `ownerPrivate` trên mọi video chưa xoá của user, xếp hàng `VideoVisibilityChangedEvent` cho từng video, xoá cache. Event cũ tới sau (outbox của user-service gửi lại) không làm gì. Consumer này **không** claim qua `IdempotentEventProcessor` (mọi bước đều là phép gán, chạy lại vô hại), và lỗi thì retry mỗi 5s cho tới khi thành công chứ không vào DLT — mất một lần chuyển sang riêng tư là video lộ ra cho người lạ. Chỉ payload không parse được mới vào `user.privacy-events.DLT` |
 
 `kafka-lib` error handler: retry 3 lần → `<topic>.DLT`.
 

@@ -210,12 +210,17 @@ them could be private.
 `VideoResponse`, so the visibility check can decide from a cached entry like it does for
 `visibility` and `status`, and clients can show a lock.
 
-**`UserPrivacyEventConsumer`** on `user.privacy-events`, group `video-service`, claimed through
-`IdempotentEventProcessor` like the other consumers:
+**`UserPrivacyEventConsumer`** on `user.privacy-events`, group `video-service`. Unlike the other
+consumers it takes no claim through `IdempotentEventProcessor`: every step below is an assignment,
+so a redelivery repeats them harmlessly, while a claim that outlived a crash before step 2 would
+make the redelivery skip the event. And since nothing replays a DLT, its own listener factory
+retries a failure every 5s until it succeeds; only a payload that does not parse goes to
+`user.privacy-events.DLT`.
 
-1. Upsert `owner_privacy` only where `changedAt <= event.occurredAt`. An older event replayed from
-   the DLT after a newer one changes nothing, and stops here. `<=` rather than `<`: a redelivery of
-   the same event, whose first attempt failed after this step, must still reach steps 2 and 3.
+1. Upsert `owner_privacy` only where `changedAt <= event.occurredAt`. An older event arriving after
+   a newer one, such as a re-send from user-service's outbox, changes nothing, and stops here. `<=`
+   rather than `<`: a redelivery of the same event, whose first attempt failed after this step,
+   must still reach steps 2 and 3.
 2. `updateMulti` the owner's undeleted videos: `ownerPrivate = event.privateAccount`,
    `visibilityEventPendingAt = now` — the per-video visibility outbox (§5.3) re-announces each one.
 3. Evict each of those videos from `VideoCache`. Same ceiling as every other eviction: a reader
@@ -339,8 +344,15 @@ Every touched service's full suite passes before its commit.
   account can be private before this ships.
 - Every reader tolerates the old shape: a missing `ownerPrivate` reads `false`, a missing
   `owner_privacy` document means public, a missing `requestApproved` reads `false`.
-- Order: `event-schema`, then the four services in any order — until user-service ships, nothing
-  can become private, so the enforcement sits idle rather than half-applied.
+- Order: `event-schema`, then video-service and notification-service, then user-service and
+  interaction-service together, then the frontend. The first two act only on what user-service
+  publishes, so they sit idle until then and enforce the first switch as it happens. The next two
+  go together because interaction-service leaves `userA` off `/internal/friendship` for an
+  anonymous viewer, and the old user-service requires it: shipped ahead, interaction-service fails
+  closed and every anonymous Reposts tab answers 403.
+- Deploy user-service stop-then-start, never rolling alongside an old replica. An old instance
+  routes every outbox row to `user.follow-events` and marks it published, so a `USER_PRIVACY` row
+  it picks up is lost.
 
 ## 12. Documents to update with the code
 

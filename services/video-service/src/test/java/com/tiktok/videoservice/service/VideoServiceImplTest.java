@@ -22,6 +22,7 @@ import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
 import com.tiktok.videoservice.repository.VideoRepository;
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +32,9 @@ import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.MongoDBContainer;
@@ -44,12 +48,15 @@ import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static org.springframework.data.mongodb.core.query.Criteria.where;
 
 @SpringBootTest
 @Testcontainers
@@ -75,15 +82,19 @@ class VideoServiceImplTest {
     @MockBean
     private com.tiktok.videoservice.client.FollowClient followClient;
 
-    // Spied so one test can make the second read of owner_privacy answer differently from the first.
+    // Spied so a test can make owner_privacy answer differently from one read to the next.
     @SpyBean
     private OwnerPrivacyRepository ownerPrivacyRepository;
 
     @Autowired
     private VideoService videoService;
 
-    @Autowired
+    // Spied so a test can count publish's corrective writes.
+    @SpyBean
     private VideoRepository videoRepository;
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
 
     @BeforeEach
     void cleanUp() {
@@ -775,5 +786,36 @@ class VideoServiceImplTest {
         assertThat(published.ownerPrivate()).isTrue();
         assertThat(stored.isOwnerPrivate()).isTrue();
         assertThat(stored.getVisibilityEventPendingAt()).isNotNull();
+    }
+
+    /**
+     * The owner goes private and straight back while the video is being published, so the
+     * corrective write carries a value that is already stale when it lands. Only a read after it
+     * can tell.
+     */
+    @Test
+    void publish_whenTheOwnerSwitchesBackMidway_readsAgainAfterEachCorrection() {
+        doReturn(false).doReturn(true).doReturn(false)
+                .when(ownerPrivacyRepository).existsByUserIdAndPrivateAccountTrue(1L);
+
+        VideoResponse published = publishAs(1L, "Switched back", VideoVisibility.PUBLIC);
+
+        assertThat(published.ownerPrivate()).isFalse();
+        assertThat(videoRepository.findById(published.id()).orElseThrow().isOwnerPrivate()).isFalse();
+        verify(videoRepository, times(2)).updateOwnerPrivacy(any(Video.class));
+    }
+
+    /** Videos stored before ownerPrivate existed have no such field, and their owners are public. */
+    @Test
+    void getFeed_keepsAVideoStoredWithoutOwnerPrivate() {
+        VideoResponse published = publishAs(1L, "Stored before", VideoVisibility.PUBLIC);
+        markPublished(published.id());
+        mongoTemplate.updateFirst(Query.query(where("_id").is(published.id())),
+                new Update().unset("ownerPrivate"), Video.class);
+        assertThat(mongoTemplate.findById(published.id(), Document.class, "videos"))
+                .doesNotContainKey("ownerPrivate");
+
+        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+                .containsExactly(published.id());
     }
 }

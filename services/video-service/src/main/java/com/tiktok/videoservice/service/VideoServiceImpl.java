@@ -194,11 +194,14 @@ public class VideoServiceImpl implements VideoService {
         // every video the owner has: if its stamping ran before this insert, its recording did too
         // and this read sees it; if after, it rewrote this video with the rest. With the first
         // read alone, a switch landing between it and the insert would leave this video wrong for
-        // good.
+        // good. And again after each corrective write, as the consumer does after its stamp:
+        // whoever writes last checks last, so a correction that went stale on its way in is not
+        // the final word.
         boolean ownerPrivate = isPrivateOwner(userId);
-        if (ownerPrivate != video.isOwnerPrivate()) {
+        while (ownerPrivate != video.isOwnerPrivate()) {
             video.changeOwnerPrivacy(ownerPrivate);
             videoRepository.updateOwnerPrivacy(video);
+            ownerPrivate = isPrivateOwner(userId);
         }
         return withAccountComments(videoMapper.toResponse(video));
     }
@@ -452,6 +455,7 @@ public class VideoServiceImpl implements VideoService {
 
     /**
      * @param userIds the Following feed's authors, or null for the public feed — every author
+     *                whose account is not private
      */
     private CursorPage<VideoResponse> feedPage(
             Collection<Long> userIds, String cursor, Integer size) {

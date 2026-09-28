@@ -306,6 +306,10 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
 
     @Override
     public List<String> markOwnerPrivacy(Long userId, boolean privateAccount, Instant pendingAt) {
+        // ponytail: every live video goes on the shared visibility outbox, which drains 100 per
+        // 5 s, so an owner with N videos holds back later visibility announcements by about N/20 s.
+        // Queue only the PUBLIC ones if that bites: the other audiences never change with the
+        // owner's privacy.
         mongoTemplate.updateMulti(
                 Query.query(where("userId").is(userId).and("deletedAt").is(null)),
                 new Update()
