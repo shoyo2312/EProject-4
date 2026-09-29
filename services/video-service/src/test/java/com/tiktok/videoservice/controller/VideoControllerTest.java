@@ -113,7 +113,7 @@ class VideoControllerTest {
     void publish_withValidToken_createsVideo() throws Exception {
         CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, List.of());
         VideoResponse response = new VideoResponse("v1", 42L, "title", "desc", null, null, null, null, null, null,
-                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
         when(videoService.publish(eq(42L), any())).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/videos")
@@ -173,7 +173,7 @@ class VideoControllerTest {
     void publish_rawFileUrlOnOurStorage_isAccepted(String rawFileUrl) throws Exception {
         CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC, List.of());
         VideoResponse response = new VideoResponse("v1", 1L, "title", "desc", null, null, null, null, null, null,
-                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
         when(videoService.publish(eq(1L), any())).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/videos")
@@ -290,5 +290,23 @@ class VideoControllerTest {
                         .header("Authorization", "Bearer " + tokenFor(1L)))
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
+    }
+
+    /**
+     * The caller decides which private owners stay on the page. A controller that stopped
+     * forwarding it would serve everyone the anonymous feed, private followed accounts missing.
+     */
+    @Test
+    void getFollowingFeed_passesTheCaller() throws Exception {
+        when(videoService.getFollowingFeed(any(), any(), any(), any())).thenReturn(new CursorPage<>(List.of(), null));
+
+        mockMvc.perform(get("/api/v1/videos/feed/following").param("followedUserIds", "1,2")
+                        .header("Authorization", "Bearer " + tokenFor(5L)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/videos/feed/following").param("followedUserIds", "1,2"))
+                .andExpect(status().isOk());
+
+        verify(videoService).getFollowingFeed(eq(5L), eq(List.of(1L, 2L)), isNull(), isNull());
+        verify(videoService).getFollowingFeed(isNull(), eq(List.of(1L, 2L)), isNull(), isNull());
     }
 }

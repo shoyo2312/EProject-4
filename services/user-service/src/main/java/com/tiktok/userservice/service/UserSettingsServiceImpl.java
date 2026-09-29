@@ -5,9 +5,12 @@ import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
 import com.tiktok.userservice.entity.SettingsAudience;
 import com.tiktok.userservice.entity.UserSettings;
+import com.tiktok.userservice.event.producer.UserEventPublisher;
 import com.tiktok.userservice.exception.InvalidUserSettingsException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
+import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.mapper.UserSettingsMapper;
+import com.tiktok.userservice.repository.UserProfileRepository;
 import com.tiktok.userservice.repository.UserSettingsRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -30,11 +33,15 @@ public class UserSettingsServiceImpl implements UserSettingsService {
 
     private final UserSettingsRepository userSettingsRepository;
     private final UserSettingsMapper userSettingsMapper;
+    private final UserProfileRepository userProfileRepository;
+    private final UserEventPublisher userEventPublisher;
+    private final FollowService followService;
 
     @Override
     @Transactional(readOnly = true)
     public UserSettingsResponse getOwnSettings(Long userId) {
-        return userSettingsMapper.toResponse(currentOrDefaults(userId));
+        return userSettingsMapper.toResponse(currentOrDefaults(userId),
+                userProfileRepository.existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(userId));
     }
 
     @Override
@@ -51,6 +58,10 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         boolean weeklyDigest = request.isWeeklyScreenTimeDigestSet()
                 ? required("weeklyScreenTimeDigest", request.getWeeklyScreenTimeDigest())
                 : settings.isWeeklyScreenTimeDigest();
+        // Null here means the key was absent: leave the flag where it is.
+        Boolean privateAccount = request.isPrivateAccountSet()
+                ? required("privateAccount", request.getPrivateAccount())
+                : null;
 
         Integer screenTimeLimitMinutes = request.isScreenTimeLimitMinutesSet()
                 ? request.getScreenTimeLimitMinutes()
@@ -76,12 +87,21 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         // reported as the 409 two concurrent writes already produce on an existing row: the
         // caller's move is identical either way, re-read and try again, and the retry finds the
         // row and updates it.
+        UserSettings saved;
         try {
-            return userSettingsMapper.toResponse(userSettingsRepository.saveAndFlush(settings));
+            saved = userSettingsRepository.saveAndFlush(settings);
         } catch (DataIntegrityViolationException ex) {
             throw new OptimisticLockingFailureException(
                     "Settings for user " + userId + " were created by another request", ex);
         }
+
+        // After the settings row, never before it: the flag's bulk update clears the persistence
+        // context, which would detach the row mid-write. One transaction either way, so a failure
+        // on either side leaves both where they were.
+        boolean isPrivate = privateAccount == null
+                ? userProfileRepository.existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(userId)
+                : changePrivacy(userId, privateAccount);
+        return userSettingsMapper.toResponse(saved, isPrivate);
     }
 
     @Override
@@ -113,6 +133,30 @@ public class UserSettingsServiceImpl implements UserSettingsService {
                 .map(id -> stored.getOrDefault(id, UserSettings.defaultsFor(id)))
                 .map(userSettingsMapper::toPolicy)
                 .toList();
+    }
+
+    /**
+     * Flips the flag only where it differs, in the database rather than after a read, so two
+     * PATCHes racing to the same value announce one change between them.
+     *
+     * @return the value now stored
+     */
+    private boolean changePrivacy(Long userId, boolean privateAccount) {
+        if (userProfileRepository.updatePrivateAccount(userId, privateAccount) == 0) {
+            // Nothing matched: either the flag already had this value — a no-op that announces
+            // nothing — or there is no profile to put it on.
+            if (!userProfileRepository.existsByUserIdAndDeletedAtIsNull(userId)) {
+                throw new UserProfileNotFoundException(userId);
+            }
+            return privateAccount;
+        }
+
+        userEventPublisher.publishPrivacyChanged(userId, privateAccount);
+        if (!privateAccount) {
+            // Nothing gates following any more, and these people already asked.
+            followService.approveAllFollowRequests(userId);
+        }
+        return privateAccount;
     }
 
     /**

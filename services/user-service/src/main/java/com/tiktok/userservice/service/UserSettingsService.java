@@ -24,6 +24,11 @@ public interface UserSettingsService {
      * <p>Inserts the row if this is the account's first write, carrying the patch over the
      * defaults. Two devices writing at once produce {@code CONCURRENT_MODIFICATION} through
      * {@code BaseEntity}'s version column.
+     *
+     * <p>{@code privateAccount} is kept on the profile, not in this row. Changing it announces
+     * {@code UserPrivacyChangedEvent}, and switching back to public approves every pending follow
+     * request — all in this one transaction. Sent before the profile exists, it is
+     * {@code USER_PROFILE_NOT_FOUND}.
      */
     UserSettingsResponse updateOwnSettings(Long userId, UpdateUserSettingsRequest request);
 

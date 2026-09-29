@@ -20,10 +20,10 @@ import java.time.LocalTime;
  * Jackson fills a missing creator parameter with the deserializer's absent value, which for
  * {@code Optional} is the same {@code Optional.empty()} an explicit null produces.
  *
- * <p>Clearing only applies to the three nullable fields. An explicit null on an audience or on
- * {@code weeklyScreenTimeDigest} is a {@code VALIDATION_ERROR} rather than a no-op: those columns
- * are NOT NULL, and silently treating the key as absent is how "I set it and it didn't save"
- * happens.
+ * <p>Clearing only applies to the three nullable fields. An explicit null on an audience, on
+ * {@code weeklyScreenTimeDigest} or on {@code privateAccount} is a {@code VALIDATION_ERROR} rather
+ * than a no-op: those columns are NOT NULL, and silently treating the key as absent is how "I set
+ * it and it didn't save" happens.
  */
 @Getter
 public class UpdateUserSettingsRequest {
@@ -63,6 +63,10 @@ public class UpdateUserSettingsRequest {
     private Boolean weeklyScreenTimeDigest;
     private boolean weeklyScreenTimeDigestSet;
 
+    /** Stored on the profile, not with the rest — see UserSettingsServiceImpl.changePrivacy. */
+    private Boolean privateAccount;
+    private boolean privateAccountSet;
+
     public void setCommentAudience(String commentAudience) {
         this.commentAudience = commentAudience;
         this.commentAudienceSet = true;
@@ -91,5 +95,10 @@ public class UpdateUserSettingsRequest {
     public void setWeeklyScreenTimeDigest(Boolean weeklyScreenTimeDigest) {
         this.weeklyScreenTimeDigest = weeklyScreenTimeDigest;
         this.weeklyScreenTimeDigestSet = true;
+    }
+
+    public void setPrivateAccount(Boolean privateAccount) {
+        this.privateAccount = privateAccount;
+        this.privateAccountSet = true;
     }
 }

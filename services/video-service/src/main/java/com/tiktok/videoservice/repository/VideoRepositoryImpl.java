@@ -54,6 +54,12 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         // and recreate — auto-index-creation will not redefine an existing name) if that changes.
         if (userIds != null) {
             criteria = criteria.and("userId").in(userIds);
+        } else {
+            // The public feed is for videos anyone may see, so a private owner's never appear on
+            // it — not even for their followers, who get them on the Following feed instead.
+            // ponytail: a residual filter after feed_idx, so a private owner's videos are read and
+            // skipped; add ownerPrivate to feed_idx if they ever become a large share of the feed.
+            criteria = criteria.and("ownerPrivate").ne(true);
         }
 
         if (beforeCreatedAt != null) {
@@ -296,6 +302,34 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         Query query = Query.query(
                 where("_id").is(videoId).and("visibilityEventPendingAt").is(announced));
         return write(query, new Update().set("visibilityEventPendingAt", null)) > 0;
+    }
+
+    @Override
+    public List<String> markOwnerPrivacy(Long userId, boolean privateAccount, Instant pendingAt) {
+        // ponytail: every live video goes on the shared visibility outbox, which drains 100 per
+        // 5 s, so an owner with N videos holds back later visibility announcements by about N/20 s.
+        // Queue only the PUBLIC ones if that bites: the other audiences never change with the
+        // owner's privacy.
+        mongoTemplate.updateMulti(
+                Query.query(where("userId").is(userId).and("deletedAt").is(null)),
+                new Update()
+                        .set("ownerPrivate", privateAccount)
+                        .set("visibilityEventPendingAt", pendingAt)
+                        .set("updatedAt", Instant.now()),
+                Video.class);
+
+        // Read after the write, so a video inserted in between is evicted too — harmless — rather
+        // than missed.
+        Query owned = Query.query(where("userId").is(userId).and("deletedAt").is(null));
+        owned.fields().include("_id");
+        return mongoTemplate.find(owned, Video.class).stream().map(Video::getId).toList();
+    }
+
+    @Override
+    public void updateOwnerPrivacy(Video video) {
+        update(video.getId(), new Update()
+                .set("ownerPrivate", video.isOwnerPrivate())
+                .set("visibilityEventPendingAt", video.getVisibilityEventPendingAt()));
     }
 
     @Override

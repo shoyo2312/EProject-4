@@ -1,8 +1,11 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.userservice.entity.UserProfile;
 import com.tiktok.userservice.exception.AlreadyBlockedException;
 import com.tiktok.userservice.exception.AlreadyFollowingException;
 import com.tiktok.userservice.exception.AlreadyMutedException;
+import com.tiktok.userservice.exception.AlreadyRequestedException;
+import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserMuteRepository;
@@ -79,6 +82,9 @@ class DuplicateRelationshipRaceTest {
     @SpyBean
     private UserMuteRepository userMuteRepository;
 
+    @SpyBean
+    private FollowRequestRepository followRequestRepository;
+
     @Autowired
     private UserProfileRepository userProfileRepository;
 
@@ -90,6 +96,7 @@ class DuplicateRelationshipRaceTest {
         userFollowRepository.deleteAll();
         userBlockRepository.deleteAll();
         userMuteRepository.deleteAll();
+        followRequestRepository.deleteAll();
         userProfileRepository.deleteAll();
 
         userProfileService.createFromRegisteredEvent(1L, "alice", null);
@@ -155,5 +162,22 @@ class DuplicateRelationshipRaceTest {
         // not the normal path.
         assertThatThrownBy(() -> followService.follow(1L, 2L))
                 .isInstanceOf(AlreadyFollowingException.class);
+    }
+
+    /** Same race as the follow edge, same backstop: uq_user_follow_requests_requester_target. */
+    @Test
+    void followRequest_losingADuplicateRace_reports409NotAServerError() {
+        userProfileRepository.save(UserProfile.builder()
+                .userId(3L)
+                .displayName("carol")
+                .privateAccount(true)
+                .build());
+        followService.follow(1L, 3L);
+        doReturn(Optional.empty())
+                .when(followRequestRepository)
+                .findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 3L);
+
+        assertThatThrownBy(() -> followService.follow(1L, 3L))
+                .isInstanceOf(AlreadyRequestedException.class);
     }
 }

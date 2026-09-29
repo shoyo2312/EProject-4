@@ -385,4 +385,70 @@ class VideoEventPublisherTest {
                 .status(VideoStatus.PUBLISHED)
                 .build();
     }
+
+    /**
+     * A private owner's PUBLIC video goes out as FOLLOWERS: search, For You and trending keep their
+     * own copy and show only PUBLIC, so the one word keeps it off all three.
+     */
+    @Test
+    void publishPending_aPrivateOwnersPublicVideo_goesOutAsFollowers() {
+        Video video = videoWith(VideoVisibility.PUBLIC, true);
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPending();
+
+        assertThat(visibilityOf(captureRecord())).isEqualTo("FOLLOWERS");
+    }
+
+    @Test
+    void publishPendingVisibilityChanges_announcesTheAudience() {
+        Video video = videoWith(VideoVisibility.PUBLIC, true);
+        video.changeVisibility(VideoVisibility.PUBLIC);
+        when(videoRepository
+                .findTop100ByVisibilityEventPendingAtIsNotNullAndEventPublishedAtIsNotNullOrderByVisibilityEventPendingAtAsc())
+                .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPendingVisibilityChanges();
+
+        ProducerRecord<String, String> record = captureRecord();
+        assertThat(eventTypeOf(record)).isEqualTo("VideoVisibilityChangedEvent");
+        assertThat(visibilityOf(record)).isEqualTo("FOLLOWERS");
+    }
+
+    /** The stored visibility is the owner's choice and stays; only the announced word changes. */
+    @Test
+    void audience_isTheVisibilityExceptForAPrivateOwnersPublicVideo() {
+        assertThat(VideoEventPublisher.audience(videoWith(VideoVisibility.PUBLIC, false))).isEqualTo("PUBLIC");
+        assertThat(VideoEventPublisher.audience(videoWith(VideoVisibility.PUBLIC, true))).isEqualTo("FOLLOWERS");
+        assertThat(VideoEventPublisher.audience(videoWith(VideoVisibility.FRIENDS, true))).isEqualTo("FRIENDS");
+        assertThat(VideoEventPublisher.audience(videoWith(VideoVisibility.PRIVATE, true))).isEqualTo("PRIVATE");
+        // No stored visibility reads as PUBLIC, so it takes the same turn.
+        assertThat(VideoEventPublisher.audience(videoWith(null, true))).isEqualTo("FOLLOWERS");
+    }
+
+    private Video videoWith(VideoVisibility visibility, boolean ownerPrivate) {
+        return Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("My video")
+                .rawFileUrl("s3://video-media/raw/1.mp4")
+                .visibility(visibility)
+                .ownerPrivate(ownerPrivate)
+                .tags(List.of("dance"))
+                .status(VideoStatus.PUBLISHED)
+                .build();
+    }
+
+    private String visibilityOf(ProducerRecord<String, String> record) {
+        try {
+            return objectMapper.readTree(record.value()).get("visibility").asText();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
 }

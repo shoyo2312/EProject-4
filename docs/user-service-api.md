@@ -59,9 +59,12 @@ Response `data` → `UserProfileResponse`:
   "bio": "Xin chào",
   "avatarUrl": "https://cdn.tiktok-clone.local/avatars/123.jpg",
   "followerCount": 10,
-  "followingCount": 5
+  "followingCount": 5,
+  "privateAccount": false
 }
 ```
+
+`privateAccount = true`: tài khoản riêng tư — chỉ người đã được duyệt follow mới xem được video, danh sách followers/following và tab Reposts (mục 3.16). Profile và các con số (followers, following, likes, số video) vẫn công khai như TikTok. Field này có trên **mọi** `UserProfileResponse` (mục 3.3, 3.3b, danh sách, tìm kiếm).
 
 > Ngay sau khi `register` ở auth-service, profile được tạo **bất đồng bộ qua Kafka** (không đồng bộ ngay trong response của `/register`). Có thể có 1 khoảng trễ ngắn (thường vài trăm ms) mà `GET /me` trả `404 USER_PROFILE_NOT_FOUND`. Client nên **retry nhẹ** (1-2 lần, delay ngắn) nếu gặp lỗi này ngay sau khi đăng ký/đăng nhập lần đầu, thay vì coi là lỗi cứng.
 
@@ -137,9 +140,13 @@ Dành cho màn hình đã có sẵn danh sách `userId` mà chưa có profile: f
 ### 3.4 `POST /{userId}/follow`
 Follow 1 user. Trả `201 Created`.
 
-Response `data` → `FollowResponse`: `{ "followerId": ..., "followingId": ... }`.
+Response `data` → `FollowResponse`: `{ "followerId": ..., "followingId": ..., "status": "FOLLOWING" }`.
 
-Lỗi: `CANNOT_FOLLOW_SELF` (400 — tự follow chính mình), `USER_BLOCKED` (403 — giữa 2 bên đang có quan hệ block, theo cả 2 chiều), `USER_PROFILE_NOT_FOUND` (404), `ALREADY_FOLLOWING` (409).
+`status` cho biết chuyện gì đã xảy ra — cả hai đều trả `201`:
+- `FOLLOWING` — đã follow ngay (tài khoản công khai).
+- `REQUESTED` — tài khoản **riêng tư**: server tạo **lời mời follow**, chưa follow. Chủ tài khoản duyệt thì mới thành follow (mục 3.16). Nút đổi thành "Requested"; bấm lại (`DELETE`, mục 3.5) là rút lời mời.
+
+Lỗi: `CANNOT_FOLLOW_SELF` (400 — tự follow chính mình), `USER_BLOCKED` (403 — giữa 2 bên đang có quan hệ block, theo cả 2 chiều), `USER_PROFILE_NOT_FOUND` (404), `ALREADY_FOLLOWING` (409), `ALREADY_REQUESTED` (409 — đã có lời mời đang chờ duyệt).
 
 `USER_PROFILE_NOT_FOUND` ở đây có **2 nguồn**, client cần phân biệt vì cách xử lý khác nhau:
 - Profile của **người được follow** không tồn tại → hiển thị "người dùng không tồn tại" như mục 3.3.
@@ -148,14 +155,14 @@ Lỗi: `CANNOT_FOLLOW_SELF` (400 — tự follow chính mình), `USER_BLOCKED` (
 Cách phân biệt rẻ nhất: nếu `GET /me` đang chạy được bình thường thì 404 chắc chắn đến từ target.
 
 ### 3.5 `DELETE /{userId}/follow`
-Unfollow. Trả `200 OK`, `data` rỗng/null.
+Unfollow. Trả `200 OK`, `data` rỗng/null. Chưa follow nhưng đang có lời mời chờ duyệt (tài khoản riêng tư) thì endpoint này **rút lời mời** — cùng một nút trên UI, không phát thông báo gì.
 
-Lỗi: `NOT_FOLLOWING` (404), `CONCURRENT_MODIFICATION` (409 — bấm unfollow 2 lần sát nhau/2 thiết bị cùng lúc; retry 1 lần là hết, xem mục 5).
+Lỗi: `NOT_FOLLOWING` (404 — không follow, cũng không có lời mời nào đang chờ), `CONCURRENT_MODIFICATION` (409 — bấm unfollow 2 lần sát nhau/2 thiết bị cùng lúc; retry 1 lần là hết, xem mục 5).
 
 ### 3.6 `GET /{userId}/followers`
 Danh sách follower của `userId`. Query param phân trang chuẩn Spring: `?page=0&size=20&sort=field,dir`. Trả `200 OK`, `data` → `Page<UserProfileResponse>` (xem mục 2).
 
-Lỗi: `USER_PROFILE_NOT_FOUND` (404) — áp dụng cùng luật ẩn-do-block như mục 3.3 (không xem được followers của người đã block/bị block mình).
+Lỗi: `USER_PROFILE_NOT_FOUND` (404) — áp dụng cùng luật ẩn-do-block như mục 3.3 (không xem được followers của người đã block/bị block mình). `PRIVATE_ACCOUNT` (403) — tài khoản riêng tư mà người gọi không phải chủ, cũng không phải follower. Là 403 chứ không phải 404 vì profile đã công khai việc tài khoản riêng tư; UI hiện "This account is private".
 
 ### 3.7 `GET /{userId}/following`
 Danh sách người `userId` đang follow. Tham số & lỗi giống hệt mục 3.6.
@@ -210,7 +217,8 @@ Cài đặt tài khoản (phần đứng sau trang `/setting` của web). **Bắ
   "screenTimeLimitMinutes": null,
   "sleepHoursStart": null,
   "sleepHoursEnd": null,
-  "weeklyScreenTimeDigest": true
+  "weeklyScreenTimeDigest": true,
+  "privateAccount": false
 }
 ```
 
@@ -221,6 +229,7 @@ Cài đặt tài khoản (phần đứng sau trang `/setting` của web). **Bắ
 - `sleepHoursStart`/`sleepHoursEnd` là **giờ treo tường, không mang timezone** (`"22:30"`, định dạng `HH:mm`). Không tài khoản nào trên hệ thống này có timezone, nên hai field đó chỉ có thể hiểu là "22:30 theo giờ của chính máy người dùng" và **client là phía enforce**. Server không bao giờ hẹn được lịch từ hai field này.
 - Bốn field screen-time hiện **chỉ được lưu và trả lại, không có gì đọc chúng** ở server. Đó là trạng thái cố ý: giới hạn thời gian dùng app do client enforce, việc của server là sync cài đặt đó giữa các thiết bị.
 - `commentAudience` / `dmAudience` **có** hiệu lực thật, do interaction-service và chat-service enforce — xem mục 3.15.
+- `privateAccount` được lưu trên **profile** chứ không phải bảng settings (mọi người xem đều cần nó — header profile, nút Follow), nhưng bật/tắt ở đây vì công tắc nằm trên trang `/setting`. Chưa có profile thì trả `false`.
 
 ### 3.15 `PATCH /me/settings`
 
@@ -234,7 +243,8 @@ Request (mọi field optional, `UpdateUserSettingsRequest`):
   "screenTimeLimitMinutes": 60,
   "sleepHoursStart": "22:30",
   "sleepHoursEnd": "07:00",
-  "weeklyScreenTimeDigest": false
+  "weeklyScreenTimeDigest": false,
+  "privateAccount": true
 }
 ```
 
@@ -244,7 +254,7 @@ Request (mọi field optional, `UpdateUserSettingsRequest`):
 |---|---|
 | **Không có key** trong JSON | Giữ nguyên giá trị cũ |
 | Key = `null`, với 3 field **nullable** (`screenTimeLimitMinutes`, `sleepHoursStart`, `sleepHoursEnd`) | **Xoá** giá trị (về `null` = tắt) |
-| Key = `null`, với `commentAudience` / `dmAudience` / `weeklyScreenTimeDigest` | `VALIDATION_ERROR` (400) — ba cột này NOT NULL, không có `null` để xoá về |
+| Key = `null`, với `commentAudience` / `dmAudience` / `weeklyScreenTimeDigest` / `privateAccount` | `VALIDATION_ERROR` (400) — bốn cột này NOT NULL, không có `null` để xoá về |
 | Chuỗi rỗng `""` | **Không** phải cách xoá field ở endpoint này (khác mục 3.2) — sẽ là `VALIDATION_ERROR` |
 
 → Ở Flutter: build body bằng `Map<String, dynamic>` chỉ chứa key user vừa đổi. Muốn tắt giới hạn thời gian thì gửi đúng `{"screenTimeLimitMinutes": null}`, **phải có key**, đừng bỏ trống.
@@ -264,13 +274,49 @@ Validate:
 - `dmAudience` do **chat-service** enforce **lúc mở cuộc hội thoại**, không phải mỗi tin nhắn → `MESSAGING_NOT_ALLOWED` (403). Hội thoại đã mở trước khi người kia siết cài đặt thì vẫn gửi được (giống "người đang follow không bị ảnh hưởng" của private account). Chỉ cài đặt của **người nhận** được xét: người gửi dù đặt `NO_ONE` vẫn chủ động mở được hội thoại.
 - Đổi `commentAudience` có thể mất tới ~3 giây mới có tác dụng (kể cả `accountCommentsOff` trên video): video-service cache cài đặt của chủ video trong Redis với TTL ngắn (`USER_SETTINGS_CACHE_TTL`, mặc định 3s). Không có event invalidate.
 
+**`privateAccount`** — bật thì từ lúc đó chỉ người được duyệt mới follow được (mục 3.4, 3.16) và xem được video, danh sách followers/following, tab Reposts. **Follower hiện có giữ nguyên.** Gửi đúng giá trị đang có là no-op, không phát event. Tắt (về công khai) thì **mọi lời mời đang chờ được duyệt hết** trong cùng request — không còn gì chặn việc follow, và những người đó đã xin rồi. Chưa có profile → `USER_PROFILE_NOT_FOUND` (404). Video của tài khoản rời khỏi For You, trending, feed mới nhất và tìm kiếm trong vòng vài chục giây (video-service đánh dấu lại từng video, 100 video mỗi 5 giây).
+
+### 3.16 Lời mời follow — `GET /me/follow-requests`, `POST /me/follow-requests/{requesterId}/approve`, `DELETE /me/follow-requests/{requesterId}`
+
+Phía **chủ tài khoản riêng tư**. **Bắt buộc token.**
+
+| Endpoint | Trả về | Lỗi |
+|---|---|---|
+| `GET /me/follow-requests` | `200`, `data` → `Page<UserProfileResponse>` của người xin follow, **mới nhất trước**. Phân trang giống mục 3.6 | — |
+| `POST /me/follow-requests/{requesterId}/approve` | `200`, `data` → `FollowResponse` với `status: "FOLLOWING"` | `FOLLOW_REQUEST_NOT_FOUND` (404) |
+| `DELETE /me/follow-requests/{requesterId}` | `200`, `data` null. **Im lặng** — người xin không được báo | `FOLLOW_REQUEST_NOT_FOUND` (404) |
+
+- Duyệt tạo follow y như follow thường (counter, event). Người xin nhận thông báo `FOLLOW_REQUEST_ACCEPTED`; chủ tài khoản **không** nhận `NEW_FOLLOWER` (chính họ vừa bấm duyệt).
+- Có lời mời mới thì chủ tài khoản nhận thông báo `FOLLOW_REQUEST`. Lời mời bị rút hoặc bị từ chối **vẫn còn thông báo trong inbox** — danh sách ở đây mới là nguồn sự thật; bấm vào thông báo cũ thì mở danh sách này.
+- Block (bất kể chiều nào) xoá luôn lời mời giữa hai bên.
+- Bị từ chối rồi vẫn xin lại được — đó là một lời mời mới.
+
+### 3.17 `GET /{userId}/friendship`
+
+Quan hệ giữa người gọi và `userId` — đủ cho nút Follow trong **một** lần gọi. **Bắt buộc token.** Trả `200 OK`, `data` → `FriendshipResponse`:
+
+```json
+{
+  "userId": 42,
+  "friends": false,
+  "following": false,
+  "requested": true,
+  "privateAccount": true
+}
+```
+
+- `following` — mình đang follow người này. `requested` — mình có lời mời đang chờ duyệt. `friends` — follow **lẫn nhau**. `privateAccount` — tài khoản kia riêng tư.
+- Nút Follow: `following` → "Following"; `requested` → "Requested"; còn lại → "Follow". Không cần tự dò danh sách following của mình nữa.
+- Không có lỗi `404`: id không tồn tại chỉ trả toàn `false`.
+
 ## 4. Enums
 
 | Enum | Giá trị | Dùng ở đâu |
 |---|---|---|
 | `SettingsAudience` | `EVERYONE`, `FRIENDS`, `NO_ONE` | `commentAudience` và `dmAudience` ở mục 3.14 / 3.15. `FRIENDS` nghĩa là **follow lẫn nhau** (mutual), không phải "người tôi follow" |
+| `FollowResponse.status` | `FOLLOWING`, `REQUESTED` | `status` ở mục 3.4 và 3.16 |
 
-Ngoài ra không có enum nào khác ở user-service (không có "visibility", "follow status"... — follow/block/mute chỉ là quan hệ có/không, xoá mềm qua `deletedAt`). Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
+Ngoài ra không có enum nào khác ở user-service — follow/block/mute và lời mời follow đều là quan hệ có/không, xoá mềm qua `deletedAt`. Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
 
 ## 5. Bảng mã lỗi (`code`) đầy đủ
 
@@ -284,11 +330,14 @@ Ngoài ra không có enum nào khác ở user-service (không có "visibility", 
 | `CANNOT_BLOCK_SELF` | 400 | Gọi `block` lên chính mình |
 | `CANNOT_MUTE_SELF` | 400 | Gọi `mute` lên chính mình |
 | `USER_BLOCKED` | 403 | `follow` thất bại vì đang có quan hệ block (2 chiều) giữa 2 bên |
+| `PRIVATE_ACCOUNT` | 403 | Xem danh sách followers/following của tài khoản riêng tư mà không phải chủ hay follower (mục 3.6) |
 | `USER_PROFILE_NOT_FOUND` | 404 | User không tồn tại, bị ẩn do có block giữa 2 bên (server cố tình gộp 2 case, xem mục 3.3), **hoặc** profile của chính người gọi chưa được tạo xong qua Kafka (xem mục 3.4) |
 | `ALREADY_FOLLOWING` | 409 | Follow lại người đã follow |
+| `ALREADY_REQUESTED` | 409 | Follow tài khoản riêng tư khi đã có lời mời đang chờ (mục 3.4) |
 | `ALREADY_BLOCKED` | 409 | Block lại người đã block |
 | `ALREADY_MUTED` | 409 | Mute lại người đã mute |
-| `NOT_FOLLOWING` | 404 | Unfollow người chưa follow |
+| `NOT_FOLLOWING` | 404 | Unfollow người chưa follow và cũng không có lời mời đang chờ |
+| `FOLLOW_REQUEST_NOT_FOUND` | 404 | Duyệt/từ chối khi không có lời mời nào đang chờ từ người đó (mục 3.16) |
 | `NOT_BLOCKED` | 404 | Unblock người chưa block |
 | `NOT_MUTED` | 404 | Unmute người chưa mute |
 | `CONCURRENT_MODIFICATION` | 409 | Hai request sửa cùng 1 bản ghi đúng lúc (2 lần bấm unfollow/unblock/unmute sát nhau, hoặc 2 thiết bị cùng thao tác). **Mã 409 duy nhất nên retry** — đọc lại trạng thái rồi thử lại 1 lần; các mã `ALREADY_*` là lỗi nghiệp vụ, retry vô ích |
@@ -318,7 +367,21 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của user-service, đế
 
 ## 8. Sự kiện Kafka (Events)
 
-Phần này cho người tích hợp backend, không phải client mobile. `user-service` **chỉ tiêu thụ**, không phát event nào (follow/block/mute chỉ ghi Postgres, không announce ra Kafka). Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+Phần này cho người tích hợp backend, không phải client mobile. `user-service` vừa phát vừa tiêu thụ event. Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+
+### Phát (producer) — outbox
+
+Ghi vào bảng `outbox_events` trong **cùng transaction** với thay đổi; `OutboxPublisher` poll mỗi 5s và chỉ đánh dấu published sau khi broker ack. Mỗi `aggregate_type` một topic, mỗi topic đúng một loại event — không có header `eventType`.
+
+| Topic | Event | Key | Payload | Khi nào |
+|---|---|---|---|---|
+| `user.follow-events` | `UserFollowChangedEvent` | `followingId` | `eventId, occurredAt, followerId, followingId, followed, requestApproved` | Follow / unfollow / block cắt follow; duyệt lời mời (`requestApproved = true`). Event cũ không có `requestApproved` → đọc là `false` |
+| `user.follow-request-events` | `FollowRequestedEvent` | `targetId` | `eventId, occurredAt, requesterId, targetId` | Follow tài khoản riêng tư. Rút hay từ chối **không** phát gì |
+| `user.privacy-events` | `UserPrivacyChangedEvent` | `userId` | `eventId, occurredAt, userId, privateAccount` | `privateAccount` ở mục 3.15 thật sự đổi giá trị |
+
+Consumer: `user.follow-events` → notification-service (`NEW_FOLLOWER` / `FOLLOW_REQUEST_ACCEPTED`) và chat-service (counter realtime); `user.follow-request-events` → notification-service (`FOLLOW_REQUEST`); `user.privacy-events` → video-service (collection `owner_privacy` và đánh dấu lại video).
+
+### Tiêu thụ (consumer)
 
 | Topic | Event | Payload | Consumer & tác dụng |
 |---|---|---|---|
@@ -327,4 +390,4 @@ Phần này cho người tích hợp backend, không phải client mobile. `user
 
 `auth.user-events` chỉ mang đúng một loại event nên hai consumer parse thẳng payload vào `UserRegisteredEvent`, không đọc header. Đó là lý do `auth-service` phát `SocialAvatarDiscoveredEvent` trên topic **riêng** (`auth.social-avatar-events`, media-worker nghe) chứ không dùng chung topic này.
 
-`kafka-lib` error handler: `user-service` **có** dùng → consumer lỗi retry 3 lần → `<topic>.DLT`. Không có outbox (không phát event).
+`kafka-lib` error handler: `user-service` **có** dùng → consumer lỗi retry 3 lần → `<topic>.DLT`.

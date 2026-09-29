@@ -305,6 +305,21 @@ Không cần token. Trả `200 OK`, `data` → `InteractionCountResponse`:
 
 `videoId` chưa có tương tác nào trả về **tất cả bằng 0**, không phải 404.
 
+### 3.11 `GET /users/{userId}/reposts` — tab Reposts của một profile
+Nằm ngoài `/videos/...`. Không bắt buộc token, **nhưng gửi nếu đã đăng nhập**. Query param: `?cursor=<nextCursor>&size=20` (tối đa 50). Trả `200 OK`, `data` → `VideoIdPageResponse`:
+
+```json
+{
+  "videoIds": [7312458901234567],
+  "nextCursor": "…",
+  "hasMore": true
+}
+```
+
+- Tài khoản công khai: ai cũng xem được, giống chính chủ.
+- Tài khoản **riêng tư**: chỉ chủ và follower. Người khác (kể cả không token) → `PRIVATE_ACCOUNT` (403). Token là cách server nhận ra follower, nên thiếu token là bị coi như người lạ.
+- Mỗi lần mở tab, service hỏi user-service; user-service không trả lời được thì coi như riêng tư và không follow (fail-closed) → 403.
+
 ## 4. Counter đến từ hai nơi — đọc số nào, khi nào
 
 | Nguồn | Endpoint | Đặc điểm |
@@ -329,6 +344,7 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 | `NOT_COMMENT_OWNER` | 403 | Xoá bình luận của người khác (mục 3.6) |
 | `COMMENTS_DISABLED` | 403 | Chủ video đã tắt comment cho **video đó** (mục 3.4). Listing (mục 3.5) không lỗi mà trả trang rỗng — tài khoản đặt `NO_ONE` cũng trả trang rỗng như vậy |
 | `COMMENTS_NOT_ALLOWED` | 403 | Cài đặt **tài khoản** của chủ video không nhận comment từ người gọi — `NO_ONE`, hoặc `FRIENDS` mà không follow lẫn nhau (mục 3.4) |
+| `PRIVATE_ACCOUNT` | 403 | Tab Reposts (mục 3.11) của tài khoản riêng tư mà người gọi không phải chủ hay follower |
 | `COMMENT_NOT_FOUND` | 404 | Bình luận không tồn tại, đã xoá, hoặc `videoId` trên URL không khớp với bình luận đó |
 | `INTERACTION_CONFLICT` | 409 | Ghi vào Cassandra không xác nhận được kết quả sau 3 lần thử (like/unlike ở mục 3.1–3.2, view ở mục 3.8). Xem bên dưới |
 | `INTERACTION_NOT_RECORDED` | 503 | Kafka không nhận event đi kèm thao tác nên thao tác đã được **hoàn tác** — like/unlike, repost, save, comment (tạo/xoá), share, view. Xem bên dưới |

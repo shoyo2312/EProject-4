@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.tiktok.videoservice.config.VideoCacheProperties;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -24,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class VideoCacheTest {
@@ -93,6 +95,7 @@ class VideoCacheTest {
         RedisConnectionFailureException down = new RedisConnectionFailureException("no redis");
         when(redisTemplate.opsForValue()).thenThrow(down);
         when(redisTemplate.delete(anyString())).thenThrow(down);
+        when(redisTemplate.delete(anyCollection())).thenThrow(down);
         when(redisTemplate.executePipelined(org.mockito.ArgumentMatchers.<org.springframework.data.redis.core.RedisCallback<Object>>any()))
                 .thenThrow(down);
 
@@ -102,6 +105,7 @@ class VideoCacheTest {
         assertThat(cache.getAll(List.of("A"))).isEmpty();
         assertThatCode(() -> cache.put(video("A"))).doesNotThrowAnyException();
         assertThatCode(() -> cache.evict("A")).doesNotThrowAnyException();
+        assertThatCode(() -> cache.evictAll(List.of("A"))).doesNotThrowAnyException();
     }
 
     /**
@@ -143,6 +147,7 @@ class VideoCacheTest {
         assertThat(cache.getAll(List.of("A"))).isEmpty();
         cache.put(video("A"));
         cache.evict("A");
+        cache.evictAll(List.of("A"));
 
         org.mockito.Mockito.verifyNoInteractions(redisTemplate);
     }
@@ -159,6 +164,35 @@ class VideoCacheTest {
         return new VideoResponse(
                 id, 42L, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
                 10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 1, 2, 3L, false,
-                List.of("tag"), Instant.parse("2026-08-27T10:00:00Z"), null, null, null, null, null, null, null, null, false);
+                List.of("tag"), Instant.parse("2026-08-27T10:00:00Z"), null, null, null, null, null, null, null, null, false, false);
+    }
+
+    /**
+     * Entries written before ownerPrivate existed stay in Redis for up to a TTL after the deploy.
+     * They must read as a public owner's video — which is what they were — not fail to parse.
+     */
+    @Test
+    void get_anEntryCachedBeforeOwnerPrivateExisted_readsAsAPublicOwners() throws Exception {
+        ObjectNode old = objectMapper.valueToTree(video("A"));
+        old.remove("ownerPrivate");
+        when(redisTemplate.opsForValue()).thenReturn(valueOps);
+        when(valueOps.get("video:A")).thenReturn(objectMapper.writeValueAsString(old));
+
+        assertThat(cache().get("A")).hasValueSatisfying(video -> assertThat(video.ownerPrivate()).isFalse());
+    }
+
+    /** An owner switching their account touches every video they have: one DEL, not one per video. */
+    @Test
+    void evictAll_deletesEveryKeyInOneCommand() {
+        cache().evictAll(List.of("A", "B"));
+
+        verify(redisTemplate).delete(List.of("video:A", "video:B"));
+    }
+
+    @Test
+    void evictAll_ofNothing_issuesNoCommand() {
+        cache().evictAll(List.of());
+
+        org.mockito.Mockito.verifyNoInteractions(redisTemplate);
     }
 }

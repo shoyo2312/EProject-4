@@ -157,6 +157,9 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 | `video.video-events` | video-service (outbox per-doc) | `VideoPublishedEvent` / `VideoDeletedEvent` / `VideoPurgedEvent` / `VideoVisibilityChangedEvent` (vắng ⇒ Published) | `VideoPublishedEvent`, `VideoDeletedEvent` (ngay khi xoá — gỡ khỏi index), `VideoPurgedEvent` (hết hạn thùng rác — chỉ media-worker xoá media), `VideoVisibilityChangedEvent` | media-worker, search-service, recommendation-service, analytics-service |
 | `media.video-transcoded-events` | media-worker (chờ ack 30s) | — | `VideoTranscodedEvent` | video-service, search-service, recommendation-service |
 | `media.avatar-events` | media-worker (chờ ack 30s) | — | `AvatarMirroredEvent` | user-service |
+| `user.follow-events` | user-service (outbox) | — (1 shape) | `UserFollowChangedEvent` (+ `requestApproved` khi là lời mời vừa được duyệt) | notification-service, chat-service |
+| `user.follow-request-events` | user-service (outbox) | — (1 shape) | `FollowRequestedEvent` | notification-service |
+| `user.privacy-events` | user-service (outbox) | — (1 shape) | `UserPrivacyChangedEvent` | video-service |
 | `interaction.like-events` | interaction-service (chờ ack 5s) | — | `VideoLikeEvent` | video-service, recommendation-service, search-service |
 | `interaction.comment-events` | interaction-service (chờ ack 5s) | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | video-service, recommendation-service, search-service |
 | `interaction.share-events` | interaction-service (chờ ack 5s) | — | `VideoSharedEvent` | recommendation-service, search-service |

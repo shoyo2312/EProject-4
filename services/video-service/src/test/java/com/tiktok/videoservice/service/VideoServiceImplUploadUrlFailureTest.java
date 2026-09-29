@@ -49,7 +49,9 @@ class VideoServiceImplUploadUrlFailureTest {
                 new QuarantinedMediaUrls(mock(MinioClient.class), new MinioProperties("http://localhost:9000", "key", "secret",
                         "video-media", "us-east-1", Duration.ofMinutes(15))),
                 mock(com.tiktok.videoservice.client.BlockClient.class),
-                mock(com.tiktok.videoservice.client.UserSettingsClient.class));
+                mock(com.tiktok.videoservice.client.UserSettingsClient.class),
+                mock(com.tiktok.videoservice.client.FollowClient.class),
+                mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class));
     }
 
     @Test

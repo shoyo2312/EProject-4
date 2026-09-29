@@ -36,4 +36,15 @@ class UserProfileMapperTest {
     void toResponse_null_returnsNull() {
         assertThat(mapper.toResponse(null)).isNull();
     }
+
+    @Test
+    void toResponse_carriesThePrivateAccountFlag() {
+        UserProfile profile = UserProfile.builder()
+                .userId(42L)
+                .displayName("Alice")
+                .privateAccount(true)
+                .build();
+
+        assertThat(mapper.toResponse(profile).privateAccount()).isTrue();
+    }
 }

@@ -1,11 +1,18 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.userservice.dto.response.FollowResponse;
+import com.tiktok.userservice.dto.response.FriendshipResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.exception.AlreadyFollowingException;
+import com.tiktok.userservice.exception.AlreadyRequestedException;
 import com.tiktok.userservice.exception.CannotFollowSelfException;
+import com.tiktok.userservice.exception.FollowRequestNotFoundException;
 import com.tiktok.userservice.exception.NotFollowingException;
+import com.tiktok.userservice.exception.PrivateAccountException;
+import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.entity.OutboxEvent;
+import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.OutboxEventRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
@@ -26,7 +33,9 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -67,9 +76,13 @@ class FollowServiceImplTest {
     @Autowired
     private OutboxEventRepository outboxEventRepository;
 
+    @Autowired
+    private FollowRequestRepository followRequestRepository;
+
     @BeforeEach
     void setUp() {
         outboxEventRepository.deleteAll();
+        followRequestRepository.deleteAll();
         userFollowRepository.deleteAll();
         userBlockRepository.deleteAll();
         userProfileRepository.deleteAll();
@@ -251,5 +264,240 @@ class FollowServiceImplTest {
                 .last()
                 .extracting(OutboxEvent::getPayload, as(org.assertj.core.api.InstanceOfAssertFactories.STRING))
                 .contains("\"followed\":false");
+    }
+
+    /** Straight on the column: the settings path is Task 4's, and going public there approves requests. */
+    private void makePrivate(Long userId) {
+        userProfileRepository.updatePrivateAccount(userId, true);
+    }
+
+    @Test
+    @Transactional
+    void follow_privateAccount_createsARequestNotAnEdge() {
+        makePrivate(2L);
+
+        FollowResponse response = followService.follow(1L, 2L);
+
+        assertThat(response.status()).isEqualTo(FollowResponse.Status.REQUESTED);
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(1L, 2L)).isEmpty();
+        assertThat(userProfileService.getByUserId(2L, 2L).followerCount()).isZero();
+        assertThat(outboxEventRepository.findAll())
+                .singleElement()
+                .satisfies(event -> {
+                    assertThat(event.getEventType()).isEqualTo("FollowRequestedEvent");
+                    // Keyed by the account asked, so one account's requests keep their order.
+                    assertThat(event.getAggregateId()).isEqualTo("2");
+                    assertThat(event.getPayload()).contains("\"requesterId\":1", "\"targetId\":2");
+                });
+    }
+
+    @Test
+    @Transactional
+    void follow_privateAccountTwice_isAlreadyRequested() {
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+
+        assertThatThrownBy(() -> followService.follow(1L, 2L))
+                .isInstanceOf(AlreadyRequestedException.class);
+    }
+
+    /** Going private keeps existing followers, so an edge already there still answers first. */
+    @Test
+    @Transactional
+    void follow_privateAccountAlreadyFollowed_isAlreadyFollowing() {
+        followService.follow(1L, 2L);
+        makePrivate(2L);
+
+        assertThatThrownBy(() -> followService.follow(1L, 2L))
+                .isInstanceOf(AlreadyFollowingException.class);
+    }
+
+    /** The Follow button reads "Requested", and pressing it again withdraws — silently. */
+    @Test
+    @Transactional
+    void unfollow_withAPendingRequest_withdrawsIt() {
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+        outboxEventRepository.deleteAll();
+
+        followService.unfollow(1L, 2L);
+
+        assertThat(followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 2L)).isEmpty();
+        assertThat(outboxEventRepository.findAll()).isEmpty();
+    }
+
+    @Test
+    @Transactional
+    void approve_turnsTheRequestIntoAFollowAndSaysSo() {
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+
+        FollowResponse response = followService.approveFollowRequest(2L, 1L);
+
+        assertThat(response.status()).isEqualTo(FollowResponse.Status.FOLLOWING);
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(1L, 2L)).isPresent();
+        assertThat(followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 2L)).isEmpty();
+        assertThat(userProfileService.getByUserId(2L, 2L).followerCount()).isEqualTo(1);
+        assertThat(userProfileService.getByUserId(1L, 1L).followingCount()).isEqualTo(1);
+        assertThat(outboxEventRepository.findAll())
+                .filteredOn(event -> "UserFollowChangedEvent".equals(event.getEventType()))
+                .singleElement()
+                .extracting(OutboxEvent::getPayload, as(org.assertj.core.api.InstanceOfAssertFactories.STRING))
+                .contains("\"followed\":true", "\"requestApproved\":true");
+    }
+
+    @Test
+    @Transactional
+    void approveAndReject_withNoPendingRequest_areNotFound() {
+        assertThatThrownBy(() -> followService.approveFollowRequest(2L, 1L))
+                .isInstanceOf(FollowRequestNotFoundException.class);
+        assertThatThrownBy(() -> followService.rejectFollowRequest(2L, 1L))
+                .isInstanceOf(FollowRequestNotFoundException.class);
+    }
+
+    /** A rejection is silent: no edge, no counter, nothing announced. */
+    @Test
+    @Transactional
+    void reject_endsTheRequestWithoutAFollowOrAnAnnouncement() {
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+        outboxEventRepository.deleteAll();
+
+        followService.rejectFollowRequest(2L, 1L);
+
+        assertThat(followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 2L)).isEmpty();
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(1L, 2L)).isEmpty();
+        assertThat(outboxEventRepository.findAll()).isEmpty();
+    }
+
+    /** The unique index covers live rows only, so a rejected requester can ask again. */
+    @Test
+    @Transactional
+    void reject_thenAskingAgain_isANewRequest() {
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+        followService.rejectFollowRequest(2L, 1L);
+
+        assertThat(followService.follow(1L, 2L).status()).isEqualTo(FollowResponse.Status.REQUESTED);
+        assertThat(followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 2L)).isPresent();
+    }
+
+    @Test
+    @Transactional
+    void listFollowRequests_newestFirst() {
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+        followService.follow(3L, 2L);
+
+        assertThat(followService.listFollowRequests(2L, PageRequest.of(0, 10)).getContent())
+                .extracting(UserProfileResponse::userId)
+                .containsExactly(3L, 1L);
+    }
+
+    /**
+     * More than one request is the case that matters: each edge moves the counters through bulk
+     * updates that clear the persistence context, and a request not yet ended by then is detached
+     * and its end silently lost.
+     */
+    @Test
+    @Transactional
+    void approveAll_approvesEveryPendingRequest() {
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+        followService.follow(3L, 2L);
+
+        followService.approveAllFollowRequests(2L);
+
+        assertThat(followRequestRepository.findByTargetIdAndDeletedAtIsNull(2L)).isEmpty();
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(1L, 2L)).isPresent();
+        assertThat(userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(3L, 2L)).isPresent();
+        assertThat(userProfileService.getByUserId(2L, 2L).followerCount()).isEqualTo(2);
+    }
+
+    /**
+     * A request left pending across a switch to public, then a direct follow: approving the
+     * request later must end it without a second edge or a second count.
+     */
+    @Test
+    @Transactional
+    void approve_whenTheFollowAlreadyExists_onlyEndsTheRequest() {
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+        userProfileRepository.updatePrivateAccount(2L, false);
+        followService.follow(1L, 2L);
+
+        followService.approveFollowRequest(2L, 1L);
+
+        assertThat(followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 2L)).isEmpty();
+        assertThat(userProfileService.getByUserId(2L, 2L).followerCount()).isEqualTo(1);
+    }
+
+    @Test
+    @Transactional
+    void friendship_saysFollowingRequestedAndPrivate() {
+        makePrivate(2L);
+        followService.follow(1L, 2L);
+
+        FriendshipResponse requested = followService.friendship(1L, 2L);
+        assertThat(requested.following()).isFalse();
+        assertThat(requested.requested()).isTrue();
+        assertThat(requested.privateAccount()).isTrue();
+
+        followService.approveFollowRequest(2L, 1L);
+
+        FriendshipResponse following = followService.friendship(1L, 2L);
+        assertThat(following.following()).isTrue();
+        assertThat(following.requested()).isFalse();
+        assertThat(following.friends()).isFalse();
+    }
+
+    /** chat-service and interaction-service ask for anonymous viewers too; only the flag can be true. */
+    @Test
+    @Transactional
+    void friendship_forAnAnonymousViewer_onlySaysWhetherTheAccountIsPrivate() {
+        makePrivate(2L);
+
+        FriendshipResponse anonymous = followService.friendship(null, 2L);
+
+        assertThat(anonymous.privateAccount()).isTrue();
+        assertThat(anonymous.following()).isFalse();
+        assertThat(anonymous.requested()).isFalse();
+        assertThat(anonymous.friends()).isFalse();
+    }
+
+    @Test
+    @Transactional
+    void followingAmong_answersTheSubsetFollowed() {
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        followService.follow(1L, 2L);
+
+        assertThat(followService.followingAmong(1L, List.of(2L, 3L, 999L))).containsExactly(2L);
+    }
+
+    @Test
+    void followingAmong_overTheBatchCap_isRejected() {
+        List<Long> ids = LongStream.rangeClosed(1, UserProfileService.MAX_BATCH_IDS + 1).boxed().toList();
+
+        assertThatThrownBy(() -> followService.followingAmong(1L, ids))
+                .isInstanceOf(TooManyProfileIdsException.class);
+    }
+
+    /** A private account's lists are for its followers: 403 to a stranger; the owner and followers pass. */
+    @Test
+    @Transactional
+    void lists_ofAPrivateAccount_refuseAStrangerButNotAFollowerOrTheOwner() {
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        followService.follow(1L, 2L);
+        makePrivate(2L);
+
+        assertThat(followService.listFollowers(1L, 2L, PageRequest.of(0, 10)).getContent())
+                .extracting(UserProfileResponse::userId).containsExactly(1L);
+        assertThat(followService.listFollowing(2L, 2L, PageRequest.of(0, 10)).getContent()).isEmpty();
+        assertThatThrownBy(() -> followService.listFollowers(3L, 2L, PageRequest.of(0, 10)))
+                .isInstanceOf(PrivateAccountException.class);
+        assertThatThrownBy(() -> followService.listFollowing(3L, 2L, PageRequest.of(0, 10)))
+                .isInstanceOf(PrivateAccountException.class);
     }
 }

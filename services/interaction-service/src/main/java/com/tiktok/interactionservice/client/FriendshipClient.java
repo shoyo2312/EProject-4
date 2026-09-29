@@ -12,6 +12,8 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.util.Optional;
+
 /**
  * "Are these two accounts mutual followers" — what {@link CommentAudience#FRIENDS} needs and only
  * user-service knows. A copy of video-service's client of the same name, down to the
@@ -28,6 +30,9 @@ import org.springframework.web.context.request.ServletRequestAttributes;
  * an outage as "everyone is my friend" would publish the thread to the platform. Whereas a failure
  * to learn the audience at all leaves commenting open, because that outage would otherwise stop
  * every comment on the platform.
+ *
+ * <p>{@link #canSeeFollowerContent} is the exception, and asks the tokenless internal endpoint:
+ * the Reposts tab is public, so its caller may be anonymous with no token to forward.
  */
 @Slf4j
 @Component
@@ -37,7 +42,7 @@ public class FriendshipClient {
     private final RestClient userServiceRestClient;
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record FriendshipView(boolean friends) {
+    private record FriendshipView(boolean friends, boolean following, boolean privateAccount) {
     }
 
     public boolean areFriends(Long ownerId, Long commenterId) {
@@ -61,6 +66,33 @@ public class FriendshipClient {
         } catch (RestClientException e) {
             log.warn("Could not confirm friendship with owner {}; refusing the friends-only comment",
                     ownerId, e);
+            return false;
+        }
+    }
+
+    /**
+     * Whether {@code viewerId} may see what {@code ownerId} keeps for followers: true for a public
+     * account, and for a private one the viewer follows. {@code viewerId} is null for an anonymous
+     * caller. Fails closed like {@link #areFriends}: an answer nobody could give reads as a private
+     * account the viewer does not follow.
+     */
+    public boolean canSeeFollowerContent(Long ownerId, Long viewerId) {
+        try {
+            ApiResponse<FriendshipView> response = userServiceRestClient.get()
+                    .uri(uri -> uri.path("/api/v1/users/internal/friendship")
+                            .queryParam("userB", ownerId)
+                            .queryParamIfPresent("userA", Optional.ofNullable(viewerId))
+                            .build())
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {
+                    });
+            if (response == null || response.data() == null) {
+                return false;
+            }
+            return !response.data().privateAccount() || response.data().following();
+        } catch (RestClientException e) {
+            log.warn("Could not ask whether user {} is private or followed by {}; hiding their reposts",
+                    ownerId, viewerId, e);
             return false;
         }
     }

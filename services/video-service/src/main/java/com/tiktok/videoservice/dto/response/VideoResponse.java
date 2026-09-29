@@ -64,7 +64,13 @@ public record VideoResponse(
          * switch so the owner's own toggle still shows what it was set to. Applied per request,
          * after the cache — see {@code VideoServiceImpl.withAccountComments}.
          */
-        boolean accountCommentsOff
+        boolean accountCommentsOff,
+        /**
+         * The owner's account is private: a PUBLIC video is then for their followers only.
+         * {@code visibility} still says PUBLIC, because that is what the owner chose for the video.
+         * Clients can show a lock. Entries cached before this existed read as {@code false}.
+         */
+        boolean ownerPrivate
 ) {
 
     /** This response for a video whose owner accepts comments from no one. */
@@ -72,6 +78,6 @@ public record VideoResponse(
         return new VideoResponse(id, userId, title, description, thumbnailUrl, previewUrl, hlsUrl,
                 durationSeconds, width, height, status, visibility, viewCount, likeCount, null,
                 commentsDisabled, tags, createdAt, updatedAt, publishedAt, rawFileUrl, failureReason,
-                takedownReason, deletedAt, purgeEventPublishedAt, moderation, true);
+                takedownReason, deletedAt, purgeEventPublishedAt, moderation, true, ownerPrivate);
     }
 }

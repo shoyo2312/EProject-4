@@ -22,6 +22,11 @@ public record UserSettingsResponse(
         Integer screenTimeLimitMinutes,
         @JsonFormat(pattern = UpdateUserSettingsRequest.TIME_FORMAT) LocalTime sleepHoursStart,
         @JsonFormat(pattern = UpdateUserSettingsRequest.TIME_FORMAT) LocalTime sleepHoursEnd,
-        boolean weeklyScreenTimeDigest
+        boolean weeklyScreenTimeDigest,
+        /**
+         * Read off the profile rather than the settings row, because every viewer needs it there —
+         * see V11. False until the profile exists.
+         */
+        boolean privateAccount
 ) {
 }

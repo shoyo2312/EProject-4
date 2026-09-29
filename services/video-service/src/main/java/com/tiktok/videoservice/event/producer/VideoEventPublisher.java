@@ -8,6 +8,7 @@ import com.tiktok.event.video.VideoPurgedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.repository.VideoRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -168,7 +169,7 @@ public class VideoEventPublisher {
     @Scheduled(fixedDelay = 5000)
     public void publishPendingVisibilityChanges() {
         List<Video> pending = videoRepository
-                .findTop100ByVisibilityEventPendingAtIsNotNullOrderByVisibilityEventPendingAtAsc();
+                .findTop100ByVisibilityEventPendingAtIsNotNullAndEventPublishedAtIsNotNullOrderByVisibilityEventPendingAtAsc();
         if (pending.isEmpty()) {
             return;
         }
@@ -185,7 +186,7 @@ public class VideoEventPublisher {
     private ProducerRecord<String, String> toPublishedRecord(Video video) {
         VideoPublishedEvent event = VideoPublishedEvent.of(
                 video.getId(), video.getUserId(), video.getTitle(), video.getDescription(),
-                video.getRawFileUrl(), visibilityName(video), video.getTags());
+                video.getRawFileUrl(), audience(video), video.getTags());
         try {
             return record(video.getId(), "VideoPublishedEvent", objectMapper.writeValueAsString(event));
         } catch (JsonProcessingException ex) {
@@ -227,7 +228,7 @@ public class VideoEventPublisher {
 
     private ProducerRecord<String, String> toVisibilityRecord(Video video) {
         VideoVisibilityChangedEvent event = VideoVisibilityChangedEvent.of(
-                video.getId(), video.getUserId(), visibilityName(video),
+                video.getId(), video.getUserId(), audience(video),
                 video.getVisibilityEventPendingAt());
         try {
             return record(video.getId(), "VideoVisibilityChangedEvent",
@@ -241,12 +242,18 @@ public class VideoEventPublisher {
     }
 
     /**
-     * Documents written before the visibility field existed have none. PUBLIC is what they
-     * behaved as, so that is what the consumers are told rather than a null they would each have
-     * to decide about.
+     * Who may see the video, in the one word every consumer that keeps a copy understands: its
+     * visibility, except that a private owner's PUBLIC video is FOLLOWERS. Consumers treat
+     * anything but PUBLIC as hidden, so FOLLOWERS takes it out of search, For You and trending
+     * with no code on their side.
+     *
+     * <p>Documents written before the visibility field existed have none. PUBLIC is what they
+     * behaved as, so that is what they are taken to be rather than a null each consumer would
+     * have to decide about.
      */
-    private static String visibilityName(Video video) {
-        return video.getVisibility() == null ? "PUBLIC" : video.getVisibility().name();
+    static String audience(Video video) {
+        VideoVisibility visibility = video.getVisibility() == null ? VideoVisibility.PUBLIC : video.getVisibility();
+        return visibility == VideoVisibility.PUBLIC && video.isOwnerPrivate() ? "FOLLOWERS" : visibility.name();
     }
 
     private ProducerRecord<String, String> record(String key, String eventType, String payload) {

@@ -44,7 +44,7 @@ class UserSettingsControllerTest {
     private static final String JWT_SECRET = "test-secret-at-least-32-bytes-long-0123456789";
 
     private static final UserSettingsResponse DEFAULTS = new UserSettingsResponse(
-            SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true);
+            SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, false);
 
     @Autowired
     private MockMvc mockMvc;
@@ -71,7 +71,7 @@ class UserSettingsControllerTest {
     void getOwnSettings_answersTheFlatKeyedObject() throws Exception {
         when(userSettingsService.getOwnSettings(1L)).thenReturn(new UserSettingsResponse(
                 SettingsAudience.FRIENDS, SettingsAudience.NO_ONE, 60,
-                LocalTime.of(22, 30), LocalTime.of(7, 0), false));
+                LocalTime.of(22, 30), LocalTime.of(7, 0), false, false));
 
         mockMvc.perform(get("/api/v1/users/me/settings")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
@@ -175,7 +175,7 @@ class UserSettingsControllerTest {
      */
     @Test
     void internalFriendship_answersWithoutAToken_andIsNotShadowedByThePathVariable() throws Exception {
-        when(followService.friendship(1L, 2L)).thenReturn(new FriendshipResponse(2L, true));
+        when(followService.friendship(1L, 2L)).thenReturn(new FriendshipResponse(2L, true, true, false, false));
 
         mockMvc.perform(get("/api/v1/users/internal/friendship")
                         .param("userA", "1")
@@ -187,5 +187,51 @@ class UserSettingsControllerTest {
         // depends on the entry point this slice happens to build, and is not the point here.
         mockMvc.perform(get("/api/v1/users/5/friendship"))
                 .andExpect(status().is4xxClientError());
+    }
+
+    @Test
+    void patch_privateAccount_reachesTheServiceAndComesBack() throws Exception {
+        when(userSettingsService.updateOwnSettings(eq(1L), any())).thenReturn(new UserSettingsResponse(
+                SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, true));
+
+        mockMvc.perform(patch("/api/v1/users/me/settings")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"privateAccount": true}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.privateAccount").value(true));
+
+        ArgumentCaptor<UpdateUserSettingsRequest> captor =
+                ArgumentCaptor.forClass(UpdateUserSettingsRequest.class);
+        verify(userSettingsService).updateOwnSettings(eq(1L), captor.capture());
+        assertThat(captor.getValue().isPrivateAccountSet()).isTrue();
+        assertThat(captor.getValue().getPrivateAccount()).isTrue();
+    }
+
+    /** interaction-service asks for anonymous callers of a public tab, so the viewer is optional. */
+    @Test
+    void internalFriendship_withoutAViewer_isTheAnonymousQuestion() throws Exception {
+        when(followService.friendship(null, 2L)).thenReturn(new FriendshipResponse(2L, false, false, false, true));
+
+        mockMvc.perform(get("/api/v1/users/internal/friendship").param("userB", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.privateAccount").value(true));
+    }
+
+    /**
+     * Same shadowing risk as the friendship check, and a worse one: {@code /users/{userId}/following}
+     * is the following list, which needs a JWT. The literal segment must keep winning.
+     */
+    @Test
+    void internalFollowing_answersWithoutAToken_andIsNotShadowedByTheFollowingList() throws Exception {
+        when(followService.followingAmong(1L, List.of(7L, 8L))).thenReturn(List.of(8L));
+
+        mockMvc.perform(get("/api/v1/users/internal/following")
+                        .param("followerId", "1")
+                        .param("ids", "7", "8"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0]").value(8));
     }
 }

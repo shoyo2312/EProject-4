@@ -1,5 +1,6 @@
 package com.tiktok.interactionservice.service;
 
+import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.RepostContextResponse;
 import com.tiktok.interactionservice.dto.response.RepostStatusResponse;
@@ -10,6 +11,7 @@ import com.tiktok.interactionservice.entity.RepostByVideo;
 import com.tiktok.interactionservice.entity.RepostByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
+import com.tiktok.interactionservice.exception.PrivateAccountException;
 import com.tiktok.interactionservice.exception.RepostRateLimitedException;
 import com.tiktok.interactionservice.repository.RepostByUserRepository;
 import com.tiktok.interactionservice.repository.RepostByVideoRepository;
@@ -55,6 +57,7 @@ public class RepostServiceImpl implements RepostService {
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
     private final VideoOwnershipClient videoOwnershipClient;
+    private final FriendshipClient friendshipClient;
 
     @Override
     public RepostStatusResponse repost(Long videoId, Long currentUserId) {
@@ -167,10 +170,15 @@ public class RepostServiceImpl implements RepostService {
     }
 
     @Override
-    public VideoIdPageResponse listReposts(Long currentUserId, String cursor, int size) {
+    public VideoIdPageResponse listReposts(Long viewerId, Long userId, String cursor, int size) {
+        // Refused outright rather than answered empty, so the client can say why.
+        if (!userId.equals(viewerId) && !friendshipClient.canSeeFollowerContent(userId, viewerId)) {
+            throw new PrivateAccountException();
+        }
+
         CassandraPageRequest pageRequest = CassandraCursors.decode(cursor, size, InvalidCursorException::new);
         try {
-            Slice<RepostByUser> slice = repostByUserRepository.findByUserId(currentUserId, pageRequest);
+            Slice<RepostByUser> slice = repostByUserRepository.findByUserId(userId, pageRequest);
             return CassandraCursors.page(slice, repost -> repost.getKey().getVideoId());
         } catch (CassandraInvalidQueryException e) {
             throw new InvalidCursorException();

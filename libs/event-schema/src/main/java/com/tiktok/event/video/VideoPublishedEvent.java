@@ -19,11 +19,13 @@ public record VideoPublishedEvent(
         String description,
         String rawFileUrl,
         // Who is allowed to see the video: PUBLIC, FRIENDS or PRIVATE, as video-service's
-        // VideoVisibility names them. Carried because search-service builds its own read path off
-        // this event and never calls video-service, so without it a PRIVATE video is returned to
-        // any anonymous search — status alone says the video finished moderation, not who may see
-        // it. Null only on events from a producer older than this field; consumers read that as
-        // PUBLIC, which is what the producer of the day only ever published.
+        // VideoVisibility names them — or FOLLOWERS, a PUBLIC video whose owner's account is
+        // private. Anything but PUBLIC is hidden on every read path that keeps its own copy.
+        // Carried because search-service builds its own read path off this event and never calls
+        // video-service, so without it a PRIVATE video is returned to any anonymous search —
+        // status alone says the video finished moderation, not who may see it. Null only on events
+        // from a producer older than this field; consumers read that as PUBLIC, which is what the
+        // producer of the day only ever published.
         String visibility,
         // Carried on the event because recommendation-service has no read path into video-service's
         // Mongo, and tags are the only content feature a candidate generator has to work with —

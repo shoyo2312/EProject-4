@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -56,6 +57,8 @@ class VideoServiceImplCacheTest {
             mock(com.tiktok.videoservice.client.BlockClient.class);
     private final com.tiktok.videoservice.client.UserSettingsClient userSettingsClient =
             mock(com.tiktok.videoservice.client.UserSettingsClient.class);
+    private final com.tiktok.videoservice.client.FollowClient followClient =
+            mock(com.tiktok.videoservice.client.FollowClient.class);
 
     private final VideoService videoService = new VideoServiceImpl(
             videoRepository,
@@ -70,7 +73,9 @@ class VideoServiceImplCacheTest {
             new QuarantinedMediaUrls(quarantineClient, new MinioProperties("http://localhost:9000", "key", "secret",
                     "video-media", "us-east-1", Duration.ofMinutes(15))),
                 blockClient,
-                userSettingsClient);
+                userSettingsClient,
+                followClient,
+                mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class));
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
@@ -154,7 +159,7 @@ class VideoServiceImplCacheTest {
     void getByIds_filtersAPrivateCachedVideoOutForAStranger() {
         VideoResponse privateVideo = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, null, 10, 1080, 1920, VideoStatus.PUBLISHED,
-                VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
+                VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
 
         when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", privateVideo));
 
@@ -171,7 +176,7 @@ class VideoServiceImplCacheTest {
     void friendsVideo_isVisibleOnlyToAConfirmedFriend() {
         VideoResponse friendsVideo = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, null, 10, 1080, 1920, VideoStatus.PUBLISHED,
-                VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
+                VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
         when(videoCache.get("A")).thenReturn(Optional.of(friendsVideo));
 
         when(friendshipClient.areFriends(OWNER, 7L)).thenReturn(true);
@@ -292,7 +297,7 @@ class VideoServiceImplCacheTest {
         VideoResponse inReview = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, "http://localhost:9000/video-media/hls/A/source.mp4",
                 10, 1080, 1920, VideoStatus.PENDING_REVIEW, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
-                Instant.now(), null, null, null, null, null, null, null, null, false);
+                Instant.now(), null, null, null, null, null, null, null, null, false, false);
         when(videoCache.get("A")).thenReturn(Optional.of(inReview));
         when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
 
@@ -308,9 +313,74 @@ class VideoServiceImplCacheTest {
         verifyNoInteractions(quarantineClient);
     }
 
+    /**
+     * The §3 table for a private owner's PUBLIC video: its owner and followers see it; a stranger
+     * and an anonymous viewer get the same 404 a PRIVATE video gets.
+     */
+    @Test
+    void privateOwnersPublicVideo_isForTheOwnerAndFollowersOnly() {
+        VideoResponse video = privateOwnersVideo("A", VideoVisibility.PUBLIC, OWNER);
+        when(videoCache.get("A")).thenReturn(Optional.of(video));
+        when(followClient.followedAmong(7L, Set.of(OWNER))).thenReturn(Set.of(OWNER));
+
+        assertThat(videoService.getById(OWNER, "A").id()).isEqualTo("A");
+        assertThat(videoService.getById(7L, "A").id()).isEqualTo("A");
+        assertThatThrownBy(() -> videoService.getById(8L, "A")).isInstanceOf(VideoNotFoundException.class);
+        assertThatThrownBy(() -> videoService.getById(null, "A")).isInstanceOf(VideoNotFoundException.class);
+    }
+
+    /** FRIENDS stays the friendship question: a mutual follow already implies following. */
+    @Test
+    void privateOwnersFriendsVideo_isStillForFriends() {
+        VideoResponse video = privateOwnersVideo("A", VideoVisibility.FRIENDS, OWNER);
+        when(videoCache.get("A")).thenReturn(Optional.of(video));
+        when(friendshipClient.areFriends(OWNER, 7L)).thenReturn(true);
+
+        assertThat(videoService.getById(7L, "A").id()).isEqualTo("A");
+        assertThatThrownBy(() -> videoService.getById(8L, "A")).isInstanceOf(VideoNotFoundException.class);
+        verifyNoInteractions(followClient);
+    }
+
+    /**
+     * One follow call for the whole batch, naming only the private owners on it — never the
+     * viewer's own account, and never a public owner.
+     */
+    @Test
+    void getByIds_asksOnceForThePrivateOwnersOnThePage_andNeverAboutTheViewer() {
+        VideoResponse followed = privateOwnersVideo("A", VideoVisibility.PUBLIC, 50L);
+        VideoResponse notFollowed = privateOwnersVideo("B", VideoVisibility.PUBLIC, 51L);
+        VideoResponse own = privateOwnersVideo("C", VideoVisibility.PUBLIC, 7L);
+        VideoResponse publicOwners = publicVideo("D");
+        when(videoCache.getAll(List.of("A", "B", "C", "D"))).thenReturn(Map.of(
+                "A", followed, "B", notFollowed, "C", own, "D", publicOwners));
+        when(followClient.followedAmong(7L, Set.of(50L, 51L))).thenReturn(Set.of(50L));
+
+        assertThat(videoService.getByIds(7L, List.of("A", "B", "C", "D")))
+                .containsExactly(followed, own, publicOwners);
+        verify(followClient).followedAmong(7L, Set.of(50L, 51L));
+        verifyNoMoreInteractions(followClient);
+    }
+
+    /** Public owners never trigger a call, so a normal feed page makes none. */
+    @Test
+    void getByIds_withNoPrivateOwnerOnThePage_makesNoFollowCall() {
+        when(videoCache.getAll(List.of("A", "B")))
+                .thenReturn(Map.of("A", publicVideo("A"), "B", publicVideo("B")));
+
+        assertThat(videoService.getByIds(7L, List.of("A", "B"))).hasSize(2);
+        verifyNoInteractions(followClient);
+    }
+
+    private static VideoResponse privateOwnersVideo(String id, VideoVisibility visibility, Long owner) {
+        return new VideoResponse(
+                id, owner, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
+                10, 1080, 1920, VideoStatus.PUBLISHED, visibility, 0, 0, 0L, false, List.of(), Instant.now(),
+                null, null, null, null, null, null, null, null, false, true);
+    }
+
     private static VideoResponse publicVideo(String id) {
         return new VideoResponse(
                 id, OWNER, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
-                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false);
+                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
     }
 }

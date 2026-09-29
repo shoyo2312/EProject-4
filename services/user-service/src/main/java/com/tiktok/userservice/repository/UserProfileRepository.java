@@ -96,6 +96,27 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
                               @Param("sourceUrl") String sourceUrl,
                               @Param("avatarUrl") String avatarUrl);
 
+    /**
+     * Sets the flag only where it differs, so the row count says whether anything changed: two
+     * PATCHes racing to the same value update one row between them, and only that one announces.
+     *
+     * <p>The version moves too. Hibernate writes every column of a dirty profile, so a
+     * {@code PATCH /me} that read the row before this and flushed after would otherwise write the
+     * old flag straight back — silently, since the version it checks would still match.
+     *
+     * @return 1 when the flag changed, 0 when it already had that value or there is no profile
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update UserProfile p set p.privateAccount = :privateAccount, p.version = p.version + 1 "
+            + "where p.userId = :userId and p.deletedAt is null and p.privateAccount <> :privateAccount")
+    int updatePrivateAccount(@Param("userId") Long userId, @Param("privateAccount") boolean privateAccount);
+
+    /**
+     * Off the profile, where every viewer reads it. A missing or deleted profile answers false,
+     * which is right: nothing can make an account private before its profile row exists.
+     */
+    boolean existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(Long userId);
+
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update UserProfile p set p.followerCount = p.followerCount + 1 where p.userId = :userId")
     void incrementFollowerCount(@Param("userId") Long userId);

@@ -31,15 +31,28 @@ public class FollowEventConsumer {
             return;
         }
 
-        idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
+        idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () -> {
+            if (event.requestApproved()) {
+                // The owner approved it themselves, so they are not told; the requester is.
                 notificationService.create(
-                        event.followingId(),
                         event.followerId(),
-                        NotificationType.NEW_FOLLOWER,
-                        "New follower",
-                        "Someone started following you.",
-                        // The follower, not a video: this is the one type whose deep link goes to
-                        // a profile.
-                        String.valueOf(event.followerId())));
+                        event.followingId(),
+                        NotificationType.FOLLOW_REQUEST_ACCEPTED,
+                        "Follow request accepted",
+                        "Your follow request was accepted.",
+                        String.valueOf(event.followingId()));
+                return;
+            }
+
+            notificationService.create(
+                    event.followingId(),
+                    event.followerId(),
+                    NotificationType.NEW_FOLLOWER,
+                    "New follower",
+                    "Someone started following you.",
+                    // The follower, not a video: this is the one type whose deep link goes to
+                    // a profile.
+                    String.valueOf(event.followerId()));
+        });
     }
 }
