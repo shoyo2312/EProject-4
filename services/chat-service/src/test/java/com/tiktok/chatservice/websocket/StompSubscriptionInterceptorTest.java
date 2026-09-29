@@ -5,6 +5,7 @@ import com.tiktok.chatservice.service.ConversationService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -17,6 +18,8 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.MessageBuilder;
 
 import java.security.Principal;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -36,6 +39,19 @@ class StompSubscriptionInterceptorTest {
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
         accessor.setDestination(destination);
         accessor.setUser((Principal) () -> "42");
+        accessor.setLeaveMutable(true);
+        return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+    }
+
+    private Message<byte[]> subscribeAs(String destination, String role) {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        accessor.setDestination(destination);
+        accessor.setUser((Principal) () -> "42");
+        Map<String, Object> session = new HashMap<>();
+        if (role != null) {
+            session.put(JwtHandshakeInterceptor.ROLE_ATTRIBUTE, role);
+        }
+        accessor.setSessionAttributes(session);
         accessor.setLeaveMutable(true);
         return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
     }
@@ -70,6 +86,7 @@ class StompSubscriptionInterceptorTest {
     @ValueSource(strings = {
             "/topic/conversations/c1",
             "/topic/feed",
+            "/topic/admin",
             "/topic/videos.v1",
             "/topic/videos.v1.comments",
             "/topic/users.42",
@@ -183,5 +200,34 @@ class StompSubscriptionInterceptorTest {
 
         assertThat(registry.findSubscriptions(MessageBuilder.createMessage(new byte[0], send.getMessageHeaders())))
                 .containsKey("attacker");
+    }
+
+    @Test
+    void adminTopicIsOpenToAdmins() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        Message<byte[]> message = subscribeAs("/topic/admin", "ADMIN");
+
+        assertThat(interceptor.preSend(message, null)).isSameAs(message);
+        verifyNoInteractions(conversationService);
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"USER", "admin", ""})
+    void adminTopicIsRefusedToEveryoneElse(String role) {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(subscribeAs("/topic/admin", role), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** A session with no attributes at all — the shape every existing test here builds. */
+    @Test
+    void adminTopicIsRefusedWithoutSessionAttributes() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(subscribeTo("/topic/admin"), null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

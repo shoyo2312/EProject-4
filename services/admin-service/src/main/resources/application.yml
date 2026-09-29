@@ -70,6 +70,11 @@ admin:
     batch-size: 500
     max-batches-per-run: 20
 
+  outbox:
+    # The admin console refreshes when these reach it, so this is most of a new report's delay.
+    # Cheap: the unpublished rows are a partial index (idx_outbox_events_unpublished).
+    poll-millis: 500
+
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 

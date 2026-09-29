@@ -154,7 +154,7 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 |---|---|---|---|---|
 | `auth.user-events` | auth-service (outbox) | — (1 shape) | `UserRegisteredEvent` | user-service |
 | `auth.social-avatar-events` | auth-service (fire-and-forget) | — | `SocialAvatarDiscoveredEvent` | media-worker |
-| `video.video-events` | video-service (outbox per-doc) | `VideoPublishedEvent` / `VideoDeletedEvent` / `VideoPurgedEvent` / `VideoVisibilityChangedEvent` (vắng ⇒ Published) | `VideoPublishedEvent`, `VideoDeletedEvent` (ngay khi xoá — gỡ khỏi index), `VideoPurgedEvent` (hết hạn thùng rác — chỉ media-worker xoá media), `VideoVisibilityChangedEvent` | media-worker, search-service, recommendation-service, analytics-service |
+| `video.video-events` | video-service (outbox per-doc) | `VideoPublishedEvent` / `VideoDeletedEvent` / `VideoPurgedEvent` / `VideoVisibilityChangedEvent` (vắng ⇒ Published) | `VideoPublishedEvent`, `VideoDeletedEvent` (ngay khi xoá — gỡ khỏi index), `VideoPurgedEvent` (hết hạn thùng rác — chỉ media-worker xoá media), `VideoVisibilityChangedEvent` | media-worker, search-service, recommendation-service, analytics-service, chat-service |
 | `media.video-transcoded-events` | media-worker (chờ ack 30s) | — | `VideoTranscodedEvent` | video-service, search-service, recommendation-service |
 | `media.avatar-events` | media-worker (chờ ack 30s) | — | `AvatarMirroredEvent` | user-service |
 | `user.follow-events` | user-service (outbox) | — (1 shape) | `UserFollowChangedEvent` (+ `requestApproved` khi là lời mời vừa được duyệt) | notification-service, chat-service |
@@ -165,10 +165,11 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 | `interaction.share-events` | interaction-service (chờ ack 5s) | — | `VideoSharedEvent` | recommendation-service, search-service |
 | `interaction.view-events` | interaction-service (chờ ack 5s) | — | `VideoViewedEvent` | video-service, search-service |
 | `interaction.watch-events` | interaction-service (fire-and-forget) | — | `VideoWatchEvent` | recommendation-service, analytics-service |
-| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / `CommentRemovedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), search-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), auth-service (`UserBannedEvent` + `UserUnbannedEvent`), interaction-service (`CommentRemovedEvent`) |
+| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / `CommentRemovedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), search-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), auth-service (`UserBannedEvent` + `UserUnbannedEvent`), interaction-service (`CommentRemovedEvent`), chat-service (mọi event) |
+| `admin.report-events` | admin-service (outbox) | `ReportSubmittedEvent` / `ReportResolvedEvent` | `ReportSubmittedEvent` (có report mới), `ReportResolvedEvent` (mọi report đang chờ của một target vừa được xử lý) | chat-service (`AdminFanout`, group riêng `admin-realtime-<uuid>` mỗi instance: chỉ báo console admin tải lại, không đọc payload) |
 
 Ghi chú:
-- **Topic trộn nhiều shape** (`video.video-events`, `interaction.comment-events`, `admin.moderation-events`) route bằng Kafka header `eventType`, KHÔNG suy từ JSON. Thiếu route → Jackson vẫn parse sang class sai với field null, không exception. Xem `CLAUDE.md` §Kafka.
+- **Topic trộn nhiều shape** (`video.video-events`, `interaction.comment-events`, `admin.moderation-events`, `admin.report-events`) route bằng Kafka header `eventType`, KHÔNG suy từ JSON. Thiếu route → Jackson vẫn parse sang class sai với field null, không exception. Xem `CLAUDE.md` §Kafka.
 - **DLT**: chỉ service dùng `kafka-lib` error handler (user, video, recommendation, media-worker) mới có `<topic>.DLT`; các service còn lại retry vô hạn theo mặc định Spring Kafka.
 - `analytics-service` là consumer của `video.video-events` + `interaction.watch-events` (sink training data cho `rank-service`) — xem `docs/ranking-model.md`. Ngoài phạm vi các doc client.
 - Cách feature xếp hạng đi từ các event này tới `rank-service`: `docs/ranking-model.md` §2.
