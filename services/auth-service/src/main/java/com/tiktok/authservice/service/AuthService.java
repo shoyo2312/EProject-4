@@ -2,19 +2,38 @@ package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
+import com.tiktok.authservice.dto.request.CompleteSignupRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
 import com.tiktok.authservice.dto.request.ResendVerificationRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
+import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifySignupRequest;
+import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 
 public interface AuthService {
 
     UserResponse register(RegisterRequest request);
+
+    /**
+     * Email-first signup, step one: refuses an address that already has an account, otherwise
+     * mails a code to it. Nothing is created yet. Calling it again is the resend.
+     */
+    void startSignup(StartSignupRequest request);
+
+    /** Step two: spends the code and hands back the ticket that proves the mailbox. */
+    SignupTicketResponse verifySignup(VerifySignupRequest request);
+
+    /**
+     * Step three: creates the account, already verified, for the address the ticket proved, and
+     * signs it in. A taken username leaves the ticket usable, so the client can just pick another.
+     */
+    TokenResponse completeSignup(CompleteSignupRequest request);
 
     TokenResponse login(LoginRequest request);
 

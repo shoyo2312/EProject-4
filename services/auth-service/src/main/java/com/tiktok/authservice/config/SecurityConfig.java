@@ -25,6 +25,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST,
                                 "/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/login/otp",
+                                "/api/v1/auth/register/start", "/api/v1/auth/register/verify",
+                                "/api/v1/auth/register/complete",
                                 "/api/v1/auth/refresh", "/api/v1/auth/logout",
                                 "/api/v1/auth/verify-email", "/api/v1/auth/resend-verification",
                                 "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",

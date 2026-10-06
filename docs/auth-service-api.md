@@ -56,6 +56,8 @@ Vì field `code`/`message` là `null` khi thành công (do `@JsonInclude(NON_NUL
 
 Base path: `/api/v1/auth`
 
+Các lời gọi **gửi OTP** — `register`, `register/start`, `email`, `resend-verification`, `forgot-password` — bắt buộc có field `turnstileToken` (token Cloudflare Turnstile) trong body. Server kiểm tra nó trước mọi thứ khác: thiếu hoặc sai trả `403 TURNSTILE_VERIFICATION_FAILED`, không gửi mail nào.
+
 ### 3.1 `POST /register`
 Không cần token. Trả `201 Created`.
 
@@ -64,7 +66,8 @@ Request:
 {
   "username": "minh_hung",   // 3-50 ký tự, bắt buộc
   "email": "a@b.com",         // định dạng email, tối đa 255, bắt buộc
-  "password": "P@ssw0rd!"     // 8-100 ký tự, bắt buộc
+  "password": "P@ssw0rd!",    // 8-100 ký tự, bắt buộc
+  "turnstileToken": "..."     // bắt buộc — xem đầu mục 3
 }
 ```
 
@@ -163,7 +166,7 @@ Không cần token. Trả `204 No Content` (luôn trả 204 kể cả khi email 
 
 Request:
 ```json
-{ "email": "a@b.com" }
+{ "email": "a@b.com", "turnstileToken": "..." }
 ```
 
 Gửi lại OTP xác thực email mới (OTP cũ bị hủy). Giới hạn **3 lần / 15 phút** theo email.
@@ -175,7 +178,7 @@ Không cần token. Trả `204 No Content` (luôn trả 204 dù email có tồn 
 
 Request:
 ```json
-{ "email": "a@b.com" }
+{ "email": "a@b.com", "turnstileToken": "..." }
 ```
 
 Nếu email tồn tại và tài khoản đang `ACTIVE`, gửi OTP reset password (15 phút, dùng 1 lần). Giới hạn **3 lần / 15 phút** theo email.
@@ -272,16 +275,68 @@ Lỗi: `VALIDATION_ERROR` (400 — thiếu token, hoặc otp không đúng dạn
 
 Request:
 ```json
-{ "email": "a@b.com" }
+{ "email": "a@b.com", "turnstileToken": "..." }
 ```
 
 Server lưu email ở trạng thái **chưa xác thực** rồi gửi OTP 6 số. Xác nhận bằng `POST /verify-email` (mục 3.6) như luồng đăng ký thường — không có endpoint riêng.
 
 Lỗi: `VALIDATION_ERROR` (400), `EMAIL_ALREADY_EXISTS` (409 — email đang thuộc tài khoản khác), `EMAIL_ALREADY_LINKED` (409 — tài khoản này đã có email **đã verify**; đổi email đã verify là thao tác khác, chưa hỗ trợ), `TOO_MANY_OTP_REQUESTS` (429 — dùng chung counter với `resend-verification`), `401` nếu thiếu/sai access token.
 
+### 3.13 `POST /register/start`
+Không cần token. Trả `200 OK` (`data` là `null`).
+
+Bước 1 của **luồng đăng ký email-first** mà web đang dùng: chứng minh hòm thư trước, chọn mật khẩu và username sau, và tài khoản chỉ được tạo ở bước cuối (mục 3.15). `register` (mục 3.1) vẫn giữ cho client tạo tài khoản trước rồi verify sau.
+
+Request:
+```json
+{ "email": "a@b.com", "turnstileToken": "..." }
+```
+
+Chưa tạo gì cả — server chỉ gửi mã 6 số tới địa chỉ, sống **15 phút**. Gọi lại là gửi lại, và mã cũ hết hiệu lực. Email đã có tài khoản bị từ chối **ngay ở bước này** và không có mail nào được gửi.
+
+Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `EMAIL_ALREADY_EXISTS` (409), `TOO_MANY_OTP_REQUESTS` (429 — quá **3 lần/15 phút** theo email, counter riêng của luồng này, xem mục 7).
+
+### 3.14 `POST /register/verify`
+Không cần token. Trả `200 OK`.
+
+Request:
+```json
+{ "email": "a@b.com", "otp": "483920" }
+```
+
+Response `data` → `SignupTicketResponse`:
+```json
+{
+  "signupToken": "...",        // vé chứng minh hòm thư — chỉ giữ trong bộ nhớ, dùng 1 lần ở mục 3.15
+  "expiresInMillis": 1800000   // 30 phút để chọn mật khẩu và username
+}
+```
+
+Mã dùng 1 lần: sai thì nhập lại, còn đúng rồi thì mã chết — cần mã mới thì gọi lại mục 3.13.
+
+Lỗi: `VALIDATION_ERROR` (400 — otp không đúng dạng 6 số), `INVALID_OTP` (400 — sai, đã dùng, hoặc hết hạn), `TOO_MANY_OTP_REQUESTS` (429 — nhập sai quá **5 lần/15 phút** theo email).
+
+### 3.15 `POST /register/complete`
+Không cần token. Trả `201 Created`.
+
+Request:
+```json
+{
+  "signupToken": "...",       // từ mục 3.14
+  "username": "minh_hung",    // 3-50 ký tự
+  "password": "P@ssw0rd!"     // 8-100 ký tự
+}
+```
+
+Không có `email` trong request: địa chỉ là cái mà vé đã chứng minh, nên không đổi được sang một địa chỉ chưa verify.
+
+Response `data` → `TokenResponse` (giống mục 3.2). Tài khoản được tạo **đã verify email** và đăng nhập luôn — lưu cặp token như sau `/login`, không cần gọi `/login` nữa.
+
+Lỗi: `VALIDATION_ERROR` (400), `USERNAME_ALREADY_EXISTS` (409 — vé **vẫn dùng được**, cho user chọn username khác), `SIGNUP_SESSION_EXPIRED` (400 — vé sai, hết hạn, hoặc đã dùng: quay lại mục 3.13), `EMAIL_ALREADY_EXISTS` (409 — địa chỉ bị tài khoản khác lấy mất trong lúc đăng ký: cũng quay lại mục 3.13).
+
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
-1. `register` → `verify-email` (OTP 6 số gửi qua mail) → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext). Bỏ qua bước verify thì `login` trả `403 EMAIL_NOT_VERIFIED`.
+1. `register` → `verify-email` (OTP 6 số gửi qua mail) → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext). Bỏ qua bước verify thì `login` trả `403 EMAIL_NOT_VERIFIED`. Luồng web thì khác: `register/start` → `register/verify` → `register/complete` (mục 3.13–3.15), bước cuối trả token luôn.
 2. Mọi request tới các service khác qua gateway: gắn header `Authorization: Bearer <accessToken>`.
 3. Access token sống **15 phút**. Khi API trả `401`, gọi `/refresh` bằng `refreshToken` **đúng một lần, và chỉ một request tại một thời điểm** (xem luật single-flight ở mục 3.3); nếu `/refresh` lỗi (`INVALID_REFRESH_TOKEN`) → xoá token, điều hướng về màn hình login. **Không retry `/refresh`** — lần thử thứ hai bị coi là replay và giết phiên trên mọi thiết bị.
 4. Refresh token sống **7 ngày** (`604800000ms`) nhưng **xoay mỗi lần dùng**: mỗi `/refresh` thành công trả về refresh token mới, phải ghi đè token cũ ngay. Nên chủ động refresh khi app resume nếu access token gần hết hạn, tránh chờ 401 (giảm giật UI).
@@ -317,8 +372,10 @@ ACTIVE, LOCKED
 | `EMAIL_ALREADY_LINKED` | 409 | Tài khoản đã có email đã verify nên không dùng `POST /email` được nữa (mục 3.12) |
 | `SOCIAL_LINK_VERIFICATION_REQUIRED` | 409 | Email sau tài khoản provider đã có chủ ở hệ thống ta và provider không khẳng định nó đã verify. Server đã gửi mã tới địa chỉ đó — **giữ lại token provider** rồi hoàn tất bằng mục 3.11. Không phải lỗi để hiển thị rồi thôi: bỏ token đi là bắt user đăng nhập provider lại từ đầu |
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
-| `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`) |
-| `TOO_MANY_OTP_REQUESTS` | 429 | (a) Quá 3 lần gọi `resend-verification`/`forgot-password` trong 15 phút (theo email), **hoặc** (b) quá 5 lần nhập sai OTP trong 15 phút ở `verify-email`/`reset-password` (theo email) — 2 counter độc lập, client cần xử lý cả hai trường hợp |
+| `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`, `register/verify`) |
+| `SIGNUP_SESSION_EXPIRED` | 400 | `signupToken` sai, hết hạn (30 phút) hoặc đã dùng ở `register/complete` → quay lại `register/start` |
+| `TURNSTILE_VERIFICATION_FAILED` | 403 | Thiếu hoặc sai `turnstileToken` ở một lời gọi gửi OTP (xem đầu mục 3) |
+| `TOO_MANY_OTP_REQUESTS` | 429 | (a) Quá 3 lần gọi `resend-verification`/`forgot-password`/`register/start` trong 15 phút (theo email), **hoặc** (b) quá 5 lần nhập sai OTP trong 15 phút ở `verify-email`/`reset-password`/`register/verify` (theo email) — 2 counter độc lập, client cần xử lý cả hai trường hợp |
 | `CONCURRENT_MODIFICATION` | 409 | Hai request cùng sửa 1 bản ghi đúng lúc (vd. 2 lần `verify-email`/`reset-password` gửi song song). An toàn để **thử lại 1 lần** sau khi đọc lại trạng thái — khác hẳn các mã 409 khác vốn là lỗi nghiệp vụ không nên retry |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định — hiển thị generic error, không show message raw cho user |
 
@@ -327,12 +384,14 @@ ACTIVE, LOCKED
 ## 7. Rate limiting (ảnh hưởng tới UX)
 
 - **Gateway** (`:8080`): giới hạn theo IP — 20 request/giây, burst 40 (áp dụng cho toàn bộ API, không riêng auth).
-- **Auth-service**, 5 counter độc lập, đều theo **tài khoản/email** chứ không theo IP (nên đổi mạng/VPN không reset được):
+- **Auth-service**, 7 counter độc lập, đều theo **tài khoản/email** chứ không theo IP (nên đổi mạng/VPN không reset được):
   - Login sai: 5 lần/15 phút → `429 TOO_MANY_LOGIN_ATTEMPTS`. Tính theo tài khoản, nên gõ lúc `username` lúc `email` vẫn chung 1 counter.
   - Gửi OTP (`resend-verification`, `forgot-password`, `POST /email`): 3 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`.
   - Nhập sai OTP (`verify-email`, `reset-password`): 5 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`.
   - Gửi mã social-link (mục 3.11, sinh bởi `POST /oauth/{provider}`): 3 lần/15 phút, **namespace riêng** — không tiêu ngân sách của 2 counter trên và ngược lại. Vượt ngưỡng thì server ngừng gửi mail nhưng **vẫn trả `409`**, không bao giờ `429` (xem mục 3.11).
   - Nhập sai mã social-link (mục 3.11): 5 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`, cũng namespace riêng.
+  - Gửi mã đăng ký email-first (`register/start`, mục 3.13): 3 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`, **namespace riêng** — địa chỉ chưa có tài khoản nên không dùng chung counter với `resend-verification`.
+  - Nhập sai mã đăng ký (`register/verify`, mục 3.14): 5 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`, cũng namespace riêng.
 
 Khi gặp `429`, UI nên disable nút tương ứng tạm thời + hiển thị thông báo rõ ràng, tránh user bấm liên tục. Riêng màn hình OTP nên đếm số lần nhập sai ở local để cảnh báo user trước khi chạm ngưỡng, vì server không trả về số lần còn lại.
 

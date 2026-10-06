@@ -112,8 +112,8 @@ auth:
     logo-url: ${MAIL_LOGO_URL:}
     site-url: ${MAIL_SITE_URL:https://tiktok-clone.dev}
   turnstile:
-    # Checked on every OTP-issuing call (register, addEmail, resendVerification,
-    # forgotPassword) before anything else runs.
+    # Checked on every OTP-issuing call (register, startSignup, addEmail,
+    # resendVerification, forgotPassword) before anything else runs.
     secret-key: ${TURNSTILE_SECRET_KEY:}
   oauth:
     google:

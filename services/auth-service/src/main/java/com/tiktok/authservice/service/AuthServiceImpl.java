@@ -4,13 +4,17 @@ import com.tiktok.authservice.config.JwtProperties;
 import com.tiktok.authservice.config.OtpProperties;
 import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
+import com.tiktok.authservice.dto.request.CompleteSignupRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
 import com.tiktok.authservice.dto.request.ResendVerificationRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
+import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifySignupRequest;
+import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.entity.RefreshToken;
@@ -28,6 +32,7 @@ import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
+import com.tiktok.authservice.exception.InvalidSignupTokenException;
 import com.tiktok.authservice.exception.MfaRequiredException;
 import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
@@ -41,6 +46,7 @@ import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.exception.ConstraintViolationException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,6 +63,8 @@ public class AuthServiceImpl implements AuthService {
     private static final String CLAIM_JTI = "jti";
     private static final String PURPOSE_EMAIL_VERIFICATION = "email-verification";
     private static final String PURPOSE_PASSWORD_RESET = "password-reset";
+    /** Its own budget: a pending signup has no account whose verification budget it could share. */
+    private static final String PURPOSE_SIGNUP = "signup";
 
     private final UserRepository userRepository;
     private final UserMapper userMapper;
@@ -75,6 +83,9 @@ public class AuthServiceImpl implements AuthService {
     private final AdminMfaService adminMfaService;
     private final SecurityEventRecorder securityEventRecorder;
     private final IdentityReconfirmation identityReconfirmation;
+    private final SignupChallenge signupChallenge;
+    private final OtpGenerator otpGenerator;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     @Transactional
@@ -85,30 +96,82 @@ public class AuthServiceImpl implements AuthService {
         // casing the user chose, and only its uniqueness check is case-insensitive.
         String email = request.email().toLowerCase(Locale.ROOT);
 
-        if (userRepository.existsByUsernameIgnoreCaseAndDeletedAtIsNull(request.username())) {
-            throw new UsernameAlreadyExistsException(request.username());
-        }
-        if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
-            throw new EmailAlreadyExistsException(email);
-        }
-
-        User user = User.builder()
-                .username(request.username())
-                .email(email)
-                .passwordHash(HashUtils.bcryptHash(request.password()))
-                .role(UserRole.USER)
-                .status(UserStatus.ACTIVE)
-                .build();
-
-        User saved = saveUnique(user, request.username(), email);
-
-        userEventProducer.publishUserRegistered(
-                UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail()));
+        User saved = createPasswordAccount(request.username(), email, request.password(), false);
 
         otpService.issue(saved, VerificationTokenType.EMAIL_VERIFICATION, otpProperties.emailVerificationExpiryMillis(),
                 otp -> new EmailVerificationRequestedEvent(saved.getEmail(), otp));
 
         return userMapper.toResponse(saved);
+    }
+
+    /**
+     * Transactional only so the mail goes out: the listener that sends it fires after commit, and
+     * with no transaction to commit it would never fire. Nothing here writes to Postgres.
+     *
+     * <p>Answering 409 for a taken address says the address has an account, exactly as
+     * {@link #register} always has; the same Turnstile gate stands in front of both. Checked ahead
+     * of the send budget, as {@link #addEmail} does, so a mistyped address costs no mail.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public void startSignup(StartSignupRequest request) {
+        turnstileService.verify(request.turnstileToken());
+
+        String email = request.email().toLowerCase(Locale.ROOT);
+        if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
+            throw new EmailAlreadyExistsException(email);
+        }
+
+        otpRateLimiter.checkAllowed(PURPOSE_SIGNUP, email);
+
+        String otp = otpGenerator.generate();
+        signupChallenge.storeCode(email, otp,
+                Duration.ofMillis(otpProperties.emailVerificationExpiryMillis()));
+        eventPublisher.publishEvent(new EmailVerificationRequestedEvent(email, otp));
+    }
+
+    /**
+     * The guess is spent before the code is checked and the limiter fails closed, for the reasons
+     * {@link OtpRateLimiter#acquireGuess} gives — a pending signup's code is the same 1e6-value
+     * secret as any other.
+     */
+    @Override
+    public SignupTicketResponse verifySignup(VerifySignupRequest request) {
+        String email = request.email().toLowerCase(Locale.ROOT);
+        otpRateLimiter.acquireGuess(PURPOSE_SIGNUP, email);
+
+        if (!signupChallenge.spendCode(email, request.otp())) {
+            throw new InvalidOtpException();
+        }
+        otpRateLimiter.recordGuessSuccess(PURPOSE_SIGNUP, email);
+
+        return new SignupTicketResponse(signupChallenge.issueTicket(email),
+                SignupChallenge.TICKET_TTL.toMillis());
+    }
+
+    /**
+     * The ticket is read first and spent last, inside the transaction: a taken username throws
+     * before it is spent, so the user just picks another, while two requests racing on one ticket
+     * both create a row and the loser of the {@code spendTicket} rolls its row back, registration
+     * event included. The unique index on email is the second line behind that.
+     */
+    @Override
+    @Transactional
+    public TokenResponse completeSignup(CompleteSignupRequest request) {
+        String email = signupChallenge.emailFor(request.signupToken())
+                .orElseThrow(InvalidSignupTokenException::new);
+
+        // Verified from the start: the address was proven before the row existed — that is what
+        // the ticket is.
+        User saved = createPasswordAccount(request.username(), email, request.password(), true);
+
+        if (!signupChallenge.spendTicket(request.signupToken())) {
+            throw new InvalidSignupTokenException();
+        }
+
+        securityEventRecorder.record(saved.getId(), SecurityEventType.EMAIL_VERIFIED, email);
+
+        return tokenIssuer.issue(saved, SecurityEventType.LOGIN_SUCCEEDED);
     }
 
     /**
@@ -511,10 +574,46 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
+     * The account both password signups end in — {@link #register} and {@link #completeSignup} —
+     * and the event user-service builds its profile from. The event goes to the outbox in the
+     * caller's transaction, so a caller that throws after this takes both back.
+     *
+     * <p>The exists checks are what name the taken field in the common case; {@link #saveUnique}
+     * is the line behind them for a request that raced past.
+     *
+     * @param emailVerified true when the address was proven before the account existed
+     */
+    private User createPasswordAccount(String username, String email, String password,
+                                       boolean emailVerified) {
+        if (userRepository.existsByUsernameIgnoreCaseAndDeletedAtIsNull(username)) {
+            throw new UsernameAlreadyExistsException(username);
+        }
+        if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
+            throw new EmailAlreadyExistsException(email);
+        }
+
+        User user = User.builder()
+                .username(username)
+                .email(email)
+                .passwordHash(HashUtils.bcryptHash(password))
+                .role(UserRole.USER)
+                .status(UserStatus.ACTIVE)
+                .build();
+        if (emailVerified) {
+            user.markEmailVerified();
+        }
+
+        User saved = saveUnique(user, username, email);
+        userEventProducer.publishUserRegistered(
+                UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail()));
+        return saved;
+    }
+
+    /**
      * Persists the new account, converting a lost uniqueness race into the same 409 the
      * sequential case returns.
      *
-     * <p>The existsBy checks in {@link #register} are not the guarantee: two concurrent
+     * <p>The existsBy checks in {@link #createPasswordAccount} are not the guarantee: two concurrent
      * registrations for the same identity both read nothing and both go on to insert, and only
      * uq_users_email / uq_users_username stops the second. The id is assigned rather than
      * generated, so Hibernate defers the INSERT to flush — left to {@code save()} the violation

@@ -2,13 +2,17 @@ package com.tiktok.authservice.controller;
 
 import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
+import com.tiktok.authservice.dto.request.CompleteSignupRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
 import com.tiktok.authservice.dto.request.ResendVerificationRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
+import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifySignupRequest;
+import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.service.AuthService;
@@ -39,6 +43,40 @@ public class AuthController {
                     + "409 USERNAME_ALREADY_EXISTS / EMAIL_ALREADY_EXISTS on a taken identity.")
     public ApiResponse<UserResponse> register(@Valid @RequestBody RegisterRequest request) {
         return ApiResponse.success(authService.register(request));
+    }
+
+    /**
+     * The email-first signup the web app uses: prove the mailbox, then choose a password and a
+     * username, and only then does an account exist. {@code /register} above stays for clients
+     * that create the account first and verify it afterwards.
+     */
+    @PostMapping("/register/start")
+    @Operation(summary = "Email-first signup: mail a code to a new address",
+            description = "Nothing is created yet. Call again to resend; the previous code stops "
+                    + "working. 409 EMAIL_ALREADY_EXISTS for an address that has an account, "
+                    + "429 TOO_MANY_OTP_REQUESTS past the send budget.")
+    public ApiResponse<Void> startSignup(@Valid @RequestBody StartSignupRequest request) {
+        authService.startSignup(request);
+        return ApiResponse.success(null);
+    }
+
+    @PostMapping("/register/verify")
+    @Operation(summary = "Email-first signup: spend the code",
+            description = "Answers the signupToken that /register/complete redeems, good for 30 "
+                    + "minutes. 400 INVALID_OTP on a wrong or expired code, 429 "
+                    + "TOO_MANY_OTP_REQUESTS after repeated guesses.")
+    public ApiResponse<SignupTicketResponse> verifySignup(@Valid @RequestBody VerifySignupRequest request) {
+        return ApiResponse.success(authService.verifySignup(request));
+    }
+
+    @PostMapping("/register/complete")
+    @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Email-first signup: create the account and sign in",
+            description = "The account is created already verified and a session is issued. "
+                    + "409 USERNAME_ALREADY_EXISTS keeps the signupToken usable; 400 "
+                    + "SIGNUP_SESSION_EXPIRED means start again from the email.")
+    public ApiResponse<TokenResponse> completeSignup(@Valid @RequestBody CompleteSignupRequest request) {
+        return ApiResponse.success(authService.completeSignup(request));
     }
 
     @PostMapping("/login")
