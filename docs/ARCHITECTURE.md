@@ -152,7 +152,7 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 
 | Topic | Producer | eventType header | Event(s) | Consumers |
 |---|---|---|---|---|
-| `auth.user-events` | auth-service (outbox) | — (1 shape) | `UserRegisteredEvent` | user-service |
+| `auth.user-events` | auth-service (outbox) | — (1 shape) | `UserRegisteredEvent` | user-service, chat-service (`AdminFanout`: chỉ báo console admin tải lại, không đọc payload) |
 | `auth.social-avatar-events` | auth-service (fire-and-forget) | — | `SocialAvatarDiscoveredEvent` | media-worker |
 | `video.video-events` | video-service (outbox per-doc) | `VideoPublishedEvent` / `VideoDeletedEvent` / `VideoPurgedEvent` / `VideoVisibilityChangedEvent` (vắng ⇒ Published) | `VideoPublishedEvent`, `VideoDeletedEvent` (ngay khi xoá — gỡ khỏi index), `VideoPurgedEvent` (hết hạn thùng rác — chỉ media-worker xoá media), `VideoVisibilityChangedEvent` | media-worker, search-service, recommendation-service, analytics-service, chat-service |
 | `media.video-transcoded-events` | media-worker (chờ ack 30s) | — | `VideoTranscodedEvent` | video-service, search-service, recommendation-service |

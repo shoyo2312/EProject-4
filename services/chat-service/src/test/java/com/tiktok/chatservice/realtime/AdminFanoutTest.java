@@ -54,6 +54,6 @@ class AdminFanoutTest {
         assertThat(listener.groupId()).startsWith("admin-realtime-");
         assertThat(listener.topics()).containsExactlyInAnyOrder(
                 "admin.report-events", "admin.moderation-events",
-                "media.video-moderation-events", "video.video-events");
+                "media.video-moderation-events", "video.video-events", "auth.user-events");
     }
 }

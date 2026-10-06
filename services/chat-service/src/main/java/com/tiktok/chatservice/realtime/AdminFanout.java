@@ -28,7 +28,8 @@ public class AdminFanout {
             "admin.report-events",
             "admin.moderation-events",
             "media.video-moderation-events",
-            "video.video-events"})
+            "video.video-events",
+            "auth.user-events"})
     public void onEvent(ConsumerRecord<String, String> record) {
         Header eventType = record.headers().lastHeader("eventType");
         String type = eventType == null
