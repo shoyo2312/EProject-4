@@ -20,15 +20,17 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
     /**
      * Handle lookup, for URLs that address an account by name rather than by id.
      *
-     * <p>{@code findFirst} because the column carries no unique constraint — it is a copy of
-     * auth-service's handle, which owns uniqueness — and case-insensitive because a handle in a
+     * <p>First rather than unique because the column carries no unique constraint — it is a copy
+     * of auth-service's handle, which owns uniqueness — and case-insensitive because a handle in a
      * URL is typed by hand.
      *
-     * <p>ponytail: sequential scan. The only index on username is the GIN trigram one V8 built
-     * for search, which does not serve equality; add a {@code lower(username)} btree if the
-     * profile table ever grows past "a class project".
+     * <p>{@code lower(...)} written out so V13's index serves it. Derived from the name alone,
+     * Spring Data compares {@code upper(...)}, which nothing indexes, and every profile opened by
+     * its handle scanned the table.
      */
-    Optional<UserProfile> findFirstByUsernameIgnoreCaseAndDeletedAtIsNull(String username);
+    @Query("select p from UserProfile p where lower(p.username) = lower(:username) and p.deletedAt is null "
+            + "order by p.id limit 1")
+    Optional<UserProfile> findFirstByUsernameIgnoreCaseAndDeletedAtIsNull(@Param("username") String username);
 
     List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<Long> userIds);
 
