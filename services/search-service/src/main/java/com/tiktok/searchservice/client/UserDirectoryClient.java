@@ -1,10 +1,10 @@
 package com.tiktok.searchservice.client;
 
+import com.tiktok.common.http.PooledRequestFactory;
 import com.tiktok.common.response.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -29,10 +29,9 @@ public class UserDirectoryClient {
     public UserDirectoryClient(@Value("${downstream.user-service-uri}") String userServiceUri,
                                @Value("${downstream.timeout-millis:1000}") long timeoutMillis) {
         // Without a timeout the JDK waits forever, and every search would wait with it.
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofMillis(timeoutMillis));
-        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
-        this.restClient = RestClient.builder().baseUrl(userServiceUri).requestFactory(requestFactory).build();
+        Duration timeout = Duration.ofMillis(timeoutMillis);
+        this.restClient = RestClient.builder().baseUrl(userServiceUri)
+                .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
     }
 
     /** Ids of the accounts whose handle or display name contains {@code query}, best first. */

@@ -1,9 +1,9 @@
 package com.tiktok.recommendationservice.config;
 
+import com.tiktok.common.http.PooledRequestFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -19,9 +19,8 @@ public class DownstreamRestClientConfig {
     @Bean
     public RestClient userServiceRestClient(@Value("${downstream.user-service-uri}") String userServiceUri,
                                             @Value("${downstream.timeout-millis:300}") long timeoutMillis) {
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofMillis(timeoutMillis));
-        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
-        return RestClient.builder().baseUrl(userServiceUri).requestFactory(requestFactory).build();
+        Duration timeout = Duration.ofMillis(timeoutMillis);
+        return RestClient.builder().baseUrl(userServiceUri)
+                .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
     }
 }
