@@ -135,6 +135,12 @@ com.tiktok.{service}/
 - Frame lấy **rải đều toàn video**, không phải mấy giây đầu — xem `Ffmpeg.sampleFrames`
 - Chi tiết: `docs/moderation.md`
 
+### Gọi service khác / Redis / JPA — bẫy hiệu năng đã gặp
+- RestClient gọi service nội bộ: dùng `PooledRequestFactory.create(connect, read)` (common-lib), KHÔNG dùng `SimpleClientHttpRequestFactory` — HttpURLConnection chỉ giữ 5 kết nối idle mỗi host, quá 5 request đồng thời là mỗi call mở TCP mới. HTTP/1.1 được ghim vì uvicorn (rank/moderation) làm rơi body khi gặp h2c upgrade
+- `executePipelined` cần `commons-pool2` trên classpath (video, interaction, recommendation đã có): không có pool, mỗi pipeline mở rồi đóng một kết nối TCP mới tới Redis
+- Spring Data derived `...IgnoreCase` sinh `upper(col) = upper(?)`, index `lower(...)` không dùng được → seq scan. Cần index thì viết `@Query` với `lower(...)` (xem auth `UserRepository`)
+- Endpoint batch (counts, like-status, repost-context, settings…) đọc cả trang trong một lệnh (MGET / `IN` / pipeline), không lặp từng id
+
 ### Dev-only affordances — tắt mặc định, KHÔNG bật trên production
 Test thủ công (Postman) cần đọc OTP mà không có mailbox thật. Trước đây in thẳng bằng
 `log.warn("[DEV ONLY ...]")`; giờ nằm sau một cờ tắt mặc định:
