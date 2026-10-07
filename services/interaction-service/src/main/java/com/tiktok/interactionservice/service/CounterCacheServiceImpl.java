@@ -4,10 +4,17 @@ import com.tiktok.interactionservice.entity.VideoCounters;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.RedisStringCommands.SetOption;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.types.Expiration;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Cache-aside for video interaction counters. Cassandra's video_counters counter table is
@@ -51,6 +58,32 @@ public class CounterCacheServiceImpl implements CounterCacheService {
         return counts;
     }
 
+    /**
+     * {@link #getCounts(Long)} for a page of videos at a fixed cost: one MGET, one Cassandra read
+     * for whatever missed (an IN over the partition key), and one pipelined write to cache it.
+     * Asked one id at a time, a fifty-video page was up to a hundred and fifty round trips in a row.
+     */
+    @Override
+    public Map<Long, VideoCounts> getCounts(List<Long> videoIds) {
+        if (videoIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<Long, VideoCounts> counts = new HashMap<>(readCache(videoIds));
+        List<Long> missing = videoIds.stream().filter(videoId -> !counts.containsKey(videoId)).toList();
+        if (missing.isEmpty()) {
+            return counts;
+        }
+
+        Map<Long, VideoCounts> loaded = new HashMap<>();
+        videoCountersRepository.findAllById(missing)
+                .forEach(row -> loaded.put(row.getVideoId(), toVideoCounts(row)));
+        missing.forEach(videoId -> loaded.putIfAbsent(videoId, VideoCounts.ZERO));
+        writeCache(loaded);
+        counts.putAll(loaded);
+        return counts;
+    }
+
     @Override
     public void invalidate(Long videoId) {
         try {
@@ -83,6 +116,30 @@ public class CounterCacheServiceImpl implements CounterCacheService {
             log.warn("Counter cache unavailable for {}, reading Cassandra: {}", key, e.getMessage());
             return null;
         }
+        return parse(cached);
+    }
+
+    /** {@link #readCache(String)} for many ids in one MGET: the readable hits, keyed by id. */
+    private Map<Long, VideoCounts> readCache(List<Long> videoIds) {
+        List<String> values;
+        try {
+            values = redisTemplate.opsForValue().multiGet(videoIds.stream().map(videoId -> KEY_PREFIX + videoId).toList());
+        } catch (RuntimeException e) {
+            log.warn("Counter cache unavailable for {} videos, reading Cassandra: {}", videoIds.size(), e.getMessage());
+            return Map.of();
+        }
+
+        Map<Long, VideoCounts> hits = new HashMap<>();
+        for (int i = 0; values != null && i < values.size(); i++) {
+            VideoCounts counts = parse(values.get(i));
+            if (counts != null) {
+                hits.put(videoIds.get(i), counts);
+            }
+        }
+        return hits;
+    }
+
+    private static VideoCounts parse(String cached) {
         if (cached == null) {
             return null;
         }
@@ -106,16 +163,40 @@ public class CounterCacheServiceImpl implements CounterCacheService {
 
     private void writeCache(String key, VideoCounts counts) {
         try {
-            redisTemplate.opsForValue().set(key, "%d%s%d%s%d%s%d%s%d%s%d".formatted(
-                    counts.likeCount(), SEPARATOR,
-                    counts.commentCount(), SEPARATOR,
-                    counts.shareCount(), SEPARATOR,
-                    counts.viewCount(), SEPARATOR,
-                    counts.saveCount(), SEPARATOR,
-                    counts.repostCount()), TTL);
+            redisTemplate.opsForValue().set(key, format(counts), TTL);
         } catch (RuntimeException e) {
             log.warn("Could not populate the counter cache for {}: {}", key, e.getMessage());
         }
+    }
+
+    /**
+     * The same SET-with-expiry as {@link #writeCache(String, VideoCounts)} for each entry, sent as
+     * one pipeline. Not MSET: it takes no TTL, and a key without one never reloads (see readCache).
+     */
+    private void writeCache(Map<Long, VideoCounts> counts) {
+        try {
+            Expiration expiry = Expiration.from(TTL);
+            redisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+                counts.forEach((videoId, value) -> connection.stringCommands().set(
+                        (KEY_PREFIX + videoId).getBytes(StandardCharsets.UTF_8),
+                        format(value).getBytes(StandardCharsets.UTF_8),
+                        expiry,
+                        SetOption.upsert()));
+                return null;
+            });
+        } catch (RuntimeException e) {
+            log.warn("Could not populate the counter cache for {} videos: {}", counts.size(), e.getMessage());
+        }
+    }
+
+    private static String format(VideoCounts counts) {
+        return "%d%s%d%s%d%s%d%s%d%s%d".formatted(
+                counts.likeCount(), SEPARATOR,
+                counts.commentCount(), SEPARATOR,
+                counts.shareCount(), SEPARATOR,
+                counts.viewCount(), SEPARATOR,
+                counts.saveCount(), SEPARATOR,
+                counts.repostCount());
     }
 
     private VideoCounts toVideoCounts(VideoCounters counters) {
