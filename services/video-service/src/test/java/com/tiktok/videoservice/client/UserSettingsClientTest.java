@@ -6,7 +6,9 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -50,7 +52,7 @@ class UserSettingsClientTest {
 
         assertThat(client.commentAudience(7L)).isEqualTo("NO_ONE");
 
-        verify(cache).putCommentAudience(7L, "NO_ONE");
+        verify(cache).putCommentAudiences(Map.of(7L, "NO_ONE"));
         server.verify();
     }
 
@@ -72,16 +74,15 @@ class UserSettingsClientTest {
      */
     @Test
     void closedToComments_asksUserServiceOnceForTheMissesOnly() {
-        when(cache.getCommentAudience(7L)).thenReturn(Optional.empty());
-        when(cache.getCommentAudience(8L)).thenReturn(Optional.of("EVERYONE"));
-        when(cache.getCommentAudience(9L)).thenReturn(Optional.of("NO_ONE"));
+        // One MGET for the page: 7 misses, 8 and 9 answer from the cache.
+        when(cache.getCommentAudiences(Set.of(7L, 8L, 9L))).thenReturn(Map.of(8L, "EVERYONE", 9L, "NO_ONE"));
         server.expect(requestTo("http://user-service/api/v1/users/internal/settings?ids=7"))
                 .andRespond(withSuccess(ONE_POLICY, MediaType.APPLICATION_JSON));
 
         assertThat(client.closedToComments(java.util.List.of(7L, 8L, 9L, 9L)))
                 .containsExactlyInAnyOrder(7L, 9L);
 
-        verify(cache).putCommentAudience(7L, "NO_ONE");
+        verify(cache).putCommentAudiences(Map.of(7L, "NO_ONE"));
         server.verify();
     }
 

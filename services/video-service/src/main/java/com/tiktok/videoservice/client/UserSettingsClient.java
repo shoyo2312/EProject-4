@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -66,26 +65,21 @@ public class UserSettingsClient {
      * The accounts among {@code userIds} that accept comments from no one — every video they own
      * reads as comments off. Cache first, then a single call for the rest, so a feed page of
      * fifty videos is at most one trip to user-service rather than fifty. Fails open like
-     * {@link #commentAudience}: an account nobody could answer for is not closed.
-     *
-     * <p>ponytail: one Redis GET per distinct owner; a pipelined MGET if pages ever get large.
+     * {@link #commentAudience}: an account nobody could answer for is not closed. The cache is
+     * read in one MGET for the whole page, not a GET per owner.
      */
     public Set<Long> closedToComments(Collection<Long> userIds) {
-        Set<Long> closed = new HashSet<>();
-        List<Long> missing = new ArrayList<>();
-        for (Long userId : new HashSet<>(userIds)) {
-            if (userId == null) {
-                continue;
-            }
-            String cached = userSettingsCache.getCommentAudience(userId).orElse(null);
-            if (cached == null) {
-                missing.add(userId);
-            } else if (NO_ONE.equals(cached)) {
-                closed.add(userId);
-            }
+        Set<Long> owners = new HashSet<>(userIds);
+        owners.remove(null);
+        if (owners.isEmpty()) {
+            return Set.of();
         }
 
-        fetch(missing).forEach((userId, audience) -> {
+        Map<Long, String> audiences = new HashMap<>(userSettingsCache.getCommentAudiences(owners));
+        audiences.putAll(fetch(owners.stream().filter(owner -> !audiences.containsKey(owner)).toList()));
+
+        Set<Long> closed = new HashSet<>();
+        audiences.forEach((userId, audience) -> {
             if (NO_ONE.equals(audience)) {
                 closed.add(userId);
             }
@@ -122,10 +116,8 @@ public class UserSettingsClient {
             response.data().stream()
                     .filter(Objects::nonNull)
                     .filter(view -> view.userId() != null && view.commentAudience() != null)
-                    .forEach(view -> {
-                        audiences.put(view.userId(), view.commentAudience());
-                        userSettingsCache.putCommentAudience(view.userId(), view.commentAudience());
-                    });
+                    .forEach(view -> audiences.put(view.userId(), view.commentAudience()));
+            userSettingsCache.putCommentAudiences(audiences);
             return audiences;
         } catch (RestClientException e) {
             log.warn("Could not read settings for users {}; leaving comments unrestricted", userIds, e);

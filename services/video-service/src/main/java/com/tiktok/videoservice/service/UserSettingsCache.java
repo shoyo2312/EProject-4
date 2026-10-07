@@ -3,9 +3,17 @@ package com.tiktok.videoservice.service;
 import com.tiktok.videoservice.config.UserSettingsCacheProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.connection.RedisStringCommands.SetOption;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.types.Expiration;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -41,15 +49,54 @@ public class UserSettingsCache {
         }
     }
 
-    public void putCommentAudience(Long userId, String commentAudience) {
-        if (!properties.enabled()) {
+    /**
+     * {@link #getCommentAudience} for every owner on a page in one MGET — a GET each was one round
+     * trip per owner on every feed page. Owners with no entry are absent from the answer.
+     */
+    public Map<Long, String> getCommentAudiences(Collection<Long> userIds) {
+        if (!properties.enabled() || userIds.isEmpty()) {
+            return Map.of();
+        }
+
+        try {
+            List<Long> ids = List.copyOf(userIds);
+            List<String> values = redisTemplate.opsForValue()
+                    .multiGet(ids.stream().map(UserSettingsCache::key).toList());
+            Map<Long, String> hits = new HashMap<>();
+            for (int i = 0; values != null && i < values.size(); i++) {
+                if (values.get(i) != null) {
+                    hits.put(ids.get(i), values.get(i));
+                }
+            }
+            return hits;
+        } catch (Exception e) {
+            log.debug("user settings cache read failed for {} users, asking user-service", userIds.size(), e);
+            return Map.of();
+        }
+    }
+
+    /**
+     * Every answer from one user-service call in a single pipeline, each with its own expiry —
+     * the shape {@link VideoCache#putAll} uses, for the same reason: MSET takes no TTL, and an
+     * entry that never expires is a settings change that never shows.
+     */
+    public void putCommentAudiences(Map<Long, String> audiences) {
+        if (!properties.enabled() || audiences.isEmpty()) {
             return;
         }
 
         try {
-            redisTemplate.opsForValue().set(key(userId), commentAudience, properties.ttl());
+            Expiration expiry = Expiration.from(properties.ttl());
+            redisTemplate.executePipelined((RedisCallback<Object>) connection -> {
+                audiences.forEach((userId, audience) -> connection.stringCommands().set(
+                        key(userId).getBytes(StandardCharsets.UTF_8),
+                        audience.getBytes(StandardCharsets.UTF_8),
+                        expiry,
+                        SetOption.upsert()));
+                return null;
+            });
         } catch (Exception e) {
-            log.debug("user settings cache write failed for userId={}, cache left cold", userId, e);
+            log.debug("user settings cache write failed for {} users, cache left cold", audiences.size(), e);
         }
     }
 
