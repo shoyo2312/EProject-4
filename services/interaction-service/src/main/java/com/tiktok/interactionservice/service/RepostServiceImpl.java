@@ -26,6 +26,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -159,18 +160,21 @@ public class RepostServiceImpl implements RepostService {
                 .distinct()
                 .limit(MAX_BATCH_SIZE)
                 .toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        // One query for the page rather than one per card. Grouping keeps each video's reposters
+        // in the order its partition returned them, which is what the per-video read answered.
+        Map<Long, List<Long>> reposters = repostByVideoRepository.findByVideoIdIn(ids, RECENT_REPOSTERS_LIMIT)
+                .stream()
+                .collect(Collectors.groupingBy(row -> row.getKey().getVideoId(),
+                        Collectors.mapping(row -> row.getKey().getUserId(), Collectors.toList())));
         Set<Long> repostedByMe = repostedBy(currentUserId, ids);
         return ids.stream()
-                .map(videoId -> getContext(videoId, repostedByMe.contains(videoId)))
+                .map(videoId -> new RepostContextResponse(videoId, repostedByMe.contains(videoId),
+                        reposters.getOrDefault(videoId, List.of())))
                 .toList();
-    }
-
-    private RepostContextResponse getContext(Long videoId, boolean repostedByMe) {
-        List<Long> reposterIds = repostByVideoRepository.findByVideoId(videoId, RECENT_REPOSTERS_LIMIT)
-                .stream()
-                .map(row -> row.getKey().getUserId())
-                .toList();
-        return new RepostContextResponse(videoId, repostedByMe, reposterIds);
     }
 
     /**
