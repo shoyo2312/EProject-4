@@ -67,6 +67,31 @@ class VideoAudienceClientTest {
         assertThat(client.commentsArePublic("100")).isFalse();
     }
 
+    /**
+     * An account that accepts comments from no one closes every video it owns, whatever the
+     * video's own switch says — video-service reports the two apart.
+     */
+    @Test
+    void anAccountThatAcceptsNoCommentsIsClosed() {
+        server.expect(requestTo(URL)).andRespond(withSuccess(
+                "{\"success\":true,\"data\":{\"id\":\"100\",\"status\":\"PUBLISHED\",\"visibility\":\"PUBLIC\","
+                        + "\"commentsDisabled\":false,\"accountCommentsOff\":true}}",
+                MediaType.APPLICATION_JSON));
+
+        assertThat(client.commentsArePublic("100")).isFalse();
+    }
+
+    /** A private account's PUBLIC video is for its followers, and the topic is for anyone. */
+    @Test
+    void aPrivateAccountsVideoIsClosedEvenIfVideoServiceServesIt() {
+        server.expect(requestTo(URL)).andRespond(withSuccess(
+                "{\"success\":true,\"data\":{\"id\":\"100\",\"status\":\"PUBLISHED\",\"visibility\":\"PUBLIC\","
+                        + "\"commentsDisabled\":false,\"ownerPrivate\":true}}",
+                MediaType.APPLICATION_JSON));
+
+        assertThat(client.commentsArePublic("100")).isFalse();
+    }
+
     @Test
     void aNonPublicAnswerIsClosedEvenIfVideoServiceServesIt() {
         server.expect(requestTo(URL)).andRespond(

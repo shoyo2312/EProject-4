@@ -36,8 +36,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>Answers are kept for {@link #TTL}, or a busy thread would cost one call per comment on every
  * replica. A state change on the video drops its entry at once (VideoStateFanout). Switching
- * comments off has no event, so frames stop within the TTL — and interaction-service refuses new
- * comments from that moment, so only likes and deletions can still go out in the meantime.
+ * comments off, on the video or for the owner's whole account, has no event, so frames stop within
+ * the TTL — and interaction-service refuses new comments from that moment, so only likes and
+ * deletions can still go out in the meantime.
  */
 @Slf4j
 @Component
@@ -109,14 +110,19 @@ public class VideoAudienceClient {
     }
 
     /**
-     * The status and visibility are checked again although an anonymous read only answers for a
-     * PUBLISHED, PUBLIC video: this is the one check between a comment and every open socket.
+     * The status, visibility and owner's privacy are checked again although an anonymous read
+     * only answers for a PUBLISHED, PUBLIC video of a public account: this is the one check between
+     * a comment and every open socket. Comments are closed by either switch video-service reports
+     * — the video's own, or the owner's account accepting comments from no one, which it keeps
+     * apart so the owner still sees what the video's toggle was set to.
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record VideoView(String status, String visibility, boolean commentsDisabled) {
+    private record VideoView(String status, String visibility, boolean ownerPrivate,
+                             boolean commentsDisabled, boolean accountCommentsOff) {
 
         boolean commentsArePublic() {
-            return "PUBLISHED".equals(status) && "PUBLIC".equals(visibility) && !commentsDisabled;
+            return "PUBLISHED".equals(status) && "PUBLIC".equals(visibility) && !ownerPrivate
+                    && !commentsDisabled && !accountCommentsOff;
         }
     }
 
