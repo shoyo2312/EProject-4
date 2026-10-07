@@ -92,6 +92,20 @@ class AdminUserDirectoryTest {
                 .containsExactly("janedoe");
     }
 
+    /** Text, not a pattern: unescaped, {@code _} matched any one character and listed everyone. */
+    @Test
+    void searchesForWildcardCharactersLiterally() {
+        save("john_doe", "john_doe@example.com", UserStatus.ACTIVE);
+
+        assertThat(directory.search("_", null, FIRST_PAGE))
+                .extracting(AdminUserResponse::username)
+                .containsExactly("john_doe");
+        assertThat(directory.search("%", null, FIRST_PAGE)).isEmpty();
+        assertThat(directory.search("n_d", null, FIRST_PAGE))
+                .extracting(AdminUserResponse::username)
+                .containsExactly("john_doe");
+    }
+
     @Test
     void combinesBothFilters() {
         assertThat(directory.search("doe", UserStatus.ACTIVE, FIRST_PAGE))

@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -34,7 +35,7 @@ public class AdminUserDirectory {
     public Page<AdminUserResponse> search(String query, UserStatus status, Pageable pageable) {
         String term = (query == null || query.isBlank())
                 ? null
-                : "%" + query.trim().toLowerCase() + "%";
+                : "%" + escapeLike(query.trim().toLowerCase(Locale.ROOT)) + "%";
 
         Page<User> users = userRepository.searchForAdmin(status, term, pageable);
 
@@ -49,5 +50,13 @@ public class AdminUserDirectory {
 
         return users.map(user -> userMapper.toAdminResponse(
                 user, providersByUser.getOrDefault(user.getId(), List.of())));
+    }
+
+    /**
+     * The search box takes text, not a pattern: {@code _} and {@code %} match themselves. Left
+     * unescaped, a search for {@code _} matched every account with a username.
+     */
+    private static String escapeLike(String query) {
+        return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 }

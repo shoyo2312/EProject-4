@@ -34,16 +34,17 @@ public interface UserRepository extends JpaRepository<User, Long> {
     /**
      * Admin console directory. Both filters are optional and independent, which is four
      * combinations — one query with null-tolerant predicates rather than four derived methods.
-     * {@code term} is expected already lowercased and wrapped in wildcards; a null email simply
-     * fails the LIKE, which is the wanted behaviour for a social account that has none.
+     * {@code term} is expected already lowercased, LIKE-escaped with a backslash and wrapped in
+     * wildcards; a null email simply fails the LIKE, which is the wanted behaviour for a social
+     * account that has none.
      */
     @Query("""
             SELECT u FROM User u
             WHERE u.deletedAt IS NULL
               AND (:status IS NULL OR u.status = :status)
               AND (:term IS NULL
-                   OR LOWER(u.username) LIKE :term
-                   OR LOWER(u.email) LIKE :term)
+                   OR LOWER(u.username) LIKE :term ESCAPE '\\'
+                   OR LOWER(u.email) LIKE :term ESCAPE '\\')
             """)
     Page<User> searchForAdmin(@Param("status") UserStatus status,
                               @Param("term") String term,
