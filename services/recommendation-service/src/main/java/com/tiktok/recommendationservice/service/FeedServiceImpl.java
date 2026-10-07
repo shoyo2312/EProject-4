@@ -75,13 +75,22 @@ public class FeedServiceImpl implements FeedService {
 
     @Override
     public List<FeedItemResponse> getFeed(Long userId, int limit) {
-        Map<String, Double> trending = trendingCandidates();
+        // Everything the feed reads about this viewer before it has candidates, in one round trip.
+        List<Object> reads = RedisPipeline.run(redisTemplate, ops -> {
+            ops.opsForZSet().reverseRangeWithScores(RecoKeys.TRENDING, 0, TRENDING_POOL - 1);
+            ops.opsForZSet().reverseRangeWithScores(RecoKeys.userTags(userId), 0, TOP_TAGS - 1L);
+            ops.opsForZSet().range(RecoKeys.userSeen(userId), 0, -1);
+            ops.opsForZSet().range(RecoKeys.userServed(userId), 0, -1);
+        });
+        Map<String, Double> trending = trendingCandidates(RedisPipeline.answer(reads, 0));
+        Map<String, Double> topTags = topTags(RedisPipeline.answer(reads, 1));
         Map<String, Double> affinityByVideo = new HashMap<>();
         Map<String, Integer> tagOverlap = new HashMap<>();
         Map<String, List<String>> reasons = new HashMap<>();
 
-        for (Map.Entry<String, Double> tag : topTags(userId).entrySet()) {
-            for (String videoId : videosTagged(tag.getKey())) {
+        Map<String, Set<String>> tagged = videosTagged(topTags.keySet());
+        for (Map.Entry<String, Double> tag : topTags.entrySet()) {
+            for (String videoId : tagged.get(tag.getKey())) {
                 affinityByVideo.merge(videoId, tag.getValue(), Double::sum);
                 tagOverlap.merge(videoId, 1, Integer::sum);
                 reasons.computeIfAbsent(videoId, id -> new ArrayList<>()).add("tag:" + tag.getKey());
@@ -102,7 +111,7 @@ public class FeedServiceImpl implements FeedService {
         // Trending comes out of trendingCandidates in rank order, which this set preserves.
         pool.addAll(trending.keySet());
 
-        Set<String> excluded = alreadyDelivered(userId);
+        Set<String> excluded = alreadyDelivered(RedisPipeline.answer(reads, 2), RedisPipeline.answer(reads, 3));
         excluded.addAll(byMutedAccounts(userId, pool));
         List<String> candidates = pool.stream()
                 .filter(videoId -> !excluded.contains(videoId))
@@ -113,8 +122,15 @@ public class FeedServiceImpl implements FeedService {
             return List.of();
         }
 
-        Counters counters = counters(candidates);
-        Map<String, Double> ages = ageHours(candidates);
+        // The three per-candidate lookups in one round trip, each one ZMSCORE for the whole set.
+        Object[] members = candidates.toArray();
+        List<Object> scored = RedisPipeline.run(redisTemplate, ops -> {
+            ops.opsForZSet().score(RecoKeys.VIDEO_WATCHES, members);
+            ops.opsForZSet().score(RecoKeys.VIDEO_COMPLETIONS, members);
+            ops.opsForZSet().score(RecoKeys.VIDEO_PUBLISHED, members);
+        });
+        Counters counters = counters(candidates, RedisPipeline.answer(scored, 0), RedisPipeline.answer(scored, 1));
+        Map<String, Double> ages = ageHours(candidates, RedisPipeline.answer(scored, 2));
 
         Map<String, Double> modelScores = rankClient.score(userId,
                 features(candidates, counters, ages, affinityByVideo, tagOverlap));
@@ -177,9 +193,7 @@ public class FeedServiceImpl implements FeedService {
         return scores;
     }
 
-    private Map<String, Double> trendingCandidates() {
-        Set<ZSetOperations.TypedTuple<String>> tuples = redisTemplate.opsForZSet()
-                .reverseRangeWithScores(RecoKeys.TRENDING, 0, TRENDING_POOL - 1);
+    private Map<String, Double> trendingCandidates(Set<ZSetOperations.TypedTuple<String>> tuples) {
         if (tuples == null) {
             return Map.of();
         }
@@ -195,9 +209,7 @@ public class FeedServiceImpl implements FeedService {
     }
 
     /** Only tags the viewer is positive about — a tag they keep skipping must not fetch more. */
-    private Map<String, Double> topTags(Long userId) {
-        Set<ZSetOperations.TypedTuple<String>> tuples = redisTemplate.opsForZSet()
-                .reverseRangeWithScores(RecoKeys.userTags(userId), 0, TOP_TAGS - 1L);
+    private Map<String, Double> topTags(Set<ZSetOperations.TypedTuple<String>> tuples) {
         if (tuples == null) {
             return Map.of();
         }
@@ -210,9 +222,17 @@ public class FeedServiceImpl implements FeedService {
         return tags;
     }
 
-    private Set<String> videosTagged(String tag) {
-        Set<String> videoIds = redisTemplate.opsForZSet().reverseRange(RecoKeys.tagIndex(tag), 0, PER_TAG - 1);
-        return videoIds == null ? Set.of() : videoIds;
+    /** The newest videos under each tag, every tag in the same round trip. */
+    private Map<String, Set<String>> videosTagged(Collection<String> tags) {
+        List<String> ordered = List.copyOf(tags);
+        List<Object> results = ordered.isEmpty() ? List.of() : RedisPipeline.run(redisTemplate, ops ->
+                ordered.forEach(tag -> ops.opsForZSet().reverseRange(RecoKeys.tagIndex(tag), 0, PER_TAG - 1)));
+        Map<String, Set<String>> byTag = new HashMap<>();
+        for (int i = 0; i < ordered.size(); i++) {
+            Set<String> videoIds = RedisPipeline.answer(results, i);
+            byTag.put(ordered.get(i), videoIds == null ? Set.of() : videoIds);
+        }
+        return byTag;
     }
 
     /**
@@ -221,13 +241,11 @@ public class FeedServiceImpl implements FeedService {
      * by simply asking again — see {@link RecoKeys#userServed} for why a cursor does not work
      * here and why the two sets are not one.
      */
-    private Set<String> alreadyDelivered(Long userId) {
+    private Set<String> alreadyDelivered(Set<String> seen, Set<String> served) {
         Set<String> excluded = new HashSet<>();
-        Set<String> seen = redisTemplate.opsForZSet().range(RecoKeys.userSeen(userId), 0, -1);
         if (seen != null) {
             excluded.addAll(seen);
         }
-        Set<String> served = redisTemplate.opsForZSet().range(RecoKeys.userServed(userId), 0, -1);
         if (served != null) {
             excluded.addAll(served);
         }
@@ -274,11 +292,13 @@ public class FeedServiceImpl implements FeedService {
                 .map(item -> (ZSetOperations.TypedTuple<String>)
                         new DefaultTypedTuple<>(item.videoId(), now))
                 .collect(Collectors.toSet());
-        redisTemplate.opsForZSet().add(key, served);
-        redisTemplate.opsForZSet().removeRange(key, 0, -RecoKeys.TRIM_TO - 1);
-        // Refreshed on every request on purpose: the window is meant to cover a scrolling
-        // session, and a session that is still going should not have its head expire under it.
-        redisTemplate.expire(key, RecoKeys.SERVED_TTL);
+        RedisPipeline.run(redisTemplate, ops -> {
+            ops.opsForZSet().add(key, served);
+            ops.opsForZSet().removeRange(key, 0, -RecoKeys.TRIM_TO - 1);
+            // Refreshed on every request on purpose: the window is meant to cover a scrolling
+            // session, and a session that is still going should not have its head expire under it.
+            ops.expire(key, RecoKeys.SERVED_TTL);
+        });
     }
 
     /** Raw watch counts alongside the completion rate, because the model wants both. */
@@ -286,14 +306,11 @@ public class FeedServiceImpl implements FeedService {
     }
 
     /**
-     * Two ZMSCORE calls for the whole candidate set rather than a round trip per video: at 500
-     * candidates the difference is a feed that answers in two hops and one that answers in a
+     * From two ZMSCORE answers for the whole candidate set rather than a round trip per video: at
+     * 500 candidates the difference is a feed that answers in one hop and one that answers in a
      * thousand.
      */
-    private Counters counters(List<String> videoIds) {
-        Object[] members = videoIds.toArray();
-        List<Double> watches = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_WATCHES, members);
-        List<Double> completions = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_COMPLETIONS, members);
+    private Counters counters(List<String> videoIds, List<Double> watches, List<Double> completions) {
         if (watches == null || completions == null) {
             return new Counters(Map.of(), Map.of());
         }
@@ -315,8 +332,7 @@ public class FeedServiceImpl implements FeedService {
         return new Counters(watchCounts, rates);
     }
 
-    private Map<String, Double> ageHours(List<String> videoIds) {
-        List<Double> publishedAt = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_PUBLISHED, videoIds.toArray());
+    private Map<String, Double> ageHours(List<String> videoIds, List<Double> publishedAt) {
         if (publishedAt == null) {
             return Map.of();
         }
