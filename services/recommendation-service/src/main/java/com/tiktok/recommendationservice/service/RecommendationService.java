@@ -43,6 +43,15 @@ public interface RecommendationService {
     void recordHeld(String videoId);
 
     /**
+     * Keeps a video whose transcode failed out of the feed without forgetting it. A failure is not
+     * final: video-service leaves FAILED open for a redelivered publication to rescue, and the
+     * rescue comes in through {@link #recordVideoReady} like any first success. So unlike
+     * {@link #recordVideoDeleted} this leaves no tombstone and keeps the stashed tags, owner and
+     * private flag.
+     */
+    void recordTranscodeFailed(String videoId);
+
+    /**
      * Puts a video into everything candidate generation reads — trending, the per-tag indexes,
      * the publish-time set — using the tags {@link #recordVideoUploaded} stashed. Driven by the
      * transcode result, so nothing enters the feed before it can be played.

@@ -153,6 +153,25 @@ class RecommendationServiceImplTest {
     }
 
     /**
+     * A failed transcode can still be rescued by a redelivered publication, and the rescue comes
+     * back through recordVideoReady. A tombstone would turn it away for eight days, and erasing the
+     * private flag would let a private video into trending once it got in.
+     */
+    @Test
+    void recordTranscodeFailed_withdrawsTheVideo_butLeavesNoTombstoneAndKeepsTheStash() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordTranscodeFailed("vid1");
+
+        verify(zSetOperations).remove("reco:tag:dance", (Object) "vid1");
+        verify(zSetOperations).remove("reco:trending", (Object) "vid1");
+        verify(valueOperations, never()).set(eq("reco:video:deleted:vid1"), anyString(), any(java.time.Duration.class));
+        verify(redisTemplate, never()).delete("reco:video:tags:vid1");
+        verify(hashOperations, never()).delete(eq("reco:video:owner"), any());
+        verify(setOperations, never()).remove(eq("reco:video:private"), any());
+    }
+
+    /**
      * A takedown hid the video everywhere except here: it stayed in trending and the tag indexes,
      * so the feed kept handing out an id that hydrates to nothing and costs the viewer a slot.
      */

@@ -164,6 +164,21 @@ public class RecommendationServiceImpl implements RecommendationService {
         withdraw(videoId);
     }
 
+    /**
+     * Withdrawn and nothing more. It used to go through {@link #recordVideoDeleted}, whose
+     * tombstone then turned the rescued video away at {@link #recordVideoReady} for eight days,
+     * and whose cleanup erased the private flag the rescue needs to keep the video off the
+     * public feed.
+     *
+     * <p>ponytail: a failure nothing rescues keeps its owner and private-flag entries until the
+     * video is deleted or purged, whose events clear them — one hash field and at most one set
+     * member per such upload.
+     */
+    @Override
+    public void recordTranscodeFailed(String videoId) {
+        withdraw(videoId);
+    }
+
     private static boolean removed(Long count) {
         return count != null && count > 0;
     }
