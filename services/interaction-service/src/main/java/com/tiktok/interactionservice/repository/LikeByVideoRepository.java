@@ -7,6 +7,7 @@ import org.springframework.data.cassandra.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.List;
 
 public interface LikeByVideoRepository extends CassandraRepository<LikeByVideo, LikeByVideoKey> {
 
@@ -24,4 +25,12 @@ public interface LikeByVideoRepository extends CassandraRepository<LikeByVideo, 
      */
     @Query("DELETE FROM likes_by_video WHERE video_id = :videoId AND user_id = :userId IF EXISTS")
     boolean deleteIfExists(@Param("videoId") Long videoId, @Param("userId") Long userId);
+
+    /**
+     * The rows among {@code videoIds} this user has liked, in one query: an IN over the partition
+     * key with the user pinned in the clustering key. The batch status endpoint used to make one
+     * point read per id, in a row.
+     */
+    @Query("SELECT * FROM likes_by_video WHERE video_id IN :videoIds AND user_id = :userId")
+    List<LikeByVideo> findLikedAmong(@Param("videoIds") List<Long> videoIds, @Param("userId") Long userId);
 }

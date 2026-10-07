@@ -23,7 +23,10 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -173,17 +176,28 @@ public class LikeServiceImpl implements LikeService {
 
     @Override
     public List<LikeStatusResponse> getStatuses(List<Long> videoIds, Long currentUserId) {
-        // One point read per id against Cassandra/Redis rather than a fan-out of HTTP requests
-        // through the gateway — the batch endpoint exists to collapse the latter, not the former.
-        // Which is also why the cap is here and not in the controller: every id costs a Cassandra
-        // point read and a cache read, and the ids arrive in a query string, so nothing else stops
-        // one request asking for thousands of round trips. Distinct first, so a list padded with
-        // one repeated id cannot use up the cap.
-        return videoIds.stream()
+        // Two reads for the whole page — the viewer's likes in one IN, the counters in one batch —
+        // where it used to be a Cassandra point read and a cache read per id, one after another.
+        // The cap stays here rather than in the controller: the ids arrive in a query string, so
+        // nothing else stops one request naming thousands of partitions. Distinct first, so a list
+        // padded with one repeated id cannot use up the cap.
+        List<Long> ids = videoIds.stream()
                 .filter(Objects::nonNull)
                 .distinct()
                 .limit(MAX_BATCH_SIZE)
-                .map(videoId -> getStatus(videoId, currentUserId))
+                .toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        Set<Long> liked = currentUserId == null ? Set.of()
+                : likeByVideoRepository.findLikedAmong(ids, currentUserId).stream()
+                        .map(row -> row.getKey().getVideoId())
+                        .collect(Collectors.toSet());
+        Map<Long, VideoCounts> counts = counterCacheService.getCounts(ids);
+        return ids.stream()
+                .map(videoId -> new LikeStatusResponse(videoId, liked.contains(videoId),
+                        counts.getOrDefault(videoId, VideoCounts.ZERO).likeCount()))
                 .toList();
     }
 
