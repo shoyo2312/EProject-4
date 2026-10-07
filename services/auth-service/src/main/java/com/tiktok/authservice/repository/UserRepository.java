@@ -16,20 +16,29 @@ import java.util.Optional;
 /**
  * All lookups are case-insensitive: an account registered as Test@Gmail.com must be reachable by
  * typing test@gmail.com, and two usernames differing only in case must not coexist. The matching
- * unique indexes are on lower(email)/lower(username) — see V6 — so these stay index-backed.
+ * unique indexes are on lower(email)/lower(username) — see V6.
+ *
+ * <p>The four identity lookups spell out {@code lower(...)} instead of leaving it to the
+ * {@code IgnoreCase} in their names: Spring Data derives that as {@code upper(col) = upper(?)},
+ * which no index here matches, so every sign-in, registration check and reset request was a
+ * sequential scan of the whole table. The names stay so no caller changes.
  */
 public interface UserRepository extends JpaRepository<User, Long> {
 
     /** Bans that have run out, for the sweep that lifts them. */
     List<User> findByStatusAndBannedUntilBefore(UserStatus status, Instant cutoff);
 
-    Optional<User> findByUsernameIgnoreCaseAndDeletedAtIsNull(String username);
+    @Query("select u from User u where lower(u.username) = lower(:username) and u.deletedAt is null")
+    Optional<User> findByUsernameIgnoreCaseAndDeletedAtIsNull(@Param("username") String username);
 
-    Optional<User> findByEmailIgnoreCaseAndDeletedAtIsNull(String email);
+    @Query("select u from User u where lower(u.email) = lower(:email) and u.deletedAt is null")
+    Optional<User> findByEmailIgnoreCaseAndDeletedAtIsNull(@Param("email") String email);
 
-    boolean existsByUsernameIgnoreCaseAndDeletedAtIsNull(String username);
+    @Query("select count(u) > 0 from User u where lower(u.username) = lower(:username) and u.deletedAt is null")
+    boolean existsByUsernameIgnoreCaseAndDeletedAtIsNull(@Param("username") String username);
 
-    boolean existsByEmailIgnoreCaseAndDeletedAtIsNull(String email);
+    @Query("select count(u) > 0 from User u where lower(u.email) = lower(:email) and u.deletedAt is null")
+    boolean existsByEmailIgnoreCaseAndDeletedAtIsNull(@Param("email") String email);
 
     /**
      * Admin console directory. Both filters are optional and independent, which is four
