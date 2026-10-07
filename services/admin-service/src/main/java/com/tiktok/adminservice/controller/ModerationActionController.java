@@ -3,6 +3,7 @@ package com.tiktok.adminservice.controller;
 import com.tiktok.adminservice.dto.response.DailyAdminStatsResponse;
 import com.tiktok.adminservice.dto.response.ModerationActionResponse;
 import com.tiktok.adminservice.dto.response.StatsSummaryResponse;
+import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.service.AdminService;
 import com.tiktok.common.response.ApiResponse;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.List;
 
 @RestController
@@ -27,12 +29,22 @@ public class ModerationActionController {
 
     private final AdminService adminService;
 
+    /**
+     * The audit log, newest first. Every filter is optional and they combine — "what did this
+     * admin do yesterday" is {@code adminId} plus a day's {@code from}/{@code to}. Instants are
+     * ISO-8601; {@code from} is inclusive and {@code to} exclusive, so consecutive days tile.
+     */
     @GetMapping("/actions")
     public ApiResponse<Page<ModerationActionResponse>> listActions(
             @RequestParam(required = false) ReportTargetType targetType,
             @RequestParam(required = false) String targetId,
+            @RequestParam(required = false) Long adminId,
+            @RequestParam(required = false) ModerationActionType actionType,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
             Pageable pageable) {
-        return ApiResponse.success(adminService.listActions(targetType, targetId, pageable));
+        return ApiResponse.success(adminService.listActions(
+                targetType, targetId, adminId, actionType, from, to, pageable));
     }
 
     /**

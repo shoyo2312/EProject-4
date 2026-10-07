@@ -216,7 +216,9 @@ public class AdminServiceImpl implements AdminService {
     }
 
     @Override
-    public Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Pageable pageable) {
+    public Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Long adminId,
+                                                      ModerationActionType actionType, Instant from, Instant to,
+                                                      Pageable pageable) {
         // Both or neither. Silently ignoring a half-filled filter answers a narrow question with
         // the whole platform's audit log, which reads as "no actions were taken against this one".
         if (targetType == null ^ targetId == null) {
@@ -224,11 +226,9 @@ public class AdminServiceImpl implements AdminService {
                     "targetType and targetId must be given together, or both omitted");
         }
 
-        Page<ModerationAction> actions = targetType != null
-                ? moderationActionRepository.findByTargetTypeAndTargetIdOrderByCreatedAtDesc(
-                        targetType, targetType.canonicalTargetId(targetId), pageable)
-                : moderationActionRepository.findAllByOrderByCreatedAtDesc(pageable);
-        return actions.map(adminMapper::toResponse);
+        String id = targetType != null ? targetType.canonicalTargetId(targetId) : null;
+        return moderationActionRepository.findFiltered(targetType, id, adminId, actionType, from, to, pageable)
+                .map(adminMapper::toResponse);
     }
 
     @Override

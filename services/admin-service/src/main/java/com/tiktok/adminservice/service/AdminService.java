@@ -13,6 +13,7 @@ import com.tiktok.adminservice.entity.ReportTargetType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.time.Instant;
 import java.util.List;
 
 public interface AdminService {
@@ -63,7 +64,13 @@ public interface AdminService {
      */
     long countStrikes(ReportTargetType targetType, String targetId);
 
-    Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Pageable pageable);
+    /**
+     * The audit log, newest first. Every filter is optional; {@code targetType} and
+     * {@code targetId} only make sense together. {@code from} is inclusive, {@code to} exclusive.
+     */
+    Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Long adminId,
+                                               ModerationActionType actionType, Instant from, Instant to,
+                                               Pageable pageable);
 
     /** Number of reports filed against one target — the console shows it next to that user/video. */
     long countReports(ReportTargetType targetType, String targetId);

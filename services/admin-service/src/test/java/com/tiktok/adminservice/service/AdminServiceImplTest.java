@@ -347,9 +347,24 @@ class AdminServiceImplTest {
 
     @Test
     void listActions_targetTypeWithoutTargetId_rejected() {
-        assertThatThrownBy(() -> adminService.listActions(ReportTargetType.USER, null, Pageable.unpaged()))
+        assertThatThrownBy(() -> adminService.listActions(ReportTargetType.USER, null,
+                null, null, null, null, Pageable.unpaged()))
                 .isInstanceOf(InvalidModerationTargetException.class);
         verifyNoInteractions(moderationActionRepository);
+    }
+
+    @Test
+    void listActions_passesEveryFilterThrough_withTheTargetInItsOneSpelling() {
+        Instant from = Instant.parse("2026-10-06T00:00:00Z");
+        Instant to = Instant.parse("2026-10-07T00:00:00Z");
+        when(moderationActionRepository.findFiltered(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        adminService.listActions(ReportTargetType.USER, "+042", 7L, ModerationActionType.BAN_USER,
+                from, to, Pageable.unpaged());
+
+        verify(moderationActionRepository).findFiltered(ReportTargetType.USER, "42", 7L,
+                ModerationActionType.BAN_USER, from, to, Pageable.unpaged());
     }
 
     @Test
