@@ -2,6 +2,8 @@ package com.tiktok.crypto.jwt;
 
 import io.jsonwebtoken.Claims;
 
+import java.util.List;
+
 /**
  * The Redis contract between auth-service, which writes revocations, and the three sides that read
  * them: auth-service's own filter, security-lib's RedisRevokedTokenChecker, and api-gateway's
@@ -43,5 +45,24 @@ public final class RevocationKeys {
      */
     public static boolean isIssuedBefore(Claims claims, String cutoffValue) {
         return cutoffValue != null && JwtProvider.issuedAtMillis(claims) < Long.parseLong(cutoffValue);
+    }
+
+    /**
+     * Every key that can revoke this token — the user's cutoff, then the jti when the token has
+     * one — for a read side to fetch in a single MGET. Asked one at a time, the check cost every
+     * authenticated request two sequential Redis round trips.
+     */
+    public static List<String> keysOf(Claims claims) {
+        String jti = jtiOf(claims);
+        String user = forUser(claims.getSubject());
+        return jti == null ? List.of(user) : List.of(user, forJti(jti));
+    }
+
+    /** @param values what an MGET of {@link #keysOf} answered, in that order */
+    public static boolean isRevoked(Claims claims, List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return false;
+        }
+        return isIssuedBefore(claims, values.get(0)) || (values.size() > 1 && values.get(1) != null);
     }
 }

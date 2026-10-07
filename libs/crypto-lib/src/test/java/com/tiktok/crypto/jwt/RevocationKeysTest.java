@@ -29,6 +29,21 @@ class RevocationKeysTest {
     }
 
     @Test
+    void keysOf_andIsRevoked_readOneMgetInOrder() {
+        Claims withJti = provider.extractClaims(provider.generateToken("7", Map.of("jti", "abc"), 60_000));
+        Claims withoutJti = provider.extractClaims(provider.generateToken("7", Map.of(), 60_000));
+        String after = String.valueOf(JwtProvider.issuedAtMillis(withJti) + 1);
+
+        assertThat(RevocationKeys.keysOf(withJti)).containsExactly("auth:blacklist:user:7", "auth:blacklist:abc");
+        assertThat(RevocationKeys.keysOf(withoutJti)).containsExactly("auth:blacklist:user:7");
+
+        assertThat(RevocationKeys.isRevoked(withJti, java.util.Arrays.asList(null, null))).isFalse();
+        assertThat(RevocationKeys.isRevoked(withJti, java.util.Arrays.asList(null, "1"))).isTrue();
+        assertThat(RevocationKeys.isRevoked(withJti, java.util.Arrays.asList(after, null))).isTrue();
+        assertThat(RevocationKeys.isRevoked(withoutJti, java.util.Collections.singletonList(null))).isFalse();
+    }
+
+    @Test
     void jtiOf_readsTheJtiClaim() {
         Claims claims = provider.extractClaims(provider.generateToken("7", Map.of("jti", "abc"), 60_000));
 

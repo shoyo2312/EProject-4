@@ -46,11 +46,10 @@ public class JwtReactiveAuthenticationManager implements ReactiveAuthenticationM
     public Mono<Authentication> authenticate(Authentication authentication) {
         String token = (String) authentication.getCredentials();
 
-        if (!jwtProvider.isValidAccessToken(token)) {
+        Claims claims = jwtProvider.parseAccessToken(token);
+        if (claims == null) {
             return Mono.error(new BadCredentialsException("Invalid or expired token"));
         }
-
-        Claims claims = jwtProvider.extractClaims(token);
 
         return isRevoked(claims).flatMap(revoked -> {
             if (revoked) {
@@ -60,29 +59,20 @@ public class JwtReactiveAuthenticationManager implements ReactiveAuthenticationM
         });
     }
 
+    /**
+     * The logged-out jti and the user-wide cutoff in one MGET. The cutoff exists because a
+     * password reset or a detected refresh-token replay ends every session for a user at once,
+     * and access tokens are stateless — there is no list of ids to blacklist, so auth-service
+     * writes one instant per user and every token issued before it is refused.
+     */
     private Mono<Boolean> isRevoked(Claims claims) {
-        String jti = RevocationKeys.jtiOf(claims);
-        Mono<Boolean> byJti = jti == null
-                ? Mono.just(false)
-                : redisTemplate.hasKey(RevocationKeys.forJti(jti));
-
-        return byJti
-                .flatMap(revoked -> revoked ? Mono.just(true) : isIssuedBeforeUserCutoff(claims))
+        return redisTemplate.opsForValue().multiGet(RevocationKeys.keysOf(claims))
+                .map(values -> RevocationKeys.isRevoked(claims, values))
+                .defaultIfEmpty(false)
                 .onErrorResume(ex -> {
                     log.warn("Redis unavailable for blacklist check, failing open", ex);
                     return Mono.just(false);
                 });
-    }
-
-    /**
-     * A password reset or a detected refresh-token replay ends every session for a user at once,
-     * but access tokens are stateless — there is no list of ids to blacklist. auth-service writes
-     * one cutoff instant per user instead, and every token issued before it is refused.
-     */
-    private Mono<Boolean> isIssuedBeforeUserCutoff(Claims claims) {
-        return redisTemplate.opsForValue().get(RevocationKeys.forUser(claims.getSubject()))
-                .map(cutoff -> RevocationKeys.isIssuedBefore(claims, cutoff))
-                .defaultIfEmpty(false);
     }
 
     private Authentication toAuthentication(Claims claims, String token) {

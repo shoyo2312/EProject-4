@@ -2,6 +2,7 @@ package com.tiktok.chatservice.websocket;
 
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.RevokedTokenChecker;
+import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -65,10 +66,9 @@ public class WebSocketSessionRegistry {
 
     private boolean isStillAuthenticated(WebSocketSession session) {
         Object token = session.getAttributes().get(JwtHandshakeInterceptor.TOKEN_ATTRIBUTE);
-        if (!(token instanceof String accessToken) || !jwtProvider.isValidAccessToken(accessToken)) {
-            return false;
-        }
-        return !revokedTokenChecker.isRevoked(jwtProvider.extractClaims(accessToken));
+        // One signature check per session per sweep, not two.
+        Claims claims = token instanceof String accessToken ? jwtProvider.parseAccessToken(accessToken) : null;
+        return claims != null && !revokedTokenChecker.isRevoked(claims);
     }
 
     /** @return true if the socket is closed and can be forgotten, false to retry next sweep. */

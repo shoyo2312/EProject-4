@@ -2,6 +2,7 @@ package com.tiktok.chatservice.websocket;
 
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.RevokedTokenChecker;
+import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
@@ -48,15 +49,16 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
                 .get(TOKEN_PARAM);
         String token = tokenParams != null && !tokenParams.isEmpty() ? tokenParams.get(0) : null;
 
-        if (token == null || !jwtProvider.isValidAccessToken(token)
-                || revokedTokenChecker.isRevoked(jwtProvider.extractClaims(token))) {
+        // One signature check for the whole handshake; it used to verify the same token four times.
+        Claims claims = token == null ? null : jwtProvider.parseAccessToken(token);
+        if (claims == null || revokedTokenChecker.isRevoked(claims)) {
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
         }
 
-        attributes.put(USER_ID_ATTRIBUTE, jwtProvider.extractSubject(token));
+        attributes.put(USER_ID_ATTRIBUTE, claims.getSubject());
         attributes.put(TOKEN_ATTRIBUTE, token);
-        Object role = jwtProvider.extractClaims(token).get(ROLE_CLAIM);
+        Object role = claims.get(ROLE_CLAIM);
         if (role != null) {
             attributes.put(ROLE_ATTRIBUTE, role.toString());
         }
