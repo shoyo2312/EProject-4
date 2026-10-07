@@ -11,6 +11,7 @@ import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.repository.OutboxEventRepository;
 import com.tiktok.event.admin.ReportResolvedEvent;
 import com.tiktok.event.admin.ReportSubmittedEvent;
+import com.tiktok.event.admin.StaleReportsDismissedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -75,6 +76,20 @@ class AdminEventProducerTest {
         ReportResolvedEvent event = objectMapper.readValue(row.getPayload(), ReportResolvedEvent.class);
         assertThat(event.targetType()).isEqualTo("USER");
         assertThat(event.targetId()).isEqualTo("42");
+    }
+
+    @Test
+    void staleReportsDismissed_isWrittenUnderTheReportAggregate() throws Exception {
+        producer().publishStaleReportsDismissed(37);
+
+        OutboxEvent row = saved();
+        // admin.report-events, where the consoles listen; not admin.moderation-events, whose
+        // consumers act on what they read.
+        assertThat(row.getAggregateType()).isEqualTo(AdminEventProducer.REPORT_AGGREGATE);
+        assertThat(row.getAggregateId()).isEqualTo(AdminEventProducer.STALE_SWEEP_KEY);
+        assertThat(row.getEventType()).isEqualTo("StaleReportsDismissedEvent");
+        assertThat(objectMapper.readValue(row.getPayload(), StaleReportsDismissedEvent.class).dismissed())
+                .isEqualTo(37);
     }
 
     @Test

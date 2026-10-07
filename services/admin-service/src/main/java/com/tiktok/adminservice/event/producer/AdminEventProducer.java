@@ -12,6 +12,7 @@ import com.tiktok.event.DomainEvent;
 import com.tiktok.event.admin.CommentRemovedEvent;
 import com.tiktok.event.admin.ReportResolvedEvent;
 import com.tiktok.event.admin.ReportSubmittedEvent;
+import com.tiktok.event.admin.StaleReportsDismissedEvent;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.UserWarnedEvent;
@@ -36,6 +37,8 @@ public class AdminEventProducer {
     private static final String AGGREGATE_TYPE = "MODERATION_ACTION";
     /** Read by OutboxPublisher to send these to admin.report-events instead. */
     static final String REPORT_AGGREGATE = "REPORT";
+    /** The Kafka key of every sweep event: there is no one target to key them by. */
+    static final String STALE_SWEEP_KEY = "stale-report-sweep";
 
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -55,6 +58,11 @@ public class AdminEventProducer {
 
     public void publishReportsResolved(ReportTargetType targetType, String targetId) {
         writeToOutbox(REPORT_AGGREGATE, targetId, ReportResolvedEvent.of(targetType.name(), targetId));
+    }
+
+    /** One batch of the stale-report sweep; see {@code StaleReportSweep}. */
+    public void publishStaleReportsDismissed(int dismissed) {
+        writeToOutbox(REPORT_AGGREGATE, STALE_SWEEP_KEY, StaleReportsDismissedEvent.of(dismissed));
     }
 
     private DomainEvent toEvent(ModerationAction action) {

@@ -1,5 +1,6 @@
 package com.tiktok.adminservice.service;
 
+import com.tiktok.adminservice.event.producer.AdminEventProducer;
 import com.tiktok.adminservice.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,10 @@ import java.time.Instant;
  * the service closed them rather than an admin. No moderation action is written, because no
  * decision was made about the target.
  *
+ * <p>Each batch that closed anything announces it with a {@code StaleReportsDismissedEvent},
+ * written in the batch's own transaction like every outbox row. Without it an open console went
+ * on listing the closed reports as pending until someone reloaded it.
+ *
  * <p>Each batch commits through the template rather than a {@code @Transactional} method on this
  * class: a self-invoked call skips the proxy, which would put the whole sweep in one transaction
  * holding every lock it took until the last batch. Same shape as {@code PublishedOutboxCleanup}.
@@ -37,6 +42,7 @@ public class StaleReportSweep {
 
     private final ReportRepository reportRepository;
     private final TransactionTemplate transactionTemplate;
+    private final AdminEventProducer adminEventProducer;
 
     @Value("${admin.stale-reports.grace}")
     private final Duration grace;
@@ -56,8 +62,13 @@ public class StaleReportSweep {
         int total = 0;
 
         for (int pass = 0; pass < maxBatchesPerRun; pass++) {
-            Integer dismissed = transactionTemplate.execute(
-                    status -> reportRepository.dismissStale(cutoff, maxReportsPerTarget, batchSize));
+            Integer dismissed = transactionTemplate.execute(status -> {
+                int closed = reportRepository.dismissStale(cutoff, maxReportsPerTarget, batchSize);
+                if (closed > 0) {
+                    adminEventProducer.publishStaleReportsDismissed(closed);
+                }
+                return closed;
+            });
             total += dismissed == null ? 0 : dismissed;
 
             if (dismissed == null || dismissed < batchSize) {
