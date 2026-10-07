@@ -394,6 +394,54 @@ class AdminServiceImplTest {
     }
 
     @Test
+    void submitReport_userStillServingATemporaryBan_closesTheReportOnArrival() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42")).thenReturn(Optional.empty());
+        standingBan(Instant.now().plus(3, ChronoUnit.DAYS));
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "42", "Spam"));
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.RESOLVED);
+        verify(adminEventProducer, never()).publishReportSubmitted(any());
+    }
+
+    @Test
+    void submitReport_userWhoseTemporaryBanRanOut_staysPending() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42")).thenReturn(Optional.empty());
+        // The ban ended on its own: auth-service's sweep lifted it and recorded nothing here, so
+        // the BAN_USER row is still the newest state-changing action. The account is back, and a
+        // report against it has to reach an admin like any other.
+        standingBan(Instant.now().minus(23, ChronoUnit.DAYS));
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "42", "Spam"));
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.PENDING);
+        assertThat(captor.getValue().getResolvedAt()).isNull();
+        verify(adminEventProducer).publishReportSubmitted(captor.getValue());
+    }
+
+    @Test
+    void submitReport_userUnderPermanentBan_closesTheReportOnArrival() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42")).thenReturn(Optional.empty());
+        standingBan(null);
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "42", "Spam"));
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.RESOLVED);
+    }
+
+    @Test
     void resolveReport_closesEveryOtherReportAgainstTheSameTarget() {
         Report pending = Report.builder()
                 .id(7L)
@@ -579,5 +627,15 @@ class AdminServiceImplTest {
         when(moderationActionRepository.findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
                 any(ReportTargetType.class), anyString(), any()))
                 .thenReturn(Optional.of(ModerationAction.builder().actionType(actionType).build()));
+    }
+
+    /** A BAN_USER as the newest such decision; {@code bannedUntil} null is a permanent ban. */
+    private void standingBan(Instant bannedUntil) {
+        when(moderationActionRepository.findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
+                any(ReportTargetType.class), anyString(), any()))
+                .thenReturn(Optional.of(ModerationAction.builder()
+                        .actionType(ModerationActionType.BAN_USER)
+                        .bannedUntil(bannedUntil)
+                        .build()));
     }
 }

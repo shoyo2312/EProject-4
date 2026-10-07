@@ -293,19 +293,26 @@ public class AdminServiceImpl implements AdminService {
 
     /**
      * The enforcement currently standing against a target, if any — the newest ban, takedown or
-     * removal that has not since been undone. Empty means nothing has been done to it, or the
-     * last word was a restore or an unban.
+     * removal that has not since been undone or run out. Empty means nothing has been done to it,
+     * the last word was a restore or an unban, or the last word was a ban whose term is over.
      *
      * <p>Read from this service's own audit log rather than asked of video-service or
      * auth-service: §6 forbids reaching into another service's database, and an HTTP call per
      * submitted report would put the report path behind another service's availability for an
      * answer this one already holds.
+     *
+     * <p>A temporary ban ends without anything landing in that log: auth-service's sweep lifts it
+     * and tells nobody. Its end date is in the log, though, and has to be read — otherwise the
+     * ban's audit row stands forever, and every report against the account it no longer holds is
+     * closed on arrival and never reaches an admin.
      */
     private Optional<ModerationAction> standingEnforcement(ReportTargetType targetType, String targetId) {
+        Instant now = Instant.now();
         return moderationActionRepository
                 .findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
                         targetType, targetId, ModerationActionType.STATE_CHANGING)
-                .filter(action -> action.getActionType().effect() == ModerationActionType.Effect.ENFORCE);
+                .filter(action -> action.getActionType().effect() == ModerationActionType.Effect.ENFORCE)
+                .filter(action -> action.getBannedUntil() == null || action.getBannedUntil().isAfter(now));
     }
 
     /**
