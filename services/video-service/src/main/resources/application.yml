@@ -48,6 +48,13 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      # One consumer thread per partition (topics are created with 3) instead of one thread
+      # draining all of them, so a burst of views or likes no longer queues behind itself. Each
+      # partition still has a single thread, so the per-key order the producers rely on holds, and
+      # every listener here is safe to run side by side: it claims its eventId first and writes
+      # with atomic field-scoped updates. Extra threads beyond the partition count sit idle.
+      concurrency: 3
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
