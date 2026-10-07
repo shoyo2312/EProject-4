@@ -193,10 +193,13 @@ public class SearchServiceImpl implements SearchService {
         NativeQueryBuilder builder = NativeQuery.builder()
                 .withQuery(Query.of(q -> q.bool(bool.build())))
                 .withPageable(pageable)
-                // Elasticsearch stops counting at 10 000 by default and reports that as the total,
-                // so a page count built from it silently caps — Page is a paging contract, it has
-                // to be exact.
-                .withTrackTotalHits(true);
+                // Counted up to the result window and no further. No page past MAX_RESULT_WINDOW
+                // can be asked for (PAGE_TOO_DEEP above), so a count beyond it only describes pages
+                // nobody can reach. Counting every match instead (track_total_hits: true) made
+                // Elasticsearch visit all of them and give up its top-k early termination on every
+                // search, for a number past reach. A page size that does not divide the window (the
+                // web client's 24) still has its last, partial page refused — as with the exact count.
+                .withTrackTotalHitsUpTo(MAX_RESULT_WINDOW);
         if (pageable.getSort().isUnsorted()) {
             // Best match first; among equal matches (and with neither q nor hashtag, where every
             // hit scores the same) the newest video.
