@@ -100,9 +100,10 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
      * Sets the flag only where it differs, so the row count says whether anything changed: two
      * PATCHes racing to the same value update one row between them, and only that one announces.
      *
-     * <p>The version moves too. Hibernate writes every column of a dirty profile, so a
-     * {@code PATCH /me} that read the row before this and flushed after would otherwise write the
-     * old flag straight back — silently, since the version it checks would still match.
+     * <p>The version moves too, so a {@code PATCH /me} that read the row before this and flushes
+     * after fails its version check instead of answering with the old flag. It cannot write that
+     * flag back either way: {@link UserProfile} is {@code @DynamicUpdate}, so an edit's UPDATE
+     * carries only the columns it changed.
      *
      * @return 1 when the flag changed, 0 when it already had that value or there is no profile
      */
@@ -117,6 +118,9 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
      */
     boolean existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(Long userId);
 
+    // The four counter updates leave the version alone on purpose: a follow must not fail the
+    // owner's concurrent profile edit. That edit cannot write the old count back, because
+    // UserProfile is @DynamicUpdate and its UPDATE names only the columns it changed.
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update UserProfile p set p.followerCount = p.followerCount + 1 where p.userId = :userId")
     void incrementFollowerCount(@Param("userId") Long userId);

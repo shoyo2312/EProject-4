@@ -446,7 +446,7 @@ class UserProfileServiceImplTest {
 
         assertThat(userProfileService.getByUserId(70L, 70L).privateAccount()).isTrue();
         // The version moves with the flag, so an edit of the same profile that read it before the
-        // switch fails on its version instead of writing the old value back.
+        // switch fails on its version instead of answering with the old value.
         assertThat(userProfileRepository.findByUserIdAndDeletedAtIsNull(70L).orElseThrow().getVersion())
                 .isGreaterThan(versionBefore);
         // Conditional on the stored value: a repeat changes nothing and says so, which is what

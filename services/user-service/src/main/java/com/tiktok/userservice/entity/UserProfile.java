@@ -9,6 +9,7 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.DynamicUpdate;
 
 @Getter
 @SuperBuilder
@@ -16,6 +17,11 @@ import lombok.experimental.SuperBuilder;
 @AllArgsConstructor
 @Entity
 @Table(name = "user_profiles")
+// An edit's UPDATE carries only the columns it changed. Hibernate's default writes every column,
+// and the follower/following counters move by bulk updates that leave the version alone (see
+// UserProfileRepository), so an edit that read the row before a follow and flushed after it wrote
+// the old count back — past the version check, and permanently, since nothing recounts.
+@DynamicUpdate
 public class UserProfile extends BaseEntity {
 
     @Column(name = "user_id", nullable = false, unique = true)
