@@ -60,9 +60,12 @@ Response `data` → `UserProfileResponse`:
   "avatarUrl": "https://cdn.tiktok-clone.local/avatars/123.jpg",
   "followerCount": 10,
   "followingCount": 5,
-  "privateAccount": false
+  "privateAccount": false,
+  "displayNameChangeableAt": null
 }
 ```
+
+`displayNameChangeableAt`: khi nào được đổi `displayName` lần tới (mục 3.2). **Chỉ chủ tài khoản thấy**, trên profile của chính mình (`GET /me`, `PATCH /me`, `POST /me/avatar`, và `GET /{userId}` / `GET /by-username/{username}` khi người gọi là chủ); `null` ở mọi chỗ khác, và `null` với chủ khi đổi được ngay.
 
 `privateAccount = true`: tài khoản riêng tư — chỉ người đã được duyệt follow mới xem được video, danh sách followers/following và tab Reposts (mục 3.16). Profile và các con số (followers, following, likes, số video) vẫn công khai như TikTok. Field này có trên **mọi** `UserProfileResponse` (mục 3.3, 3.3b, danh sách, tìm kiếm).
 
@@ -84,6 +87,7 @@ Request (mọi field đều optional, `UpdateProfileRequest`):
 - **Không gửi field** (field vắng mặt trong JSON, hoặc `null`) → giữ nguyên giá trị cũ trên server.
 - **Gửi field = `""`** (chuỗi rỗng) → **xoá** giá trị (set về `null` trong DB). Áp dụng cho `bio` và `avatarUrl`.
 - **`displayName` không thể xoá bằng chuỗi rỗng** — server từ chối whitespace-only bằng `VALIDATION_ERROR` (400). Chỉ có thể giữ nguyên (không gửi) hoặc thay bằng giá trị khác.
+- **`displayName` chỉ đổi được 1 lần mỗi 7 ngày.** Đổi lần nữa khi chưa đủ 7 ngày → `429 DISPLAY_NAME_CHANGE_TOO_SOON`, và **cả request bị từ chối** (bio/avatar gửi kèm cũng không được lưu). Gửi lại đúng tên hiện tại không tính là đổi, kể cả khi chỉ khác khoảng trắng ở đầu/cuối (`"Alice "` và `"Alice"` là cùng một tên); tên mới được lưu sau khi bỏ khoảng trắng đó. Tên ban đầu (copy từ username lúc đăng ký) không tính, nên lần đổi đầu tiên luôn được phép. `bio`/`avatarUrl` không bị giới hạn. Đọc `displayNameChangeableAt` (mục 3.1) để khoá ô tên kèm ngày mở lại.
 
 → Vì vậy, khi build request body ở Flutter: **chỉ đưa key nào user thực sự chỉnh sửa vào JSON** (dùng `Map<String, dynamic>` build tay hoặc `@JsonKey(includeIfNull: false)` + loại bỏ field không đổi), tuyệt đối không serialize nguyên object rồi gửi full — nếu form có field trống mặc định (`""`), gửi nguyên request sẽ vô tình xoá `bio`/`avatarUrl` hiện có của user.
 
@@ -103,7 +107,7 @@ Bước 3 **chỉ** ghi đè khi `avatarUrl` đang trống hoặc vẫn đúng U
 
 Client hiển thị đúng URL server trả về, không suy đoán host. Next.js phải khai báo host trong `images.remotePatterns` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, và origin MinIO) mới render được qua `next/image`.
 
-Lỗi: `VALIDATION_ERROR` (400).
+Lỗi: `VALIDATION_ERROR` (400), `DISPLAY_NAME_CHANGE_TOO_SOON` (429).
 
 ### 3.2b `POST /me/avatar`
 
@@ -326,6 +330,7 @@ Ngoài ra không có enum nào khác ở user-service — follow/block/mute và 
 | `VALIDATION_ERROR` | 400 | Body không đúng ràng buộc (`displayName`/`bio`/`avatarUrl` sai định dạng/độ dài); ở mục 3.15: audience sai giá trị, `screenTimeLimitMinutes` ngoài `[10, 1440]`, `null` trên field NOT NULL, hoặc khung giờ ngủ thiếu một đầu / hai đầu bằng nhau |
 | `BAD_REQUEST` | 400 | Body không parse được — ví dụ giờ ngủ không đúng định dạng `HH:mm` (mục 3.15). Khác `VALIDATION_ERROR` ở chỗ request chưa bao giờ thành object để validate |
 | `TOO_MANY_PROFILE_IDS` | 400 | Gửi quá 100 id cho `GET /?ids=` (mục 3.3b). Chia nhỏ theo trang, đừng gộp cả feed vào 1 lần gọi |
+| `DISPLAY_NAME_CHANGE_TOO_SOON` | 429 | `PATCH /me` đổi `displayName` khi chưa đủ 7 ngày từ lần đổi trước (mục 3.2). Retry vô ích cho tới `displayNameChangeableAt` |
 | `CANNOT_FOLLOW_SELF` | 400 | Gọi `follow` lên chính `userId` của mình |
 | `CANNOT_BLOCK_SELF` | 400 | Gọi `block` lên chính mình |
 | `CANNOT_MUTE_SELF` | 400 | Gọi `mute` lên chính mình |
@@ -385,9 +390,10 @@ Consumer: `user.follow-events` → notification-service (`NEW_FOLLOWER` / `FOLLO
 
 | Topic | Event | Payload | Consumer & tác dụng |
 |---|---|---|---|
-| `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` | `UserRegisteredEventConsumer` → tạo `UserProfile` (`displayName = username`, `avatarUrl` = ảnh provider nếu có). **Claim `eventId` vào bảng `inbox_events` TRƯỚC khi tạo** (`tryClaim` = `INSERT ... ON CONFLICT DO NOTHING`) — hai redelivery đua nhau chỉ một cái INSERT thắng, không tạo profile đôi. Đây là độ trễ khiến `GET /me` trả `404` ngay sau register (mục 3.1) |
+| `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` | `UserRegisteredEventConsumer` → tạo `UserProfile` (`displayName = username`, `avatarUrl` = ảnh provider nếu có). **Claim `eventId` vào bảng `inbox_events` TRƯỚC khi tạo** (`tryClaim` = `INSERT ... ON CONFLICT DO NOTHING`) — hai redelivery đua nhau chỉ một cái INSERT thắng, không tạo profile đôi. Đây là độ trễ khiến `GET /me` trả `404` ngay sau register (mục 3.1). Profile khác còn giữ đúng handle này thì bị gỡ handle, như ở `auth.username-events` |
 | `media.avatar-events` | `AvatarMirroredEvent` | `eventId, occurredAt, userId, sourceUrl, avatarUrl` | `AvatarMirroredEventConsumer` → `applyMirroredAvatar`: đổi `avatarUrl` sang bản MinIO **chỉ khi** field đang trống hoặc đúng bằng `sourceUrl`. Ảnh user tự đặt qua `PATCH /me` / `POST /me/avatar` không bao giờ bị đè. Không cần inbox claim — công việc là một UPDATE có điều kiện về giá trị cố định, redelivery là no-op |
+| `auth.username-events` | `UsernameChangedEvent` | `eventId, occurredAt, userId, username, previousUsername` | `UsernameChangedEventConsumer` → `applyUsernameChange`: đổi bản sao `username` của profile (không đụng `displayName`). Claim `eventId` vào `inbox_events` trong cùng transaction. Profile chưa tồn tại (rename đến trước `UserRegisteredEvent` vì hai topic khác nhau) → **throw** để `kafka-lib` retry, thay vì bỏ qua — bỏ qua thì event đăng ký đến sau sẽ ghi username cũ và không gì sửa lại được. Retry chỉ thêm 3 lần, cách nhau 1 giây (đủ cho độ trễ thường gặp), sau đó event nằm ở `auth.username-events.DLT` và profile giữ handle cũ cho tới khi event được replay. Cột `username` không unique ở đây (auth-service giữ uniqueness): khi gán handle cho một profile, profile khác còn giữ đúng handle đó (không phân biệt hoa thường) bị gỡ handle (`username = null`) cho tới khi rename của chính nó tới — auth-service chỉ cho một tài khoản giữ một handle tại một thời điểm, nên bản sao kia chắc chắn đã cũ. Nhờ vậy `GET /by-username/{username}` trả về người đang giữ handle chứ không phải bản sao cũ |
 
-`auth.user-events` chỉ mang đúng một loại event nên hai consumer parse thẳng payload vào `UserRegisteredEvent`, không đọc header. Đó là lý do `auth-service` phát `SocialAvatarDiscoveredEvent` trên topic **riêng** (`auth.social-avatar-events`, media-worker nghe) chứ không dùng chung topic này.
+`auth.user-events` chỉ mang đúng một loại event nên hai consumer parse thẳng payload vào `UserRegisteredEvent`, không đọc header. Đó là lý do `auth-service` phát `SocialAvatarDiscoveredEvent` và `UsernameChangedEvent` trên topic **riêng** (`auth.social-avatar-events`, `auth.username-events`) chứ không dùng chung topic này.
 
 `kafka-lib` error handler: `user-service` **có** dùng → consumer lỗi retry 3 lần → `<topic>.DLT`.

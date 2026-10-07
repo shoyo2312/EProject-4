@@ -12,6 +12,8 @@ public record UserResponse(
         UserRole role,
         UserStatus status,
         boolean emailVerified,
-        Instant createdAt
+        Instant createdAt,
+        /** When the handle may next change; null when it may change now. See UsernameCooldown. */
+        Instant usernameChangeableAt
 ) {
 }

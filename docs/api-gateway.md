@@ -61,9 +61,13 @@ Response `data` → `MeResponse`:
   "avatarUrl": "http://localhost:9000/video-media/avatars/123.jpg",
   "followerCount": 10,
   "followingCount": 5,
-  "profileReady": true
+  "profileReady": true,
+  "usernameChangeableAt": null,
+  "displayNameChangeableAt": "2026-08-08T10:00:00Z"
 }
 ```
+
+- **`usernameChangeableAt`** (từ auth-service) / **`displayNameChangeableAt`** (từ user-service): khi nào được đổi username (1 lần / 30 ngày, `PUT /api/v1/auth/me/username`) và tên hiển thị (1 lần / 7 ngày, `PATCH /api/v1/users/me`) lần tới. `null` = đổi được ngay. `displayNameChangeableAt` cũng `null` khi `profileReady: false`.
 
 - **`profileReady: false`** → user-service chưa tạo profile xong (Kafka `UserRegisteredEvent` chưa xử lý — thường vài trăm ms sau register). Khi đó `displayName`/`bio`/`avatarUrl`/`followerCount`/`followingCount` đều `null`. Gateway đã **retry ngầm** call user-service 2 lần (backoff 150ms) trên riêng `404` trước khi degrade — client vẫn nên xử lý được trạng thái này (hiện `id`/`username`/`email` trước, poll lại `/me` để lấy profile).
 - Call auth-service **không** được degrade: identity là bắt buộc, lỗi của nó (401, 5xx, timeout) truyền thẳng ra client.

@@ -72,7 +72,7 @@ class FollowRequestControllerTest {
 
     @Test
     void list_isTheCallersOwnRequests() throws Exception {
-        UserProfileResponse requester = new UserProfileResponse(7L, "carol", "Carol", null, null, 0, 0, false);
+        UserProfileResponse requester = new UserProfileResponse(7L, "carol", "Carol", null, null, 0, 0, false, null);
         when(followService.listFollowRequests(eq(1L), any()))
                 .thenReturn(new PageImpl<>(List.of(requester), PageRequest.of(0, 20), 1));
 

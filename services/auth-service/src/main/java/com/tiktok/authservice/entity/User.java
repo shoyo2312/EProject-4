@@ -22,6 +22,14 @@ public class User extends BaseEntity {
     private String username;
 
     /**
+     * When the owner last chose a new handle; null until they first do. The handle picked at
+     * signup, or invented for a social one, is not a change, so it does not start the 30 days —
+     * see {@code UsernameCooldown}.
+     */
+    @Column(name = "username_changed_at")
+    private Instant usernameChangedAt;
+
+    /**
      * Null for an account created by a social login whose provider gave no address — Facebook's
      * {@code email} permission is optional, and an account registered with a phone number has none
      * to give. Such an account cannot reset a password or receive mail until it supplies one, so
@@ -87,6 +95,11 @@ public class User extends BaseEntity {
         this.email = newEmail;
         this.emailVerified = false;
         this.emailVerifiedAt = null;
+    }
+
+    public void changeUsername(String newUsername, Instant at) {
+        this.username = newUsername;
+        this.usernameChangedAt = at;
     }
 
     public void changePasswordHash(String newHash) {

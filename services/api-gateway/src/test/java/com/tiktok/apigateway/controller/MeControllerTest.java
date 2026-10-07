@@ -33,7 +33,7 @@ class MeControllerTest {
     void getMe_forwardsAuthorizationHeaderAndWrapsResultInApiResponse() {
         MeResponse meResponse = new MeResponse(
                 1L, "alice", "alice@example.com", "USER", "ACTIVE", Instant.parse("2024-01-01T00:00:00Z"),
-                "Alice A", "hello", "https://example.com/avatar.png", 10L, 5L, true);
+                "Alice A", "hello", "https://example.com/avatar.png", 10L, 5L, true, null, null);
         when(meService.getMe(anyString())).thenReturn(Mono.just(meResponse));
 
         WebTestClient client = WebTestClient.bindToController(new MeController(meService)).build();
@@ -58,7 +58,7 @@ class MeControllerTest {
     void getMe_whenProfileNotReady_returnsNullProfileFieldsButStillOk() {
         MeResponse meResponse = new MeResponse(
                 1L, "alice", "alice@example.com", "USER", "ACTIVE", Instant.parse("2024-01-01T00:00:00Z"),
-                null, null, null, null, null, false);
+                null, null, null, null, null, false, null, null);
         when(meService.getMe(anyString())).thenReturn(Mono.just(meResponse));
 
         WebTestClient client = WebTestClient.bindToController(new MeController(meService)).build();

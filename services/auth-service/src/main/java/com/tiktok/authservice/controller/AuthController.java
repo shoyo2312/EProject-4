@@ -2,6 +2,7 @@ package com.tiktok.authservice.controller;
 
 import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
+import com.tiktok.authservice.dto.request.ChangeUsernameRequest;
 import com.tiktok.authservice.dto.request.CompleteSignupRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
@@ -16,6 +17,7 @@ import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.service.AuthService;
+import com.tiktok.authservice.service.UsernameChangeService;
 import com.tiktok.common.response.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -35,6 +37,7 @@ public class AuthController {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final AuthService authService;
+    private final UsernameChangeService usernameChangeService;
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
@@ -134,6 +137,21 @@ public class AuthController {
     @Operation(summary = "The signed-in account")
     public ApiResponse<UserResponse> me(@AuthenticationPrincipal Long userId) {
         return ApiResponse.success(authService.getCurrentUser(userId));
+    }
+
+    /**
+     * Its own path rather than a PATCH of {@code /me}: nothing else about the account changes by a
+     * plain write — the email and the password each go through a flow that proves something first.
+     */
+    @PutMapping("/me/username")
+    @Operation(summary = "Choose a new handle",
+            description = "At most once every 30 days; usernameChangeableAt in the answer (and in "
+                    + "GET /me) says when the next change opens. Sending the current handle is a "
+                    + "no-op that spends nothing. 400 VALIDATION_ERROR, 409 USERNAME_ALREADY_EXISTS, "
+                    + "429 USERNAME_CHANGE_TOO_SOON.")
+    public ApiResponse<UserResponse> changeUsername(@AuthenticationPrincipal Long userId,
+                                                    @Valid @RequestBody ChangeUsernameRequest request) {
+        return ApiResponse.success(usernameChangeService.changeUsername(userId, request.username()));
     }
 
     /**
