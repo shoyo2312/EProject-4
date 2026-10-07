@@ -4,6 +4,7 @@ import com.tiktok.authservice.dto.response.AdminUserResponse;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
+import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Both filters on the directory query are optional, so the interesting cases are the null ones:
@@ -122,6 +124,32 @@ class AdminUserDirectoryTest {
         assertThat(directory.search(null, null, FIRST_PAGE))
                 .extracting(AdminUserResponse::username)
                 .doesNotContain("ghost");
+    }
+
+    /** A report carries an id and nothing else; the console opens the account from that alone. */
+    @Test
+    void readsOneAccountById() {
+        User jane = userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull("janedoe").orElseThrow();
+
+        AdminUserResponse found = directory.get(jane.getId());
+
+        assertThat(found.username()).isEqualTo("janedoe");
+        assertThat(found.status()).isEqualTo(UserStatus.BANNED);
+    }
+
+    @Test
+    void anUnknownIdIsNotFound() {
+        assertThatThrownBy(() -> directory.get(123_456_789L)).isInstanceOf(UserNotFoundException.class);
+    }
+
+    /** Same rule as the listing: an account that cannot be listed cannot be opened either. */
+    @Test
+    void aSoftDeletedAccountIsNotFound() {
+        User ghost = userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull("ghost").orElseThrow();
+        ghost.markDeleted();
+        userRepository.save(ghost);
+
+        assertThatThrownBy(() -> directory.get(ghost.getId())).isInstanceOf(UserNotFoundException.class);
     }
 
     private void save(String username, String email, UserStatus status) {

@@ -4,6 +4,7 @@ import com.tiktok.authservice.dto.response.AdminUserResponse;
 import com.tiktok.authservice.entity.AuthProvider;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserStatus;
+import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.mapper.UserMapper;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
@@ -50,6 +51,23 @@ public class AdminUserDirectory {
 
         return users.map(user -> userMapper.toAdminResponse(
                 user, providersByUser.getOrDefault(user.getId(), List.of())));
+    }
+
+    /**
+     * One account by id — what a report resolves to, since it carries the id and nothing else.
+     * Soft-deleted is not found, as in {@link #search}: an account that cannot be listed cannot be
+     * opened either.
+     */
+    @Transactional(readOnly = true)
+    public AdminUserResponse get(Long userId) {
+        User user = userRepository.findById(userId)
+                .filter(found -> !found.isDeleted())
+                .orElseThrow(() -> new UserNotFoundException(String.valueOf(userId)));
+        List<AuthProvider> providers = userIdentityRepository.findByUserIdInOrderByCreatedAtAsc(List.of(userId))
+                .stream()
+                .map(identity -> identity.getProvider())
+                .toList();
+        return userMapper.toAdminResponse(user, providers);
     }
 
     /**
