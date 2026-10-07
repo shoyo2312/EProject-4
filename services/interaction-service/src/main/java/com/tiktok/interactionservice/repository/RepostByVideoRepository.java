@@ -12,6 +12,14 @@ import java.util.List;
 public interface RepostByVideoRepository extends CassandraRepository<RepostByVideo, RepostByVideoKey> {
 
     /**
+     * Which of these videos this user has reposted — at most one row per video, since the user is
+     * the clustering key inside each video's partition. A direct read rather than a scan of who
+     * reposted: a capped scan only answers for whoever happens to be in it.
+     */
+    @Query("SELECT * FROM reposts_by_video WHERE video_id IN :videoIds AND user_id = :userId")
+    List<RepostByVideo> findByVideoIdInAndUserId(@Param("videoIds") List<Long> videoIds, @Param("userId") Long userId);
+
+    /**
      * Lightweight-transaction insert. Returns whether the row was newly created — the caller
      * must only mutate the repost counter when this is true, otherwise a retried/duplicate repost
      * would double-count.

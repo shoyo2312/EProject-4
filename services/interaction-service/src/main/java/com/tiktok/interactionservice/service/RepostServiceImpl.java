@@ -27,6 +27,8 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Repost is a toggle, exactly like {@link LikeServiceImpl} — not an event log like
@@ -152,21 +154,38 @@ public class RepostServiceImpl implements RepostService {
 
     @Override
     public List<RepostContextResponse> getContexts(List<Long> videoIds, Long currentUserId) {
-        return videoIds.stream()
+        List<Long> ids = videoIds.stream()
                 .filter(Objects::nonNull)
                 .distinct()
                 .limit(MAX_BATCH_SIZE)
-                .map(videoId -> getContext(videoId, currentUserId))
+                .toList();
+        Set<Long> repostedByMe = repostedBy(currentUserId, ids);
+        return ids.stream()
+                .map(videoId -> getContext(videoId, repostedByMe.contains(videoId)))
                 .toList();
     }
 
-    private RepostContextResponse getContext(Long videoId, Long currentUserId) {
+    private RepostContextResponse getContext(Long videoId, boolean repostedByMe) {
         List<Long> reposterIds = repostByVideoRepository.findByVideoId(videoId, RECENT_REPOSTERS_LIMIT)
                 .stream()
                 .map(row -> row.getKey().getUserId())
                 .toList();
-        boolean repostedByMe = currentUserId != null && reposterIds.contains(currentUserId);
         return new RepostContextResponse(videoId, repostedByMe, reposterIds);
+    }
+
+    /**
+     * Which of these videos the viewer reposted, asked of the table rather than read off the
+     * reposter sample. The sample is the first twenty by user_id, so anyone outside it was told
+     * they had not reposted a video they had, and the badge offered Repost instead of Remove.
+     * One query for the page.
+     */
+    private Set<Long> repostedBy(Long userId, List<Long> videoIds) {
+        if (userId == null || videoIds.isEmpty()) {
+            return Set.of();
+        }
+        return repostByVideoRepository.findByVideoIdInAndUserId(videoIds, userId).stream()
+                .map(row -> row.getKey().getVideoId())
+                .collect(Collectors.toSet());
     }
 
     @Override

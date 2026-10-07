@@ -125,6 +125,24 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(contexts.get(2).reposterIds()).isEmpty();
     }
 
+    /**
+     * The reposter sample is capped at twenty by user_id. The viewer's own repost is asked for
+     * directly, so a viewer outside the sample still sees their repost and can remove it.
+     */
+    @Test
+    void getContexts_viewerOutsideTheReposterSample_stillSeesTheirOwnRepost() {
+        for (long userId = 1; userId <= 25; userId++) {
+            repostByVideoRepository.insertIfNotExists(64L, userId, java.time.Instant.now());
+        }
+
+        RepostContextResponse context = repostService.getContexts(List.of(64L), 25L).get(0);
+
+        assertThat(context.reposterIds()).hasSize(20).doesNotContain(25L);
+        assertThat(context.repostedByMe()).isTrue();
+        assertThat(repostService.getContexts(List.of(64L), 26L).get(0).repostedByMe()).isFalse();
+        assertThat(repostService.getContexts(List.of(64L), null).get(0).repostedByMe()).isFalse();
+    }
+
     @Test
     void getContexts_afterUnrepost_dropsTheReposter() {
         repostService.repost(63L, 1L);
