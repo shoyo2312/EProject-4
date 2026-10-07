@@ -10,6 +10,8 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
 
+import java.time.Instant;
+
 @Getter
 @SuperBuilder
 @NoArgsConstructor
@@ -22,15 +24,25 @@ public class UserProfile extends BaseEntity {
     private Long userId;
 
     /**
-     * The account's handle, copied from the registration event. Null for profiles created before
-     * this field existed — see V8 for why those were not backfilled. Never updated: auth-service
-     * has no rename endpoint, so there is nothing here to keep in step with.
+     * The account's handle, copied from the registration event and then from every
+     * {@code UsernameChangedEvent}. Null for profiles created before this field existed — see V8
+     * for why those were not backfilled. auth-service owns the handle and its uniqueness; this copy
+     * follows asynchronously, so two profiles can briefly share one while a rename and a claim of
+     * the name it freed are both in flight.
      */
     @Column(name = "username")
     private String username;
 
     @Column(name = "display_name", nullable = false)
     private String displayName;
+
+    /**
+     * When the owner last changed {@link #displayName}; null until they first do. The name a
+     * profile starts with is the handle, which the owner never chose, so it does not start the 7
+     * days — see {@code DisplayNameCooldown}.
+     */
+    @Column(name = "display_name_changed_at")
+    private Instant displayNameChangedAt;
 
     @Column(name = "bio")
     private String bio;
@@ -56,15 +68,22 @@ public class UserProfile extends BaseEntity {
     @Column(name = "private_account", nullable = false)
     private boolean privateAccount = false;
 
+    public void changeDisplayName(String newDisplayName, Instant at) {
+        this.displayName = newDisplayName;
+        this.displayNameChangedAt = at;
+    }
+
+    public void changeUsername(String newUsername) {
+        this.username = newUsername;
+    }
+
     /**
-     * Partial update: null arguments leave the current value alone, matching the PATCH semantics
-     * of UpdateProfileRequest. Blank strings clear the optional fields — that is the only way a
-     * client can erase a bio or avatar, since null already means "not sent".
+     * Partial update of the two optional fields: null leaves the current value alone, matching the
+     * PATCH semantics of UpdateProfileRequest, and a blank string clears it — the only way a client
+     * can erase a bio or avatar, since null already means "not sent". The display name is not
+     * here because changing it is rate-limited: see {@link #changeDisplayName}.
      */
-    public void updateProfile(String displayName, String bio, String avatarUrl) {
-        if (displayName != null) {
-            this.displayName = displayName;
-        }
+    public void updateProfile(String bio, String avatarUrl) {
         if (bio != null) {
             this.bio = bio.isBlank() ? null : bio;
         }

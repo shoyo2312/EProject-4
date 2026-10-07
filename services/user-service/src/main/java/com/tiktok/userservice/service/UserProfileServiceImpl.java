@@ -4,6 +4,7 @@ import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
 import com.tiktok.userservice.entity.UserProfile;
+import com.tiktok.userservice.exception.DisplayNameChangeTooSoonException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.mapper.UserProfileMapper;
@@ -17,6 +18,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -50,7 +52,7 @@ public class UserProfileServiceImpl implements UserProfileService {
 
         UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new UserProfileNotFoundException(userId));
-        return userProfileMapper.toResponse(profile);
+        return toResponseFor(viewerId, profile);
     }
 
     @Override
@@ -66,7 +68,14 @@ public class UserProfileServiceImpl implements UserProfileService {
 
         // After the lookup, not before: the guard needs the id the handle resolved to.
         profileVisibilityGuard.requireVisible(viewerId, profile.getUserId());
-        return userProfileMapper.toResponse(profile);
+        return toResponseFor(viewerId, profile);
+    }
+
+    /** The owner's own profile also says when their name may next change; nobody else's does. */
+    private UserProfileResponse toResponseFor(Long viewerId, UserProfile profile) {
+        return profile.getUserId().equals(viewerId)
+                ? userProfileMapper.toOwnResponse(profile)
+                : userProfileMapper.toResponse(profile);
     }
 
     @Override
@@ -161,9 +170,23 @@ public class UserProfileServiceImpl implements UserProfileService {
         UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new UserProfileNotFoundException(userId));
 
-        profile.updateProfile(request.displayName(), request.bio(), request.avatarUrl());
+        // Only a different name is a change, and whitespace around it is no difference: the current
+        // name sent back — by a client posting the whole form, or trimming a name stored with a
+        // stray space — neither spends the allowance nor trips over it. A new name is stored
+        // stripped.
+        String displayName = request.displayName() == null ? null : request.displayName().strip();
+        if (displayName != null && !displayName.equals(profile.getDisplayName().strip())) {
+            Instant now = Instant.now();
+            Instant changeableAt = DisplayNameCooldown.changeableAt(profile.getDisplayNameChangedAt(), now);
+            if (changeableAt != null) {
+                throw new DisplayNameChangeTooSoonException(changeableAt);
+            }
+            profile.changeDisplayName(displayName, now);
+        }
 
-        return userProfileMapper.toResponse(profile);
+        profile.updateProfile(request.bio(), request.avatarUrl());
+
+        return userProfileMapper.toOwnResponse(profile);
     }
 
     @Override
@@ -181,8 +204,8 @@ public class UserProfileServiceImpl implements UserProfileService {
                             .formatted(avatarUrl.length(), MAX_AVATAR_URL_LENGTH));
         }
 
-        profile.updateProfile(null, null, avatarUrl);
-        return userProfileMapper.toResponse(profile);
+        profile.updateProfile(null, avatarUrl);
+        return userProfileMapper.toOwnResponse(profile);
     }
 
     @Override
@@ -192,6 +215,8 @@ public class UserProfileServiceImpl implements UserProfileService {
             return;
         }
 
+        userProfileRepository.releaseUsername(username, userId);
+
         UserProfile profile = UserProfile.builder()
                 .userId(userId)
                 .username(username)
@@ -200,6 +225,25 @@ public class UserProfileServiceImpl implements UserProfileService {
                 .build();
 
         userProfileRepository.save(profile);
+    }
+
+    @Override
+    @Transactional
+    public void applyUsernameChange(Long userId, String username) {
+        // Before the read, not after: the release clears the persistence context, so a profile
+        // loaded first would be detached and the rename below silently dropped.
+        userProfileRepository.releaseUsername(username, userId);
+
+        // A missing profile is a rename that overtook the registration creating it — the two
+        // travel on different topics. Thrown, which rolls the release back with it, so the
+        // delivery is retried: kafka-lib tries three more times a second apart, enough for the
+        // usual gap, then parks the event on auth.username-events.DLT, where the profile keeps the
+        // old handle until the event is replayed. Written off here instead, the registration
+        // landing afterwards would carry the old handle and nothing would ever correct it.
+        UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .orElseThrow(() -> new UserProfileNotFoundException(userId));
+
+        profile.changeUsername(username);
     }
 
     @Override

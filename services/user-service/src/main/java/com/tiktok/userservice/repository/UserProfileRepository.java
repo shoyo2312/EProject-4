@@ -30,6 +30,25 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
      */
     Optional<UserProfile> findFirstByUsernameIgnoreCaseAndDeletedAtIsNull(String username);
 
+    /**
+     * Takes {@code username} off every live profile but {@code userId}'s, ahead of giving it to
+     * that one.
+     *
+     * <p>auth-service lets one account hold a handle at a time, so another profile still showing it
+     * is a copy whose own rename has not arrived yet: a registration and a rename travel on
+     * different topics and land in either order. Left alone, two profiles would answer to one
+     * handle and {@link #findFirstByUsernameIgnoreCaseAndDeletedAtIsNull} would return whichever
+     * row Postgres reads first. Cleared, the stale profile has no handle until its rename sets the
+     * new one.
+     *
+     * <p>The version moves for the reason {@link #updatePrivateAccount} gives: a {@code PATCH /me}
+     * on the stale profile that flushed after this would otherwise write the handle straight back.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update UserProfile p set p.username = null, p.version = p.version + 1 "
+            + "where lower(p.username) = lower(:username) and p.userId <> :userId and p.deletedAt is null")
+    void releaseUsername(@Param("username") String username, @Param("userId") Long userId);
+
     List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<Long> userIds);
 
     /**
