@@ -61,6 +61,7 @@ class RecommendationServiceImplTest {
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(redisTemplate.<Object, Object>opsForHash()).thenReturn(hashOperations);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        MockPipeline.install(redisTemplate);
     }
 
     /**

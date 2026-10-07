@@ -3,6 +3,7 @@ package com.tiktok.recommendationservice.service;
 import com.tiktok.recommendationservice.dto.response.TrendingVideoResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -117,14 +118,16 @@ public class RecommendationServiceImpl implements RecommendationService {
     }
 
     private void indexTags(String videoId, Iterable<String> tags, double publishedAt) {
-        for (String tag : tags) {
-            String index = RecoKeys.tagIndex(tag);
-            redisTemplate.opsForZSet().add(index, videoId, publishedAt);
-            // Trimmed by rank, which for this set is by publish time: a tag index only ever
-            // needs to answer "what is new under this tag", so the old tail is dead weight.
-            redisTemplate.opsForZSet().removeRange(index, 0, -RecoKeys.TRIM_TO - 1);
-            redisTemplate.expire(index, RecoKeys.PROFILE_TTL);
-        }
+        RedisPipeline.run(redisTemplate, ops -> {
+            for (String tag : tags) {
+                String index = RecoKeys.tagIndex(tag);
+                ops.opsForZSet().add(index, videoId, publishedAt);
+                // Trimmed by rank, which for this set is by publish time: a tag index only ever
+                // needs to answer "what is new under this tag", so the old tail is dead weight.
+                ops.opsForZSet().removeRange(index, 0, -RecoKeys.TRIM_TO - 1);
+                ops.expire(index, RecoKeys.PROFILE_TTL);
+            }
+        });
     }
 
     @Override
@@ -183,11 +186,18 @@ public class RecommendationServiceImpl implements RecommendationService {
         return count != null && count > 0;
     }
 
+    /**
+     * All four questions in one round trip. This runs ahead of every engagement a video earns,
+     * and asked one after another — usually all four, since most videos are none of these — it
+     * was four.
+     */
     private boolean isHidden(String videoId) {
-        return Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_PRIVATE, videoId))
-                || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_TAKEN_DOWN, videoId))
-                || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_HELD, videoId))
-                || isDeleted(videoId);
+        return RedisPipeline.run(redisTemplate, ops -> {
+            ops.opsForSet().isMember(RecoKeys.VIDEO_PRIVATE, videoId);
+            ops.opsForSet().isMember(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
+            ops.opsForSet().isMember(RecoKeys.VIDEO_HELD, videoId);
+            ops.hasKey(RecoKeys.videoDeleted(videoId));
+        }).contains(Boolean.TRUE);
     }
 
     private boolean isDeleted(String videoId) {
@@ -200,14 +210,17 @@ public class RecommendationServiceImpl implements RecommendationService {
      */
     private void withdraw(String videoId) {
         Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
-        if (tags != null) {
-            for (String tag : tags) {
-                redisTemplate.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+        // One round trip for what used to be one per tag and one per trending hour — thirty-odd.
+        RedisPipeline.run(redisTemplate, ops -> {
+            if (tags != null) {
+                for (String tag : tags) {
+                    ops.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+                }
             }
-        }
-        RecoKeys.trendingWindow(Instant.now())
-                .forEach(bucket -> redisTemplate.opsForZSet().remove(bucket, videoId));
-        redisTemplate.opsForZSet().remove(RecoKeys.TRENDING, videoId);
+            RecoKeys.trendingWindow(Instant.now())
+                    .forEach(bucket -> ops.opsForZSet().remove(bucket, videoId));
+            ops.opsForZSet().remove(RecoKeys.TRENDING, videoId);
+        });
     }
 
     /**
@@ -242,24 +255,27 @@ public class RecommendationServiceImpl implements RecommendationService {
         redisTemplate.opsForValue().set(RecoKeys.videoDeleted(videoId), "1", RecoKeys.DELETED_TTL);
 
         Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
-        if (tags != null) {
-            for (String tag : tags) {
-                redisTemplate.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+        // The rest in one round trip; sent one by one it was over forty.
+        RedisPipeline.run(redisTemplate, ops -> {
+            if (tags != null) {
+                for (String tag : tags) {
+                    ops.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+                }
             }
-        }
-        redisTemplate.delete(RecoKeys.videoTags(videoId));
+            ops.delete(RecoKeys.videoTags(videoId));
 
-        RecoKeys.trendingWindow(Instant.now())
-                .forEach(bucket -> redisTemplate.opsForZSet().remove(bucket, videoId));
+            RecoKeys.trendingWindow(Instant.now())
+                    .forEach(bucket -> ops.opsForZSet().remove(bucket, videoId));
 
-        redisTemplate.opsForZSet().remove(RecoKeys.TRENDING, videoId);
-        redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_PUBLISHED, videoId);
-        redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_WATCHES, videoId);
-        redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_COMPLETIONS, videoId);
-        redisTemplate.opsForHash().delete(RecoKeys.VIDEO_OWNER, videoId);
-        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_PRIVATE, videoId);
-        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
-        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_HELD, videoId);
+            ops.opsForZSet().remove(RecoKeys.TRENDING, videoId);
+            ops.opsForZSet().remove(RecoKeys.VIDEO_PUBLISHED, videoId);
+            ops.opsForZSet().remove(RecoKeys.VIDEO_WATCHES, videoId);
+            ops.opsForZSet().remove(RecoKeys.VIDEO_COMPLETIONS, videoId);
+            ops.opsForHash().delete(RecoKeys.VIDEO_OWNER, videoId);
+            ops.opsForSet().remove(RecoKeys.VIDEO_PRIVATE, videoId);
+            ops.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
+            ops.opsForSet().remove(RecoKeys.VIDEO_HELD, videoId);
+        });
     }
 
     @Override
@@ -296,15 +312,16 @@ public class RecommendationServiceImpl implements RecommendationService {
             addEngagement(videoId, WATCH_SCORE * raise);
         }
 
-        // Every session, as before: these two are features the ranking model is trained on from
-        // every row in watch_events, and counting them per viewer here would serve it a different
-        // number under the same name — see rank-service's features.py.
-        redisTemplate.opsForZSet().incrementScore(RecoKeys.VIDEO_WATCHES, videoId, 1);
-        if (completed) {
-            redisTemplate.opsForZSet().incrementScore(RecoKeys.VIDEO_COMPLETIONS, videoId, 1);
-        }
-
-        markSeen(userId, videoId);
+        RedisPipeline.run(redisTemplate, ops -> {
+            // Every session, as before: these two are features the ranking model is trained on
+            // from every row in watch_events, and counting them per viewer here would serve it a
+            // different number under the same name — see rank-service's features.py.
+            ops.opsForZSet().incrementScore(RecoKeys.VIDEO_WATCHES, videoId, 1);
+            if (completed) {
+                ops.opsForZSet().incrementScore(RecoKeys.VIDEO_COMPLETIONS, videoId, 1);
+            }
+            markSeen(ops, userId, videoId);
+        });
         learnTags(userId, videoId, ratio);
     }
 
@@ -385,15 +402,18 @@ public class RecommendationServiceImpl implements RecommendationService {
             return;
         }
         String bucket = RecoKeys.trendBucket(Instant.now());
-        redisTemplate.opsForZSet().incrementScore(bucket, videoId, score);
-        redisTemplate.expire(bucket, RecoKeys.BUCKET_TTL);
+        RedisPipeline.run(redisTemplate, ops -> {
+            ops.opsForZSet().incrementScore(bucket, videoId, score);
+            ops.expire(bucket, RecoKeys.BUCKET_TTL);
+        });
     }
 
-    private void markSeen(Long userId, String videoId) {
+    /** Queued on the caller's pipeline: one more trio of writes needs no round trip of its own. */
+    private void markSeen(RedisOperations<String, String> ops, Long userId, String videoId) {
         String key = RecoKeys.userSeen(userId);
-        redisTemplate.opsForZSet().add(key, videoId, Instant.now().getEpochSecond());
-        redisTemplate.opsForZSet().removeRange(key, 0, -RecoKeys.TRIM_TO - 1);
-        redisTemplate.expire(key, RecoKeys.PROFILE_TTL);
+        ops.opsForZSet().add(key, videoId, Instant.now().getEpochSecond());
+        ops.opsForZSet().removeRange(key, 0, -RecoKeys.TRIM_TO - 1);
+        ops.expire(key, RecoKeys.PROFILE_TTL);
     }
 
     /**
@@ -409,9 +429,11 @@ public class RecommendationServiceImpl implements RecommendationService {
 
         double delta = ratio < SKIP_RATIO ? SKIP_PENALTY : ratio;
         String key = RecoKeys.userTags(userId);
-        for (String tag : tags) {
-            redisTemplate.opsForZSet().incrementScore(key, tag, delta);
-        }
-        redisTemplate.expire(key, RecoKeys.PROFILE_TTL);
+        RedisPipeline.run(redisTemplate, ops -> {
+            for (String tag : tags) {
+                ops.opsForZSet().incrementScore(key, tag, delta);
+            }
+            ops.expire(key, RecoKeys.PROFILE_TTL);
+        });
     }
 }
