@@ -318,7 +318,7 @@ Nằm ngoài `/videos/...`. Không bắt buộc token, **nhưng gửi nếu đã
 
 - Tài khoản công khai: ai cũng xem được, giống chính chủ.
 - Tài khoản **riêng tư**: chỉ chủ và follower. Người khác (kể cả không token) → `PRIVATE_ACCOUNT` (403). Token là cách server nhận ra follower, nên thiếu token là bị coi như người lạ.
-- Mỗi lần mở tab, service hỏi user-service; user-service không trả lời được thì coi như riêng tư và không follow (fail-closed) → 403.
+- Mỗi lần mở tab của người khác, service hỏi user-service. user-service không trả lời được thì tab vẫn không mở (fail-closed), nhưng lỗi là `PRIVACY_CHECK_UNAVAILABLE` (503) chứ không phải `PRIVATE_ACCOUNT`: đây là lỗi tạm thời, thử lại được, và không có nghĩa tài khoản riêng tư — đừng hiện "tài khoản riêng tư". Tab của chính chủ không hỏi user-service nên không bị ảnh hưởng.
 
 ## 4. Counter đến từ hai nơi — đọc số nào, khi nào
 
@@ -347,6 +347,7 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 | `PRIVATE_ACCOUNT` | 403 | Tab Reposts (mục 3.11) của tài khoản riêng tư mà người gọi không phải chủ hay follower |
 | `COMMENT_NOT_FOUND` | 404 | Bình luận không tồn tại, đã xoá, hoặc `videoId` trên URL không khớp với bình luận đó |
 | `INTERACTION_CONFLICT` | 409 | Ghi vào Cassandra không xác nhận được kết quả sau 3 lần thử (like/unlike ở mục 3.1–3.2, view ở mục 3.8). Xem bên dưới |
+| `PRIVACY_CHECK_UNAVAILABLE` | 503 | Tab Reposts (mục 3.11) của người khác khi không hỏi được user-service tài khoản có riêng tư không. Thử lại; **không** có nghĩa tài khoản riêng tư |
 | `INTERACTION_NOT_RECORDED` | 503 | Kafka không nhận event đi kèm thao tác nên thao tác đã được **hoàn tác** — like/unlike, repost, save, comment (tạo/xoá), share, view. Xem bên dưới |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 

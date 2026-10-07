@@ -1,11 +1,13 @@
 package com.tiktok.interactionservice.client;
 
+import com.tiktok.interactionservice.exception.PrivacyCheckUnavailableException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -44,13 +46,29 @@ class FriendshipClientTest {
         server.verify();
     }
 
-    /** Fails closed: a lookup that failed must not open a private account's tab. */
+    /**
+     * Fails closed, but not as "private": a lookup that failed must not open a private account's
+     * tab, and must not tell the client that a public account is private either.
+     */
     @Test
-    void canSeeFollowerContent_whenUserServiceFails_isNo() {
+    void canSeeFollowerContent_whenUserServiceFails_isUnavailableRatherThanPrivate() {
         server.expect(requestTo("http://user-service/api/v1/users/internal/friendship?userB=7&userA=5"))
                 .andRespond(withServerError());
 
-        assertThat(client.canSeeFollowerContent(7L, 5L)).isFalse();
+        assertThatThrownBy(() -> client.canSeeFollowerContent(7L, 5L))
+                .isInstanceOf(PrivacyCheckUnavailableException.class);
+        server.verify();
+    }
+
+    @Test
+    void canSeeFollowerContent_answerWithoutData_isUnavailableRatherThanPrivate() {
+        server.expect(requestTo("http://user-service/api/v1/users/internal/friendship?userB=7"))
+                .andRespond(withSuccess("""
+                        {"success": true, "data": null}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> client.canSeeFollowerContent(7L, null))
+                .isInstanceOf(PrivacyCheckUnavailableException.class);
         server.verify();
     }
 }

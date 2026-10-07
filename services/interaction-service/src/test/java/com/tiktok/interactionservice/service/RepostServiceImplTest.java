@@ -6,6 +6,7 @@ import com.tiktok.interactionservice.dto.response.RepostContextResponse;
 import com.tiktok.interactionservice.dto.response.RepostStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
 import com.tiktok.interactionservice.exception.EventNotPublishedException;
+import com.tiktok.interactionservice.exception.PrivacyCheckUnavailableException;
 import com.tiktok.interactionservice.exception.PrivateAccountException;
 import com.tiktok.interactionservice.exception.RepostRateLimitedException;
 import com.tiktok.interactionservice.repository.RepostByUserRepository;
@@ -220,5 +221,17 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         assertThatThrownBy(() -> repostService.listReposts(null, 1L, null, 20))
                 .isInstanceOf(PrivateAccountException.class);
         verify(friendshipClient, never()).canSeeFollowerContent(1L, 1L);
+    }
+
+    /** The owner's own tab never asks, so a user-service outage cannot take it away. */
+    @Test
+    void listReposts_whenThePrivacyCheckIsUnavailable_isA503ForOthersOnly() {
+        repostService.repost(19L, 1L);
+        when(friendshipClient.canSeeFollowerContent(1L, 2L))
+                .thenThrow(new PrivacyCheckUnavailableException(new IllegalStateException("down")));
+
+        assertThatThrownBy(() -> repostService.listReposts(2L, 1L, null, 20))
+                .isInstanceOf(PrivacyCheckUnavailableException.class);
+        assertThat(repostService.listReposts(1L, 1L, null, 20).videoIds()).containsExactly(19L);
     }
 }

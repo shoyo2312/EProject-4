@@ -2,6 +2,7 @@ package com.tiktok.interactionservice.client;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.tiktok.common.response.ApiResponse;
+import com.tiktok.interactionservice.exception.PrivacyCheckUnavailableException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
@@ -73,12 +74,18 @@ public class FriendshipClient {
     /**
      * Whether {@code viewerId} may see what {@code ownerId} keeps for followers: true for a public
      * account, and for a private one the viewer follows. {@code viewerId} is null for an anonymous
-     * caller. Fails closed like {@link #areFriends}: an answer nobody could give reads as a private
-     * account the viewer does not follow.
+     * caller.
+     *
+     * <p>Fails closed like {@link #areFriends}, but out loud: an answer nobody could give throws
+     * {@link PrivacyCheckUnavailableException}, a 503, instead of returning false. The tab stays
+     * shut either way, but false reads as "private, and you do not follow", and the caller turns
+     * that into a 403 saying the account is private — for every account, public ones included,
+     * for as long as user-service is down.
      */
     public boolean canSeeFollowerContent(Long ownerId, Long viewerId) {
+        ApiResponse<FriendshipView> response;
         try {
-            ApiResponse<FriendshipView> response = userServiceRestClient.get()
+            response = userServiceRestClient.get()
                     .uri(uri -> uri.path("/api/v1/users/internal/friendship")
                             .queryParam("userB", ownerId)
                             .queryParamIfPresent("userA", Optional.ofNullable(viewerId))
@@ -86,15 +93,16 @@ public class FriendshipClient {
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {
                     });
-            if (response == null || response.data() == null) {
-                return false;
-            }
-            return !response.data().privateAccount() || response.data().following();
         } catch (RestClientException e) {
-            log.warn("Could not ask whether user {} is private or followed by {}; hiding their reposts",
+            log.warn("Could not ask whether user {} is private or followed by {}; their reposts are unavailable",
                     ownerId, viewerId, e);
-            return false;
+            throw new PrivacyCheckUnavailableException(e);
         }
+        if (response == null || response.data() == null) {
+            throw new PrivacyCheckUnavailableException(
+                    new IllegalStateException("user-service answered the friendship lookup without data"));
+        }
+        return !response.data().privateAccount() || response.data().following();
     }
 
     private static String callerAuthorization() {
