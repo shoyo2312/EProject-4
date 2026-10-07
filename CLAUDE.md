@@ -106,7 +106,7 @@ com.tiktok.{service}/
   - notification cũng không có outbox: `NotificationEventPublisher` chỉ announce (`notification.created`) bản ghi inbox vừa lưu để chat-service đẩy xuống socket. Mất event = mất badge realtime, lần fetch inbox kế tiếp sửa lại; còn throw ở đây sẽ bắt consumer redeliver và ghi bản ghi lần hai
 
 ### JWT Authentication & security-lib
-- **security-lib usage**: 8 services (admin, chat, interaction, notification, recommendation, story, user, video) dùng centralized `security-lib` để validate JWT token
+- **security-lib usage**: 9 services (admin, analytics, chat, interaction, notification, recommendation, story, user, video) dùng centralized `security-lib` để validate JWT token
   - Dependency: `<artifactId>security-lib</artifactId>`
   - Auto-configured via Spring Boot auto-configuration (`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`)
   - Services KHÔNG cần `@Configuration` cục bộ cho JWT — được inject tự động
