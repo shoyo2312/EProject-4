@@ -14,6 +14,7 @@ import com.tiktok.event.admin.ReportResolvedEvent;
 import com.tiktok.event.admin.ReportSubmittedEvent;
 import com.tiktok.event.admin.StaleReportsDismissedEvent;
 import com.tiktok.event.admin.UserBannedEvent;
+import com.tiktok.event.admin.UserSessionsRevokedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.UserWarnedEvent;
 import com.tiktok.event.admin.VideoPurgeRequestedEvent;
@@ -83,6 +84,7 @@ public class AdminEventProducer {
             // A warning changes nothing about the platform, so it carries the report's target
             // rather than a user id: notification-service resolves a video to its owner.
             case WARN_USER -> UserWarnedEvent.of(action.getTargetType().name(), targetId, adminId, reason);
+            case REVOKE_SESSIONS -> UserSessionsRevokedEvent.of(Long.valueOf(targetId), adminId, reason);
             case DISMISS_REPORT -> null;
         };
     }

@@ -577,6 +577,49 @@ class AdminServiceImplTest {
         assertThat(pending.getStatus()).isEqualTo(ReportStatus.PENDING);
     }
 
+    /**
+     * Signing an account out secures it; it says nothing about whether the reports against it were
+     * right, so they stay in the queue for whoever decides that.
+     */
+    @Test
+    void moderate_revokingSessionsLeavesTheReportsStanding() {
+        adminService.moderate(2L, ReportTargetType.USER, "42", ModerationActionType.REVOKE_SESSIONS,
+                "account taken over");
+
+        verify(moderationActionRepository).save(any(ModerationAction.class));
+        verify(adminEventProducer).publishFor(any(ModerationAction.class));
+        verify(reportRepository, never()).closePendingFor(any(), any(), any(), any(), any(), any());
+        verify(adminEventProducer, never()).publishReportsResolved(any(), any());
+    }
+
+    @Test
+    void resolveReport_revokingSessionsIsNotADecisionOnAReport() {
+        Report pending = Report.builder()
+                .id(9L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.USER)
+                .targetId("42")
+                .reason("hacked account posting spam")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(9L)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> adminService.resolveReport(2L, 9L,
+                new ResolveReportRequest(ModerationActionType.REVOKE_SESSIONS, "sign out", null)))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository, adminEventProducer);
+        assertThat(pending.getStatus()).isEqualTo(ReportStatus.PENDING);
+    }
+
+    /** A video has no sessions: the user id in the event would be a Mongo document id. */
+    @Test
+    void moderate_revokingSessionsOfAVideo_rejected() {
+        assertThatThrownBy(() -> adminService.moderate(2L, ReportTargetType.VIDEO, "v1",
+                ModerationActionType.REVOKE_SESSIONS, "sign out"))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository, adminEventProducer);
+    }
+
     @Test
     void listReportQueue_dropsAnySortTheCallerAsksFor() {
         when(reportRepository.findPendingQueue(any(Pageable.class)))

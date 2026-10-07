@@ -12,6 +12,7 @@ import com.tiktok.adminservice.repository.OutboxEventRepository;
 import com.tiktok.event.admin.ReportResolvedEvent;
 import com.tiktok.event.admin.ReportSubmittedEvent;
 import com.tiktok.event.admin.StaleReportsDismissedEvent;
+import com.tiktok.event.admin.UserSessionsRevokedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -90,6 +91,28 @@ class AdminEventProducerTest {
         assertThat(row.getEventType()).isEqualTo("StaleReportsDismissedEvent");
         assertThat(objectMapper.readValue(row.getPayload(), StaleReportsDismissedEvent.class).dismissed())
                 .isEqualTo(37);
+    }
+
+    /**
+     * Keyed by the account like a ban, so a sign-out and a ban of the same account keep their
+     * order on the partition — and carrying the user id auth-service acts on.
+     */
+    @Test
+    void revokingSessions_isAnEventAuthServiceCanActOn() throws Exception {
+        producer().publishFor(ModerationAction.builder()
+                .adminId(2L)
+                .actionType(ModerationActionType.REVOKE_SESSIONS)
+                .targetType(ReportTargetType.USER)
+                .targetId("42")
+                .reason("account taken over")
+                .build());
+
+        OutboxEvent row = saved();
+        assertThat(row.getAggregateId()).isEqualTo("42");
+        assertThat(row.getEventType()).isEqualTo("UserSessionsRevokedEvent");
+        UserSessionsRevokedEvent event = objectMapper.readValue(row.getPayload(), UserSessionsRevokedEvent.class);
+        assertThat(event.userId()).isEqualTo(42L);
+        assertThat(event.adminId()).isEqualTo(2L);
     }
 
     @Test

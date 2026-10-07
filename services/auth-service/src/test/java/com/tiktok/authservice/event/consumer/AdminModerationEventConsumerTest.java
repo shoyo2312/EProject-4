@@ -9,6 +9,7 @@ import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.authservice.service.SessionRevoker;
 import com.tiktok.authservice.service.UserModerationService;
 import com.tiktok.event.admin.UserBannedEvent;
+import com.tiktok.event.admin.UserSessionsRevokedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -114,6 +115,38 @@ class AdminModerationEventConsumerTest {
         consumer.onMessage(payload, null);
 
         verify(userRepository, never()).save(any());
+        verify(sessionRevoker, never()).revokeAllSessions(anyLong());
+    }
+
+    /** Signed out, not locked out: the owner signs straight back in, whoever stole a session cannot. */
+    @Test
+    void revokingSessionsSignsTheAccountOutWithoutBanningIt() throws Exception {
+        consumer.onMessage(json(UserSessionsRevokedEvent.of(USER_ID, ADMIN_ID, "account taken over")),
+                header("UserSessionsRevokedEvent"));
+
+        verify(sessionRevoker).revokeAllSessions(USER_ID);
+        verify(userRepository, never()).save(any());
+        assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
+    }
+
+    /** Unlike a ban, this cannot lock the console: an admin who is signed out signs back in. */
+    @Test
+    void anAdminAccountCanBeSignedOut() throws Exception {
+        user.promoteToAdmin();
+
+        consumer.onMessage(json(UserSessionsRevokedEvent.of(USER_ID, ADMIN_ID, "laptop stolen")),
+                header("UserSessionsRevokedEvent"));
+
+        verify(sessionRevoker).revokeAllSessions(USER_ID);
+    }
+
+    @Test
+    void signingOutAnUnknownUserIsANoOp() throws Exception {
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+        consumer.onMessage(json(UserSessionsRevokedEvent.of(USER_ID, ADMIN_ID, "account taken over")),
+                header("UserSessionsRevokedEvent"));
+
         verify(sessionRevoker, never()).revokeAllSessions(anyLong());
     }
 
