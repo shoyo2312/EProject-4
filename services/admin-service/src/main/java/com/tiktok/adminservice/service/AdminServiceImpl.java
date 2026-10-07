@@ -51,8 +51,9 @@ public class AdminServiceImpl implements AdminService {
     @Transactional
     public ReportResponse submitReport(Long reporterId, SubmitReportRequest request) {
         // Checked here and not only at resolve time: an id nobody can act on is a report that
-        // cannot be closed, discovered days later by the admin who tries.
-        request.targetType().validateTargetId(request.targetId());
+        // cannot be closed, discovered days later by the admin who tries. Stored in its one
+        // spelling, or "007" and "7" would be two targets — see ReportTargetType.
+        String targetId = request.targetType().canonicalTargetId(request.targetId());
 
         // The ordinary repeat — the same user reporting the same thing again — answers with the
         // report they already filed. Reading first rather than inserting and recovering: Postgres
@@ -60,7 +61,7 @@ public class AdminServiceImpl implements AdminService {
         // against a dead transaction and fails with "current transaction is aborted".
         Optional<Report> existing = reportRepository
                 .findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                        reporterId, request.targetType(), request.targetId());
+                        reporterId, request.targetType(), targetId);
         if (existing.isPresent()) {
             return adminMapper.toResponse(existing.get());
         }
@@ -69,12 +70,12 @@ public class AdminServiceImpl implements AdminService {
         // bulk of a busy queue: the video is gone, everyone who saw it before reports it, and an
         // admin opens fifty rows to decide nothing. They are recorded — the report is still the
         // record that someone objected — and closed on arrival.
-        boolean alreadyEnforced = standingEnforcement(request.targetType(), request.targetId()).isPresent();
+        boolean alreadyEnforced = standingEnforcement(request.targetType(), targetId).isPresent();
 
         Report report = Report.builder()
                 .reporterId(reporterId)
                 .targetType(request.targetType())
-                .targetId(request.targetId())
+                .targetId(targetId)
                 .reason(request.reason())
                 .status(alreadyEnforced ? ReportStatus.RESOLVED : ReportStatus.PENDING)
                 // resolvedBy stays null, which is how the console tells a decision the service
@@ -109,7 +110,9 @@ public class AdminServiceImpl implements AdminService {
     @Override
     public Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType,
                                             String targetId, Long reporterId, Pageable pageable) {
-        return reportRepository.findFiltered(status, targetType, targetId, reporterId, pageable)
+        // Canonical only when the type says how: a bare targetId filter is matched as typed.
+        String id = targetType != null && targetId != null ? targetType.canonicalTargetId(targetId) : targetId;
+        return reportRepository.findFiltered(status, targetType, id, reporterId, pageable)
                 .map(adminMapper::toResponse);
     }
 
@@ -149,13 +152,13 @@ public class AdminServiceImpl implements AdminService {
         // them up — see ModerationActionType. Reports predating the submit-time check above can
         // still carry an id this action cannot use, so both halves are verified.
         request.actionType().requireApplicableTo(report.getTargetType());
-        report.getTargetType().validateTargetId(report.getTargetId());
+        String targetId = report.getTargetType().canonicalTargetId(report.getTargetId());
         if (!request.actionType().answersReports()) {
             throw new InvalidModerationTargetException(
                     request.actionType() + " is not a decision on a report");
         }
 
-        record(adminId, report.getTargetType(), report.getTargetId(),
+        record(adminId, report.getTargetType(), targetId,
                 request.actionType(), request.reason(), report.getId(),
                 bannedUntil(request.actionType(), request.banDays()));
 
@@ -165,9 +168,9 @@ public class AdminServiceImpl implements AdminService {
         // Everyone else who reported the same thing is answered by the same decision. Without
         // this their reports stay PENDING and come back up the queue as a target with no
         // history — the admin who takes it next sees a video already down and decides it again.
-        reportRepository.closePendingFor(report.getTargetType(), report.getTargetId(),
+        reportRepository.closePendingFor(report.getTargetType(), targetId,
                 finalStatus, adminId, report.getId(), Instant.now());
-        adminEventProducer.publishReportsResolved(report.getTargetType(), report.getTargetId());
+        adminEventProducer.publishReportsResolved(report.getTargetType(), targetId);
 
         return adminMapper.toResponse(report);
     }
@@ -192,9 +195,9 @@ public class AdminServiceImpl implements AdminService {
     public ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
                                             ModerationActionType actionType, String reason, Integer banDays) {
         actionType.requireApplicableTo(targetType);
-        targetType.validateTargetId(targetId);
+        String id = targetType.canonicalTargetId(targetId);
 
-        ModerationAction action = record(adminId, targetType, targetId, actionType, reason, null,
+        ModerationAction action = record(adminId, targetType, id, actionType, reason, null,
                 bannedUntil(actionType, banDays));
 
         // The console resolves a whole queue row through this path — one decision, every
@@ -204,9 +207,9 @@ public class AdminServiceImpl implements AdminService {
         // to the top of the queue an hour after it was dealt with. A purge is the exception: it
         // says nothing about whether the reports were right, so they stay where they are.
         if (actionType.answersReports()) {
-            reportRepository.closePendingFor(targetType, targetId, actionType.resolutionStatus(),
+            reportRepository.closePendingFor(targetType, id, actionType.resolutionStatus(),
                     adminId, null, Instant.now());
-            adminEventProducer.publishReportsResolved(targetType, targetId);
+            adminEventProducer.publishReportsResolved(targetType, id);
         }
 
         return adminMapper.toResponse(action);
@@ -222,7 +225,8 @@ public class AdminServiceImpl implements AdminService {
         }
 
         Page<ModerationAction> actions = targetType != null
-                ? moderationActionRepository.findByTargetTypeAndTargetIdOrderByCreatedAtDesc(targetType, targetId, pageable)
+                ? moderationActionRepository.findByTargetTypeAndTargetIdOrderByCreatedAtDesc(
+                        targetType, targetType.canonicalTargetId(targetId), pageable)
                 : moderationActionRepository.findAllByOrderByCreatedAtDesc(pageable);
         return actions.map(adminMapper::toResponse);
     }
@@ -230,12 +234,13 @@ public class AdminServiceImpl implements AdminService {
     @Override
     public long countStrikes(ReportTargetType targetType, String targetId) {
         return moderationActionRepository.countByTargetTypeAndTargetIdAndActionTypeIn(
-                targetType, targetId, ModerationActionType.ENFORCING);
+                targetType, targetType.canonicalTargetId(targetId), ModerationActionType.ENFORCING);
     }
 
     @Override
     public long countReports(ReportTargetType targetType, String targetId) {
-        return reportRepository.countByTargetTypeAndTargetIdAndDeletedAtIsNull(targetType, targetId);
+        return reportRepository.countByTargetTypeAndTargetIdAndDeletedAtIsNull(
+                targetType, targetType.canonicalTargetId(targetId));
     }
 
     @Override

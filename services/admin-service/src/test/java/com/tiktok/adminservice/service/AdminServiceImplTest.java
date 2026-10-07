@@ -441,6 +441,56 @@ class AdminServiceImplTest {
         assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.RESOLVED);
     }
 
+    /** "007" and "7" are one account: the repeat finds the report already filed under "7". */
+    @Test
+    void submitReport_anotherSpellingOfTheSameTarget_isTheSameReport() {
+        Report filed = Report.builder().id(3L).reporterId(10L).targetType(ReportTargetType.USER)
+                .targetId("7").reason("Spam").status(ReportStatus.PENDING).build();
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "7")).thenReturn(Optional.of(filed));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "007", "Spam"));
+
+        verify(reportRepository, never()).saveAndFlush(any());
+        verify(adminMapper).toResponse(filed);
+    }
+
+    @Test
+    void submitReport_storesTheTargetInItsOneSpelling() {
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.COMMENT, " 007:+8 ", "Spam"));
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getTargetId()).isEqualTo("7:8");
+    }
+
+    /** The self-ban guard compares strings, so it has to see the admin's id spelled as theirs. */
+    @Test
+    void moderate_banningYourselfUnderAnotherSpelling_isStillRefused() {
+        assertThatThrownBy(() -> adminService.moderate(42L, ReportTargetType.USER, "+042",
+                ModerationActionType.BAN_USER, "test"))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(adminEventProducer);
+    }
+
+    /** A row stored before ids were canonical is acted on, and its siblings closed, under the one id. */
+    @Test
+    void resolveReport_aReportStoredUnderAnOldSpelling_actsOnTheCanonicalId() {
+        Report pending = Report.builder().id(9L).reporterId(1L).targetType(ReportTargetType.USER)
+                .targetId("007").reason("Spam").status(ReportStatus.PENDING).build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(9L)).thenReturn(Optional.of(pending));
+
+        adminService.resolveReport(2L, 9L, new ResolveReportRequest(ModerationActionType.BAN_USER, "spam", null));
+
+        ArgumentCaptor<ModerationAction> action = ArgumentCaptor.forClass(ModerationAction.class);
+        verify(moderationActionRepository).save(action.capture());
+        assertThat(action.getValue().getTargetId()).isEqualTo("7");
+        verify(reportRepository).closePendingFor(eq(ReportTargetType.USER), eq("7"),
+                eq(ReportStatus.RESOLVED), eq(2L), eq(9L), any(Instant.class));
+    }
+
     @Test
     void resolveReport_closesEveryOtherReportAgainstTheSameTarget() {
         Report pending = Report.builder()
