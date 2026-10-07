@@ -7,11 +7,16 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class AdminFanoutTest {
@@ -21,11 +26,10 @@ class AdminFanoutTest {
 
     @Test
     void relaysTheEventTypeAndNothingElse() {
-        ConsumerRecord<String, String> record = new ConsumerRecord<>(
-                "admin.report-events", 0, 0L, "v1", "{\"reportId\":7,\"targetId\":\"v1\"}");
-        record.headers().add("eventType", "ReportSubmittedEvent".getBytes(StandardCharsets.UTF_8));
+        AdminFanout fanout = new AdminFanout(messaging);
+        fanout.onEvent(record("admin.report-events", "ReportSubmittedEvent", "{\"reportId\":7,\"targetId\":\"v1\"}"));
 
-        new AdminFanout(messaging).onEvent(record);
+        fanout.flush();
 
         verify(messaging).convertAndSend(AdminFanout.DESTINATION, new AdminFrame("ReportSubmittedEvent"));
     }
@@ -33,12 +37,51 @@ class AdminFanoutTest {
     /** media-worker's verdicts carry no eventType header. */
     @Test
     void fallsBackToTheTopicWhenTheProducerSetNoType() {
-        ConsumerRecord<String, String> record = new ConsumerRecord<>(
-                "media.video-moderation-events", 0, 0L, "v1", "{}");
+        AdminFanout fanout = new AdminFanout(messaging);
+        fanout.onEvent(record("media.video-moderation-events", null, "{}"));
 
-        new AdminFanout(messaging).onEvent(record);
+        fanout.flush();
 
         verify(messaging).convertAndSend(AdminFanout.DESTINATION, new AdminFrame("media.video-moderation-events"));
+    }
+
+    /**
+     * An account going private moves every video it owns, one VideoVisibilityChangedEvent each.
+     * Every frame is a REST re-read by every open console, so the burst has to stop here.
+     */
+    @Test
+    void aBurstOfOneTypeIsOneFramePerWindow() {
+        AdminFanout fanout = new AdminFanout(messaging);
+        for (int i = 0; i < 200; i++) {
+            fanout.onEvent(record("video.video-events", "VideoVisibilityChangedEvent", "{}"));
+        }
+        fanout.onEvent(record("admin.report-events", "ReportSubmittedEvent", "{}"));
+
+        fanout.flush();
+
+        verify(messaging, times(1)).convertAndSend(AdminFanout.DESTINATION, new AdminFrame("VideoVisibilityChangedEvent"));
+        verify(messaging, times(1)).convertAndSend(AdminFanout.DESTINATION, new AdminFrame("ReportSubmittedEvent"));
+    }
+
+    @Test
+    void aQuietWindowSendsNothing() {
+        AdminFanout fanout = new AdminFanout(messaging);
+        fanout.flush();
+        verifyNoInteractions(messaging);
+
+        fanout.onEvent(record("admin.report-events", "ReportResolvedEvent", "{}"));
+        fanout.flush();
+        fanout.flush();
+
+        // The second window had nothing new: what the first one sent is not sent again.
+        verify(messaging, times(1)).convertAndSend(anyString(), any(Object.class));
+    }
+
+    @Test
+    void flushesOnTheCounterFlushersWindow() throws Exception {
+        Scheduled scheduled = AdminFanout.class.getMethod("flush").getAnnotation(Scheduled.class);
+
+        assertThat(scheduled.fixedDelayString()).isEqualTo("${realtime.flush-interval-millis}");
     }
 
     /**
@@ -55,5 +98,13 @@ class AdminFanoutTest {
         assertThat(listener.topics()).containsExactlyInAnyOrder(
                 "admin.report-events", "admin.moderation-events",
                 "media.video-moderation-events", "video.video-events", "auth.user-events");
+    }
+
+    private static ConsumerRecord<String, String> record(String topic, String eventType, String payload) {
+        ConsumerRecord<String, String> record = new ConsumerRecord<>(topic, 0, 0L, "v1", payload);
+        if (eventType != null) {
+            record.headers().add("eventType", eventType.getBytes(StandardCharsets.UTF_8));
+        }
+        return record;
     }
 }
