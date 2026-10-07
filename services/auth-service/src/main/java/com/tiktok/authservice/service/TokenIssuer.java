@@ -12,6 +12,7 @@ import com.tiktok.crypto.jwt.JwtProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.Map;
@@ -42,17 +43,23 @@ public class TokenIssuer {
     private final RefreshTokenRepository refreshTokenRepository;
     private final UserRepository userRepository;
     private final SecurityEventRecorder securityEventRecorder;
+    private final TransactionTemplate transactionTemplate;
 
     /**
      * A sign-in. Mints the pair and appends {@code signIn} to the account's security log, so every
      * way of proving an account — password, admin OTP, social — is recorded in one place rather
      * than at each of the four call sites that would otherwise have to remember to.
      *
+     * <p>The entry is written after the tokens commit, not inside their transaction. The recorder
+     * opens a transaction of its own ({@code REQUIRES_NEW}, see {@link SecurityEventRecorder}), so
+     * inside this one every sign-in held two pooled connections at once, and a login burst could
+     * fill the pool with first connections all waiting for a second. A caller that is already in a
+     * transaction still joins it here, as before.
+     *
      * @param signIn how the account was proven, for the log
      */
-    @Transactional
     public TokenResponse issue(User user, SecurityEventType signIn) {
-        TokenResponse tokens = mint(user);
+        TokenResponse tokens = transactionTemplate.execute(status -> mint(user));
         securityEventRecorder.record(user.getId(), signIn);
         return tokens;
     }
