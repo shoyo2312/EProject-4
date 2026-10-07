@@ -3,6 +3,7 @@ package com.tiktok.notificationservice.event.consumer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.tiktok.event.user.UserFollowChangedEvent;
+import com.tiktok.notificationservice.client.BlockClient;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.repository.ProcessedEventRepository;
 import com.tiktok.notificationservice.service.NotificationService;
@@ -27,11 +28,14 @@ class FollowEventConsumerTest {
     @Mock
     private NotificationService notificationService;
 
+    @Mock
+    private BlockClient blockClient;
+
     private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
 
     private FollowEventConsumer consumer() {
         return new FollowEventConsumer(
-                new IdempotentEventProcessor(processedEventRepository), notificationService, objectMapper);
+                new IdempotentEventProcessor(processedEventRepository), notificationService, objectMapper, blockClient);
     }
 
     @Test
@@ -62,6 +66,22 @@ class FollowEventConsumerTest {
                 eq(9L), eq(50L), eq(NotificationType.FOLLOW_REQUEST_ACCEPTED), any(), any(), eq("50"));
         verify(notificationService, never()).create(
                 any(), any(), eq(NotificationType.NEW_FOLLOWER), any(), any(), any());
+    }
+
+    /**
+     * user-service refuses a follow across a block, but a block placed while the event was still
+     * in flight is not something it can take back. The blocker is not told about the follow.
+     */
+    @Test
+    void onMessage_betweenAccountsThatHaveSinceBlockedOneAnother_tellsNobody() throws Exception {
+        when(processedEventRepository.tryClaim(anyString(), anyString())).thenReturn(true);
+        when(blockClient.isBlockedBetween(50L, 9L)).thenReturn(true);
+        when(blockClient.isBlockedBetween(9L, 50L)).thenReturn(true);
+
+        consumer().onMessage(objectMapper.writeValueAsString(UserFollowChangedEvent.of(9L, 50L, true)));
+        consumer().onMessage(objectMapper.writeValueAsString(UserFollowChangedEvent.of(9L, 50L, true, true)));
+
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     /** Events written before requestApproved existed carry no such key, and read as a plain follow. */
