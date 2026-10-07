@@ -37,6 +37,11 @@ public class VideoOwnershipClient {
                                    String commentAudience) {
     }
 
+    /** The one field of {@code GET /videos/{id}} this client reads. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    private record VisibleVideoView(Integer durationSeconds) {
+    }
+
     /**
      * Refuses an interaction with a video the caller may not see, or one that does not exist.
      *
@@ -49,10 +54,16 @@ public class VideoOwnershipClient {
      * <p>Only a 404 refuses. Anything else — video-service down, a timeout — lets the interaction
      * through, the same way the comments switch fails open: an outage there should not stop every
      * like on the platform, and video-service still refuses to serve a hidden video itself.
+     *
+     * @return the video's real length in milliseconds, as probed during transcoding, read off the
+     *         same answer — or 0 when nobody knows it yet (the transcode has not finished, or
+     *         video-service could not be reached). A watch report needs it as the denominator of
+     *         its ratio, and asking {@code /policy} for it as well was a second call per watch.
+     *         Zero rather than null because a length of zero is not a thing a video can have.
      */
-    public void requireVisible(Long videoId) {
+    public long requireVisible(Long videoId) {
         try {
-            videoServiceRestClient.get()
+            ApiResponse<VisibleVideoView> response = videoServiceRestClient.get()
                     .uri("/api/v1/videos/{videoId}", videoId)
                     .headers(headers -> {
                         String token = callerAuthorization();
@@ -61,11 +72,15 @@ public class VideoOwnershipClient {
                         }
                     })
                     .retrieve()
-                    .toBodilessEntity();
+                    .body(new ParameterizedTypeReference<>() {
+                    });
+            Integer seconds = response == null || response.data() == null ? null : response.data().durationSeconds();
+            return seconds == null || seconds <= 0 ? 0 : seconds * 1000L;
         } catch (HttpClientErrorException.NotFound e) {
             throw new VideoNotFoundException(videoId);
         } catch (RestClientException e) {
             log.warn("Could not confirm video {} is visible, letting the interaction through", videoId, e);
+            return 0;
         }
     }
 
@@ -133,22 +148,6 @@ public class VideoOwnershipClient {
             log.warn("Unknown comment audience '{}' from video-service; leaving comments unrestricted", raw);
             return CommentAudience.EVERYONE;
         }
-    }
-
-    /**
-     * The video's real length in milliseconds, as probed during transcoding, or 0 when nobody
-     * knows it yet — the transcode has not finished, or video-service could not be reached. The
-     * caller needs the difference: a duration this service confirmed can be trusted as the
-     * denominator of a watch ratio, a missing one leaves the client's own number to be treated
-     * with suspicion. Zero rather than null for "unknown" because every caller has to handle it
-     * either way, and a length of zero is not a thing a video can have.
-     */
-    public long durationMs(Long videoId) {
-        VideoPolicyView view = fetch(videoId);
-        if (view == null || view.durationSeconds() == null || view.durationSeconds() <= 0) {
-            return 0;
-        }
-        return view.durationSeconds() * 1000L;
     }
 
     private VideoPolicyView fetch(Long videoId) {

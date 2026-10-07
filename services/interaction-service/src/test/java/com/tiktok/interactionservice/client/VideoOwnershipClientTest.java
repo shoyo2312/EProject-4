@@ -149,6 +149,17 @@ class VideoOwnershipClientTest {
         assertThatCode(() -> client.requireVisible(42L)).doesNotThrowAnyException();
     }
 
+    /** The watch path takes its denominator from here rather than asking /policy a second time. */
+    @Test
+    void requireVisible_answersTheProbedDurationOfTheVideoItRead() {
+        server.expect(requestTo("http://video-service/api/v1/videos/42"))
+                .andRespond(withSuccess("{\"success\": true, \"data\": {\"id\": \"42\", \"durationSeconds\": 61}}",
+                        MediaType.APPLICATION_JSON));
+
+        assertThat(client.requireVisible(42L)).isEqualTo(61_000L);
+        server.verify();
+    }
+
     /**
      * Fails open, like the comments switch: an outage of video-service should not stop every like
      * on the platform, and nothing here is a secret the check protects on its own — video-service
