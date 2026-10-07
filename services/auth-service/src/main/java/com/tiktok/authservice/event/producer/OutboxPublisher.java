@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Polls unpublished outbox rows and forwards them to Kafka. Keeps producer writes
@@ -25,7 +26,13 @@ import java.util.List;
 @RequiredArgsConstructor
 public class OutboxPublisher {
 
-    private static final String TOPIC = "auth.user-events";
+    /**
+     * One topic per shape: consumers of {@code auth.user-events} parse every message as a
+     * registration and read no header, so a second shape there would arrive as a signup.
+     */
+    private static final Map<String, String> TOPICS = Map.of(
+            UserEventProducer.USER_AGGREGATE, "auth.user-events",
+            UserEventProducer.USERNAME_AGGREGATE, "auth.username-events");
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxDispatcher outboxDispatcher;
@@ -43,10 +50,7 @@ public class OutboxPublisher {
         }
 
         List<Long> acked = new ArrayList<>(pending.size());
-        int published = outboxDispatcher.dispatch(
-                pending,
-                event -> new ProducerRecord<>(TOPIC, event.getAggregateId(), event.getPayload()),
-                event -> acked.add(event.getId()));
+        int published = outboxDispatcher.dispatch(pending, this::toRecord, event -> acked.add(event.getId()));
         if (!acked.isEmpty()) {
             outboxEventRepository.markPublished(acked, Instant.now());
         }
@@ -55,5 +59,17 @@ public class OutboxPublisher {
             log.warn("Published {}/{} auth outbox events, the rest stay pending for the next poll",
                     published, pending.size());
         }
+    }
+
+    private ProducerRecord<String, String> toRecord(OutboxEvent event) {
+        String topic = TOPICS.get(event.getAggregateType());
+        if (topic == null) {
+            // Thrown, not guessed: the dispatcher leaves the row pending for an instance that knows
+            // the type. The reverse is not covered — an instance from before this map sends every
+            // row to auth.user-events, where a USERNAME row reads as a signup — so the deploy that
+            // brings the map in has to stop every old replica before starting a new one.
+            throw new IllegalStateException("No topic for outbox aggregate type " + event.getAggregateType());
+        }
+        return new ProducerRecord<>(topic, event.getAggregateId(), event.getPayload());
     }
 }

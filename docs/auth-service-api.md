@@ -80,7 +80,8 @@ Response `data` → `UserResponse`:
   "role": "USER",             // enum: xem UserRole
   "status": "ACTIVE",         // enum: xem UserStatus
   "emailVerified": false,     // luôn false ngay sau khi đăng ký — xem mục 3.6
-  "createdAt": "2026-08-01T10:00:00Z"
+  "createdAt": "2026-08-01T10:00:00Z",
+  "usernameChangeableAt": null // khi nào được đổi username lần tới; null = đổi được ngay (mục 3.16)
 }
 ```
 
@@ -145,7 +146,7 @@ Request:
 ### 3.5 `GET /me`
 **Bắt buộc** header `Authorization: Bearer <accessToken>`. Trả `200 OK`.
 
-Response `data` → `UserResponse` (giống mục 3.1, bao gồm `emailVerified`).
+Response `data` → `UserResponse` (giống mục 3.1, bao gồm `emailVerified` và `usernameChangeableAt` — dùng field này để khoá ô username kèm ngày mở lại, thay vì để user bấm Lưu rồi mới nhận `429`).
 
 Lỗi: `401 Unauthorized` nếu token thiếu/hết hạn/đã bị blacklist (do logout).
 
@@ -334,6 +335,25 @@ Response `data` → `TokenResponse` (giống mục 3.2). Tài khoản được t
 
 Lỗi: `VALIDATION_ERROR` (400), `USERNAME_ALREADY_EXISTS` (409 — vé **vẫn dùng được**, cho user chọn username khác), `SIGNUP_SESSION_EXPIRED` (400 — vé sai, hết hạn, hoặc đã dùng: quay lại mục 3.13), `EMAIL_ALREADY_EXISTS` (409 — địa chỉ bị tài khoản khác lấy mất trong lúc đăng ký: cũng quay lại mục 3.13).
 
+### 3.16 `PUT /me/username`
+**Cần Bearer token.** Trả `200 OK`. Đổi username (TikTok ID) — **tối đa 1 lần mỗi 30 ngày**.
+
+Request:
+```json
+{ "username": "minh.hung" }  // 3-50 ký tự: chữ thường, số, "_" và "."; bắt đầu bằng chữ cái
+```
+
+Quy tắc chặt hơn `register` (vốn nhận mọi chuỗi 3-50 ký tự) vì username mới trở thành link profile `/@username`. Bắt đầu bằng chữ cái nên không bao giờ trùng dạng với id số mà client dùng để route.
+
+Response `data` → `UserResponse` (giống mục 3.1) với `username` mới và `usernameChangeableAt` = thời điểm đổi + 30 ngày.
+
+- Gửi **đúng username hiện tại** → không phải lần đổi: trả nguyên trạng, không tốn lượt, không lỗi.
+- Lần đổi đầu tiên luôn được phép: username chọn lúc đăng ký (hoặc tự sinh khi đăng ký social) không tính là một lần đổi.
+- Đổi thành công thì username cũ **được giải phóng ngay** — tài khoản khác có thể lấy. Đăng nhập bằng username cũ không còn được; token đang có vẫn sống (token chỉ mang `userId`).
+- Profile ở user-service cập nhật **bất đồng bộ** qua `UsernameChangedEvent` (mục 9): trong vài giây đầu `GET /users/by-username/{mới}` có thể còn `404`. Client nên điều hướng tới trang của chính mình bằng dữ liệu phiên (`/me`) thay vì tra theo username mới.
+
+Lỗi: `VALIDATION_ERROR` (400), `USERNAME_ALREADY_EXISTS` (409 — không phân biệt hoa thường), `USERNAME_CHANGE_TOO_SOON` (429 — chưa đủ 30 ngày từ lần đổi trước; xem `usernameChangeableAt` ở `GET /me`), `CONCURRENT_MODIFICATION` (409 — hai lần đổi gửi cùng lúc, chỉ một lần thắng), `401` nếu thiếu/sai access token.
+
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
 1. `register` → `verify-email` (OTP 6 số gửi qua mail) → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext). Bỏ qua bước verify thì `login` trả `403 EMAIL_NOT_VERIFIED`. Luồng web thì khác: `register/start` → `register/verify` → `register/complete` (mục 3.13–3.15), bước cuối trả token luôn.
@@ -366,7 +386,8 @@ ACTIVE, LOCKED
 | `INVALID_REFRESH_TOKEN` | 401 | Refresh token sai/hết hạn/**đã bị xoay** ở lần `/refresh` trước (xem mục 3.3 — trình lại token đã xoay còn kích hoạt replay detection, giết mọi phiên) |
 | `EMAIL_NOT_VERIFIED` | 403 | Mật khẩu đúng nhưng email chưa xác thực → điều hướng sang màn hình nhập OTP, KHÔNG gộp với `INVALID_CREDENTIALS` |
 | `TOO_MANY_LOGIN_ATTEMPTS` | 429 | Quá 5 lần login sai trong 15 phút (theo tài khoản) |
-| `USERNAME_ALREADY_EXISTS` | 409 | Đăng ký trùng username |
+| `USERNAME_ALREADY_EXISTS` | 409 | Đăng ký hoặc đổi username (mục 3.16) trùng username của tài khoản khác, không phân biệt hoa thường |
+| `USERNAME_CHANGE_TOO_SOON` | 429 | Đổi username khi chưa đủ 30 ngày từ lần đổi trước (mục 3.16). Retry vô ích cho tới `usernameChangeableAt` |
 | `EMAIL_ALREADY_EXISTS` | 409 | Đăng ký trùng email |
 | `INVALID_SOCIAL_TOKEN` | 401 | Token Google/Facebook sai, hết hạn, hoặc **được cấp cho ứng dụng khác** (mục 3.10). Cố ý không nói rõ là lý do nào |
 | `EMAIL_ALREADY_LINKED` | 409 | Tài khoản đã có email đã verify nên không dùng `POST /email` được nữa (mục 3.12) |
@@ -413,10 +434,11 @@ Phần này cho người tích hợp backend, không phải client mobile. `auth
 |---|---|---|---|---|
 | `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` (`avatarUrl` null với đăng ký bằng mật khẩu) | **Outbox** (`outbox_events`, ghi cùng transaction tạo `User`). `OutboxPublisher` poll → `OutboxDispatcher` của `kafka-lib` chỉ `markPublished` **sau** khi broker ack | user-service (tạo profile) |
 | `auth.social-avatar-events` | `SocialAvatarDiscoveredEvent` | `eventId, occurredAt, userId, avatarUrl` | **Gửi thẳng broker, fire-and-forget** (chỉ log khi lỗi). Không qua outbox: đăng nhập social gặp tài khoản sẵn có thì không ghi DB nào để "atomic" cùng, và Kafka chết không được làm hỏng login vì một tấm ảnh | media-worker (sao ảnh về MinIO) |
+| `auth.username-events` | `UsernameChangedEvent` | `eventId, occurredAt, userId, username, previousUsername` | **Outbox** (cùng transaction với việc đổi username, mục 3.16), key `userId`. `OutboxPublisher` chọn topic theo `aggregate_type` (`USER` / `USERNAME`) — deploy bản có bảng route này phải dừng hết instance cũ trước, vì instance cũ đẩy mọi row lên `auth.user-events` | user-service (cập nhật bản sao username trong profile) |
 
 Phát `SocialAvatarDiscoveredEvent` **mỗi lần** đăng nhập social có mang ảnh, không chỉ lần đầu — URL của provider (nhất là Facebook) hết hạn sau vài ngày, nên phát lại là cách media-worker luôn có URL còn sống để sao, và cũng là cách backfill tài khoản social cũ chưa có ảnh.
 
-Hai topic tách nhau vì `auth.user-events` chỉ mang đúng một shape và các consumer parse thẳng không đọc header — đăng một shape thứ hai lên đó sẽ deserialize thành `UserRegisteredEvent` với mọi field null và tạo profile rác.
+Ba topic tách nhau vì `auth.user-events` chỉ mang đúng một shape và các consumer parse thẳng không đọc header — đăng một shape thứ hai lên đó sẽ deserialize thành `UserRegisteredEvent` với mọi field null và tạo profile rác. `UsernameChangedEvent` còn tệ hơn: nó có đủ `userId` và `username`, nên sẽ được đọc như một lần đăng ký thật.
 
 `ExpiredRecordCleanup` (job retention) chỉ xoá row outbox đã `published_at IS NOT NULL` — row chưa publish là event chưa tồn tại ở đâu khác.
 
