@@ -14,6 +14,12 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, Long> 
 
     List<OutboxEvent> findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
 
+    /** For the backlog gauges (OutboxMetricsConfig); both read idx_outbox_events_unpublished. */
+    long countByPublishedAtIsNull();
+
+    @Query("SELECT MIN(e.createdAt) FROM OutboxEvent e WHERE e.publishedAt IS NULL")
+    Instant oldestPendingCreatedAt();
+
     /** The rows the broker acknowledged, marked in one statement and its own transaction. */
     @Transactional
     @Modifying

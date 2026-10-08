@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.repository;
 
+import com.tiktok.kafka.outbox.OutboxBacklog;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -7,17 +8,24 @@ import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,9 +52,53 @@ class OutboxPollQueryTest {
     @Autowired
     private MongoTemplate mongoTemplate;
 
+    @Autowired
+    private List<OutboxBacklog> outboxBacklogs;
+
+    @Value("${video.trash.retention:P30D}")
+    private Duration trashRetention;
+
     @BeforeEach
     void cleanUp() {
         videoRepository.deleteAll();
+    }
+
+    /** Each backlog counts what its poll still has to send, plus a parked publication no poll will send. */
+    @Test
+    void backlogCountsWhatEachPollStillHasToSend() {
+        Video oldest = save(false);
+        Video parked = save(false);
+        parked.markEventFailed();
+        videoRepository.save(parked);
+        save(true);
+        Video changed = save(false);
+        changed.markEventPublished();
+        changed.changeVisibility(VideoVisibility.PRIVATE);
+        videoRepository.save(changed);
+
+        assertThat(backlog("published").pending().getAsLong()).isEqualTo(2);
+        assertThat(backlog("published").oldestPendingSince().get())
+                .isEqualTo(oldest.getCreatedAt().truncatedTo(ChronoUnit.MILLIS));
+        assertThat(backlog("deleted").pending().getAsLong()).isEqualTo(1);
+        assertThat(backlog("visibility").pending().getAsLong()).isEqualTo(1);
+        assertThat(backlog("purge").pending().getAsLong()).isZero();
+        assertThat(backlog("purge-request").pending().getAsLong()).isZero();
+    }
+
+    @Test
+    void aPurgeIsDueWhenTheTrashWindowEndsNotWhenTheOwnerDeleted() {
+        Video trashed = save(true);
+        Instant deletedAt = Instant.now().minus(trashRetention).minus(Duration.ofMinutes(10))
+                .truncatedTo(ChronoUnit.MILLIS);
+        mongoTemplate.updateFirst(Query.query(Criteria.where("_id").is(trashed.getId())),
+                new Update().set("deletedAt", deletedAt), Video.class);
+
+        assertThat(backlog("purge").pending().getAsLong()).isEqualTo(1);
+        assertThat(backlog("purge").oldestPendingSince().get()).isEqualTo(deletedAt.plus(trashRetention));
+    }
+
+    private OutboxBacklog backlog(String slot) {
+        return outboxBacklogs.stream().filter(b -> b.outbox().equals(slot)).findFirst().orElseThrow();
     }
 
     @Test

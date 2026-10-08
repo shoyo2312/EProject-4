@@ -108,6 +108,9 @@ kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
   ├── OutboxDispatcher (+ KafkaOutboxAutoConfiguration, OutboxProperties)
   │   └── Chỉ markPublished SAU khi broker ack; send lỗi → để nguyên cho poll sau
   │   └── Gửi cả batch rồi mới chờ ack (pipeline), timeout `tiktok.kafka.outbox.ack-timeout` (30s)
+  ├── OutboxBacklog (MeterBinder — mỗi outbox một bean trong `config/OutboxMetricsConfig` của service)
+  │   └── `outbox_pending_events{outbox}` + `outbox_oldest_pending_age_seconds{outbox}`, query lại mỗi lần scrape
+  │   └── outbox: `outbox_events` (auth, admin, user); video có 5 slot: published, deleted, visibility, purge, purge-request
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean khi service thêm dependency, không cần @Configuration cục bộ
 ```
@@ -223,7 +226,22 @@ chỉ route `/api/v1/**`). Riêng api-gateway — port public duy nhất — đ�
   (= `docker build --build-arg SERVICE=auth-service .`). `.dockerignore` loại `.env` khỏi build context.
 - **Metrics đáng canh** (Prometheus, tag `application`): consumer lag
   (`kafka_consumer_fetch_manager_records_lag_max`), `kafka_consumer_dead_letters_total` (record vào DLT —
-  mỗi lần tăng là một event chưa được xử lý), HTTP latency/5xx (`http_server_requests_seconds_*`).
+  mỗi lần tăng là một event chưa được xử lý), `outbox_oldest_pending_age_seconds{outbox}` (event đã commit
+  mà chưa tới Kafka — poll chạy 5s/lần nên tuổi vượt vài phút là poller kẹt chứ không phải tải cao; video
+  đếm cả bản ghi bị `eventFailedAt` gác lại, nên alert còn bật tới khi có người gỡ cờ), HTTP latency/5xx
+  (`http_server_requests_seconds_*`).
+- **Alert tối thiểu** (repo chưa chạy Prometheus; dán vào `rule_files`). Nhiều replica cùng đọc một DB
+  nên lấy `max`, không cộng:
+  ```yaml
+  groups:
+    - name: tiktok-events
+      rules:
+        - alert: OutboxStuck
+          expr: max by (application, outbox) (outbox_oldest_pending_age_seconds) > 120
+          for: 5m
+        - alert: EventDeadLettered
+          expr: sum by (application, topic) (increase(kafka_consumer_dead_letters_total[10m])) > 0
+  ```
 - **Chạy nhiều replica**: đặt `SNOWFLAKE_NODE_ID` (0–1023) khác nhau cho từng instance. Để trống thì mỗi
   instance tự chọn ngẫu nhiên — ổn với 1 replica, nhưng 2 replica có 1/1024 khả năng trùng node id, và
   Cassandra ghi đè comment trùng id mà không báo.

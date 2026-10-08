@@ -48,7 +48,10 @@ class ActuatorEndpointsTest {
                 .andExpect(status().isOk());
         mockMvc.perform(get("/actuator/prometheus"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("application=\"video-service\"")));
+                .andExpect(content().string(containsString("application=\"video-service\"")))
+                // The name an alert rule is written against: kafka-lib's gauge, bound from a bean.
+                .andExpect(content().string(containsString("outbox_oldest_pending_age_seconds{")))
+                .andExpect(content().string(containsString("outbox=\"published\"")));
     }
 
     @Test
