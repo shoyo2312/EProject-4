@@ -8,7 +8,7 @@ import jakarta.validation.constraints.Size;
 public record RegisterRequest(
         @NotBlank @Pattern(regexp = UsernameRule.REGEXP, message = UsernameRule.MESSAGE) String username,
         @NotBlank @Email @Size(max = 255) String email,
-        @NotBlank @Size(min = 8, max = 100) String password,
+        @NotBlank @Size(min = 8, max = 100) @FitsBcrypt String password,
         String turnstileToken
 ) {
 }

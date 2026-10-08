@@ -11,6 +11,6 @@ import jakarta.validation.constraints.Size;
 public record CompleteSignupRequest(
         @NotBlank String signupToken,
         @NotBlank @Pattern(regexp = UsernameRule.REGEXP, message = UsernameRule.MESSAGE) String username,
-        @NotBlank @Size(min = 8, max = 100) String password
+        @NotBlank @Size(min = 8, max = 100) @FitsBcrypt String password
 ) {
 }
