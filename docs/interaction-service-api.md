@@ -80,9 +80,8 @@ Lỗi: `INTERACTION_CONFLICT` (409), `401`.
 **Không bắt buộc token, nhưng nên gửi nếu đã đăng nhập.** Trả `200 OK`, `data` → `LikeStatusResponse`.
 
 - Có token: `liked` phản ánh đúng người đang đăng nhập.
-- Không token (hoặc token hết hạn): `liked` **luôn `false`**, không có lỗi nào báo. `likeCount` vẫn đúng.
-
-Nghĩa là: nếu tim trên UI đột nhiên rỗng sau khi app khởi động lại, hãy kiểm tra token trước khi nghi dữ liệu — giống hệt cái bẫy ở `GET` của video-service.
+- Không token: `liked` **luôn `false`**, không có lỗi nào báo. `likeCount` vẫn đúng.
+- Token hết hạn: gateway trả `401` — refresh một lần rồi gửi lại. Không bị hạ xuống khách, nên tim của người đã đăng nhập không tự rỗng.
 
 Endpoint này chỉ cho **một** video. Không có API hỏi trạng thái like của cả một danh sách video, nên khi render feed thì hoặc gọi song song cho từng video đang hiển thị, hoặc chỉ gọi cho video đang phát và cache lại — đừng gọi cho toàn bộ 20 item của trang feed cùng lúc (rate-limit gateway theo IP, mục 6).
 

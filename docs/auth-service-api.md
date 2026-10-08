@@ -64,9 +64,9 @@ Không cần token. Trả `201 Created`.
 Request:
 ```json
 {
-  "username": "minh_hung",   // 3-50 ký tự, bắt buộc
+  "username": "minh_hung",   // bắt buộc, 3-50 ký tự: chữ thường, số, "_" và "."; bắt đầu bằng chữ cái
   "email": "a@b.com",         // định dạng email, tối đa 255, bắt buộc
-  "password": "P@ssw0rd!",    // 8-100 ký tự, bắt buộc
+  "password": "P@ssw0rd!",    // 8-100 ký tự và tối đa 72 byte UTF-8 (giới hạn của bcrypt), bắt buộc
   "turnstileToken": "..."     // bắt buộc — xem đầu mục 3
 }
 ```
@@ -324,7 +324,7 @@ Request:
 ```json
 {
   "signupToken": "...",       // từ mục 3.14
-  "username": "minh_hung",    // 3-50 ký tự
+  "username": "minh_hung",    // cùng quy tắc với mục 3.1
   "password": "P@ssw0rd!"     // 8-100 ký tự
 }
 ```
@@ -343,7 +343,7 @@ Request:
 { "username": "minh.hung" }  // 3-50 ký tự: chữ thường, số, "_" và "."; bắt đầu bằng chữ cái
 ```
 
-Quy tắc chặt hơn `register` (vốn nhận mọi chuỗi 3-50 ký tự) vì username mới trở thành link profile `/@username`. Bắt đầu bằng chữ cái nên không bao giờ trùng dạng với id số mà client dùng để route.
+Cùng quy tắc với `register` và `register/complete`: username trở thành link profile `/@username`, và bắt đầu bằng chữ cái nên không bao giờ trùng dạng với id số mà client dùng để route. Không có `@` là điều kiện của `/login`: `usernameOrEmail` chứa `@` thì chỉ được tra như email, nên một username đặt theo địa chỉ của người khác không thể chắn đường đăng nhập của họ.
 
 Response `data` → `UserResponse` (giống mục 3.1) với `username` mới và `usernameChangeableAt` = thời điểm đổi + 30 ngày.
 

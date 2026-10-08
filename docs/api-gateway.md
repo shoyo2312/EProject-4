@@ -36,10 +36,13 @@ Converter đọc header `Authorization: Bearer <token>`. Thiếu prefix `Bearer 
 | `GET /api/v1/videos/**` | Mọi GET của video (POST/DELETE vẫn cần token) |
 | `GET /api/v1/recommendations/trending` | Chỉ trending; `GET /feed` cần token |
 | `GET /api/v1/search/**` | Toàn bộ search |
+| `GET /api/v1/interactions/videos/{id}/comments`, `/videos/{id}/counts`, `/videos/counts/batch`, `/videos/{id}/like-status` | Các `GET` mà chính interaction-service để public; khách nhận `liked: false` ở `like-status` |
+| `GET /api/v1/interactions/users/{id}/reposts` | Tab Reposts của profile |
+| `/ws/**` | Handshake chat: token nằm ở query param, chat-service tự validate |
 
 Mọi request khác → **bắt buộc** token hợp lệ; thiếu/sai/hết hạn → `401` (envelope `ApiResponse`, `RestAuthenticationEntryPoint`). Không đủ quyền ở tầng gateway → `403` (`RestAccessDeniedHandler`) — hiếm, vì gateway không check role.
 
-> Lưu ý cho các `GET` public của video/interaction: token hết hạn gửi kèm **không** gây `401` ở gateway — request vẫn đi qua, service coi bạn là khách vãng lai. Xem `docs/video-service-api.md` mục 6.
+> Lưu ý cho các path public: **không gửi token** thì là khách. **Gửi token hỏng** (hết hạn, bị thu hồi, sai chữ ký) thì vẫn `401`, kể cả trên path public — gateway không lặng lẽ hạ xuống khách. Client xử lý như mọi `401`: `/refresh` **một lần** rồi gửi lại; refresh thất bại thì xoá token và gọi lại như khách. Hạ xuống khách thì người đã đăng nhập nhận dữ liệu sai mà không có gì báo (tim rỗng, video private của chính mình biến mất).
 
 ## 3. `GET /api/v1/me` — view "tài khoản của tôi" gộp sẵn
 

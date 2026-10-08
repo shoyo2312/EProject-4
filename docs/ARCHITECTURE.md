@@ -47,7 +47,7 @@ A gửi msg → instance 1 → lưu MongoDB
 | **Idempotent Consumer**  | Mọi Kafka consumer                                | Chống xử lý trùng (inbox_events table)             |
 | **Soft Delete**          | Tất cả services                                   | `deleted_at` thay vì xoá thật                      |
 | **Optimistic Lock**      | `BaseEntity` (`@Version`)                         | Chống race condition trên update                   |
-| **Dead Letter Queue**    | user-service, video-service (qua `kafka-lib`)     | Poison message retry 3 lần → `<topic>.DLT` thay vì kẹt consumer vô hạn |
+| **Dead Letter Queue**    | Mọi service có `@KafkaListener` (qua `kafka-lib`) | Dependency chết → retry tới khi sống lại; lỗi do chính record → 3 lần → `<topic>.DLT` thay vì kẹt consumer vô hạn. Xem §5b |
 
 ## 4. Database per Service
 
@@ -90,17 +90,20 @@ crypto-lib       ← auth-service + api-gateway + admin-service
   ├── HashUtils           (SHA-256, BCrypt wrappers)
   └── AesEncryptor        (PII encryption)
 
-security-lib     ← Centralized JWT auto-configuration (13 services)
+security-lib     ← Centralized JWT auto-configuration (9 services, xem §5a)
   ├── JwtProperties       (JWT secret, expiry, prefix từ environment)
   ├── JwtAuthenticationFilter (Servlet filter validate + extract JWT)
   ├── JwtSecurityAutoConfiguration (Spring Boot auto-config beans)
   │   └── Fail-fast startup: kiểm tra JWT_SECRET tồn tại
+  ├── ActuatorSecurityAutoConfiguration (chain riêng cho /actuator: health/info/prometheus không cần token, còn lại denyAll)
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
-      └── Auto-register bean cho 13 services
+      └── Auto-register bean cho 9 services
 
 kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
   ├── KafkaConsumerAutoConfiguration (DefaultErrorHandler + DeadLetterPublishingRecoverer)
-  │   └── Poison message: retry 3 lần (FixedBackOff 1s) → topic `<topic>.DLT`
+  │   └── Dependency chết (DB/Redis/ES/Cassandra/broker không tới được): retry KHÔNG giới hạn, backoff mũ 1s→30s
+  │   └── Lỗi do chính record (JSON hỏng, bug): retry 3 lần (FixedBackOff 1s) → topic `<topic>.DLT`
+  │   └── Mỗi record vào DLT: log ERROR + counter `kafka_consumer_dead_letters_total{topic}`
   │   └── @ConditionalOnMissingBean — service tự khai bean riêng vẫn override được
   ├── OutboxDispatcher (+ KafkaOutboxAutoConfiguration, OutboxProperties)
   │   └── Chỉ markPublished SAU khi broker ack; send lỗi → để nguyên cho poll sau
@@ -111,10 +114,10 @@ kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
 
 ### 5a. JWT Authentication — security-lib (Centralized)
 
-**8 Services sử dụng security-lib** (auto-configured via Spring Boot):
+**9 Services sử dụng security-lib** (auto-configured via Spring Boot):
 
 ```
-admin-service, chat-service, interaction-service, notification-service,
+admin-service, analytics-service, chat-service, interaction-service, notification-service,
 recommendation-service, story-service, user-service, video-service
 ```
 
@@ -129,22 +132,27 @@ recommendation-service, story-service, user-service, video-service
 **Đang dùng `kafka-lib`** (auto-configured via Spring Boot):
 
 ```
-user-service, video-service, recommendation-service, media-worker  ← consumer error handling → <topic>.DLT
-auth-service, admin-service, video-service                          ← OutboxDispatcher (mark sau ack)
+auth, user, video, recommendation, media-worker, search,
+interaction, analytics, chat, notification                  ← consumer error handling (outage vs poison) → <topic>.DLT
+auth-service, admin-service, video-service, user-service    ← OutboxDispatcher (mark sau ack)
 ```
 
-**Chưa migrate consumer error handling** — có `@KafkaListener` nhưng vẫn dùng default
-retry-vô-hạn của Spring Kafka (thêm dependency `kafka-lib` khi cần):
+**Không cần `kafka-lib`** — không có consumer lẫn outbox: `story-service`.
 
-```
-analytics-service, notification-service, search-service
-```
+**Chính sách lỗi consumer**: `KafkaConsumerAutoConfiguration.isOutage` đọc cả chuỗi cause. Lỗi dịch
+sang `TransientDataAccessException` / `DataAccessResourceFailureException`, không lấy được connection
+lúc mở transaction, socket/DNS, hay `RetriableException` của Kafka đều là **dependency chết**: partition
+đứng chờ (thấy được qua consumer lag + WARN mỗi lần thử), không mất event. Mọi lỗi khác là của chính
+record → DLT sau 3 lần. Client báo "unavailable" theo kiểu khác thì service tự dịch sang transient chỗ
+nó bắt lỗi — search-service làm vậy với 429/502/503/504 của Elasticsearch (`ElasticsearchStatus.classify`),
+và dịch ngược một câu trả lời có status khác (400, 409…) để nó không bị coi là outage rồi kẹt partition.
+`user.privacy-events` ở video-service vẫn retry vô hạn với **mọi** lỗi (`KafkaUnlimitedRetryConfig`).
 
-**Không cần `kafka-lib`** — không có consumer lẫn outbox:
-
-```
-interaction-service, story-service
-```
+**Khi có record trong DLT** (log ERROR `parked on <topic>.DLT` / `kafka_consumer_dead_letters_total` tăng):
+không có gì tự đọc lại DLT. Xem record trong kafka-ui (header `kafka_dlt-exception-*` cho biết lý do),
+sửa nguyên nhân, rồi produce lại đúng key/value + header `eventType` vào topic gốc. Consumer đều
+idempotent nên gửi trùng an toàn, **nhưng thứ tự thì không**: kiểm tra trước xem event cùng key có bị
+event mới hơn thay thế chưa (vd. replay một takedown sau khi video đã được restore sẽ gỡ nó lần nữa).
 
 ### 5c. Kafka — bảng topic đầy đủ
 
@@ -157,6 +165,7 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 | `auth.username-events` | auth-service (outbox, key `userId`) | — (1 shape) | `UsernameChangedEvent` | user-service (bản sao `username` của profile) |
 | `video.video-events` | video-service (outbox per-doc) | `VideoPublishedEvent` / `VideoDeletedEvent` / `VideoPurgedEvent` / `VideoVisibilityChangedEvent` (vắng ⇒ Published) | `VideoPublishedEvent`, `VideoDeletedEvent` (ngay khi xoá — gỡ khỏi index), `VideoPurgedEvent` (hết hạn thùng rác — chỉ media-worker xoá media), `VideoVisibilityChangedEvent` | media-worker, search-service, recommendation-service, analytics-service, chat-service |
 | `media.video-transcoded-events` | media-worker (chờ ack 30s) | — | `VideoTranscodedEvent` | video-service, search-service, recommendation-service |
+| `media.video-moderation-events` | media-worker (chờ ack) | — (1 shape) | `VideoModerationCompletedEvent` (verdict của classifier; lỗi classifier vẫn phát REVIEW) | video-service, search-service, recommendation-service, chat-service (`VideoStateFanout`, `AdminFanout`) |
 | `media.avatar-events` | media-worker (chờ ack 30s) | — | `AvatarMirroredEvent` | user-service |
 | `user.follow-events` | user-service (outbox) | — (1 shape) | `UserFollowChangedEvent` (+ `requestApproved` khi là lời mời vừa được duyệt) | notification-service, chat-service |
 | `user.follow-request-events` | user-service (outbox) | — (1 shape) | `FollowRequestedEvent` | notification-service |
@@ -166,12 +175,19 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 | `interaction.share-events` | interaction-service (chờ ack 5s) | — | `VideoSharedEvent` | recommendation-service, search-service |
 | `interaction.view-events` | interaction-service (chờ ack 5s) | — | `VideoViewedEvent` | video-service, search-service |
 | `interaction.watch-events` | interaction-service (fire-and-forget) | — | `VideoWatchEvent` | recommendation-service, analytics-service |
-| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / `CommentRemovedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), search-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), auth-service (`UserBannedEvent` + `UserUnbannedEvent`), interaction-service (`CommentRemovedEvent`), chat-service (mọi event) |
+| `interaction.comment-like-events` | interaction-service (fire-and-forget, log nếu broker từ chối) | — | `CommentLikeChangedEvent` | notification-service, chat-service (`VideoStatsFanout`) |
+| `interaction.repost-events` | interaction-service (chờ ack) | — | `VideoRepostedEvent` | (chưa có consumer) |
+| `interaction.save-events` | interaction-service (chờ ack) | — | `VideoSavedEvent` | chat-service (`VideoStatsFanout`) |
+| `video.like-owner-events` | video-service (fire-and-forget, key `ownerId`) | — | `VideoLikeOwnerEvent` | chat-service (`UserStatsFanout`) |
+| `notification.created` | notification-service (chỉ announce, không outbox) | — | `NotificationCreatedEvent` | chat-service (`NotificationFanout`: đẩy badge xuống socket) |
+| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / `CommentRemovedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `VideoPurgeRequestedEvent` + `UserBannedEvent`/`UserUnbannedEvent` → `owner_bans`), search-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `UserBannedEvent`/`UserUnbannedEvent` → index `owner_bans`), recommendation-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), auth-service (`UserBannedEvent` + `UserUnbannedEvent` + `UserSessionsRevokedEvent`), interaction-service (`CommentRemovedEvent`), notification-service (`UserBannedEvent`, `VideoTakenDownEvent`, `UserWarnedEvent`), media-worker (`VideoTakenDownEvent` + `VideoRestoredEvent`: quarantine media), chat-service (mọi event) |
 | `admin.report-events` | admin-service (outbox) | `ReportSubmittedEvent` / `ReportResolvedEvent` / `StaleReportsDismissedEvent` | `ReportSubmittedEvent` (có report mới), `ReportResolvedEvent` (mọi report đang chờ của một target vừa được xử lý), `StaleReportsDismissedEvent` (một lô report quá hạn vừa bị `StaleReportSweep` tự đóng) | chat-service (`AdminFanout`, group riêng `admin-realtime-<uuid>` mỗi instance: chỉ báo console admin tải lại, không đọc payload; gộp mỗi loại event còn tối đa một frame trong mỗi cửa sổ `realtime.flush-interval-millis`) |
 
 Ghi chú:
 - **Topic trộn nhiều shape** (`video.video-events`, `interaction.comment-events`, `admin.moderation-events`, `admin.report-events`) route bằng Kafka header `eventType`, KHÔNG suy từ JSON. Thiếu route → Jackson vẫn parse sang class sai với field null, không exception. Xem `CLAUDE.md` §Kafka.
-- **DLT**: chỉ service dùng `kafka-lib` error handler (user, video, recommendation, media-worker) mới có `<topic>.DLT`; các service còn lại retry vô hạn theo mặc định Spring Kafka.
+- **DLT**: mọi service có consumer đều dùng error handler của `kafka-lib` (§5b). DLT chỉ nhận record lỗi do chính nó; dependency chết thì partition đứng chờ thay vì đẩy event vào DLT. Một topic `<topic>.DLT` gom record của **mọi** consumer group đọc topic đó.
+- **Ban**: video-service và search-service tự giữ bản ghi ban theo user (`owner_bans`) và lọc lúc đọc, theo `bannedUntil > now` — vì ban tạm hết hạn do `ExpiredBanSweep` của auth-service gỡ mà **không phát event**. Feed recommendation và trending đi qua `/videos/batch` nên cũng được lọc ở video-service.
+- **Restore vs verdict**: `VideoRestoredEvent` và verdict đi hai topic khác nhau. search-service và recommendation-service lưu thời điểm admin quyết định (`approvedAt` / `reco:video:approved-at:{id}`); verdict REVIEW/REJECTED sinh **trước** mốc đó được coi là đã duyệt.
 - `analytics-service` là consumer của `video.video-events` + `interaction.watch-events` (sink training data cho `rank-service`) — xem `docs/ranking-model.md`. Ngoài phạm vi các doc client.
 - Cách feature xếp hạng đi từ các event này tới `rank-service`: `docs/ranking-model.md` §2.
 
@@ -193,6 +209,24 @@ Ghi chú:
 | admin-service          | 8096 | PG:5439        |
 | analytics-service      | 8097 | ClickHouse:8123 |
 | rank-service (Python)  | 8098 | — (mạng nội bộ, không route qua gateway) |
+| moderation-service (Python) | 8099 | — (mạng nội bộ, không route qua gateway) |
+
+Actuator: mọi service Java mở `/actuator/health` (kèm `/health/liveness`, `/health/readiness`),
+`/actuator/info`, `/actuator/prometheus` **không cần token** trên chính port của nó (mạng nội bộ; gateway
+chỉ route `/api/v1/**`). Riêng api-gateway — port public duy nhất — để actuator ở port quản trị
+`MANAGEMENT_PORT` (mặc định **8180**), không publish ra ngoài. Cấu hình chung nằm ở
+`common-lib/ManagementDefaults` (service vẫn override được trong `application.yml`).
+
+## 6b. Vận hành
+
+- **Image**: một `Dockerfile` chung ở root cho mọi service Java: `make image SERVICE=auth-service`
+  (= `docker build --build-arg SERVICE=auth-service .`). `.dockerignore` loại `.env` khỏi build context.
+- **Metrics đáng canh** (Prometheus, tag `application`): consumer lag
+  (`kafka_consumer_fetch_manager_records_lag_max`), `kafka_consumer_dead_letters_total` (record vào DLT —
+  mỗi lần tăng là một event chưa được xử lý), HTTP latency/5xx (`http_server_requests_seconds_*`).
+- **Chạy nhiều replica**: đặt `SNOWFLAKE_NODE_ID` (0–1023) khác nhau cho từng instance. Để trống thì mỗi
+  instance tự chọn ngẫu nhiên — ổn với 1 replica, nhưng 2 replica có 1/1024 khả năng trùng node id, và
+  Cassandra ghi đè comment trùng id mà không báo.
 
 ## 7. Tài liệu theo service
 

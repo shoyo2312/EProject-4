@@ -294,7 +294,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 
 Ngoài ra `401 Unauthorized` (không có `code` riêng của video-service, đến từ `security-lib`/gateway) xảy ra ở `POST`/`DELETE` khi thiếu/hết hạn/token bị thu hồi — xử lý giống auth-service doc (thử `/refresh` **một lần** rồi mới logout local).
 
-Lưu ý khác biệt ở các `GET`: token hết hạn gửi kèm `GET` **không** gây 401, chỉ khiến server coi bạn là khách vãng lai và giấu bớt video. Nếu màn "Video của tôi" đột nhiên trống, kiểm tra token trước khi nghi dữ liệu.
+Ở các `GET` public: không gửi token thì server coi bạn là khách vãng lai và giấu bớt video (PROCESSING/PRIVATE của chính mình). Gửi token **hết hạn** thì gateway trả `401` như mọi path khác — refresh một lần rồi gửi lại, đừng coi đó là lỗi của `GET`. (Gọi thẳng `video-service:8083`, bỏ qua gateway, thì token hết hạn mới bị hạ xuống khách.)
 
 ## 7. Rate limiting
 
