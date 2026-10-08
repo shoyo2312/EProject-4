@@ -15,6 +15,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
@@ -121,15 +122,41 @@ class GatewaySecurityRulesTest {
                 .expectStatus().isOk();
     }
 
+    /**
+     * The reads interaction-service leaves public itself, so a signed-out viewer sees a video's
+     * counts and comments. The catch-all here answered them 401 first, whatever the service said.
+     */
+    @Test
+    void publicInteractionReads_passWithoutAToken_butWritesDoNot() {
+        for (String uri : List.of("/api/v1/interactions/videos/123/comments",
+                "/api/v1/interactions/videos/123/counts",
+                "/api/v1/interactions/videos/counts/batch?videoIds=1,2",
+                "/api/v1/interactions/videos/123/like-status")) {
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isOk();
+        }
+        client.post().uri("/api/v1/interactions/videos/123/comments")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
     @RestController
     static class Stub {
 
         @GetMapping({"/api/v1/users/internal/blocks", "/api/v1/users/internal/settings",
                 "/api/v1/users/internal/friendship", "/api/v1/users/42",
                 "/api/v1/videos/123/policy", "/api/v1/videos/123",
-                "/api/v1/interactions/internal/videos/1/comments/2/author"})
+                "/api/v1/interactions/internal/videos/1/comments/2/author",
+                "/api/v1/interactions/videos/123/comments", "/api/v1/interactions/videos/123/counts",
+                "/api/v1/interactions/videos/counts/batch", "/api/v1/interactions/videos/123/like-status"})
         Mono<String> ok() {
             return Mono.just("ok");
+        }
+
+        @PostMapping("/api/v1/interactions/videos/123/comments")
+        Mono<String> write() {
+            return Mono.just("written");
         }
     }
 }

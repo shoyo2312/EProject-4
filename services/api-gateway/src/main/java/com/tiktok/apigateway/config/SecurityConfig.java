@@ -28,6 +28,10 @@ public class SecurityConfig {
     public SecurityWebFilterChain filterChain(ServerHttpSecurity http) {
         AuthenticationWebFilter authenticationWebFilter = new AuthenticationWebFilter(jwtReactiveAuthenticationManager);
         authenticationWebFilter.setServerAuthenticationConverter(jwtServerAuthenticationConverter);
+        // A token that fails — expired, revoked, forged — is a 401 on a public path too, not a
+        // quiet downgrade to guest. The clients refresh once on a 401 and retry; a guest answer
+        // to a signed-in viewer is wrong data with nothing to say so: every heart unliked, their
+        // own private videos gone. No token at all is the guest, and passes as one.
         authenticationWebFilter.setAuthenticationFailureHandler((webFilterExchange, exception) ->
                 restAuthenticationEntryPoint.commence(webFilterExchange.getExchange(), exception));
 
@@ -64,6 +68,15 @@ public class SecurityConfig {
                         // A repost is public, like the videos on a profile — the Reposts tab
                         // has to load for a signed-out viewer too.
                         .pathMatchers(HttpMethod.GET, "/api/v1/interactions/users/*/reposts").permitAll()
+                        // The reads interaction-service leaves public itself, so a signed-out
+                        // viewer sees a video's counts and comments; like-status answers a guest
+                        // liked=false rather than refusing one. Missing here, the catch-all below
+                        // answered all four 401 whatever the service said.
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/interactions/videos/*/comments",
+                                "/api/v1/interactions/videos/*/counts",
+                                "/api/v1/interactions/videos/counts/batch",
+                                "/api/v1/interactions/videos/*/like-status").permitAll()
                         // The chat handshake carries its token as a query parameter, not a
                         // header: a browser cannot set one on a WebSocket/SockJS handshake.
                         // chat-service validates it itself in JwtHandshakeInterceptor and
