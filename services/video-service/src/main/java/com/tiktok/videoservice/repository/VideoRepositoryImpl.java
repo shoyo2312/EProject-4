@@ -40,8 +40,8 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     private final MongoTemplate mongoTemplate;
 
     @Override
-    public List<Video> findFeedPage(
-            Collection<Long> userIds, Instant beforeCreatedAt, String beforeId, int limit) {
+    public List<Video> findFeedPage(Collection<Long> userIds, Collection<Long> bannedOwners,
+                                    Instant beforeCreatedAt, String beforeId, int limit) {
         Criteria criteria = where("status").is(VideoStatus.PUBLISHED)
                 .and("visibility").is(VideoVisibility.PUBLIC)
                 .and("deletedAt").is(null);
@@ -60,6 +60,12 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
             // ponytail: a residual filter after feed_idx, so a private owner's videos are read and
             // skipped; add ownerPrivate to feed_idx if they ever become a large share of the feed.
             criteria = criteria.and("ownerPrivate").ne(true);
+            // ponytail: every ban in force rides on this query as a $nin, read and skipped after
+            // feed_idx like the filter above; past a few thousand bans, stamp the ban on the
+            // videos and index it instead.
+            if (!bannedOwners.isEmpty()) {
+                criteria = criteria.and("userId").nin(bannedOwners);
+            }
         }
 
         if (beforeCreatedAt != null) {

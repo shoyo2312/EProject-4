@@ -7,6 +7,7 @@ import com.tiktok.common.exception.BadRequestException;
 import com.tiktok.searchservice.client.UserDirectoryClient;
 import com.tiktok.searchservice.document.VideoDocument;
 import com.tiktok.searchservice.dto.response.VideoSearchResponse;
+import com.tiktok.searchservice.index.OwnerBans;
 import com.tiktok.searchservice.mapper.SearchMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -82,6 +83,7 @@ public class SearchServiceImpl implements SearchService {
     private final ElasticsearchOperations elasticsearchOperations;
     private final SearchMapper searchMapper;
     private final UserDirectoryClient userDirectoryClient;
+    private final OwnerBans ownerBans;
 
     /**
      * A hashtag as a caller types it — "#Dance", "dance", " Dance " — reduced to what
@@ -132,6 +134,11 @@ public class SearchServiceImpl implements SearchService {
         // score, so ranking is left entirely to how well the text matched.
         bool.filter(f -> f.term(t -> t.field("status").value("PUBLISHED")));
         bool.filter(f -> f.term(t -> t.field("visibility").value("PUBLIC")));
+        // A banned account's videos, read now rather than stamped on them — see OwnerBans.
+        List<FieldValue> banned = ownerBans.active().stream().map(FieldValue::of).toList();
+        if (!banned.isEmpty()) {
+            bool.mustNot(m -> m.terms(t -> t.field("userId").terms(v -> v.value(banned))));
+        }
 
         if (StringUtils.hasText(query)) {
             // A document need only satisfy one arm to be a result, but every arm it satisfies adds

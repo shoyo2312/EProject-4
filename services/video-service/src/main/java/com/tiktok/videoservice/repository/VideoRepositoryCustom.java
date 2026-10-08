@@ -57,11 +57,14 @@ public interface VideoRepositoryCustom {
      *
      * @param userIds         restrict to these authors — the Following feed — or null for the
      *                        public feed, which is every author whose account is not private
+     * @param bannedOwners    left out of the public feed; the Following feed's authors are
+     *                        narrowed before the call instead
      * @param beforeCreatedAt null for the first page, together with {@code beforeId}
      * @param limit           ask for one more than the page holds — a row beyond it is how the
      *                        caller learns there is a next page without counting anything
      */
-    List<Video> findFeedPage(Collection<Long> userIds, Instant beforeCreatedAt, String beforeId, int limit);
+    List<Video> findFeedPage(Collection<Long> userIds, Collection<Long> bannedOwners,
+                             Instant beforeCreatedAt, String beforeId, int limit);
 
     /**
      * The admin console's video listing: every video regardless of owner, status or visibility.

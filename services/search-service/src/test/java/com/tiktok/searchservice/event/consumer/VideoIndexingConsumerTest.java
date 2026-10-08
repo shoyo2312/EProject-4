@@ -1,6 +1,8 @@
 package com.tiktok.searchservice.event.consumer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tiktok.event.admin.UserBannedEvent;
+import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import com.tiktok.event.interaction.CommentCreatedEvent;
@@ -11,6 +13,7 @@ import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
+import com.tiktok.searchservice.document.OwnerBanDocument;
 import com.tiktok.searchservice.document.ProcessedEventDocument;
 import com.tiktok.searchservice.document.VideoDocument;
 import com.tiktok.searchservice.service.SearchService;
@@ -74,6 +77,7 @@ class VideoIndexingConsumerTest {
     void cleanUp() {
         deleteAll(VideoDocument.class);
         deleteAll(ProcessedEventDocument.class);
+        deleteAll(OwnerBanDocument.class);
     }
 
     @Test
@@ -550,6 +554,70 @@ class VideoIndexingConsumerTest {
 
         elasticsearchOperations.indexOps(VideoDocument.class).refresh();
         assertThat(searchService.searchVideos("beach", null, PageRequest.of(0, 10))).isEmpty();
+    }
+
+    /**
+     * A ban used to stop at auth-service, and a banned account's videos stayed searchable — title,
+     * description and thumbnail. They leave the results while the ban is in force.
+     */
+    @Test
+    void searchVideos_leavesOutABannedOwnersVideos_untilTheUnban() throws Exception {
+        publishApprovedBy(7L, "b1", "banned dance");
+        publishApprovedBy(8L, "b2", "other dance");
+
+        ban(7L, null, Instant.now());
+        assertThat(searched("dance")).containsExactly("b2");
+
+        unban(7L, Instant.now());
+        assertThat(searched("dance")).containsExactlyInAnyOrder("b1", "b2");
+    }
+
+    /** Nothing announces the end of a temporary ban — auth-service lifts it quietly — so it ends here by itself. */
+    @Test
+    void searchVideos_keepsTheVideosOfABanThatHasRunOut() throws Exception {
+        publishApprovedBy(7L, "b3", "lapsed ban");
+
+        ban(7L, Instant.now().minusSeconds(60), Instant.now().minusSeconds(3600));
+
+        assertThat(searched("lapsed")).containsExactly("b3");
+    }
+
+    /** An older decision delivered late — a replay off the DLT — does not undo a newer one. */
+    @Test
+    void anOlderUnbanAfterANewerBan_keepsTheBan() throws Exception {
+        publishApprovedBy(7L, "b4", "still banned");
+        Instant now = Instant.now();
+
+        ban(7L, null, now);
+        unban(7L, now.minusSeconds(60));
+
+        assertThat(searched("still")).isEmpty();
+    }
+
+    private void publishApprovedBy(long ownerId, String videoId, String title) throws Exception {
+        VideoPublishedEvent event = VideoPublishedEvent.of(
+                videoId, ownerId, title, null, "s3://raw/" + videoId + ".mp4", "PUBLIC", List.of());
+        videoEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
+        transcode(VideoTranscodedEvent.success(videoId, "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate(videoId, ModerationVerdict.APPROVED);
+    }
+
+    private void ban(long userId, Instant until, Instant at) throws Exception {
+        UserBannedEvent event = new UserBannedEvent(UUID.randomUUID().toString(), at, userId, 99L, "spam", until);
+        adminModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("UserBannedEvent"));
+    }
+
+    private void unban(long userId, Instant at) throws Exception {
+        UserUnbannedEvent event = new UserUnbannedEvent(UUID.randomUUID().toString(), at, userId, 99L, "appeal");
+        adminModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("UserUnbannedEvent"));
+    }
+
+    private List<String> searched(String query) {
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        elasticsearchOperations.indexOps(OwnerBanDocument.class).refresh();
+        return searchService.searchVideos(query, null, PageRequest.of(0, 10)).stream()
+                .map(response -> response.id())
+                .toList();
     }
 
     private void publish(String videoId, String title, String description, List<String> tags) throws Exception {

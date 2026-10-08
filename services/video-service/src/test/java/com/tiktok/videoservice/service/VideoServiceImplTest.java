@@ -6,6 +6,7 @@ import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
@@ -20,6 +21,7 @@ import com.tiktok.videoservice.exception.PrivateAccountException;
 import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
+import com.tiktok.videoservice.repository.OwnerBanRepository;
 import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
 import com.tiktok.videoservice.repository.VideoRepository;
 import org.bson.Document;
@@ -41,6 +43,7 @@ import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -96,10 +99,14 @@ class VideoServiceImplTest {
     @Autowired
     private MongoTemplate mongoTemplate;
 
+    @Autowired
+    private OwnerBanRepository ownerBanRepository;
+
     @BeforeEach
     void cleanUp() {
         videoRepository.deleteAll();
         ownerPrivacyRepository.deleteAll();
+        ownerBanRepository.deleteAll();
     }
 
     /**
@@ -803,6 +810,48 @@ class VideoServiceImplTest {
         assertThat(published.ownerPrivate()).isFalse();
         assertThat(videoRepository.findById(published.id()).orElseThrow().isOwnerPrivate()).isFalse();
         verify(videoRepository, times(2)).updateOwnerPrivacy(any(Video.class));
+    }
+
+    /** What the ban consumer records; every viewer-facing read checks it. */
+    private void ban(long userId, Instant until) {
+        ownerBanRepository.save(new OwnerBan(userId, until, Instant.now()));
+    }
+
+    /**
+     * A ban ended the account's sessions and nothing else: its videos went on playing on the feed,
+     * on its profile and through every link anyone had kept. They leave every path a viewer reads.
+     */
+    @Test
+    void aBannedOwnersVideos_leaveEveryViewerFacingPath() {
+        VideoResponse banned = publishAs(1L, "Banned", VideoVisibility.PUBLIC);
+        markPublished(banned.id());
+        VideoResponse other = publishAs(2L, "Other", VideoVisibility.PUBLIC);
+        markPublished(other.id());
+        ban(1L, OwnerBan.PERMANENT);
+
+        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+                .containsExactly(other.id());
+        assertThat(videoService.getFollowingFeed(9L, List.of(1L, 2L), null, 10).items())
+                .extracting(VideoResponse::id)
+                .containsExactly(other.id());
+        assertThat(videoService.getByIds(9L, List.of(banned.id(), other.id()))).extracting(VideoResponse::id)
+                .containsExactly(other.id());
+        assertThatThrownBy(() -> videoService.getById(9L, banned.id())).isInstanceOf(VideoNotFoundException.class);
+        assertThat(videoService.listByUser(9L, 1L, PageRequest.of(0, 10)).getContent()).isEmpty();
+        assertThat(videoService.getUserStats(9L, 1L).videoCount()).isZero();
+    }
+
+    /** Nothing announces the end of a temporary ban — auth-service lifts it quietly — so it ends here by itself. */
+    @Test
+    void aBanThatHasRunOut_hidesNothing() {
+        VideoResponse video = publishAs(1L, "Served again", VideoVisibility.PUBLIC);
+        markPublished(video.id());
+        ban(1L, Instant.now().minusSeconds(60));
+
+        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+                .containsExactly(video.id());
+        assertThat(videoService.getById(9L, video.id()).id()).isEqualTo(video.id());
+        assertThat(videoService.listByUser(9L, 1L, PageRequest.of(0, 10)).getContent()).hasSize(1);
     }
 
     /** Videos stored before ownerPrivate existed have no such field, and their owners are public. */

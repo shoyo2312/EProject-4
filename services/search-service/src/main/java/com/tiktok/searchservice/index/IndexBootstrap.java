@@ -1,5 +1,6 @@
 package com.tiktok.searchservice.index;
 
+import com.tiktok.searchservice.document.OwnerBanDocument;
 import com.tiktok.searchservice.document.ProcessedEventDocument;
 import com.tiktok.searchservice.document.VideoDocument;
 import lombok.RequiredArgsConstructor;
@@ -61,6 +62,7 @@ public class IndexBootstrap implements SmartLifecycle {
     public void start() {
         createOrMigrateVideos();
         create(ProcessedEventDocument.class);
+        create(OwnerBanDocument.class);
         running = true;
     }
 

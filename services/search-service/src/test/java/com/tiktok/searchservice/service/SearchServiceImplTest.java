@@ -49,7 +49,8 @@ class SearchServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        searchService = new SearchServiceImpl(elasticsearchOperations, searchMapper, userDirectoryClient);
+        searchService = new SearchServiceImpl(elasticsearchOperations, searchMapper, userDirectoryClient,
+                mock(com.tiktok.searchservice.index.OwnerBans.class));
         VideoDocument document = VideoDocument.builder().id("v1").status("PUBLISHED").build();
         SearchHits<VideoDocument> hits = mockSearchHits(document);
         // Lenient: the rejection tests never get as far as searching.

@@ -14,6 +14,7 @@ import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -27,6 +28,7 @@ import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
+import com.tiktok.videoservice.repository.OwnerBanRepository;
 import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
 import com.tiktok.videoservice.repository.UserVideoStats;
 import com.tiktok.videoservice.repository.VideoRepository;
@@ -41,6 +43,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -114,6 +117,7 @@ public class VideoServiceImpl implements VideoService {
     private final UserSettingsClient userSettingsClient;
     private final FollowClient followClient;
     private final OwnerPrivacyRepository ownerPrivacyRepository;
+    private final OwnerBanRepository ownerBanRepository;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -409,8 +413,9 @@ public class VideoServiceImpl implements VideoService {
                 .filter(Objects::nonNull)
                 .toList();
         Set<Long> followed = followedPrivateOwners(requesterId, ordered);
+        Set<Long> banned = bannedAmong(ordered.stream().map(VideoResponse::userId).collect(Collectors.toSet()));
         return withAccountComments(ordered.stream()
-                .filter(video -> isVisibleTo(requesterId, video, followed))
+                .filter(video -> isVisibleTo(requesterId, video, followed, banned))
                 .toList());
     }
 
@@ -447,6 +452,8 @@ public class VideoServiceImpl implements VideoService {
         // it. Dropped before the query rather than filtered out of the page, which would come back
         // short under a cursor that already went past what it hid.
         authors.removeAll(privateOwnersHiddenFrom(requesterId, authors));
+        // Followers included: a banned account's videos are gone for everyone.
+        authors.removeAll(bannedAmong(authors));
         if (authors.isEmpty()) {
             return new CursorPage<>(List.of(), null);
         }
@@ -466,6 +473,7 @@ public class VideoServiceImpl implements VideoService {
         // a count query gives, for the cost of one extra document instead of a second scan.
         List<Video> rows = videoRepository.findFeedPage(
                 userIds,
+                userIds == null ? activeBans() : Set.of(),
                 after == null ? null : after.createdAt(),
                 after == null ? null : after.id(),
                 limit + 1);
@@ -515,6 +523,11 @@ public class VideoServiceImpl implements VideoService {
                             .map(quarantinedMediaUrls::forOwner));
         }
 
+        // Empty rather than an error a client would have to learn: the grid simply has nothing in it.
+        if (!bannedAmong(List.of(userId)).isEmpty()) {
+            return Page.empty(pageable);
+        }
+
         if (isPrivateOwner(userId)
                 && !followClient.followedAmong(requesterId, List.of(userId)).contains(userId)) {
             throw new PrivateAccountException();
@@ -541,6 +554,10 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public UserVideoStatsResponse getUserStats(Long requesterId, Long userId) {
+        // Zero over an empty grid, the one listByUser serves a banned account.
+        if (!isSelf(requesterId, userId) && !bannedAmong(List.of(userId)).isEmpty()) {
+            return new UserVideoStatsResponse(userId, 0, 0, 0);
+        }
         UserVideoStats stats = videoRepository.sumUserVideoStats(userId, isSelf(requesterId, userId));
         return new UserVideoStatsResponse(
                 userId, stats.videoCount(), stats.totalLikes(), stats.totalViews());
@@ -637,7 +654,8 @@ public class VideoServiceImpl implements VideoService {
      * user-service call per video. Needs a batch block endpoint if feeds must hide them too.
      */
     private VideoResponse requireVisible(Long requesterId, VideoResponse video, String videoId) {
-        if (!isVisibleTo(requesterId, video, followedPrivateOwners(requesterId, List.of(video)))
+        if (!isVisibleTo(requesterId, video, followedPrivateOwners(requesterId, List.of(video)),
+                bannedAmong(List.of(video.userId())))
                 || blockClient.isBlockedBetween(video.userId(), requesterId)) {
             throw new VideoNotFoundException(videoId);
         }
@@ -652,12 +670,14 @@ public class VideoServiceImpl implements VideoService {
      *
      * @param followedPrivateOwners the private owners on this request the requester follows — see
      *                              {@link #followedPrivateOwners}
+     * @param bannedOwners          the owners on this request under a ban — see {@link #bannedAmong}
      */
-    private boolean isVisibleTo(Long requesterId, VideoResponse video, Set<Long> followedPrivateOwners) {
+    private boolean isVisibleTo(Long requesterId, VideoResponse video, Set<Long> followedPrivateOwners,
+                                Set<Long> bannedOwners) {
         if (isSelf(requesterId, video.userId())) {
             return true;
         }
-        if (video.status() != VideoStatus.PUBLISHED) {
+        if (video.status() != VideoStatus.PUBLISHED || bannedOwners.contains(video.userId())) {
             return false;
         }
         return switch (video.visibility()) {
@@ -687,6 +707,27 @@ public class VideoServiceImpl implements VideoService {
 
     private boolean isPrivateOwner(Long userId) {
         return ownerPrivacyRepository.existsByUserIdAndPrivateAccountTrue(userId);
+    }
+
+    /**
+     * The owners among {@code owners} under a ban as of now — see {@link OwnerBan}. One query on
+     * _id, none for an empty list. Asked after the cache, like every other viewer check: the cached
+     * entry is the video's own state, and a ban is the owner's.
+     */
+    private Set<Long> bannedAmong(Collection<Long> owners) {
+        if (owners.isEmpty()) {
+            return Set.of();
+        }
+        return ownerBanRepository.findByUserIdInAndBannedUntilAfter(owners, Instant.now()).stream()
+                .map(OwnerBan::getUserId)
+                .collect(Collectors.toSet());
+    }
+
+    /** Every owner under a ban, for the public feed, which has no author list to narrow first. */
+    private Set<Long> activeBans() {
+        return ownerBanRepository.findByBannedUntilAfter(Instant.now()).stream()
+                .map(OwnerBan::getUserId)
+                .collect(Collectors.toSet());
     }
 
     /**
