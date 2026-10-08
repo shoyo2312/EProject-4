@@ -17,6 +17,16 @@
 
     <!-- Reactive gateway — KHÔNG dùng spring-boot-starter-web -->
     <dependencies>
+        <!-- Health probes and the Prometheus scrape; what is exposed is set once in common-lib's ManagementDefaults. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>runtime</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-gateway</artifactId>

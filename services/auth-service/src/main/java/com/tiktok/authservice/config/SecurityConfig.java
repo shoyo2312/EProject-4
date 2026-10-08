@@ -34,6 +34,11 @@ public class SecurityConfig {
                                 "/api/v1/auth/oauth/google", "/api/v1/auth/oauth/facebook",
                                 "/api/v1/auth/oauth/google/link", "/api/v1/auth/oauth/facebook/link").permitAll()
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        // A container probe and a Prometheus scrape carry no JWT. The same set
+                        // security-lib opens for the other services; the gateway routes /api/v1/**
+                        // only, so this is the internal network's to reach.
+                        .requestMatchers("/actuator/health", "/actuator/health/**",
+                                "/actuator/info", "/actuator/prometheus").permitAll()
                         // The admin console's user directory — the whole platform's accounts,
                         // not the caller's own, so authenticated is not enough.
                         .requestMatchers("/api/v1/auth/admin/**").hasRole("ADMIN")

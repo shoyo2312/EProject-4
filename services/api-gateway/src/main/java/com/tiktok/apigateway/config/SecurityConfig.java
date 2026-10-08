@@ -83,6 +83,10 @@ public class SecurityConfig {
                         // refuses the upgrade with a 401 — this filter would reject every
                         // handshake before it ever got there.
                         .pathMatchers("/ws/**").permitAll()
+                        // Served on the management port only (application.yml), which nothing
+                        // publishes; on 8080 there is no /actuator to reach. A probe and a scraper
+                        // carry no token.
+                        .pathMatchers("/actuator/**").permitAll()
                         .anyExchange().authenticated())
                 .addFilterAt(authenticationWebFilter, SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();

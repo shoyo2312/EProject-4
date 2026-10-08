@@ -1,6 +1,13 @@
 server:
   port: 8080
 
+# The gateway is the one public port, so its actuator does not live on it: health, info and the
+# Prometheus scrape answer on this port instead, which nothing publishes. Setting it to 8080
+# would put the scrape on the internet — SecurityConfig opens /actuator to whoever reaches it.
+management:
+  server:
+    port: ${MANAGEMENT_PORT:8180}
+
 spring:
   application:
     name: api-gateway
