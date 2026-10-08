@@ -113,6 +113,7 @@ kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
   ├── OutboxBacklog (MeterBinder — mỗi outbox một bean trong `config/OutboxMetricsConfig` của service)
   │   └── `outbox_pending_events{outbox}` + `outbox_oldest_pending_age_seconds{outbox}`, query lại mỗi lần scrape
   │   └── outbox: `outbox_events` (auth, admin, user); video có 5 slot: published, deleted, visibility, purge, purge-request
+  ├── DltReplay (`make dlt-list` / `make dlt-replay`: gửi lại record DLT về topic gốc, có kiểm tra thứ tự theo key — §5b)
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean khi service thêm dependency, không cần @Configuration cục bộ
 ```
@@ -154,10 +155,13 @@ và dịch ngược một câu trả lời có status khác (400, 409…) để 
 `user.privacy-events` ở video-service vẫn retry vô hạn với **mọi** lỗi (`KafkaUnlimitedRetryConfig`).
 
 **Khi có record trong DLT** (log ERROR `parked on <topic>.DLT` / `kafka_consumer_dead_letters_total` tăng):
-không có gì tự đọc lại DLT. Xem record trong kafka-ui (header `kafka_dlt-exception-*` cho biết lý do),
-sửa nguyên nhân, rồi produce lại đúng key/value + header `eventType` vào topic gốc. Consumer đều
-idempotent nên gửi trùng an toàn, **nhưng thứ tự thì không**: kiểm tra trước xem event cùng key có bị
-event mới hơn thay thế chưa (vd. replay một takedown sau khi video đã được restore sẽ gỡ nó lần nữa).
+không có gì tự đọc lại DLT. Sửa nguyên nhân và deploy trước, rồi dùng `kafka-lib/DltReplay`:
+`make dlt-list TOPIC=<topic>.DLT` (lý do lỗi, key, eventType, group nào hỏng), sau đó
+`make dlt-replay TOPIC=<topic>.DLT OFFSET=<partition:offset>` hoặc `ALL=1` (nhớ vị trí bằng consumer group
+`dlt-replay`). Record được gửi lại vào topic gốc với đúng key/value/header (giữ `eventType`, bỏ
+`kafka_dlt-*`, thêm `dlt-replayed-from`). Consumer đều idempotent nên gửi trùng an toàn, **nhưng thứ tự
+thì không**: tool bỏ qua record nào mà partition gốc đã có record mới hơn cùng key (vd. replay một takedown
+sau khi video đã được restore sẽ gỡ nó lần nữa) và in lệnh `FORCE=1` để chạy lại sau khi người đã xem.
 
 ### 5c. Kafka — bảng topic đầy đủ
 

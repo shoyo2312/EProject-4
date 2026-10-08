@@ -23,7 +23,8 @@ endif
 	run-admin run-analytics run-search \
 	migrate-auth migrate-user \
 	migrate-admin migrate-all \
-	moderation-up moderation-test
+	moderation-up moderation-test \
+	dlt-list dlt-replay
 
 # Hiển thị help
 help:
@@ -83,6 +84,11 @@ help:
 	@echo "    make migrate-user       Chạy Flyway migration cho user-service"
 	@echo "    make migrate-admin      Chạy Flyway migration cho admin-service"
 	@echo "    make migrate-all        Chạy Flyway migration tất cả PostgreSQL services"
+	@echo ""
+	@echo "  Dead letters (đọc javadoc kafka-lib DltReplay trước khi replay):"
+	@echo "    make dlt-list TOPIC=x.DLT               Liệt kê record trong DLT"
+	@echo "    make dlt-replay TOPIC=x.DLT OFFSET=p:o  Replay một record (FORCE=1 khi đã kiểm tra thứ tự)"
+	@echo "    make dlt-replay TOPIC=x.DLT ALL=1       Replay mọi record nhóm dlt-replay chưa đi qua"
 	@echo ""
 
 # ──────────────────────────────────────────────
@@ -225,6 +231,23 @@ run-admin:
 
 run-analytics:
 	$(RUN_INTERNAL) -pl services/analytics-service
+
+# ─────────────────────────────────────────────────────────────────
+# Dead letters — kafka-lib's DltReplay; its class comment says when replaying is safe.
+# KAFKA_BOOTSTRAP_SERVERS picks the cluster, the compose broker by default.
+# ─────────────────────────────────────────────────────────────────
+
+DLT_TOOL = ./mvnw -q -pl libs/kafka-lib compile exec:java -Dexec.classpathScope=compile \
+	-Dexec.mainClass=com.tiktok.kafka.dlt.DltReplay
+
+dlt-list:
+	@test -n "$(TOPIC)" || { echo "TOPIC=<topic>.DLT is required"; exit 2; }
+	$(DLT_TOOL) -Dexec.args="list $(TOPIC)"
+
+dlt-replay:
+	@test -n "$(TOPIC)" || { echo "TOPIC=<topic>.DLT is required"; exit 2; }
+	@test -n "$(OFFSET)$(ALL)" || { echo "OFFSET=<partition:offset> or ALL=1 is required"; exit 2; }
+	$(DLT_TOOL) -Dexec.args="replay $(TOPIC) $(if $(ALL),all,$(OFFSET))$(if $(FORCE), --force,)"
 
 # ─────────────────────────────────────────────────────────────────
 # moderation-service (Python)
