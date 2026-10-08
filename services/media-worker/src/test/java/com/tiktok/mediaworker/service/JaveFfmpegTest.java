@@ -63,6 +63,22 @@ class JaveFfmpegTest {
         assertThat(ffmpeg.sampleFrames(notMedia, work, 6, 3)).isEmpty();
     }
 
+    /**
+     * A playlist uploaded under a video's name. ffmpeg picks the demuxer from the content, not the
+     * name, and an HLS playlist's segments can be any file the worker can read — another upload in
+     * its own work directory, copied into this one's playback file. Only the containers an upload
+     * may be, mp4/mov and webm, are opened now.
+     */
+    @Test
+    void faststart_refusesAPlaylistThatPullsInAnotherFile(@TempDir Path work) throws Exception {
+        Path someoneElses = synthesize(work.resolve("someone-else.ts"), "320x240");
+        Path upload = work.resolve("upload.mp4");
+        Files.writeString(upload, "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\nfile://"
+                + someoneElses + "\n#EXT-X-ENDLIST\n");
+
+        assertThat(ffmpeg.faststart(upload, work.resolve("playback.mp4"))).isFalse();
+    }
+
     @Test
     void faststart_refusesInputItCannotCopyIntoMp4(@TempDir Path work) throws Exception {
         Path notMedia = work.resolve("notes.txt");
