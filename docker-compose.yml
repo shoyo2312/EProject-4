@@ -204,7 +204,7 @@ services:
 
   # Kafka UI (optional, dev-only)
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: provectuslabs/kafka-ui:v0.7.2
     container_name: tt-kafka-ui
     depends_on:
       - kafka
@@ -258,7 +258,9 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1" ]
+      # 127.0.0.1, not localhost: inside this image localhost resolves to ::1 only, ClickHouse
+      # listens on IPv4, and busybox wget does not fall back — the check failed on a healthy server.
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -339,6 +341,10 @@ services:
   # ─────────────────────────────────────────────────────────────────
 
   minio:
+    # Not pinned to a release tag on purpose: MinIO stopped publishing community images (Docker Hub
+    # answers 404, quay.io requires an account), so no tag can be pulled any more and this one only
+    # resolves from a local copy (`docker load`). It is RELEASE.2025-09-07T16-13-09Z; a release tag
+    # here would make compose try to pull it and fail.
     image: quay.io/minio/minio:latest
     container_name: tt-minio
     command: server /data --console-address ":9001"
@@ -370,6 +376,7 @@ services:
   # ilm import replaces the whole config rather than appending, which is what makes re-running
   # this container a no-op instead of a duplicate-rule error.
   minio-init:
+    # Unpinned for the same reason as minio above; it is RELEASE.2025-08-13T08-35-41Z.
     image: quay.io/minio/mc:latest
     container_name: tt-minio-init
     depends_on:
