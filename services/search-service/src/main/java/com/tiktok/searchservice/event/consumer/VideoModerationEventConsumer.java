@@ -37,7 +37,7 @@ public class VideoModerationEventConsumer {
                 objectMapper.readValue(payload, VideoModerationCompletedEvent.class);
 
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
-                searchIndexWriter.applyVerdict(event.videoId(), statusOf(event)));
+                searchIndexWriter.applyVerdict(event.videoId(), statusOf(event), event.occurredAt()));
     }
 
     /** Mirrors {@code Video.applyModeration} in video-service; the two must not drift. */

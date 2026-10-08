@@ -18,6 +18,7 @@ import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.RedisScript;
 
+import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -248,7 +249,7 @@ class RecommendationServiceImplTest {
         when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
 
-        recommendationService.recordRestored("vid1");
+        recommendationService.recordRestored("vid1", Instant.now());
 
         verify(zSetOperations).add("reco:tag:dance", "vid1", 1700.0);
     }
@@ -261,7 +262,7 @@ class RecommendationServiceImplTest {
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
         when(setOperations.isMember("reco:video:private", "vid1")).thenReturn(true);
 
-        recommendationService.recordRestored("vid1");
+        recommendationService.recordRestored("vid1", Instant.now());
 
         verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
     }
@@ -274,7 +275,7 @@ class RecommendationServiceImplTest {
     void recordHeld_withdrawsTheVideoButKeepsWhatAnApprovalNeeds() {
         when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
 
-        recommendationService.recordHeld("vid1");
+        recommendationService.recordHeld("vid1", Instant.now());
 
         verify(setOperations).add("reco:video:held", "vid1");
         verify(zSetOperations).remove("reco:tag:dance", (Object) "vid1");
@@ -302,7 +303,7 @@ class RecommendationServiceImplTest {
         when(setOperations.remove("reco:video:held", "vid1")).thenReturn(1L);
         when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
 
-        recommendationService.recordRestored("vid1");
+        recommendationService.recordRestored("vid1", Instant.now());
 
         verify(zSetOperations).add(eq("reco:video:published"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
         verify(zSetOperations).add(eq("reco:tag:dance"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
@@ -318,7 +319,7 @@ class RecommendationServiceImplTest {
         when(setOperations.remove("reco:video:taken-down", "vid1")).thenReturn(1L);
         when(setOperations.isMember("reco:video:held", "vid1")).thenReturn(true);
 
-        recommendationService.recordRestored("vid1");
+        recommendationService.recordRestored("vid1", Instant.now());
 
         verify(setOperations, never()).remove("reco:video:held", "vid1");
         verify(zSetOperations, never()).add(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
@@ -327,10 +328,53 @@ class RecommendationServiceImplTest {
     /** Neither down nor held: already live, or never heard of. Nothing to undo either way. */
     @Test
     void recordRestored_withNothingToUndo_indexesNothing() {
-        recommendationService.recordRestored("vid1");
+        recommendationService.recordRestored("vid1", Instant.now());
 
         verify(zSetOperations, never()).add(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
         verify(zSetOperations, never()).incrementScore(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * Nothing to undo may only mean the verdict has not been read yet — this consumer lagging on
+     * the moderation topic. The time of the decision is kept for that verdict to be held against.
+     */
+    @Test
+    void recordRestored_beforeAnyVerdict_remembersWhenTheAdminDecided() {
+        Instant restoredAt = Instant.ofEpochMilli(1_700_000_000_000L);
+
+        recommendationService.recordRestored("vid1", restoredAt);
+
+        verify(valueOperations).set("reco:video:approved-at:vid1", "1700000000000", RecoKeys.DELETED_TTL);
+    }
+
+    /**
+     * The approval was read before the verdict it overruled. The verdict used to hold the video
+     * for good: approved and published in video-service, never in the feed.
+     */
+    @Test
+    void recordHeld_afterAnApprovalThatOverruledIt_putsTheVideoInTheFeed() {
+        Instant checkedAt = Instant.ofEpochMilli(1_700_000_000_000L);
+        when(valueOperations.get("reco:video:approved-at:vid1"))
+                .thenReturn(String.valueOf(checkedAt.plusSeconds(30).toEpochMilli()));
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordHeld("vid1", checkedAt);
+
+        verify(setOperations, never()).add("reco:video:held", "vid1");
+        verify(zSetOperations).add(eq("reco:video:published"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations).add(eq("reco:tag:dance"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /** A restore from before the verdict existed approved nothing, so the verdict still holds the video. */
+    @Test
+    void recordHeld_afterARestoreFromBeforeTheVerdict_stillHoldsIt() {
+        Instant checkedAt = Instant.ofEpochMilli(1_700_000_000_000L);
+        when(valueOperations.get("reco:video:approved-at:vid1"))
+                .thenReturn(String.valueOf(checkedAt.minusSeconds(30).toEpochMilli()));
+
+        recommendationService.recordHeld("vid1", checkedAt);
+
+        verify(setOperations).add("reco:video:held", "vid1");
     }
 
     /**

@@ -32,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -448,6 +449,54 @@ class VideoIndexingConsumerTest {
         assertThat(video("v24").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
     }
 
+    /**
+     * The approval read before the verdict it overruled — this consumer lagging on the moderation
+     * topic, restarting, or waiting out an outage. The restore found no verdict and did nothing,
+     * and the REVIEW that landed afterwards held the video for good: published in video-service,
+     * never in search.
+     */
+    @Test
+    void onMessage_approvalReadBeforeItsHeldVerdict_stillPublishes() throws Exception {
+        publish("v26", "approved while search lagged", null, List.of());
+        transcode(VideoTranscodedEvent.success("v26", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        Instant verdictAt = Instant.now();
+
+        restore("v26", verdictAt.plusSeconds(30));
+        moderate("v26", ModerationVerdict.REVIEW, verdictAt);
+
+        assertThat(video("v26").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /** One step further behind: the transcode result is still to come too, and applies the approval. */
+    @Test
+    void onMessage_approvalReadBeforeTheTranscodeAndTheVerdict_publishesWhenBothLand() throws Exception {
+        publish("v27", "approved before the pipeline caught up", null, List.of());
+        Instant verdictAt = Instant.now();
+
+        restore("v27", verdictAt.plusSeconds(30));
+        transcode(VideoTranscodedEvent.success("v27", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        assertThat(video("v27").orElseThrow().getStatus()).isEqualTo("PENDING_MODERATION");
+        moderate("v27", ModerationVerdict.REJECTED, verdictAt);
+
+        assertThat(video("v27").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /**
+     * A restore from before the verdict existed approved nothing — video-service ignores it too —
+     * so the verdict that follows still decides.
+     */
+    @Test
+    void onMessage_restoreFromBeforeTheVerdictExisted_letsTheVerdictDecide() throws Exception {
+        publish("v28", "restored too early", null, List.of());
+        transcode(VideoTranscodedEvent.success("v28", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        Instant restoredAt = Instant.now();
+
+        restore("v28", restoredAt);
+        moderate("v28", ModerationVerdict.REVIEW, restoredAt.plusSeconds(30));
+
+        assertThat(video("v28").orElseThrow().getStatus()).isEqualTo("PENDING_REVIEW");
+    }
+
     /** A restore nobody took down for leaves a video still in the pipeline where it is. */
     @Test
     void onMessage_restoreWithoutATakedown_ofAVideoStillProcessing_changesNothing() throws Exception {
@@ -519,7 +568,11 @@ class VideoIndexingConsumerTest {
     }
 
     private void moderate(String videoId, ModerationVerdict verdict) throws Exception {
-        VideoModerationCompletedEvent event = VideoModerationCompletedEvent.of(
+        moderate(videoId, verdict, Instant.now());
+    }
+
+    private void moderate(String videoId, ModerationVerdict verdict, Instant at) throws Exception {
+        VideoModerationCompletedEvent event = new VideoModerationCompletedEvent(UUID.randomUUID().toString(), at,
                 videoId, verdict, "nsfw", 0.1, 0, 10, 900L, "model", "v1", null);
         videoModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event));
     }
@@ -531,9 +584,12 @@ class VideoIndexingConsumerTest {
     }
 
     private void restore(String videoId) throws Exception {
-        adminModerationEventConsumer.onMessage(
-                objectMapper.writeValueAsString(VideoRestoredEvent.of(videoId, 99L, "approved")),
-                header("VideoRestoredEvent"));
+        restore(videoId, Instant.now());
+    }
+
+    private void restore(String videoId, Instant at) throws Exception {
+        VideoRestoredEvent event = new VideoRestoredEvent(UUID.randomUUID().toString(), at, videoId, 99L, "approved");
+        adminModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("VideoRestoredEvent"));
     }
 
     private void comment(String eventType, Object event) throws Exception {

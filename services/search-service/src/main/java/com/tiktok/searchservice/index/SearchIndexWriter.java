@@ -106,16 +106,29 @@ public class SearchIndexWriter {
      * <p>It moves the status only from PENDING_MODERATION. Before the transcode it is kept for
      * {@link #TRANSCODE_SCRIPT} and changes nothing a viewer sees: a video with no media yet is
      * not playable, and video-service does not publish it either.
+     *
+     * <p>A verdict an admin has already overruled lands as the approval. The restore comes on
+     * another topic, so it can be read first — this consumer lagging, restarting, or waiting out
+     * an outage — and then finds no verdict to overrule; the REVIEW that landed after it used to
+     * hold the video for good, published in video-service and never in search. The restore leaves
+     * the time of the decision in {@code approvedAt}: a verdict produced before it is one the
+     * admin saw. One produced after it is not, and that restore approved nothing — video-service
+     * ignored it, since there was no verdict yet when it arrived.
      */
     private static final String VERDICT_SCRIPT = """
             if (ctx._source.verdict != null) {
               ctx.op = 'noop';
             } else {
-              ctx._source.verdict = params.status;
+              def outcome = params.status;
+              if (outcome != 'PUBLISHED' && ctx._source.approvedAt != null
+                  && ((Number) ctx._source.approvedAt).longValue() >= ((Number) params.checkedAt).longValue()) {
+                outcome = 'PUBLISHED';
+              }
+              ctx._source.verdict = outcome;
               if (ctx._source.pendingStatus == 'PENDING_MODERATION') {
-                ctx._source.pendingStatus = params.status;
+                ctx._source.pendingStatus = outcome;
                 if (ctx._source.status != null && ctx._source.status != 'TAKEN_DOWN') {
-                  ctx._source.status = params.status;
+                  ctx._source.status = outcome;
                 }
               }
             }
@@ -137,6 +150,9 @@ public class SearchIndexWriter {
      *
      * <p>pendingStatus moves to PUBLISHED with it, because a later takedown's restore reads it.
      * A stub the publication has not reached keeps a null status, as in TRANSCODE_SCRIPT.
+     *
+     * <p>With no verdict here yet, nothing changes now, but the time of the decision is kept in
+     * {@code approvedAt} for the verdict to read when it lands — see {@link #VERDICT_SCRIPT}.
      */
     private static final String RESTORE_SCRIPT = """
             if (ctx._source.status == 'TAKEN_DOWN') {
@@ -144,6 +160,8 @@ public class SearchIndexWriter {
             } else if (ctx._source.pendingStatus == 'PENDING_REVIEW' || ctx._source.pendingStatus == 'REJECTED') {
               ctx._source.pendingStatus = 'PUBLISHED';
               if (ctx._source.status != null) { ctx._source.status = 'PUBLISHED'; }
+            } else if (ctx._source.verdict == null) {
+              ctx._source.approvedAt = params.restoredAt;
             } else {
               ctx.op = 'noop';
             }
@@ -223,9 +241,13 @@ public class SearchIndexWriter {
         update(VideoDocument.class, videoId, TRANSCODE_SCRIPT, withoutNulls(params), Document.from(withoutNulls(upsert)));
     }
 
-    /** @param status the status the verdict maps to: PUBLISHED, PENDING_REVIEW or REJECTED */
-    public void applyVerdict(String videoId, String status) {
-        update(VideoDocument.class, videoId, VERDICT_SCRIPT, Map.of("status", status),
+    /**
+     * @param status    the status the verdict maps to: PUBLISHED, PENDING_REVIEW or REJECTED
+     * @param checkedAt when the classifier produced it, which is what an earlier restore is held against
+     */
+    public void applyVerdict(String videoId, String status, Instant checkedAt) {
+        update(VideoDocument.class, videoId, VERDICT_SCRIPT,
+                Map.of("status", status, "checkedAt", checkedAt.toEpochMilli()),
                 Document.from(Map.of("verdict", status)));
     }
 
@@ -252,8 +274,9 @@ public class SearchIndexWriter {
         update(VideoDocument.class, videoId, VISIBILITY_SCRIPT, Map.of("visibility", visibility), null);
     }
 
-    public void restoreVideo(String videoId) {
-        update(VideoDocument.class, videoId, RESTORE_SCRIPT, Map.of(), null);
+    /** @param restoredAt when the admin decided, which a verdict that lands later is held against */
+    public void restoreVideo(String videoId, Instant restoredAt) {
+        update(VideoDocument.class, videoId, RESTORE_SCRIPT, Map.of("restoredAt", restoredAt.toEpochMilli()), null);
     }
 
     public void deleteVideo(String videoId) {

@@ -49,7 +49,8 @@ public class AdminModerationEventConsumer {
             }
             case VIDEO_RESTORED -> {
                 VideoRestoredEvent event = objectMapper.readValue(payload, VideoRestoredEvent.class);
-                inboxService.runOnce(event.eventId(), () -> recommendationService.recordRestored(event.videoId()));
+                inboxService.runOnce(event.eventId(),
+                        () -> recommendationService.recordRestored(event.videoId(), event.occurredAt()));
             }
             default -> log.debug("Ignoring moderation eventType={}", eventType);
         }

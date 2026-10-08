@@ -58,7 +58,7 @@ public class AdminModerationEventConsumer {
             case VIDEO_RESTORED -> {
                 VideoRestoredEvent event = objectMapper.readValue(payload, VideoRestoredEvent.class);
                 idempotentEventProcessor.runOnce(event.eventId(), VIDEO_RESTORED, () ->
-                        searchIndexWriter.restoreVideo(event.videoId()));
+                        searchIndexWriter.restoreVideo(event.videoId(), event.occurredAt()));
             }
             // UserBanned, ... — other services' events on a shared topic.
             default -> log.debug("Ignoring moderation eventType={}", eventType);

@@ -2,6 +2,7 @@ package com.tiktok.recommendationservice.service;
 
 import com.tiktok.recommendationservice.dto.response.TrendingVideoResponse;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -32,15 +33,19 @@ public interface RecommendationService {
      * The admin restore, which means what it means in video-service's {@code Video.markRestored}:
      * on a taken-down video it lifts the takedown and puts the video back where it was, and on a
      * held one it is the approval that puts it into the feed.
+     *
+     * @param restoredAt when the admin decided, which a verdict read after this is held against
      */
-    void recordRestored(String videoId);
+    void recordRestored(String videoId, Instant restoredAt);
 
     /**
      * Keeps a video moderation did not approve out of the feed, in a state an admin approval can
      * lift. Unlike {@link #recordVideoDeleted} the stashed tags and owner stay, because the
      * approval has nothing else to index the video from.
+     *
+     * @param checkedAt when the classifier produced the verdict
      */
-    void recordHeld(String videoId);
+    void recordHeld(String videoId, Instant checkedAt);
 
     /**
      * Keeps a video whose transcode failed out of the feed without forgetting it. A failure is not

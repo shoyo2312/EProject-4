@@ -44,7 +44,7 @@ public class VideoModerationEventConsumer {
             } else {
                 log.info("Verdict {} for videoId={}, keeping it out of the feed",
                         event.verdict(), event.videoId());
-                recommendationService.recordHeld(event.videoId());
+                recommendationService.recordHeld(event.videoId(), event.occurredAt());
             }
         });
     }

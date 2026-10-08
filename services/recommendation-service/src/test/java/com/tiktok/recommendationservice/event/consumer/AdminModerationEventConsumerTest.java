@@ -66,7 +66,7 @@ class AdminModerationEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoRestoredEvent"));
 
-        verify(recommendationService).recordRestored("vid1");
+        verify(recommendationService).recordRestored("vid1", event.occurredAt());
     }
 
     /** A shared topic: other services' events, and header-less ones, are not ours to guess at. */

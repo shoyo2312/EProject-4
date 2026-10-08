@@ -91,6 +91,13 @@ public class VideoDocument {
     @Field(type = FieldType.Keyword)
     private String verdict;
 
+    /**
+     * Epoch millis of an admin's restore that arrived while this index had no verdict yet, for the
+     * verdict landing after it to read — see SearchIndexWriter. Absent otherwise.
+     */
+    @Field(type = FieldType.Long)
+    private Long approvedAt;
+
     @Field(type = FieldType.Integer)
     private Integer durationSeconds;
 

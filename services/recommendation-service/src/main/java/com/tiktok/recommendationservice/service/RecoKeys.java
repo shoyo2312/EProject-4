@@ -150,6 +150,15 @@ public final class RecoKeys {
     public static final String VIDEO_HELD = "reco:video:held";
 
     /**
+     * Epoch millis of an admin restore that found neither marker — which can mean the verdict it
+     * overruled has not been read yet. recordHeld treats a verdict produced before this time as
+     * already approved. Lives {@link #DELETED_TTL}, past which no verdict can still arrive.
+     */
+    public static String videoApprovedAt(String videoId) {
+        return "reco:video:approved-at:" + videoId;
+    }
+
+    /**
      * Present for a while after a video is deleted. recordVideoDeleted clears every other marker
      * the video had, so without this nothing says it is gone — and events already on their way
      * put it straight back: a like consumed late lands in the current hour's bucket and the next

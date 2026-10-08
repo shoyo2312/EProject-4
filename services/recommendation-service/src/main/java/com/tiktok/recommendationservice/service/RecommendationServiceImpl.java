@@ -150,19 +150,35 @@ public class RecommendationServiceImpl implements RecommendationService {
     /**
      * The takedown is checked first, as in video-service: a video taken down while it waited for
      * review goes back to waiting, and only the next restore approves it. A restore that finds
-     * neither marker has nothing to undo.
+     * neither marker has nothing to undo now — but the verdict it overruled may simply not have
+     * been read yet, so when the admin decided is kept for {@link #recordHeld}.
      */
     @Override
-    public void recordRestored(String videoId) {
+    public void recordRestored(String videoId, Instant restoredAt) {
         if (removed(redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId))) {
             reindexIfVisible(videoId);
         } else if (removed(redisTemplate.opsForSet().remove(RecoKeys.VIDEO_HELD, videoId))) {
             recordVideoReady(videoId);
+        } else {
+            redisTemplate.opsForValue().set(RecoKeys.videoApprovedAt(videoId),
+                    String.valueOf(restoredAt.toEpochMilli()), RecoKeys.DELETED_TTL);
         }
     }
 
+    /**
+     * A verdict an admin already overruled is the approval. The restore travels on another topic,
+     * so it can be read first — this consumer lagging, restarting, or waiting out an outage — and
+     * the verdict that landed after it used to hold the video for good: approved and published in
+     * video-service, never in the feed. A verdict produced after the restore is not one the admin
+     * saw, and that restore approved nothing; video-service ignored it too.
+     */
     @Override
-    public void recordHeld(String videoId) {
+    public void recordHeld(String videoId, Instant checkedAt) {
+        String approvedAt = redisTemplate.opsForValue().get(RecoKeys.videoApprovedAt(videoId));
+        if (approvedAt != null && Long.parseLong(approvedAt) >= checkedAt.toEpochMilli()) {
+            recordVideoReady(videoId);
+            return;
+        }
         redisTemplate.opsForSet().add(RecoKeys.VIDEO_HELD, videoId);
         withdraw(videoId);
     }
