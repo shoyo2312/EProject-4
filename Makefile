@@ -58,7 +58,7 @@ help:
 	@echo "    make infra-logs         Xem logs tất cả containers"
 	@echo "    make infra-status       Xem trạng thái containers"
 	@echo ""
-	@echo "  Run services (local):"
+	@echo "  Run services (local; trừ gateway, chỉ nghe 127.0.0.1 — BIND=0.0.0.0 để mở):"
 	@echo "    make run-gateway        Run api-gateway :8080"
 	@echo "    make run-auth           Run auth-service :8081"
 	@echo "    make run-user           Run user-service :8082"
@@ -176,47 +176,55 @@ infra-status:
 # Run services locally
 # ──────────────────────────────────────────────
 
+# Every service but the gateway listens on loopback only, the way a deployment publishes only the
+# gateway's port: otherwise anyone on the same Wi-Fi reaches each service directly, past the
+# gateway's rate limits and path rules. Not server.address in the services' own config, because
+# the gateway has to stay reachable, and on Node 18 the frontends' proxy resolves "localhost" to
+# ::1, which a 127.0.0.1-only gateway refuses. `make run-user BIND=0.0.0.0` to open one up.
+BIND ?= 127.0.0.1
+RUN_INTERNAL = ./mvnw spring-boot:run -Dspring-boot.run.profiles=local -Dspring-boot.run.arguments=--server.address=$(BIND)
+
 run-gateway:
 	./mvnw spring-boot:run -pl services/api-gateway -Dspring-boot.run.profiles=local
 
 run-auth:
-	./mvnw spring-boot:run -pl services/auth-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/auth-service
 
 run-user:
-	./mvnw spring-boot:run -pl services/user-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/user-service
 
 run-video:
-	./mvnw spring-boot:run -pl services/video-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/video-service
 
 # Transcodes uploaded videos into HLS. Without it an upload stays PENDING forever:
 # video-service only flips a video to PUBLISHED on the event this worker emits.
 run-media:
-	./mvnw spring-boot:run -pl services/media-worker -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/media-worker
 
 run-interaction:
-	./mvnw spring-boot:run -pl services/interaction-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/interaction-service
 
 run-story:
-	./mvnw spring-boot:run -pl services/story-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/story-service
 
 run-recommendation:
-	./mvnw spring-boot:run -pl services/recommendation-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/recommendation-service
 
 run-chat:
-	./mvnw spring-boot:run -pl services/chat-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/chat-service
 
 run-notification:
-	./mvnw spring-boot:run -pl services/notification-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/notification-service
 
 # Cả hai service này phục vụ admin console (../tiktok-admin) và đều yêu cầu ROLE_ADMIN.
 run-search:
-	./mvnw spring-boot:run -pl services/search-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/search-service
 
 run-admin:
-	./mvnw spring-boot:run -pl services/admin-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/admin-service
 
 run-analytics:
-	./mvnw spring-boot:run -pl services/analytics-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/analytics-service
 
 # ─────────────────────────────────────────────────────────────────
 # moderation-service (Python)

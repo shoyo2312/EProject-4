@@ -2,6 +2,7 @@ package com.tiktok.chatservice.client;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.tiktok.chatservice.exception.DmSettingsUnavailableException;
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.common.response.ApiResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -13,10 +14,10 @@ import org.springframework.web.client.RestClientException;
  * Whether two accounts follow each other, which is what a {@link DmAudience#FRIENDS} recipient
  * means by "friends".
  *
- * <p>The tokenless {@code /users/internal/friendship}, not the authenticated
- * {@code /users/{id}/friendship} that video-service uses: a conversation opens from a WebSocket
- * frame as well as from a REST call, and there is no bearer token to forward on the frame. That
- * endpoint exists because of this client.
+ * <p>{@code /users/internal/friendship}, which takes the internal API token and no user's, not the
+ * authenticated {@code /users/{id}/friendship} that video-service uses: a conversation opens from a
+ * WebSocket frame as well as from a REST call, and there is no bearer token to forward on the
+ * frame. That endpoint exists because of this client.
  *
  * <p>Fails closed, like {@link SettingsClient} and {@link BlockClient} — "only my friends" must
  * not become "everyone" because user-service could not be reached.
@@ -31,8 +32,10 @@ public class FriendshipClient {
     private final RestClient restClient;
 
     public FriendshipClient(RestClient.Builder builder,
-                            @Value("${downstream.user-service-uri}") String userServiceUri) {
-        this.restClient = builder.baseUrl(userServiceUri).build();
+                            @Value("${downstream.user-service-uri}") String userServiceUri,
+                            InternalApiToken internalApiToken) {
+        this.restClient = builder.baseUrl(userServiceUri)
+                .defaultHeader(InternalApiToken.HEADER, internalApiToken.value()).build();
     }
 
     public boolean areFriends(Long userA, Long userB) {

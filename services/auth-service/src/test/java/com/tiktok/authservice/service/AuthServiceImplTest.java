@@ -31,6 +31,7 @@ import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.authservice.repository.VerificationTokenRepository;
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.crypto.jwt.RevocationKeys;
@@ -109,6 +110,9 @@ class AuthServiceImplTest {
     private AuthService authService;
 
     @Autowired
+    private InternalApiToken internalApiToken;
+
+    @Autowired
     private UserRepository userRepository;
 
     @Autowired
@@ -158,12 +162,14 @@ class AuthServiceImplTest {
 
     /**
      * Puts a request on the thread the way Spring MVC would, so the recorder — which reads the
-     * current request rather than taking the address as a parameter — sees one.
+     * current request rather than taking the address as a parameter — sees one. A client address
+     * arrives the way api-gateway forwards it: beside the internal token that vouches for it.
      */
     private MockHttpServletRequest arriveFrom(String clientIp, String userAgent) {
         MockHttpServletRequest request = new MockHttpServletRequest();
         if (clientIp != null) {
             request.addHeader("X-Client-Ip", clientIp);
+            request.addHeader(InternalApiToken.HEADER, internalApiToken.value());
         }
         if (userAgent != null) {
             request.addHeader("User-Agent", userAgent);
@@ -1263,6 +1269,26 @@ class AuthServiceImplTest {
         registerVerified();
         MockHttpServletRequest request = arriveFrom(null, null);
         request.addHeader("X-Forwarded-For", "198.51.100.66");
+        request.setRemoteAddr("10.0.0.4");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getIpAddress)
+                .containsExactly("10.0.0.4");
+    }
+
+    /**
+     * The gateway's header, written by something that is not the gateway: anything that reaches
+     * this service's port directly can set X-Client-Ip, and only the internal token says it came
+     * through api-gateway.
+     */
+    @Test
+    void aClientIpWithoutTheGatewaysTokenIsNotBelieved() {
+        registerVerified();
+        MockHttpServletRequest request = arriveFrom(null, null);
+        request.addHeader("X-Client-Ip", "198.51.100.66");
+        request.addHeader(InternalApiToken.HEADER, "a-guess");
         request.setRemoteAddr("10.0.0.4");
 
         authService.login(new LoginRequest("johndoe", "password123"));

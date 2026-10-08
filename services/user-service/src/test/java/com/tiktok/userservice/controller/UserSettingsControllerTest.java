@@ -1,5 +1,7 @@
 package com.tiktok.userservice.controller;
 
+import com.tiktok.common.config.InternalApiAutoConfiguration;
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.userservice.config.SecurityConfig;
@@ -37,8 +39,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(controllers = {UserSettingsController.class, InternalFollowController.class, FollowController.class})
-@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class})
-@TestPropertySource(properties = "jwt.secret=test-secret-at-least-32-bytes-long-0123456789")
+@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, InternalApiAutoConfiguration.class})
+@TestPropertySource(properties = {
+        "jwt.secret=test-secret-at-least-32-bytes-long-0123456789",
+        "INTERNAL_API_TOKEN=internal-token-for-tests-0123456789abcdef"
+})
 class UserSettingsControllerTest {
 
     private static final String JWT_SECRET = "test-secret-at-least-32-bytes-long-0123456789";
@@ -48,6 +53,9 @@ class UserSettingsControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
+
+    @Autowired
+    private InternalApiToken internalApiToken;
 
     @MockBean
     private UserSettingsService userSettingsService;
@@ -160,7 +168,8 @@ class UserSettingsControllerTest {
         when(userSettingsService.getSettingsPolicies(List.of(7L))).thenReturn(List.of(
                 new UserSettingsPolicyResponse(7L, SettingsAudience.NO_ONE, SettingsAudience.FRIENDS)));
 
-        mockMvc.perform(get("/api/v1/users/internal/settings").param("ids", "7"))
+        mockMvc.perform(get("/api/v1/users/internal/settings").param("ids", "7")
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].userId").value(7))
                 .andExpect(jsonPath("$.data[0].commentAudience").value("NO_ONE"))
@@ -178,6 +187,7 @@ class UserSettingsControllerTest {
         when(followService.friendship(1L, 2L)).thenReturn(new FriendshipResponse(2L, true, true, false, false));
 
         mockMvc.perform(get("/api/v1/users/internal/friendship")
+                        .header(InternalApiToken.HEADER, internalApiToken.value())
                         .param("userA", "1")
                         .param("userB", "2"))
                 .andExpect(status().isOk())
@@ -215,7 +225,8 @@ class UserSettingsControllerTest {
     void internalFriendship_withoutAViewer_isTheAnonymousQuestion() throws Exception {
         when(followService.friendship(null, 2L)).thenReturn(new FriendshipResponse(2L, false, false, false, true));
 
-        mockMvc.perform(get("/api/v1/users/internal/friendship").param("userB", "2"))
+        mockMvc.perform(get("/api/v1/users/internal/friendship").param("userB", "2")
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.privateAccount").value(true));
     }
@@ -229,6 +240,7 @@ class UserSettingsControllerTest {
         when(followService.followingAmong(1L, List.of(7L, 8L))).thenReturn(List.of(8L));
 
         mockMvc.perform(get("/api/v1/users/internal/following")
+                        .header(InternalApiToken.HEADER, internalApiToken.value())
                         .param("followerId", "1")
                         .param("ids", "7", "8"))
                 .andExpect(status().isOk())

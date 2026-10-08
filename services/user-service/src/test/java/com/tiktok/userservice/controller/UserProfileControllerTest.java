@@ -1,6 +1,7 @@
 package com.tiktok.userservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tiktok.common.config.InternalApiAutoConfiguration;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.userservice.config.PageableConfig;
@@ -53,9 +54,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * responses end-to-end, not just the controller method in isolation.
  */
 @WebMvcTest(controllers = {UserProfileController.class, FollowController.class})
-@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, PageableConfig.class})
+@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, InternalApiAutoConfiguration.class,
+        PageableConfig.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-at-least-32-bytes-long-0123456789",
+        "INTERNAL_API_TOKEN=internal-token-for-tests-0123456789abcdef",
         "app.media.allowed-hosts=cdn.example.com"
 })
 class UserProfileControllerTest {

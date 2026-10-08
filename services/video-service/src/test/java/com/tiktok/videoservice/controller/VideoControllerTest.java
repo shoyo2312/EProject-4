@@ -1,6 +1,8 @@
 package com.tiktok.videoservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tiktok.common.config.InternalApiAutoConfiguration;
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.common.validation.MediaUrlProperties;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
@@ -55,10 +57,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * UserProfileControllerTest.
  */
 @WebMvcTest(controllers = VideoController.class)
-@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class})
+@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, InternalApiAutoConfiguration.class})
 @EnableConfigurationProperties(MediaUrlProperties.class)
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-at-least-32-bytes-long-0123456789",
+        "INTERNAL_API_TOKEN=internal-token-for-tests-0123456789abcdef",
         "app.media.allowed-hosts=cdn.example.com",
         "app.media.allowed-buckets=video-media"
 })
@@ -74,6 +77,9 @@ class VideoControllerTest {
 
     @MockBean
     private VideoService videoService;
+
+    @Autowired
+    private InternalApiToken internalApiToken;
 
     /**
      * Not used by any test here, and not optional either: video-service now has Redis on its
@@ -95,6 +101,20 @@ class VideoControllerTest {
     private String tokenFor(long userId) {
         return jwtProvider.generateToken(String.valueOf(userId),
                 Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS), 60_000L);
+    }
+
+    /**
+     * /policy answers for any video whatever its visibility, so only other services may ask it.
+     * The blanket GET rule must not reach it, and neither no token nor a user's JWT gets in.
+     */
+    @Test
+    void policy_answersOnlyCallersWithTheInternalToken() throws Exception {
+        mockMvc.perform(get("/api/v1/videos/v1/policy"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/videos/v1/policy").header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/videos/v1/policy").header(InternalApiToken.HEADER, internalApiToken.value()))
+                .andExpect(status().isOk());
     }
 
     @Test

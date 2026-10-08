@@ -3,6 +3,7 @@ package com.tiktok.authservice.service;
 import com.tiktok.authservice.entity.AuthSecurityEvent;
 import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.repository.AuthSecurityEventRepository;
+import com.tiktok.common.http.InternalApiToken;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -65,10 +66,13 @@ public class SecurityEventRecorder {
 
     private final AuthSecurityEventRepository repository;
     private final TransactionTemplate transactionTemplate;
+    private final InternalApiToken internalApiToken;
 
     public SecurityEventRecorder(AuthSecurityEventRepository repository,
-                                 PlatformTransactionManager transactionManager) {
+                                 PlatformTransactionManager transactionManager,
+                                 InternalApiToken internalApiToken) {
         this.repository = repository;
+        this.internalApiToken = internalApiToken;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -127,14 +131,19 @@ public class SecurityEventRecorder {
      * was reached directly — local development, or a health probe. In a deployment that is the
      * gateway's own address, and recording that is honest: it says the hop the request arrived
      * from, rather than a client address nobody established.
+     *
+     * <p>The header counts only beside the internal API token, which api-gateway sends to this
+     * service and no other. Anything that reaches this port without the gateway can write
+     * X-Client-Ip however it likes, and for that caller the socket is the honest answer too.
      */
-    private static String clientIp(HttpServletRequest request) {
+    private String clientIp(HttpServletRequest request) {
         if (request == null) {
             return null;
         }
 
         String resolved = request.getHeader(CLIENT_IP_HEADER);
-        return resolved != null && !resolved.isBlank() ? resolved.strip() : request.getRemoteAddr();
+        boolean fromGateway = internalApiToken.accepts(request.getHeader(InternalApiToken.HEADER));
+        return fromGateway && resolved != null && !resolved.isBlank() ? resolved.strip() : request.getRemoteAddr();
     }
 
     private static String header(HttpServletRequest request, String name) {

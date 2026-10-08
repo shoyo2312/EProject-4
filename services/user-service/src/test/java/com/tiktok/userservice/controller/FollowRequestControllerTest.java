@@ -1,5 +1,6 @@
 package com.tiktok.userservice.controller;
 
+import com.tiktok.common.config.InternalApiAutoConfiguration;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.userservice.config.PageableConfig;
@@ -33,8 +34,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(controllers = {FollowRequestController.class, FollowController.class})
-@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, PageableConfig.class})
-@TestPropertySource(properties = "jwt.secret=test-secret-at-least-32-bytes-long-0123456789")
+@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, InternalApiAutoConfiguration.class,
+        PageableConfig.class})
+@TestPropertySource(properties = {
+        "jwt.secret=test-secret-at-least-32-bytes-long-0123456789",
+        "INTERNAL_API_TOKEN=internal-token-for-tests-0123456789abcdef"
+})
 class FollowRequestControllerTest {
 
     private static final String JWT_SECRET = "test-secret-at-least-32-bytes-long-0123456789";

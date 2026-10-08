@@ -1,5 +1,6 @@
 package com.tiktok.searchservice.client;
 
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.common.http.PooledRequestFactory;
 import com.tiktok.common.response.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -13,10 +14,11 @@ import java.time.Duration;
 import java.util.List;
 
 /**
- * Which accounts a search term names, asked of user-service's internal endpoint (no token; the
- * gateway denies that prefix). The video index holds only the author's id, and usernames are
- * owned by user-service — asking at query time rather than copying them in means no backfill for
- * accounts registered before this existed, and a display-name change is seen at once.
+ * Which accounts a search term names, asked of user-service's internal endpoint (no user token,
+ * the internal API token instead; the gateway denies that prefix). The video index holds only the
+ * author's id, and usernames are owned by user-service — asking at query time rather than copying
+ * them in means no backfill for accounts registered before this existed, and a display-name change
+ * is seen at once.
  *
  * <p>Fails open: a user-service outage costs the author match, not the search.
  */
@@ -27,10 +29,12 @@ public class UserDirectoryClient {
     private final RestClient restClient;
 
     public UserDirectoryClient(@Value("${downstream.user-service-uri}") String userServiceUri,
-                               @Value("${downstream.timeout-millis:1000}") long timeoutMillis) {
+                               @Value("${downstream.timeout-millis:1000}") long timeoutMillis,
+                               InternalApiToken internalApiToken) {
         // Without a timeout the JDK waits forever, and every search would wait with it.
         Duration timeout = Duration.ofMillis(timeoutMillis);
         this.restClient = RestClient.builder().baseUrl(userServiceUri)
+                .defaultHeader(InternalApiToken.HEADER, internalApiToken.value())
                 .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
     }
 

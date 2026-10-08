@@ -1,14 +1,17 @@
 package com.tiktok.chatservice.client;
 
 import com.tiktok.chatservice.exception.DmSettingsUnavailableException;
+import com.tiktok.common.http.InternalApiToken;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
+import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -16,6 +19,8 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 class SettingsClientTest {
 
     private static final String URL = "http://user-service/api/v1/users/internal/settings?ids=2";
+    private static final InternalApiToken TOKEN = InternalApiToken.from(new MockEnvironment()
+            .withProperty("INTERNAL_API_TOKEN", "internal-token-for-tests-0123456789abcdef"));
 
     private MockRestServiceServer server;
     private SettingsClient client;
@@ -24,12 +29,12 @@ class SettingsClientTest {
     void setUp() {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
-        client = new SettingsClient(builder, "http://user-service");
+        client = new SettingsClient(builder, "http://user-service", TOKEN);
     }
 
     @Test
     void audience_isReadOffTheInternalBatchEndpoint() {
-        server.expect(requestTo(URL)).andRespond(withSuccess(
+        server.expect(requestTo(URL)).andExpect(header(InternalApiToken.HEADER, TOKEN.value())).andRespond(withSuccess(
                 "{\"success\":true,\"data\":[{\"userId\":2,\"dmAudience\":\"FRIENDS\"}]}",
                 MediaType.APPLICATION_JSON));
 

@@ -2,6 +2,7 @@ package com.tiktok.chatservice.client;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.tiktok.chatservice.exception.DmSettingsUnavailableException;
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.common.response.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,9 +15,9 @@ import java.util.List;
 
 /**
  * Asks user-service who a given account accepts direct messages from. Modelled on
- * {@link BlockClient}, and for the same reasons: no token, because the check runs for WebSocket
- * frames too, where there is no Authorization header to forward; timeouts from
- * {@code RestClientConfig}; and it fails closed.
+ * {@link BlockClient}, and for the same reasons: no user token, only the internal API token,
+ * because the check runs for WebSocket frames too, where there is no Authorization header to
+ * forward; timeouts from {@code RestClientConfig}; and it fails closed.
  *
  * <p>The internal endpoint answers every id it is asked for, defaults included, so there is no
  * "this account has no settings" case to handle — an empty answer means something went wrong.
@@ -32,8 +33,10 @@ public class SettingsClient {
     private final RestClient restClient;
 
     public SettingsClient(RestClient.Builder builder,
-                          @Value("${downstream.user-service-uri}") String userServiceUri) {
-        this.restClient = builder.baseUrl(userServiceUri).build();
+                          @Value("${downstream.user-service-uri}") String userServiceUri,
+                          InternalApiToken internalApiToken) {
+        this.restClient = builder.baseUrl(userServiceUri)
+                .defaultHeader(InternalApiToken.HEADER, internalApiToken.value()).build();
     }
 
     /**

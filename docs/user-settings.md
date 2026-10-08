@@ -163,9 +163,10 @@ way, and the retry finds the row and updates it.
 
 The path prefix is **not** cosmetic. `api-gateway`'s `SecurityConfig` line 44 already carries
 `.pathMatchers("/api/v1/users/internal/**").denyAll()`, first in the chain so no later rule can
-open it, and user-service's own `SecurityConfig` already `permitAll`s the same prefix. Putting the
-endpoint there means **no gateway change at all** and no token — which is mandatory, because
-chat-service asks these questions from WebSocket frames that carry no Authorization header. An
+open it, and user-service's own `SecurityConfig` admits the same prefix to any caller carrying the
+internal API token (`X-Internal-Token`) and no one else. Putting the endpoint there means **no
+gateway change at all** and no user token — which is mandatory, because chat-service asks these
+questions from WebSocket frames that carry no Authorization header. An
 endpoint at `/users/{id}/settings-policy` instead would need a new deny rule, and forgetting it
 publishes every account's settings.
 

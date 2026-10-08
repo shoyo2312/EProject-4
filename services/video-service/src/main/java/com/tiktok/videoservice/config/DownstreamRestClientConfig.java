@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.config;
 
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.common.http.PooledRequestFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -12,15 +13,17 @@ import java.time.Duration;
  * video-service's outbound calls, all to user-service: FRIENDS visibility needs to know whether a
  * viewer and an owner are mutual followers, a single-video read whether either has blocked the
  * other, and {@code /policy} the owner's comment audience. user-service is the only place that
- * knows any of them. Mirrors interaction-service's {@code DownstreamRestClientConfig}.
+ * knows any of them, and answers them on its {@code /internal/} prefix, which checks the internal
+ * API token both clients carry. Mirrors interaction-service's {@code DownstreamRestClientConfig}.
  */
 @Configuration
 public class DownstreamRestClientConfig {
 
     @Bean
     public RestClient userServiceRestClient(@Value("${downstream.user-service-uri}") String userServiceUri,
-                                            @Value("${downstream.timeout-millis:1000}") long timeoutMillis) {
-        return client(userServiceUri, timeoutMillis);
+                                            @Value("${downstream.timeout-millis:1000}") long timeoutMillis,
+                                            InternalApiToken internalApiToken) {
+        return client(userServiceUri, timeoutMillis, internalApiToken);
     }
 
     /**
@@ -35,15 +38,17 @@ public class DownstreamRestClientConfig {
      */
     @Bean
     public RestClient userSettingsRestClient(@Value("${downstream.user-service-uri}") String userServiceUri,
-                                             @Value("${downstream.settings-timeout-millis:250}") long timeoutMillis) {
-        return client(userServiceUri, timeoutMillis);
+                                             @Value("${downstream.settings-timeout-millis:250}") long timeoutMillis,
+                                             InternalApiToken internalApiToken) {
+        return client(userServiceUri, timeoutMillis, internalApiToken);
     }
 
-    private static RestClient client(String baseUrl, long timeoutMillis) {
+    private static RestClient client(String baseUrl, long timeoutMillis, InternalApiToken internalApiToken) {
         // Without a timeout the JDK waits forever, so a downstream that accepts the connection
         // and never answers holds a request thread per call until the pool runs dry.
         Duration timeout = Duration.ofMillis(timeoutMillis);
         return RestClient.builder().baseUrl(baseUrl)
+                .defaultHeader(InternalApiToken.HEADER, internalApiToken.value())
                 .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
     }
 }

@@ -30,6 +30,13 @@
             <groupId>com.tiktok</groupId>
             <artifactId>crypto-lib</artifactId>
         </dependency>
+        <!-- Provided: InternalApiToken, for InternalCallerAuthorization. Every service on this lib
+             already has common-lib, and it brings JPA and web along, so it is not pulled in from here. -->
+        <dependency>
+            <groupId>com.tiktok</groupId>
+            <artifactId>common-lib</artifactId>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>

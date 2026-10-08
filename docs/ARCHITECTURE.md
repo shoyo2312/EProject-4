@@ -75,6 +75,7 @@ common-lib       ← Mọi service đều phụ thuộc
   ├── ApiResponse<T>      (success, code, message, data, timestamp)
   ├── DomainException     (sealed — mọi custom exception kế thừa)
   ├── GlobalExceptionHandler
+  ├── InternalApiToken    (X-Internal-Token của endpoint nội bộ: so constant-time, fail-fast, bean @Lazy)
   └── SnowflakeIdGenerator
 
 event-schema     ← Services produce/consume Kafka events (mọi record implements DomainEvent: eventId, occurredAt)
@@ -96,6 +97,7 @@ security-lib     ← Centralized JWT auto-configuration (9 services, xem §5a)
   ├── JwtSecurityAutoConfiguration (Spring Boot auto-config beans)
   │   └── Fail-fast startup: kiểm tra JWT_SECRET tồn tại
   ├── ActuatorSecurityAutoConfiguration (chain riêng cho /actuator: health/info/prometheus không cần token, còn lại denyAll)
+  ├── InternalCallerAuthorization (`.access(...)` cho endpoint nội bộ: chỉ request mang X-Internal-Token hợp lệ)
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean cho 9 services
 
@@ -220,6 +222,12 @@ chỉ route `/api/v1/**`). Riêng api-gateway — port public duy nhất — đ�
 `MANAGEMENT_PORT` (mặc định **8180**), không publish ra ngoài. Cấu hình chung nằm ở
 `common-lib/ManagementDefaults` (service vẫn override được trong `application.yml`).
 
+Endpoint nội bộ (`/api/v1/users/internal/**`, `/api/v1/interactions/internal/**`, `/api/v1/videos/*/policy`)
+bị gateway `denyAll` **và** chỉ nhận request mang `X-Internal-Token` = `INTERNAL_API_TOKEN`: gateway không
+phải ranh giới duy nhất, vì service nào cũng nghe trên port riêng. Gateway chỉ gửi token sang auth-service
+(nơi duy nhất đọc `X-Client-Ip`), không gửi lên route khác. Khi deploy chỉ publish port gateway; chạy
+local, `make run-*` cho mọi service trừ gateway bind `127.0.0.1` (`make run-user BIND=0.0.0.0` để mở).
+
 ## 6b. Vận hành
 
 - **Image**: một `Dockerfile` chung ở root cho mọi service Java: `make image SERVICE=auth-service`
@@ -242,6 +250,10 @@ chỉ route `/api/v1/**`). Riêng api-gateway — port public duy nhất — đ�
         - alert: EventDeadLettered
           expr: sum by (application, topic) (increase(kafka_consumer_dead_letters_total[10m])) > 0
   ```
+- **`INTERNAL_API_TOKEN`** (≥ 32 byte, **cùng một giá trị**): bắt buộc ở api-gateway, auth, user, video,
+  interaction, chat, notification, recommendation, search; thiếu thì service không khởi động (ngoài profile
+  local/test). Lệch giá trị giữa các service → mọi call nội bộ 403. Đổi token: (1) mọi service thêm
+  `INTERNAL_API_TOKEN_ROTATING=<mới>`, (2) đổi chỗ hai giá trị ở mọi service, (3) bỏ `..._ROTATING`.
 - **Chạy nhiều replica**: đặt `SNOWFLAKE_NODE_ID` (0–1023) khác nhau cho từng instance. Để trống thì mỗi
   instance tự chọn ngẫu nhiên — ổn với 1 replica, nhưng 2 replica có 1/1024 khả năng trùng node id, và
   Cassandra ghi đè comment trùng id mà không báo.
