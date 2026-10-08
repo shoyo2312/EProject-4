@@ -38,9 +38,10 @@ public class JwtSecurityAutoConfiguration {
     }
 
     /**
-     * Fallback for services with no Redis on the classpath (product, order, admin, …): they can't
-     * see the logout blacklist, so a token stays usable until it expires. api-gateway still
-     * rejects revoked tokens at the edge, which covers all traffic that isn't service-to-service.
+     * Fallback for services with no Redis on the classpath (admin, analytics, notification, story,
+     * user): they can't see the logout blacklist, so a token stays usable until it expires.
+     * api-gateway still rejects revoked tokens at the edge, which covers all traffic that isn't
+     * service-to-service.
      */
     @Bean
     @ConditionalOnMissingBean

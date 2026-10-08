@@ -50,7 +50,7 @@ public class AdminModerationEventConsumer {
             // than thrown: a retry cannot add a header the producer never set.
             log.warn("Moderation event without an eventType header, dropped: {}", payload);
         } else {
-            // VideoTakenDown, ProductSuspended, ... — other services' events on a shared topic.
+            // VideoTakenDown, CommentRemoved, ... — other services' events on a shared topic.
             log.debug("Ignoring moderation eventType={}", eventType);
         }
     }
