@@ -6,6 +6,7 @@ import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
@@ -16,6 +17,10 @@ public class UserRegisteredEventConsumer {
     private final IdempotentEventProcessor idempotentEventProcessor;
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
+
+    /** The name the welcome mail is signed with: auth-service reads the same variable. */
+    @Value("${MAIL_BRAND_NAME:Nowaa}")
+    private final String brandName;
 
     @KafkaListener(topics = "auth.user-events", groupId = "notification-service")
     @SneakyThrows
@@ -29,7 +34,7 @@ public class UserRegisteredEventConsumer {
                         event.userId(),
                         null,
                         NotificationType.SYSTEM,
-                        "Welcome to TikTok!",
+                        "Welcome to " + brandName + "!",
                         "Hi " + event.username() + ", thanks for joining us.",
                         null));
     }

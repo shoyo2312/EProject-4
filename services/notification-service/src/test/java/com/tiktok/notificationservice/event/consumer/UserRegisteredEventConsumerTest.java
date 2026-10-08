@@ -30,7 +30,7 @@ class UserRegisteredEventConsumerTest {
 
     private UserRegisteredEventConsumer consumer() {
         return new UserRegisteredEventConsumer(
-                new IdempotentEventProcessor(processedEventRepository), notificationService, objectMapper);
+                new IdempotentEventProcessor(processedEventRepository), notificationService, objectMapper, "Nowaa");
     }
 
     @Test
@@ -41,7 +41,9 @@ class UserRegisteredEventConsumerTest {
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).create(eq(1L), isNull(), eq(NotificationType.SYSTEM), any(), bodyCaptor.capture(), isNull());
+        // The brand the welcome mail is signed with, not the product this one is modelled on.
+        verify(notificationService).create(eq(1L), isNull(), eq(NotificationType.SYSTEM),
+                eq("Welcome to Nowaa!"), bodyCaptor.capture(), isNull());
         assertThat(bodyCaptor.getValue()).contains("alice");
     }
 
