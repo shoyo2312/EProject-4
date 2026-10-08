@@ -160,6 +160,22 @@ class AdminMfaServiceTest {
         assertThat(tokens.accessToken()).isNotBlank();
     }
 
+    /** The console signs in by email too, so an account named after that email must not answer for it. */
+    @Test
+    void adminSignInByEmail_isNotShadowedByAUsernameSpelledLikeIt() {
+        admin("adminfive", "admin5@example.com");
+        authService.register(new RegisterRequest("admin5@example.com", "impostor@example.com", "impostor-pass", "t"));
+
+        assertThatThrownBy(() -> authService.login(
+                new LoginRequest("admin5@example.com", "password123", "turnstile", null)))
+                .isInstanceOf(MfaRequiredException.class);
+        String otp = mailedOtp("admin5@example.com");
+
+        TokenResponse tokens = authService.loginWithOtp(
+                new AdminLoginOtpRequest("admin5@example.com", otp, "turnstile", false));
+        assertThat(tokens.accessToken()).isNotBlank();
+    }
+
     @Test
     void nonAdminLogin_isUnaffected() {
         authService.register(new RegisterRequest("plainuser", "user@example.com", "password123", "t"));

@@ -37,6 +37,19 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("select count(u) > 0 from User u where lower(u.username) = lower(:username) and u.deletedAt is null")
     boolean existsByUsernameIgnoreCaseAndDeletedAtIsNull(@Param("username") String username);
 
+    /**
+     * The account a sign-in identifier names. One with an "@" is an email and only that: trying
+     * usernames first let an account named "victim@example.com" answer for that address, so every
+     * sign-in by email — the console's included — checked the password against the wrong account.
+     * Signup refuses an "@" in a username now; this is what keeps any registered before that from
+     * still standing in front of the address they imitate.
+     */
+    default Optional<User> findSignInAccount(String identifier) {
+        return identifier.indexOf('@') >= 0
+                ? findByEmailIgnoreCaseAndDeletedAtIsNull(identifier)
+                : findByUsernameIgnoreCaseAndDeletedAtIsNull(identifier);
+    }
+
     @Query("select count(u) > 0 from User u where lower(u.email) = lower(:email) and u.deletedAt is null")
     boolean existsByEmailIgnoreCaseAndDeletedAtIsNull(@Param("email") String email);
 

@@ -254,6 +254,24 @@ class AuthServiceImplTest {
         assertThat(tokens.accessToken()).isNotBlank();
     }
 
+    /**
+     * Signup no longer lets a username contain "@", but an account registered before that could
+     * still be named after someone else's address — and the lookup tried usernames first, so
+     * signing in with that address checked the password against the impostor's account.
+     */
+    @Test
+    @Transactional
+    void login_withEmail_isNotShadowedByAUsernameSpelledLikeIt() {
+        UserResponse victim = registerVerified();
+        authService.register(new RegisterRequest("john@example.com", "impostor@example.com",
+                "impostor-pass", "test-turnstile-token"));
+
+        TokenResponse tokens = authService.login(new LoginRequest("john@example.com", "password123"));
+
+        assertThat(jwtProvider.parseAccessToken(tokens.accessToken()).getSubject())
+                .isEqualTo(String.valueOf(victim.id()));
+    }
+
     @Test
     @Transactional
     void login_withWrongPassword_throwsInvalidCredentials() {

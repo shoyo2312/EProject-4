@@ -83,8 +83,7 @@ public class AdminMfaService {
      */
     @Transactional
     public TokenResponse completeLogin(String usernameOrEmail, String otp, boolean rememberDevice) {
-        User user = userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull(usernameOrEmail)
-                .or(() -> userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(usernameOrEmail))
+        User user = userRepository.findSignInAccount(usernameOrEmail)
                 .orElseThrow(InvalidOtpException::new);
 
         if (user.getRole() != UserRole.ADMIN || user.getStatus() != UserStatus.ACTIVE) {

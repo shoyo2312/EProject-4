@@ -193,9 +193,7 @@ public class AuthServiceImpl implements AuthService {
         // Resolved before the limit is checked, because the account is what the limit is about.
         // Keyed on the string the client sent, "bob" and "bob@example.com" were two counters for
         // one account and alternating them bought 10 attempts instead of 5.
-        User user = userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull(identifier)
-                .or(() -> userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(identifier))
-                .orElse(null);
+        User user = userRepository.findSignInAccount(identifier).orElse(null);
 
         String key = rateLimitKey(user, identifier);
         loginRateLimiter.acquireAttempt(key);

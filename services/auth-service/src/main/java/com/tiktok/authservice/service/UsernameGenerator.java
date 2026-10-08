@@ -19,7 +19,7 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class UsernameGenerator {
 
-    private static final int MIN_LENGTH = 3;   // matches RegisterRequest's @Size
+    private static final int MIN_LENGTH = 3;   // matches UsernameRule
     private static final int MAX_LENGTH = 50;
     private static final int SUFFIX_BOUND = 10_000;
     private static final int MAX_ATTEMPTS = 10;
