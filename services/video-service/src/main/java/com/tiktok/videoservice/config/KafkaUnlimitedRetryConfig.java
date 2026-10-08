@@ -13,9 +13,10 @@ import org.springframework.util.backoff.FixedBackOff;
 
 /**
  * The listener factory for user.privacy-events: it retries a failed record every 5 s until it
- * succeeds, where kafka-lib's handler gives up after three attempts and parks it on a DLT that
- * nothing replays. The topic is low-volume and ordered per user, so stalling through an outage
- * beats dropping a switch — a lost switch to private leaves the account's videos public.
+ * succeeds, whatever the failure. kafka-lib's handler does that only for an outage it recognises;
+ * anything else gets three attempts and a DLT that nothing replays. The topic is low-volume and
+ * ordered per user, so stalling beats dropping a switch — a lost switch to private leaves the
+ * account's videos public.
  *
  * <p>ponytail: a poison event that parses stalls privacy events on its partition, visible as
  * consumer lag and an ERROR every 5 s; one that does not parse still goes to the DLT. The upgrade

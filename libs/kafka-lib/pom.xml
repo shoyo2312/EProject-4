@@ -19,10 +19,10 @@
         Shared Kafka plumbing, auto-configured via META-INF/spring/...AutoConfiguration.imports —
         consuming services just need this dependency, no local @Configuration class required.
 
-        1. Consumer error handling: a DefaultErrorHandler wired to a DeadLetterPublishingRecoverer,
-           so a poison message (bad JSON, or any exception thrown from a @KafkaListener) retries a
-           bounded number of times then goes to a "<topic>.DLT" topic instead of blocking the
-           partition forever (Spring Kafka's default).
+        1. Consumer error handling: a DefaultErrorHandler wired to a DeadLetterPublishingRecoverer.
+           A dependency that is down is retried until it is back; anything else about the record
+           (bad JSON, a bug) retries a bounded number of times then goes to a "<topic>.DLT" topic
+           instead of blocking the partition forever (Spring Kafka's default).
         2. OutboxDispatcher: sends outbox rows and marks them published only once the broker
            acknowledges them, so a failed send is retried on the next poll rather than lost.
     -->
@@ -34,6 +34,11 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <!-- The DLT counter. Recorded on the global registry, which actuator binds its own to. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
         </dependency>
         <!-- Provided: every consuming service already has slf4j-api via spring-boot-starter-logging. -->
         <dependency>

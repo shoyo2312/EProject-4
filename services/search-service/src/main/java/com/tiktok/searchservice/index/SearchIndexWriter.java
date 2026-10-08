@@ -257,7 +257,11 @@ public class SearchIndexWriter {
     }
 
     public void deleteVideo(String videoId) {
-        elasticsearchOperations.delete(videoId, VideoDocument.class);
+        try {
+            elasticsearchOperations.delete(videoId, VideoDocument.class);
+        } catch (DataAccessException ex) {
+            throw ElasticsearchStatus.classify(ex);
+        }
     }
 
     private void update(Class<?> type, String id, String script, Map<String, Object> params, Document upsert) {
@@ -277,7 +281,7 @@ public class SearchIndexWriter {
                 log.warn("Update skipped, no {} document with id={}", type.getSimpleName(), id);
                 return;
             }
-            throw ex;
+            throw ElasticsearchStatus.classify(ex);
         }
     }
 }
