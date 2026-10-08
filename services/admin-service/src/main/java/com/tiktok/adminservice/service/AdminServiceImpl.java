@@ -1,5 +1,6 @@
 package com.tiktok.adminservice.service;
 
+import com.tiktok.adminservice.client.AccountRoleClient;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.DailyAdminStatsResponse;
@@ -46,6 +47,7 @@ public class AdminServiceImpl implements AdminService {
     private final ModerationActionRepository moderationActionRepository;
     private final AdminMapper adminMapper;
     private final AdminEventProducer adminEventProducer;
+    private final AccountRoleClient accountRoleClient;
 
     @Override
     @Transactional
@@ -334,10 +336,16 @@ public class AdminServiceImpl implements AdminService {
     private ModerationAction record(Long adminId, ReportTargetType targetType, String targetId,
                                     ModerationActionType actionType, String reason, Long reportId,
                                     Instant bannedUntil) {
-        // auth-service refuses to ban any admin account, since only it knows roles. This one knows
-        // who is asking, so a self-ban gets a 400 instead of an audit row for a ban that never lands.
+        // auth-service refuses to ban any admin account, since only it knows roles, and its refusal
+        // reached nobody: this side kept an audit row for a ban that never landed, closed the
+        // reports against the account as handled, and the services that hide a banned owner's
+        // videos hid an admin's. So a ban asks the role first. The self-ban check stays ahead of
+        // it — it needs no call, and still holds when auth-service cannot be asked.
         if (actionType == ModerationActionType.BAN_USER && targetId.equals(String.valueOf(adminId))) {
             throw new InvalidModerationTargetException("An admin cannot ban their own account");
+        }
+        if (actionType == ModerationActionType.BAN_USER && accountRoleClient.isAdmin(Long.valueOf(targetId))) {
+            throw new InvalidModerationTargetException("An admin account cannot be banned");
         }
         // No existence check against the owning service: this one cannot read its database, and an
         // extra HTTP call would only move the failure. An action against an id that does not exist

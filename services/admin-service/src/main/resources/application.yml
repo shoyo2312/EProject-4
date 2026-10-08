@@ -46,6 +46,8 @@ downstream:
   # moderation-service: internal network only, no auth, not routed at the gateway. Read for the
   # console's settings screen — the thresholds live in that service's environment, not here.
   moderation-service-uri: ${MODERATION_SERVICE_URL:http://localhost:8099}
+  # auth-service: asked whether a ban's target is an admin account, which it would refuse.
+  auth-service-uri: ${AUTH_SERVICE_URL:http://localhost:8081}
   timeout-millis: ${DOWNSTREAM_TIMEOUT_MS:2000}
 
 admin:

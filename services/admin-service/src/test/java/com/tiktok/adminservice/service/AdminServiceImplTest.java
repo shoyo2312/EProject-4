@@ -1,5 +1,6 @@
 package com.tiktok.adminservice.service;
 
+import com.tiktok.adminservice.client.AccountRoleClient;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.ReportGroupResponse;
@@ -57,11 +58,33 @@ class AdminServiceImplTest {
     @Mock
     private AdminEventProducer adminEventProducer;
 
+    // Default answer is false: every ban here targets an ordinary account unless a test says so.
+    @Mock
+    private AccountRoleClient accountRoleClient;
+
     private AdminServiceImpl adminService;
 
     @BeforeEach
     void setUp() {
-        adminService = new AdminServiceImpl(reportRepository, moderationActionRepository, adminMapper, adminEventProducer);
+        adminService = new AdminServiceImpl(reportRepository, moderationActionRepository, adminMapper,
+                adminEventProducer, accountRoleClient);
+    }
+
+    /**
+     * auth-service refuses an admin ban, and nothing told this side: the audit row said banned,
+     * the account's reports closed as handled, and its videos were hidden for a ban that never
+     * landed. Refused here first, before anything is written.
+     */
+    @Test
+    void moderate_banningAnotherAdmin_isRefusedAndRecordsNothing() {
+        when(accountRoleClient.isAdmin(8L)).thenReturn(true);
+
+        assertThatThrownBy(() -> adminService.moderate(1L, ReportTargetType.USER, "8",
+                ModerationActionType.BAN_USER, "spam"))
+                .isInstanceOf(InvalidModerationTargetException.class);
+
+        verify(moderationActionRepository, never()).save(any(ModerationAction.class));
+        verifyNoInteractions(adminEventProducer);
     }
 
     /**

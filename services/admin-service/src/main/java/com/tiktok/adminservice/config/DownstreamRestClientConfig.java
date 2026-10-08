@@ -27,4 +27,14 @@ public class DownstreamRestClientConfig {
         return RestClient.builder().baseUrl(moderationServiceUri)
                 .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
     }
+
+    /** Asked whether a ban's target is an admin account — see AccountRoleClient. */
+    @Bean
+    public RestClient authServiceRestClient(
+            @Value("${downstream.auth-service-uri:http://localhost:8081}") String authServiceUri,
+            @Value("${downstream.timeout-millis:2000}") long timeoutMillis) {
+        Duration timeout = Duration.ofMillis(timeoutMillis);
+        return RestClient.builder().baseUrl(authServiceUri)
+                .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
+    }
 }
