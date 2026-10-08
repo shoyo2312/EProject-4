@@ -12,7 +12,7 @@ ifneq (,$(wildcard ./.env))
 endif
 
 .PHONY: help \
-	build build-libs build-auth build-user build-video build-interaction \
+	build image build-libs build-auth build-user build-video build-interaction \
 	build-story build-recommendation build-chat build-gateway \
 	build-admin \
 	clean \
@@ -43,6 +43,7 @@ help:
 	@echo "    make build-admin        Build admin-service"
 	@echo "    make build-gateway      Build api-gateway"
 	@echo "    make clean              Clean tất cả target/"
+	@echo "    make image SERVICE=x    Build Docker image cho 1 service Java (Dockerfile ở root)"
 	@echo ""
 	@echo "  Test:"
 	@echo "    make test               Chạy toàn bộ tests"
@@ -90,6 +91,11 @@ help:
 
 build:
 	./mvnw clean install -DskipTests
+
+# One Java service's image from the shared root Dockerfile: make image SERVICE=auth-service
+image:
+	@test -n "$(SERVICE)" || { echo "usage: make image SERVICE=<directory under services/>"; exit 1; }
+	docker build --build-arg SERVICE=$(SERVICE) -t tiktok/$(SERVICE):latest .
 
 build-libs:
 	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,libs/crypto-lib
