@@ -1,0 +1,275 @@
+{
+  "AvatarMirroredEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "sourceUrl" : "sourceUrl-4",
+    "avatarUrl" : "avatarUrl-5"
+  },
+  "CommentCreatedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "commentId" : 1003,
+    "videoId" : 1004,
+    "userId" : 1005,
+    "content" : "content-6",
+    "parentId" : 1007,
+    "replyToUserId" : 1008,
+    "parentAuthorId" : 1009
+  },
+  "CommentDeletedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "commentId" : 1003,
+    "videoId" : 1004,
+    "userId" : 1005
+  },
+  "CommentLikeChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "commentId" : 1003,
+    "videoId" : 1004,
+    "userId" : 1005,
+    "liked" : true,
+    "likeCount" : 7,
+    "commentAuthorId" : 1008
+  },
+  "CommentRemovedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : 1003,
+    "commentId" : 1004,
+    "adminId" : 1005,
+    "reason" : "reason-6"
+  },
+  "FollowRequestedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "requesterId" : 1003,
+    "targetId" : 1004
+  },
+  "NotificationCreatedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "recipientId" : 1003,
+    "notificationId" : "notificationId-4",
+    "actorId" : 1005,
+    "type" : "type-6",
+    "title" : "title-7",
+    "body" : "body-8",
+    "referenceId" : "referenceId-9",
+    "createdAt" : "2026-10-08T09:30:25.123456789Z"
+  },
+  "ReportResolvedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "targetType" : "targetType-3",
+    "targetId" : "targetId-4"
+  },
+  "ReportSubmittedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "reportId" : 1003,
+    "targetType" : "targetType-4",
+    "targetId" : "targetId-5"
+  },
+  "SocialAvatarDiscoveredEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "avatarUrl" : "avatarUrl-4"
+  },
+  "StaleReportsDismissedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "dismissed" : 3
+  },
+  "UserBannedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "adminId" : 1004,
+    "reason" : "reason-5",
+    "bannedUntil" : "2026-10-08T09:30:21.123456789Z"
+  },
+  "UserFollowChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "followerId" : 1003,
+    "followingId" : 1004,
+    "followed" : false,
+    "requestApproved" : true
+  },
+  "UserPrivacyChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "privateAccount" : true
+  },
+  "UserRegisteredEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "username" : "username-4",
+    "email" : "email-5",
+    "avatarUrl" : "avatarUrl-6"
+  },
+  "UserSessionsRevokedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "adminId" : 1004,
+    "reason" : "reason-5"
+  },
+  "UserUnbannedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "adminId" : 1004,
+    "reason" : "reason-5"
+  },
+  "UserWarnedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "targetType" : "targetType-3",
+    "targetId" : "targetId-4",
+    "adminId" : 1005,
+    "reason" : "reason-6"
+  },
+  "UsernameChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "username" : "username-4",
+    "previousUsername" : "previousUsername-5"
+  },
+  "VideoDeletedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "userId" : 1004,
+    "rawFileUrl" : "rawFileUrl-5"
+  },
+  "VideoLikeEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : 1003,
+    "userId" : 1004,
+    "liked" : false
+  },
+  "VideoLikeOwnerEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : 1003,
+    "ownerId" : 1004
+  },
+  "VideoModerationCompletedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "verdict" : "REVIEW",
+    "label" : "label-5",
+    "maxScore" : 6.25,
+    "suspiciousFrames" : 7,
+    "totalFrames" : 8,
+    "processingTimeMs" : 1009,
+    "model" : "model-10",
+    "modelVersion" : "modelVersion-11",
+    "reason" : "reason-12"
+  },
+  "VideoPublishedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "userId" : 1004,
+    "title" : "title-5",
+    "description" : "description-6",
+    "rawFileUrl" : "rawFileUrl-7",
+    "visibility" : "visibility-8",
+    "tags" : [ "tags-a", "tags-b" ]
+  },
+  "VideoPurgeRequestedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "adminId" : 1004,
+    "reason" : "reason-5"
+  },
+  "VideoPurgedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "userId" : 1004,
+    "rawFileUrl" : "rawFileUrl-5"
+  },
+  "VideoRepostedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : 1003,
+    "userId" : 1004,
+    "reposted" : false
+  },
+  "VideoRestoredEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "adminId" : 1004,
+    "reason" : "reason-5"
+  },
+  "VideoSavedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : 1003,
+    "userId" : 1004,
+    "saved" : false
+  },
+  "VideoSharedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "shareId" : 1003,
+    "videoId" : 1004,
+    "userId" : 1005
+  },
+  "VideoTakenDownEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "adminId" : 1004,
+    "reason" : "reason-5"
+  },
+  "VideoTranscodedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "success" : true,
+    "thumbnailUrl" : "thumbnailUrl-5",
+    "previewUrl" : "previewUrl-6",
+    "hlsUrl" : "hlsUrl-7",
+    "durationSeconds" : 8,
+    "width" : 9,
+    "height" : 10,
+    "failureReason" : "failureReason-11"
+  },
+  "VideoViewedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : 1003,
+    "userId" : 1004
+  },
+  "VideoVisibilityChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "userId" : 1004,
+    "visibility" : "visibility-5"
+  },
+  "VideoWatchEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : 1003,
+    "userId" : 1004,
+    "watchedMs" : 1005,
+    "durationMs" : 1006,
+    "completed" : false
+  }
+}
