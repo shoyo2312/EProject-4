@@ -1,7 +1,6 @@
 package com.tiktok.mediaworker.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
@@ -29,7 +28,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class QuarantineRoutingTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Mock
     private MediaQuarantineService quarantine;

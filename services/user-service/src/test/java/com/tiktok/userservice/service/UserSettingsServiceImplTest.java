@@ -18,13 +18,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -47,16 +47,16 @@ class UserSettingsServiceImplTest {
 
     @Container
     @ServiceConnection
-    static PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     @Autowired
     private UserSettingsService userSettingsService;
 
     // Spied rather than autowired so one test can force what a lost first-write race saw.
-    @SpyBean
+    @MockitoSpyBean
     private UserSettingsRepository userSettingsRepository;
 
     @Autowired

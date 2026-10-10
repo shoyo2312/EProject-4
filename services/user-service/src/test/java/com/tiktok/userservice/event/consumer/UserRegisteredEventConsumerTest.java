@@ -1,7 +1,7 @@
 package com.tiktok.userservice.event.consumer;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.user.UserRegisteredEvent;
 import com.tiktok.userservice.repository.InboxEventRepository;
 import com.tiktok.userservice.service.UserProfileService;
@@ -25,7 +25,7 @@ class UserRegisteredEventConsumerTest {
     @Mock
     private UserProfileService userProfileService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private UserRegisteredEventConsumer newConsumer() {
         return new UserRegisteredEventConsumer(inboxEventRepository, userProfileService, objectMapper);
@@ -75,7 +75,7 @@ class UserRegisteredEventConsumerTest {
         UserRegisteredEventConsumer consumer = newConsumer();
 
         assertThatThrownBy(() -> consumer.onMessage("{not-valid-json"))
-                .isInstanceOf(JsonProcessingException.class);
+                .isInstanceOf(JacksonException.class);
 
         verify(inboxEventRepository, never()).tryClaim(
                 ArgumentMatchers.anyLong(), ArgumentMatchers.anyString(),

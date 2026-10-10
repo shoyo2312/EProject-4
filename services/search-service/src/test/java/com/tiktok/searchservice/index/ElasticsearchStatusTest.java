@@ -1,11 +1,10 @@
 package com.tiktok.searchservice.index;
 
-import org.apache.http.HttpHost;
-import org.apache.http.HttpVersion;
-import org.apache.http.message.BasicRequestLine;
-import org.apache.http.message.BasicStatusLine;
-import org.elasticsearch.client.Response;
-import org.elasticsearch.client.ResponseException;
+import co.elastic.clients.transport.rest5_client.low_level.Response;
+import co.elastic.clients.transport.rest5_client.low_level.ResponseException;
+import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.http.HttpVersion;
+import org.apache.hc.core5.http.message.RequestLine;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
@@ -64,9 +63,9 @@ class ElasticsearchStatusTest {
 
     private static Response response(int status) {
         Response response = mock(Response.class);
-        when(response.getRequestLine()).thenReturn(new BasicRequestLine("POST", "/videos/_update/v1", HttpVersion.HTTP_1_1));
+        when(response.getRequestLine()).thenReturn(new RequestLine("POST", "/videos/_update/v1", HttpVersion.HTTP_1_1));
         when(response.getHost()).thenReturn(new HttpHost("localhost", 9200));
-        when(response.getStatusLine()).thenReturn(new BasicStatusLine(HttpVersion.HTTP_1_1, status, "refused"));
+        when(response.getStatusCode()).thenReturn(status);
         return response;
     }
 }

@@ -1,6 +1,6 @@
 package com.tiktok.videoservice.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.common.config.InternalApiAutoConfiguration;
 import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.common.validation.MediaUrlProperties;
@@ -20,8 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
@@ -75,7 +75,7 @@ class VideoControllerTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    @MockBean
+    @MockitoBean
     private VideoService videoService;
 
     @Autowired
@@ -88,7 +88,7 @@ class VideoControllerTest {
      * autoconfigure Redis, so without this the context fails to start before a single request is
      * made.
      */
-    @MockBean
+    @MockitoBean
     private StringRedisTemplate revocationRedisTemplate;
 
     private JwtProvider jwtProvider;

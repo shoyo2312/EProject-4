@@ -1,7 +1,7 @@
 package com.tiktok.videoservice.event.producer;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -48,7 +48,7 @@ class VideoEventPublisherTest {
     @Mock
     private KafkaOperations<String, String> kafkaOperations;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private VideoEventPublisher publisher;
 
@@ -189,7 +189,7 @@ class VideoEventPublisherTest {
                 .thenReturn(List.of(video));
 
         ObjectMapper broken = org.mockito.Mockito.mock(ObjectMapper.class);
-        when(broken.writeValueAsString(any())).thenThrow(new JsonProcessingException("no") {
+        when(broken.writeValueAsString(any())).thenThrow(new JacksonException("no") {
         });
         VideoEventPublisher brokenPublisher = new VideoEventPublisher(
                 videoRepository, new OutboxDispatcher(kafkaOperations, Duration.ofSeconds(5)), broken,

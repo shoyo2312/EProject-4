@@ -36,7 +36,7 @@ import io.minio.MinioClient;
 import io.minio.PostPolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
+import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -106,7 +106,7 @@ public class VideoServiceImpl implements VideoService {
 
     private final VideoRepository videoRepository;
     private final VideoMapper videoMapper;
-    private final SpringDataWebProperties pageableProperties;
+    private final DataWebProperties pageableProperties;
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
     private final VideoCache videoCache;
@@ -497,7 +497,7 @@ public class VideoServiceImpl implements VideoService {
      * {@code ?size=100000} has to stay clamped whichever pagination style the endpoint uses.
      */
     private int clampSize(Integer size) {
-        SpringDataWebProperties.Pageable limits = pageableProperties.getPageable();
+        DataWebProperties.Pageable limits = pageableProperties.getPageable();
         return size == null
                 ? limits.getDefaultPageSize()
                 : Math.clamp(size, 1, limits.getMaxPageSize());

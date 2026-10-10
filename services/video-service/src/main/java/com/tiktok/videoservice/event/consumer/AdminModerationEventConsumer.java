@@ -1,6 +1,6 @@
 package com.tiktok.videoservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.VideoPurgeRequestedEvent;

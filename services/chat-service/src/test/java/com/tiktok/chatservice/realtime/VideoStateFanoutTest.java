@@ -1,6 +1,6 @@
 package com.tiktok.chatservice.realtime;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
@@ -23,7 +23,7 @@ class VideoStateFanoutTest {
     void setUp() {
         messaging = mock(SimpMessagingTemplate.class);
         audience = mock(VideoAudienceClient.class);
-        fanout = new VideoStateFanout(messaging, new ObjectMapper().findAndRegisterModules(), audience);
+        fanout = new VideoStateFanout(messaging, new ObjectMapper(), audience);
     }
 
     @Test

@@ -1,6 +1,6 @@
 package com.tiktok.searchservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.searchservice.index.SearchIndexWriter;
 import lombok.RequiredArgsConstructor;

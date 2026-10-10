@@ -1,7 +1,6 @@
 package com.tiktok.notificationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.user.FollowRequestedEvent;
 import com.tiktok.notificationservice.client.BlockClient;
 import com.tiktok.notificationservice.entity.NotificationType;
@@ -31,7 +30,7 @@ class FollowRequestEventConsumerTest {
     @Mock
     private BlockClient blockClient;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private FollowRequestEventConsumer consumer() {
         return new FollowRequestEventConsumer(

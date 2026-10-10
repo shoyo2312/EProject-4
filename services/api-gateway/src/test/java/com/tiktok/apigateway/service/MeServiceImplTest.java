@@ -4,7 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,8 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.codec.json.Jackson2JsonDecoder;
-import org.springframework.http.codec.json.Jackson2JsonEncoder;
+import org.springframework.http.codec.json.JacksonJsonDecoder;
+import org.springframework.http.codec.json.JacksonJsonEncoder;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.ExchangeFunction;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
@@ -304,11 +304,11 @@ class MeServiceImplTest {
         }
 
         WebClient client() {
-            ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+            JsonMapper mapper = new JsonMapper();
             ExchangeStrategies strategies = ExchangeStrategies.builder()
                     .codecs(configurer -> {
-                        configurer.defaultCodecs().jackson2JsonDecoder(new Jackson2JsonDecoder(mapper));
-                        configurer.defaultCodecs().jackson2JsonEncoder(new Jackson2JsonEncoder(mapper));
+                        configurer.defaultCodecs().jacksonJsonDecoder(new JacksonJsonDecoder(mapper));
+                        configurer.defaultCodecs().jacksonJsonEncoder(new JacksonJsonEncoder(mapper));
                     })
                     .build();
 

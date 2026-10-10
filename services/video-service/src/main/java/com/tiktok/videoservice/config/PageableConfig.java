@@ -1,6 +1,6 @@
 package com.tiktok.videoservice.config;
 
-import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
+import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,12 +23,12 @@ import org.springframework.data.web.config.PageableHandlerMethodArgumentResolver
  * VideoControllerPageSizeTest asserts the cap end-to-end rather than trusting it.
  */
 @Configuration
-@EnableConfigurationProperties(SpringDataWebProperties.class)
+@EnableConfigurationProperties(DataWebProperties.class)
 public class PageableConfig {
 
     @Bean
-    public PageableHandlerMethodArgumentResolverCustomizer pageableCustomizer(SpringDataWebProperties properties) {
-        SpringDataWebProperties.Pageable pageable = properties.getPageable();
+    public PageableHandlerMethodArgumentResolverCustomizer pageableCustomizer(DataWebProperties properties) {
+        DataWebProperties.Pageable pageable = properties.getPageable();
 
         return resolver -> {
             resolver.setMaxPageSize(pageable.getMaxPageSize());

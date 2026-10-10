@@ -1,6 +1,6 @@
 package com.tiktok.notificationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserWarnedEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;

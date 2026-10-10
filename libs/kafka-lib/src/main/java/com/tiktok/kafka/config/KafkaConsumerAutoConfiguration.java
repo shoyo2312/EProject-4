@@ -1,8 +1,9 @@
 package com.tiktok.kafka.config;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
+import tools.jackson.core.JacksonException;
 import io.micrometer.core.instrument.Metrics;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.RetriableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,7 +11,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration;
+import org.springframework.boot.kafka.autoconfigure.KafkaAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.RecoverableDataAccessException;
@@ -99,14 +100,24 @@ public class KafkaConsumerAutoConfiguration {
     @ConditionalOnMissingBean
     @ConditionalOnBean(KafkaOperations.class)
     public DefaultErrorHandler kafkaErrorHandler(KafkaOperations<Object, Object> kafkaOperations) {
-        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaOperations);
-        DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, POISON);
-        errorHandler.addNotRetryableExceptions(JsonProcessingException.class);
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(deadLetterRecoverer(kafkaOperations), POISON);
+        errorHandler.addNotRetryableExceptions(JacksonException.class);
         // Consulted again whenever the exception changes type, so a record that outlasts an
         // outage and then fails on its own content still ends on the DLT.
         errorHandler.setBackOffFunction((record, ex) -> backOffFor(ex));
         errorHandler.setRetryListeners(DEAD_LETTER_ALARM);
         return errorHandler;
+    }
+
+    /**
+     * Parks a record on "&lt;topic&gt;.DLT", same partition. Named here rather than left to the
+     * recoverer's default, which Spring Kafka 4 changed to "&lt;topic&gt;-dlt": the log line, the
+     * alert, make dlt-* and every record parked before the upgrade use ".DLT", and a silent rename
+     * would split a topic's dead letters across two topics with only one of them being watched.
+     */
+    public static DeadLetterPublishingRecoverer deadLetterRecoverer(KafkaOperations<?, ?> kafkaOperations) {
+        return new DeadLetterPublishingRecoverer(kafkaOperations,
+                (record, ex) -> new TopicPartition(record.topic() + ".DLT", record.partition()));
     }
 
     /** Null keeps the handler's default — the poison-message backoff. */

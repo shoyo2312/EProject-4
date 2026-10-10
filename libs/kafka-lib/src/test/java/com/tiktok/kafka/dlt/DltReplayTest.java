@@ -1,5 +1,6 @@
 package com.tiktok.kafka.dlt;
 
+import com.tiktok.kafka.config.KafkaConsumerAutoConfiguration;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
@@ -11,7 +12,6 @@ import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.junit.jupiter.api.Test;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
@@ -107,7 +107,8 @@ class DltReplayTest {
         try {
             ConsumerRecord<byte[], byte[]> failed = new ConsumerRecord<>(topic, 0, offset, key.getBytes(UTF_8), payload(key));
             failed.headers().add("eventType", eventType.getBytes(UTF_8));
-            new DeadLetterPublishingRecoverer(new KafkaTemplate<>(factory)).accept(failed, new IllegalStateException("bug"));
+            KafkaConsumerAutoConfiguration.deadLetterRecoverer(new KafkaTemplate<>(factory))
+                    .accept(failed, new IllegalStateException("bug"));
         } finally {
             factory.destroy();
         }

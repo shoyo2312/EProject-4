@@ -1,6 +1,6 @@
 package com.tiktok.videoservice.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.videoservice.config.VideoCacheProperties;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import lombok.RequiredArgsConstructor;

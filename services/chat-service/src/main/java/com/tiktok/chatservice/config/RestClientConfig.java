@@ -2,7 +2,7 @@ package com.tiktok.chatservice.config;
 
 import com.tiktok.common.http.PooledRequestFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.RestClientCustomizer;
+import org.springframework.boot.restclient.RestClientCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.ClientHttpRequestFactory;

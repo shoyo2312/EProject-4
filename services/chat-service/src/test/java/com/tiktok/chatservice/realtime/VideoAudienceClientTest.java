@@ -104,7 +104,7 @@ class VideoAudienceClientTest {
     @Test
     void asksWithoutAToken() {
         server.expect(requestTo(URL))
-                .andExpect(request -> assertThat(request.getHeaders().containsKey("Authorization")).isFalse())
+                .andExpect(request -> assertThat(request.getHeaders().containsHeader("Authorization")).isFalse())
                 .andRespond(withSuccess(video("PUBLISHED", "PUBLIC", false), MediaType.APPLICATION_JSON));
 
         client.commentsArePublic("100");

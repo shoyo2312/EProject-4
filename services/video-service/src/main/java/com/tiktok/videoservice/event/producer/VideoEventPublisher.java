@@ -1,7 +1,7 @@
 package com.tiktok.videoservice.event.producer;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoPurgedEvent;
@@ -17,7 +17,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -189,7 +188,7 @@ public class VideoEventPublisher {
                 video.getRawFileUrl(), audience(video), video.getTags());
         try {
             return record(video.getId(), "VideoPublishedEvent", objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException ex) {
+        } catch (JacksonException ex) {
             // Park the row before rethrowing. The dispatcher skips a record it cannot build and
             // moves on, but the poll reads the oldest hundred unpublished videos every five
             // seconds, so without this the same row comes back in the same first position for
@@ -197,7 +196,7 @@ public class VideoEventPublisher {
             // document serializes the same way every time.
             markEventFailed(video);
             // Unchecked so the dispatcher can skip this one row and still send the rest.
-            throw new UncheckedIOException(ex);
+            throw ex;
         }
     }
 
@@ -211,8 +210,8 @@ public class VideoEventPublisher {
         VideoDeletedEvent event = VideoDeletedEvent.of(video.getId(), video.getUserId(), video.getRawFileUrl());
         try {
             return record(video.getId(), "VideoDeletedEvent", objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException ex) {
-            throw new UncheckedIOException(ex);
+        } catch (JacksonException ex) {
+            throw ex;
         }
     }
 
@@ -221,8 +220,8 @@ public class VideoEventPublisher {
         VideoPurgedEvent event = VideoPurgedEvent.of(video.getId(), video.getUserId(), video.getRawFileUrl());
         try {
             return record(video.getId(), "VideoPurgedEvent", objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException ex) {
-            throw new UncheckedIOException(ex);
+        } catch (JacksonException ex) {
+            throw ex;
         }
     }
 
@@ -233,11 +232,11 @@ public class VideoEventPublisher {
         try {
             return record(video.getId(), "VideoVisibilityChangedEvent",
                     objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException ex) {
+        } catch (JacksonException ex) {
             // No parking counterpart, for the same reason as the deletion event: every field is an
             // id or an enum name this service produced, so there is nothing here Jackson can
             // refuse that would not be a bug in the event class.
-            throw new UncheckedIOException(ex);
+            throw ex;
         }
     }
 

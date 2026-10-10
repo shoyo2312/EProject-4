@@ -1,6 +1,6 @@
 package com.tiktok.searchservice.index;
 
-import org.elasticsearch.client.ResponseException;
+import co.elastic.clients.transport.rest5_client.low_level.ResponseException;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
@@ -67,7 +67,7 @@ public final class ElasticsearchStatus {
                 return OptionalInt.of(translated.getStatusCode());
             }
             if (current instanceof ResponseException transport) {
-                return OptionalInt.of(transport.getResponse().getStatusLine().getStatusCode());
+                return OptionalInt.of(transport.getResponse().getStatusCode());
             }
             if (current.getCause() == current) {
                 break;

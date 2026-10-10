@@ -1,6 +1,6 @@
 package com.tiktok.interactionservice.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.interactionservice.exception.EventNotPublishedException;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.KafkaException;
@@ -31,7 +31,7 @@ class InteractionEventPublisherTest {
     private KafkaTemplate<String, String> kafkaTemplate;
 
     private InteractionEventPublisher publisher() {
-        return new InteractionEventPublisher(kafkaTemplate, new ObjectMapper().findAndRegisterModules());
+        return new InteractionEventPublisher(kafkaTemplate, new ObjectMapper());
     }
 
     /**

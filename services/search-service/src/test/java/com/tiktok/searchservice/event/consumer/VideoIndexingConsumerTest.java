@@ -1,6 +1,6 @@
 package com.tiktok.searchservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
@@ -48,7 +48,7 @@ class VideoIndexingConsumerTest {
     @Container
     @ServiceConnection
     static ElasticsearchContainer ELASTICSEARCH = new ElasticsearchContainer(
-            DockerImageName.parse("docker.elastic.co/elasticsearch/elasticsearch:8.14.0"))
+            DockerImageName.parse("docker.elastic.co/elasticsearch/elasticsearch:9.4.5"))
             .withEnv("xpack.security.enabled", "false");
 
     @Autowired

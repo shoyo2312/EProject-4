@@ -1,6 +1,6 @@
 package com.tiktok.analyticsservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.analyticsservice.repository.UserSignupEventRepository;
 import com.tiktok.event.user.UserRegisteredEvent;
 import lombok.RequiredArgsConstructor;

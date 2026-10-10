@@ -15,7 +15,7 @@ import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
@@ -51,7 +51,7 @@ class AdminCommentDirectoryTest extends AbstractInteractionServiceIT {
 
     // Same reason as CommentServiceImplTest: the real client talks to video-service over HTTP, and
     // the default answer (comments enabled) is what the tests want anyway.
-    @MockBean
+    @MockitoBean
     private VideoOwnershipClient videoOwnershipClient;
 
     @BeforeEach

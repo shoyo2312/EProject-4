@@ -16,7 +16,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
@@ -55,7 +55,7 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
     private CounterCacheService counterCacheService;
 
     // Default answer false: anyone but the owner is refused unless a test says they may look.
-    @MockBean
+    @MockitoBean
     private FriendshipClient friendshipClient;
 
     @BeforeEach

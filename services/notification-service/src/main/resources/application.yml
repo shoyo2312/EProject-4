@@ -5,11 +5,13 @@ spring:
   application:
     name: notification-service
 
+  mongodb:
+    # From the environment like every other Mongo service's: the literal localhost URI this used to
+    # be could not be pointed anywhere else, so the service only ever ran beside its database.
+    uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:password}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/notification_db?authSource=admin
+
   data:
     mongodb:
-      # From the environment like every other Mongo service's: the literal localhost URI this used to
-      # be could not be pointed anywhere else, so the service only ever ran beside its database.
-      uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:password}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/notification_db?authSource=admin
       # Off by default since Spring Data Mongo 3.x, which left the inbox index uncreated:
       # every inbox read was a collection scan sorted in memory.
       auto-index-creation: true

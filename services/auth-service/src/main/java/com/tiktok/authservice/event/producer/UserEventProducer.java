@@ -1,6 +1,6 @@
 package com.tiktok.authservice.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.authservice.entity.OutboxEvent;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.event.DomainEvent;

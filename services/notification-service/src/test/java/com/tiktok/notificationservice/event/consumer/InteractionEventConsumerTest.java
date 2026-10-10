@@ -1,7 +1,6 @@
 package com.tiktok.notificationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.event.interaction.CommentLikeChangedEvent;
@@ -48,7 +47,7 @@ class InteractionEventConsumerTest {
     @Mock
     private BlockClient blockClient;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private InteractionEventConsumer consumer;
 

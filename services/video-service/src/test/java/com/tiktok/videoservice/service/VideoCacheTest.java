@@ -1,16 +1,15 @@
 package com.tiktok.videoservice.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import com.tiktok.videoservice.config.VideoCacheProperties;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
+import org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
@@ -19,6 +18,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -35,12 +35,8 @@ class VideoCacheTest {
 
     private final StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
     private final ValueOperations<String, String> valueOps = mock(ValueOperations.class);
-    /**
-     * Built the way Boot builds its own bean, not with {@code new ObjectMapper()}: the bare one
-     * cannot write an Instant, so these tests would fail on a serializer the application never
-     * uses. The round trip below pins that equivalence.
-     */
-    private final ObjectMapper objectMapper = Jackson2ObjectMapperBuilder.json().build();
+    /** Boot's own bean, so these tests write and read what the application's cache does. */
+    private final ObjectMapper objectMapper = bootMapper();
 
     /**
      * The one failure with no symptom on the read path: if a VideoResponse cannot survive a
@@ -194,5 +190,13 @@ class VideoCacheTest {
         cache().evictAll(List.of());
 
         org.mockito.Mockito.verifyNoInteractions(redisTemplate);
+    }
+
+    private static ObjectMapper bootMapper() {
+        AtomicReference<ObjectMapper> mapper = new AtomicReference<>();
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class))
+                .run(context -> mapper.set(context.getBean(ObjectMapper.class)));
+        return mapper.get();
     }
 }

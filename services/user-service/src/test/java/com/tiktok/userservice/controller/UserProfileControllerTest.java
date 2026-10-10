@@ -1,6 +1,6 @@
 package com.tiktok.userservice.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.common.config.InternalApiAutoConfiguration;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
@@ -20,8 +20,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -71,15 +71,15 @@ class UserProfileControllerTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    @MockBean
+    @MockitoBean
     private UserProfileService userProfileService;
 
-    @MockBean
+    @MockitoBean
     private FollowService followService;
 
     // The controller takes it even though nothing here posts an avatar: without it the slice
     // context fails to start and every test in this class errors out.
-    @MockBean
+    @MockitoBean
     private AvatarUploadService avatarUploadService;
 
     private JwtProvider jwtProvider;

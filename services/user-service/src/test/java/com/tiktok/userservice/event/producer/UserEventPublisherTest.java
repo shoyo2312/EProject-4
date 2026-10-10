@@ -1,6 +1,6 @@
 package com.tiktok.userservice.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.userservice.entity.OutboxEvent;
 import com.tiktok.userservice.repository.OutboxEventRepository;
 import org.junit.jupiter.api.Test;
@@ -16,7 +16,7 @@ class UserEventPublisherTest {
 
     private final OutboxEventRepository outboxEventRepository = mock(OutboxEventRepository.class);
     private final UserEventPublisher publisher =
-            new UserEventPublisher(outboxEventRepository, new ObjectMapper().findAndRegisterModules());
+            new UserEventPublisher(outboxEventRepository, new ObjectMapper());
 
     /**
      * The aggregate type is what OutboxPublisher routes on and the aggregate id is the record key,

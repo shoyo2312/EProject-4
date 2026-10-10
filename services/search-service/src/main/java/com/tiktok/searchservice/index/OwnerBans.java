@@ -8,7 +8,6 @@ import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
 import org.springframework.data.elasticsearch.core.document.Document;
-import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.stereotype.Component;
 
@@ -66,7 +65,6 @@ public class OwnerBans {
         upsert.put("userId", userId);
 
         UpdateQuery query = UpdateQuery.builder(String.valueOf(userId))
-                .withScriptType(ScriptType.INLINE)
                 .withScript(RECORD_SCRIPT)
                 .withParams(params)
                 .withUpsert(Document.from(upsert))
@@ -82,7 +80,7 @@ public class OwnerBans {
     /** The owners whose ban is in force now. */
     public List<Long> active() {
         NativeQuery query = NativeQuery.builder()
-                .withQuery(q -> q.range(r -> r.field("bannedUntil").gt(JsonData.of(System.currentTimeMillis()))))
+                .withQuery(q -> q.range(r -> r.untyped(u -> u.field("bannedUntil").gt(JsonData.of(System.currentTimeMillis())))))
                 .withMaxResults(MAX_BANS)
                 .build();
         return elasticsearchOperations.search(query, OwnerBanDocument.class).stream()

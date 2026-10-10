@@ -5,9 +5,11 @@ spring:
   application:
     name: video-service
 
+  mongodb:
+    uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:password}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/video_db?authSource=admin
+
   data:
     mongodb:
-      uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:password}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/video_db?authSource=admin
       # Off by default since Spring Data Mongo 3.x, which silently left every @Indexed and
       # @CompoundIndex in this service uncreated: feed_idx was absent (feed queries were
       # collection scans) and ProcessedEvent.eventId had no unique index, so the idempotency

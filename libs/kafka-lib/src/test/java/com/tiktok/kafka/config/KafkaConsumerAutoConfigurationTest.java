@@ -1,6 +1,6 @@
 package com.tiktok.kafka.config;
 
-import com.fasterxml.jackson.core.JsonParseException;
+import tools.jackson.core.exc.StreamReadException;
 import org.apache.kafka.common.KafkaException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -61,7 +61,7 @@ class KafkaConsumerAutoConfigurationTest {
                 Arguments.of("a bug", new NullPointerException("event.videoId()")),
                 Arguments.of("a constraint the record breaks", new DataIntegrityViolationException("duplicate key")),
                 // An IOException, but a statement about the bytes, not the network.
-                Arguments.of("JSON that does not parse", new JsonParseException(null, "Unexpected character")),
+                Arguments.of("JSON that does not parse", new StreamReadException(null, "Unexpected character")),
                 Arguments.of("an I/O failure that is not the network", new IOException("No space left on device")));
     }
 

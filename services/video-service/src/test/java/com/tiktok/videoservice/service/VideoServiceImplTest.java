@@ -29,8 +29,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -39,7 +39,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -70,30 +70,30 @@ class VideoServiceImplTest {
     @ServiceConnection
     static MongoDBContainer MONGO = new MongoDBContainer("mongo:7");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     // Default answer is false, so every stranger view falls to the PUBLIC-only branch exactly as
     // before FRIENDS existed. The dedicated FRIENDS assertions live in VideoServiceImplCacheTest.
-    @MockBean
+    @MockitoBean
     private com.tiktok.videoservice.client.FriendshipClient friendshipClient;
 
-    @MockBean
+    @MockitoBean
     private com.tiktok.videoservice.client.BlockClient blockClient;
 
     // Default answer is an empty set: a private owner's videos stay hidden unless a test says who follows.
-    @MockBean
+    @MockitoBean
     private com.tiktok.videoservice.client.FollowClient followClient;
 
     // Spied so a test can make owner_privacy answer differently from one read to the next.
-    @SpyBean
+    @MockitoSpyBean
     private OwnerPrivacyRepository ownerPrivacyRepository;
 
     @Autowired
     private VideoService videoService;
 
     // Spied so a test can count publish's corrective writes.
-    @SpyBean
+    @MockitoSpyBean
     private VideoRepository videoRepository;
 
     @Autowired

@@ -1,7 +1,6 @@
 package com.tiktok.notificationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.UserWarnedEvent;
@@ -50,7 +49,7 @@ class AdminModerationEventConsumerTest {
     @Mock
     private CommentAuthorClient commentAuthorClient;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private AdminModerationEventConsumer consumer() {
         lenient().when(processedEventRepository.tryClaim(anyString(), anyString())).thenReturn(true);

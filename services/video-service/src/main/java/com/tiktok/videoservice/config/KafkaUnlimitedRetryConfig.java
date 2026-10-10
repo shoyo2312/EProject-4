@@ -1,13 +1,13 @@
 package com.tiktok.videoservice.config;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import org.springframework.boot.autoconfigure.kafka.ConcurrentKafkaListenerContainerFactoryConfigurer;
+import com.tiktok.kafka.config.KafkaConsumerAutoConfiguration;
+import tools.jackson.core.JacksonException;
+import org.springframework.boot.kafka.autoconfigure.ConcurrentKafkaListenerContainerFactoryConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaOperations;
-import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.util.backoff.FixedBackOff;
 
@@ -36,9 +36,9 @@ public class KafkaUnlimitedRetryConfig {
         configurer.configure(factory, consumerFactory);
 
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(
-                new DeadLetterPublishingRecoverer(kafkaOperations),
+                KafkaConsumerAutoConfiguration.deadLetterRecoverer(kafkaOperations),
                 new FixedBackOff(5_000L, FixedBackOff.UNLIMITED_ATTEMPTS));
-        errorHandler.addNotRetryableExceptions(JsonProcessingException.class);
+        errorHandler.addNotRetryableExceptions(JacksonException.class);
         factory.setCommonErrorHandler(errorHandler);
         return factory;
     }

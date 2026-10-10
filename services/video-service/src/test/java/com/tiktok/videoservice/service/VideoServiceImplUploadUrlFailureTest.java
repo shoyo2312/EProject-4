@@ -10,7 +10,7 @@ import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
 import io.minio.PostPolicy;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
+import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
 import org.springframework.http.HttpStatus;
 
 import java.time.Duration;
@@ -39,7 +39,7 @@ class VideoServiceImplUploadUrlFailureTest {
         return new VideoServiceImpl(
                 mock(VideoRepository.class),
                 mock(VideoMapper.class),
-                new SpringDataWebProperties(),
+                new DataWebProperties(),
                 minioClient,
                 new MinioProperties("http://localhost:9000", "key", "secret",
                         "video-media", "us-east-1", Duration.ofMinutes(15)),

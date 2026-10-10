@@ -1,7 +1,7 @@
 package com.tiktok.notificationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.tiktok.event.user.UserFollowChangedEvent;
 import com.tiktok.notificationservice.client.BlockClient;
 import com.tiktok.notificationservice.entity.NotificationType;
@@ -31,7 +31,9 @@ class FollowEventConsumerTest {
     @Mock
     private BlockClient blockClient;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    // With the modules the service's own mapper finds, common-lib's PrimitiveDefaultsModule among
+    // them: it is what reads an event from before requestApproved existed.
+    private final ObjectMapper objectMapper = JsonMapper.builder().findAndAddModules().build();
 
     private FollowEventConsumer consumer() {
         return new FollowEventConsumer(

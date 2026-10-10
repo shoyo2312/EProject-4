@@ -1,6 +1,6 @@
 package com.tiktok.userservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.user.AvatarMirroredEvent;
 import com.tiktok.userservice.service.UserProfileService;
 import lombok.RequiredArgsConstructor;

@@ -1,7 +1,6 @@
 package com.tiktok.analyticsservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.analyticsservice.repository.EngagementEventRepository;
 import com.tiktok.analyticsservice.repository.TrainingDataRepository;
 import com.tiktok.event.interaction.VideoWatchEvent;
@@ -29,7 +28,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 @ExtendWith(MockitoExtension.class)
 class TrainingSinkConsumerTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Mock
     private TrainingDataRepository trainingDataRepository;

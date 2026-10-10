@@ -1,6 +1,6 @@
 package com.tiktok.videoservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.event.video.VideoLikeOwnerEvent;
 import com.tiktok.videoservice.entity.Video;

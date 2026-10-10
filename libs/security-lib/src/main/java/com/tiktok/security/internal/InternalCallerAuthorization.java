@@ -22,7 +22,8 @@ public class InternalCallerAuthorization implements AuthorizationManager<Request
     }
 
     @Override
-    public AuthorizationDecision check(Supplier<Authentication> authentication, RequestAuthorizationContext context) {
+    public AuthorizationDecision authorize(Supplier<? extends Authentication> authentication,
+                                           RequestAuthorizationContext context) {
         return new AuthorizationDecision(token.accepts(context.getRequest().getHeader(InternalApiToken.HEADER)));
     }
 }

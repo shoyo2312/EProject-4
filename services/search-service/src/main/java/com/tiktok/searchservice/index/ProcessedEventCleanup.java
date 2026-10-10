@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.query.Criteria;
 import org.springframework.data.elasticsearch.core.query.CriteriaQuery;
+import org.springframework.data.elasticsearch.core.query.DeleteQuery;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -38,7 +39,7 @@ public class ProcessedEventCleanup {
         CriteriaQuery expired = new CriteriaQuery(Criteria.where("processedAt").lessThan(cutoff));
 
         long deleted = elasticsearchOperations
-                .delete(expired, ProcessedEventDocument.class)
+                .delete(DeleteQuery.builder(expired).build(), ProcessedEventDocument.class)
                 .getDeleted();
 
         log.info("Deleted {} processed_events older than {}", deleted, cutoff);

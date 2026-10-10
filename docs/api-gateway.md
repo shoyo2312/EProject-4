@@ -2,7 +2,7 @@
 
 `api-gateway` (`:8080`) là **cửa duy nhất** cho client (Flutter mobile + Next.js web). Mọi doc `*-api.md` khác đều giả định request đi qua đây. Tài liệu này gom những thứ gateway tự làm, không lặp lại ở từng service.
 
-Stack: Spring Cloud Gateway (**WebFlux/reactive** — KHÔNG có servlet API, KHÔNG dùng `spring-boot-starter-web`). Redis cho rate-limit. JWT config riêng (`JwtConfig`/`JwtProperties`, prefix `jwt.secret`) vì `security-lib` là servlet-only — xem `CLAUDE.md` §JWT.
+Stack: Spring Cloud Gateway (**WebFlux/reactive** — KHÔNG có servlet API, KHÔNG dùng `spring-boot-starter-webmvc`). Redis cho rate-limit. JWT config riêng (`JwtConfig`/`JwtProperties`, prefix `jwt.secret`) vì `security-lib` là servlet-only — xem `CLAUDE.md` §JWT.
 
 ## 1. Bảng route
 

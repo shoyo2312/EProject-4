@@ -1,7 +1,6 @@
 package com.tiktok.adminservice.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.adminservice.entity.ModerationAction;
 import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.OutboxEvent;
@@ -28,7 +27,7 @@ class AdminEventProducerTest {
     @Mock
     private OutboxEventRepository outboxEventRepository;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private AdminEventProducer producer() {
         return new AdminEventProducer(outboxEventRepository, objectMapper);
@@ -63,7 +62,7 @@ class AdminEventProducerTest {
         assertThat(event.targetId()).isEqualTo("v1");
         // Every admin console receives this; the reporter's text and identity stay behind REST.
         assertThat(row.getPayload()).doesNotContain("neighbour");
-        assertThat(objectMapper.readTree(row.getPayload()).fieldNames()).toIterable()
+        assertThat(objectMapper.readTree(row.getPayload()).propertyNames())
                 .containsExactlyInAnyOrder("eventId", "occurredAt", "reportId", "targetType", "targetId");
     }
 

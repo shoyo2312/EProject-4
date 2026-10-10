@@ -1,6 +1,6 @@
 package com.tiktok.authservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.authservice.service.UserModerationService;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserSessionsRevokedEvent;

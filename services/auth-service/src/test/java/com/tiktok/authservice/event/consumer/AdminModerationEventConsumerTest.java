@@ -1,7 +1,6 @@
 package com.tiktok.authservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
@@ -35,7 +34,7 @@ class AdminModerationEventConsumerTest {
     private static final long USER_ID = 42L;
     private static final long ADMIN_ID = 7L;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private UserRepository userRepository;
     private SessionRevoker sessionRevoker;

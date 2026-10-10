@@ -2,15 +2,15 @@
 
 ## 1. Tech Stack
 - **Java**: 21 LTS
-- **Framework**: Spring Boot 3.3.x | Spring Cloud 2023.0.x
+- **Framework**: Spring Boot 4.1.x | Spring Cloud 2025.1.x (Spring Framework 7, Spring Security 7, Jackson 3)
 - **Build**: Maven 3.9.x — dùng `./mvnw` (macOS/Linux) hoặc `mvnw.cmd` (Windows)
 - **API Gateway**: Spring Cloud Gateway (WebFlux/reactive) — port 8080
 - **Databases**: PostgreSQL 16 (JPA + Flyway) | MongoDB 7 (Spring Data Mongo)
 - **Cache**: Redis 7 (Spring Data Redis)
 - **Messaging**: Kafka (Spring Kafka) — event-driven giữa services
-- **Search**: Elasticsearch 8
+- **Search**: Elasticsearch 9
 - **Storage**: MinIO (S3-compatible)
-- **Docs**: springdoc-openapi 2.x (`/swagger-ui.html`)
+- **Docs**: springdoc-openapi 3.x (`/swagger-ui.html`)
 
 ## 2. Monorepo Structure
 ```
@@ -22,7 +22,7 @@ tiktok-backend/
 │   ├── security-lib/     # Centralized JWT config + auto-configuration (JwtProperties, JwtAuthenticationFilter, JwtSecurityAutoConfiguration, RevokedTokenChecker)
 │   └── kafka-lib/        # Centralized Kafka consumer error handling + auto-configuration (KafkaConsumerAutoConfiguration → DefaultErrorHandler + DLQ)
 └── services/
-    ├── api-gateway/      :8080  WebFlux — KHÔNG dùng spring-boot-starter-web
+    ├── api-gateway/      :8080  WebFlux — KHÔNG dùng spring-boot-starter-webmvc
     ├── auth-service/     :8081  PostgreSQL + Security + Flyway
     ├── user-service/     :8082  PostgreSQL + Security + Flyway
     ├── video-service/    :8083  MongoDB
@@ -145,6 +145,15 @@ com.tiktok.{service}/
 - Spring Data derived `...IgnoreCase` sinh `upper(col) = upper(?)`, index `lower(...)` không dùng được → seq scan. Cần index thì viết `@Query` với `lower(...)` (xem auth `UserRepository`)
 - Endpoint batch (counts, like-status, repost-context, settings…) đọc cả trang trong một lệnh (MGET / `IN` / pipeline), không lặp từng id
 
+### Spring Boot 4 — bẫy khi thêm dependency hay config
+Mấy chỗ dưới đây sai thì vẫn compile, vẫn khởi động, chỉ là âm thầm không làm gì:
+- **Auto-config đi theo module**: `spring-kafka` trần không có `KafkaTemplate` lẫn listener factory → dùng `spring-boot-starter-kafka`. `flyway-core` trần thì migration **không chạy** → `spring-boot-starter-flyway` (vẫn kèm `flyway-database-postgresql`). Inject `RestClient.Builder` cần `spring-boot-starter-restclient`. Test slice cần starter `-test` của nó: `spring-boot-starter-webmvc-test` (`@WebMvcTest`, `@AutoConfigureMockMvc`), `-data-jpa-test`, `-data-mongodb-test`, `-webflux-test`, `-micrometer-metrics-test` (`@AutoConfigureMetrics`)
+- **Key cũ bị bỏ qua, không báo lỗi**: Mongo là `spring.mongodb.uri` — để `spring.data.mongodb.uri` thì service nối vào `localhost/test` (riêng `spring.data.mongodb.auto-index-creation` vẫn ở chỗ cũ). Route gateway nằm dưới `spring.cloud.gateway.server.webflux.*` — key cũ nghĩa là gateway không có route nào
+- **Jackson 3**: package `tools.jackson.*` (annotation vẫn `com.fasterxml.jackson.annotation`), `JacksonException` là unchecked, `ObjectMapper` immutable (không `registerModule`, java.time có sẵn), bean của Boot là `JsonMapper`. Jackson 3 mặc định ném lỗi khi field primitive thiếu/null — payload từ trước khi field tồn tại (event cũ, service chưa deploy, cache) sẽ hỏng; `common-lib/PrimitiveDefaultsModule` (đăng ký qua `META-INF/services`) trả lại hành vi Jackson 2 cho mọi mapper tự tìm module (bean của Boot, converter/codec mặc định của RestClient/WebClient). Mapper tự `new ObjectMapper()` thì không có — trong test dùng `JsonMapper.builder().findAndAddModules().build()`. JSON của mọi event bị ghim ở `event-schema/EventJsonCompatibilityTest` (bản Jackson 2 ghi ra): test đó đỏ nghĩa là đổi contract với consumer còn chạy bản cũ và record còn nằm trên topic/DLT/outbox
+- **DLT**: Spring Kafka 4 đổi tên mặc định sang `<topic>-dlt`; kafka-lib giữ `<topic>.DLT`. Tự dựng `DeadLetterPublishingRecoverer` thì qua `KafkaConsumerAutoConfiguration.deadLetterRecoverer`, không `new` thẳng
+- **Filter là bean + nằm trong security chain** (như `JwtAuthenticationFilter`) thì khai thêm `FilterRegistrationBean` với `setEnabled(false)` (xem `security-lib/JwtSecurityAutoConfiguration`): Boot còn đăng ký nó làm servlet filter chạy TRƯỚC chain, nó gán authentication, `SecurityContextHolderFilter` thay context, bản trong chain tự bỏ qua vì `OncePerRequestFilter` → mọi request tới controller đều ẩn danh
+- **Test**: `@MockitoBean`/`@MockitoSpyBean` của Spring; `@MockBean`/`@SpyBean` đã bị xoá
+
 ### Dev-only affordances — tắt mặc định, KHÔNG bật trên production
 Test thủ công (Postman) cần đọc OTP mà không có mailbox thật. Trước đây in thẳng bằng
 `log.warn("[DEV ONLY ...]")`; giờ nằm sau một cờ tắt mặc định:
@@ -187,7 +196,7 @@ Actuator: mọi service Java mở `/actuator/health|info|prometheus` không cầ
 - [ ] Mọi Kafka consumer PHẢI idempotent (claim eventId trước khi xử lý, xem §Kafka)
 - [ ] KHÔNG để video lên feed mà chưa qua kiểm duyệt — xem §Kiểm duyệt video tự động
 - [ ] MongoDB service: BẬT `spring.data.mongodb.auto-index-creation` — mặc định TẮT từ Spring Data Mongo 3.x, `@Indexed`/`@CompoundIndex` sẽ im lặng không được tạo
-- [ ] `api-gateway` dùng WebFlux — KHÔNG import `spring-boot-starter-web`
+- [ ] `api-gateway` dùng WebFlux — KHÔNG import `spring-boot-starter-webmvc`
 - [ ] **Feature của ranking model chỉ được định nghĩa một chỗ**: `services/rank-service/features.py`. Đổi tên, đổi thứ tự, hay đổi công thức một feature ở một phía (Java `CandidateFeatures` / Python `FEATURE_NAMES` / cột ClickHouse) mà không đổi phía kia là lỗi **không có triệu chứng**: mô hình vẫn trả về số, API vẫn 200, chỉ có feed là tệ đi. Xem `docs/ranking-model.md` §2 trước khi động vào
 
 ## 7. Khi Claude sinh code — checklist

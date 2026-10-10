@@ -19,7 +19,7 @@ import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,11 +47,11 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     // Real bean talks to video-service over HTTP; in the IT there is none, so it is mocked. The
     // default answer (false) matches what the unreachable real client returns, so the other tests
     // are unaffected.
-    @MockBean
+    @MockitoBean
     private VideoOwnershipClient videoOwnershipClient;
 
     // Same reasoning: the FRIENDS branch of the audience guard asks user-service over HTTP.
-    @MockBean
+    @MockitoBean
     private FriendshipClient friendshipClient;
 
     /** What the real client answers when video-service cannot be reached: nothing restricted. */

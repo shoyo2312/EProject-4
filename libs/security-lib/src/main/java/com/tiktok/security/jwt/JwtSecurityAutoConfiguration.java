@@ -5,6 +5,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -18,7 +19,7 @@ import java.nio.charset.StandardCharsets;
  * issues tokens and has its own JwtProperties/JwtConfig, and api-gateway, which is WebFlux
  * and has no servlet API on its classpath).
  */
-@AutoConfiguration(afterName = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
+@AutoConfiguration(afterName = "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration")
 @EnableConfigurationProperties(JwtProperties.class)
 public class JwtSecurityAutoConfiguration {
 
@@ -35,6 +36,21 @@ public class JwtSecurityAutoConfiguration {
     public JwtAuthenticationFilter jwtAuthenticationFilter(JwtProvider jwtProvider,
                                                            RevokedTokenChecker revokedTokenChecker) {
         return new JwtAuthenticationFilter(jwtProvider, revokedTokenChecker);
+    }
+
+    /**
+     * The filter belongs inside the security chain, where each service's SecurityConfig puts it, and
+     * nowhere else. Boot also registers every Filter bean with the servlet container unless told not
+     * to, and on Boot 4 that copy runs ahead of the chain: it sets the authentication,
+     * SecurityContextHolderFilter then replaces the context, and the copy inside the chain skips
+     * itself as already applied — so every request reaches the controllers anonymous.
+     */
+    @Bean
+    public FilterRegistrationBean<JwtAuthenticationFilter> jwtAuthenticationFilterRegistration(
+            JwtAuthenticationFilter jwtAuthenticationFilter) {
+        FilterRegistrationBean<JwtAuthenticationFilter> registration = new FilterRegistrationBean<>(jwtAuthenticationFilter);
+        registration.setEnabled(false);
+        return registration;
     }
 
     /**

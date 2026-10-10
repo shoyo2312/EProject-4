@@ -1,7 +1,6 @@
 package com.tiktok.notificationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.user.UserRegisteredEvent;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.repository.ProcessedEventRepository;
@@ -26,7 +25,7 @@ class UserRegisteredEventConsumerTest {
     @Mock
     private ProcessedEventRepository processedEventRepository;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private UserRegisteredEventConsumer consumer() {
         return new UserRegisteredEventConsumer(

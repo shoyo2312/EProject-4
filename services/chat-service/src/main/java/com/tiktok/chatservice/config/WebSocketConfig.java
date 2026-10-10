@@ -1,6 +1,6 @@
 package com.tiktok.chatservice.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.tiktok.chatservice.websocket.JwtHandshakeInterceptor;
 import com.tiktok.chatservice.websocket.StompSubscriptionInterceptor;
 import com.tiktok.chatservice.websocket.UserPrincipalHandshakeHandler;
@@ -8,7 +8,7 @@ import com.tiktok.chatservice.websocket.WebSocketSessionRegistry;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.messaging.converter.MappingJackson2MessageConverter;
+import org.springframework.messaging.converter.JacksonJsonMessageConverter;
 import org.springframework.messaging.converter.MessageConverter;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
@@ -30,7 +30,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final JwtHandshakeInterceptor jwtHandshakeInterceptor;
     private final StompSubscriptionInterceptor stompSubscriptionInterceptor;
     private final WebSocketSessionRegistry sessionRegistry;
-    private final ObjectMapper objectMapper;
+    private final JsonMapper jsonMapper;
 
     /**
      * The origins allowed to open a socket. A wildcard here would let any page a logged-in user
@@ -72,20 +72,18 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     }
 
     /**
-     * Without this, STOMP messaging builds its own {@code MappingJackson2MessageConverter} on a
-     * fresh {@code ObjectMapper} that never went through Spring Boot's Jackson auto-configuration
+     * Without this, STOMP messaging builds its own {@code JacksonJsonMessageConverter} on a
+     * fresh {@code JsonMapper} that never went through Spring Boot's Jackson auto-configuration
      * — so {@code Instant} fields serialize as a raw epoch-seconds number instead of the ISO-8601
      * string every REST response uses. A client doing {@code new Date(value)} on that number reads
      * it as epoch milliseconds, landing the timestamp ~56 years off. Wiring the app's own
-     * {@link ObjectMapper} bean here (already configured to write dates as ISO strings) makes
+     * {@link JsonMapper} bean here (already configured to write dates as ISO strings) makes
      * every outbound STOMP payload match what {@code NotificationResponse} and friends send over
      * REST.
      */
     @Override
     public boolean configureMessageConverters(List<MessageConverter> messageConverters) {
-        MappingJackson2MessageConverter converter = new MappingJackson2MessageConverter();
-        converter.setObjectMapper(objectMapper);
-        messageConverters.add(converter);
+        messageConverters.add(new JacksonJsonMessageConverter(jsonMapper));
         return true;
     }
 

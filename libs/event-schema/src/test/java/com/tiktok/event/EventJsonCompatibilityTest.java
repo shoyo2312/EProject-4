@@ -1,14 +1,14 @@
 package com.tiktok.event;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
+import org.springframework.boot.autoconfigure.AutoConfigurations;
+import org.springframework.boot.jackson.autoconfigure.JacksonAutoConfiguration;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.io.File;
 import java.lang.reflect.RecordComponent;
@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -30,7 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * wrote it on a topic, a DLT and an outbox row, so what Jackson writes for an event is a contract
  * with every consumer still running older code: a renamed field or a date written as a number
  * breaks them without breaking anything here. event-json.json holds what the services wrote under
- * Jackson 2 (Spring Boot 3), and the current mapper has to write the same and read it back.
+ * Jackson 2 (Spring Boot 3), and the current mapper has to write the same and read it back, and
+ * read an event that predates every field but the record's name.
  *
  * <p>An event with no entry fails: run once with {@code -Devent-json.record=true}, which adds the
  * missing entries and never rewrites an existing one, and review the diff. Changing an event's
@@ -41,11 +43,8 @@ class EventJsonCompatibilityTest {
     private static final Path PINNED = Path.of("src/test/resources/event-json.json");
     private static final Instant AT = Instant.parse("2026-10-08T09:30:15.123456789Z");
 
-    /** As Spring Boot 3 configured the services' ObjectMapper. */
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-            .registerModule(new JavaTimeModule())
-            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+    /** The mapper every service gets: Spring Boot's own, not one configured to look like it. */
+    private static final ObjectMapper MAPPER = servicesMapper();
 
     @TestFactory
     Stream<DynamicTest> everyEventKeepsItsJson() throws Exception {
@@ -66,6 +65,9 @@ class EventJsonCompatibilityTest {
             assertThat(MAPPER.readTree(MAPPER.writeValueAsString(event))).isEqualTo(written);
             assertThat(MAPPER.treeToValue(written, type)).isEqualTo(event);
             assertThat(MAPPER.treeToValue(epochSeconds(written), type)).isEqualTo(event);
+            // A field added later is absent from everything written before it; Jackson 3 refuses a
+            // missing primitive unless common-lib's PrimitiveDefaultsModule is on the mapper.
+            assertThat(MAPPER.readValue("{}", type)).isNotNull();
         }));
     }
 
@@ -140,18 +142,26 @@ class EventJsonCompatibilityTest {
      * Jackson 2's default of seconds.nanos as a number, not Spring Boot's ISO string.
      */
     private static JsonNode epochSeconds(JsonNode written) {
-        ObjectNode copy = written.deepCopy();
-        written.fields().forEachRemaining(field -> {
-            if (!field.getValue().isTextual()) {
+        ObjectNode copy = (ObjectNode) written.deepCopy();
+        written.properties().forEach(field -> {
+            if (!field.getValue().isString()) {
                 return;
             }
             try {
-                Instant at = Instant.parse(field.getValue().textValue());
+                Instant at = Instant.parse(field.getValue().stringValue());
                 copy.put(field.getKey(), BigDecimal.valueOf(at.getEpochSecond()).add(BigDecimal.valueOf(at.getNano(), 9)));
             } catch (DateTimeParseException notATimestamp) {
                 // stays as written
             }
         });
         return copy;
+    }
+
+    private static ObjectMapper servicesMapper() {
+        AtomicReference<ObjectMapper> mapper = new AtomicReference<>();
+        new ApplicationContextRunner()
+                .withConfiguration(AutoConfigurations.of(JacksonAutoConfiguration.class))
+                .run(context -> mapper.set(context.getBean(ObjectMapper.class)));
+        return mapper.get();
     }
 }

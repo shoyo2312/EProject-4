@@ -6,7 +6,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.document.Document;
-import org.springframework.data.elasticsearch.core.query.ScriptType;
 import org.springframework.data.elasticsearch.core.query.UpdateQuery;
 import org.springframework.stereotype.Component;
 
@@ -289,7 +288,6 @@ public class SearchIndexWriter {
 
     private void update(Class<?> type, String id, String script, Map<String, Object> params, Document upsert) {
         UpdateQuery.Builder builder = UpdateQuery.builder(id)
-                .withScriptType(ScriptType.INLINE)
                 .withScript(script)
                 .withParams(params)
                 .withRetryOnConflict(RETRY_ON_CONFLICT);

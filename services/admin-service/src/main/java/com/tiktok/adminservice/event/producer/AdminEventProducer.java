@@ -1,6 +1,6 @@
 package com.tiktok.adminservice.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.adminservice.entity.CommentTarget;
 import com.tiktok.adminservice.entity.ModerationAction;
 import com.tiktok.adminservice.entity.ModerationActionType;

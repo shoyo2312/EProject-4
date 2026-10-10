@@ -12,7 +12,7 @@ import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
+import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -63,7 +63,7 @@ class VideoServiceImplCacheTest {
     private final VideoService videoService = new VideoServiceImpl(
             videoRepository,
             videoMapper,
-            new SpringDataWebProperties(),
+            new DataWebProperties(),
             mock(MinioClient.class),
             new MinioProperties("http://localhost:9000", "key", "secret",
                     "video-media", "us-east-1", Duration.ofMinutes(15)),

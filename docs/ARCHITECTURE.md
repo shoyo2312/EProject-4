@@ -258,6 +258,10 @@ local, `make run-*` cho mọi service trừ gateway bind `127.0.0.1` (`make run-
   interaction, chat, notification, recommendation, search; thiếu thì service không khởi động (ngoài profile
   local/test). Lệch giá trị giữa các service → mọi call nội bộ 403. Đổi token: (1) mọi service thêm
   `INTERNAL_API_TOKEN_ROTATING=<mới>`, (2) đổi chỗ hai giá trị ở mọi service, (3) bỏ `..._ROTATING`.
+- **Elasticsearch 9**: client của Spring Data Elasticsearch 6 chỉ nói chuyện với server 9, mà ES 9 không khởi
+  động trên data của bản 8 cũ hơn 8.19. Volume đang chạy 8.x phải qua `elasticsearch:8.19.x` một lần (đổi image,
+  `docker compose up -d elasticsearch`, chờ green/yellow) rồi mới lên 9.4.5. Xoá volume `elasticsearch-data` cũng
+  chạy được, nhưng index trống: không có job reindex từ nguồn, chỉ event mới mới vào lại.
 - **Chạy nhiều replica**: đặt `SNOWFLAKE_NODE_ID` (0–1023) khác nhau cho từng instance. Để trống thì mỗi
   instance tự chọn ngẫu nhiên — ổn với 1 replica, nhưng 2 replica có 1/1024 khả năng trùng node id, và
   Cassandra ghi đè comment trùng id mà không báo.

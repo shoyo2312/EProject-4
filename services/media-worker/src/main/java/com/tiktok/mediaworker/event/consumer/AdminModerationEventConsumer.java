@@ -1,6 +1,6 @@
 package com.tiktok.mediaworker.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import com.tiktok.mediaworker.service.MediaQuarantineService;

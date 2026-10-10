@@ -36,7 +36,7 @@ class IndexBootstrapMigrationTest {
     @Container
     @ServiceConnection
     static ElasticsearchContainer ELASTICSEARCH = new ElasticsearchContainer(
-            DockerImageName.parse("docker.elastic.co/elasticsearch/elasticsearch:8.14.0"))
+            DockerImageName.parse("docker.elastic.co/elasticsearch/elasticsearch:9.4.5"))
             .withEnv("xpack.security.enabled", "false");
 
     private static final IndexCoordinates LIVE = IndexCoordinates.of("videos");

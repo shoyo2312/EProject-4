@@ -1,7 +1,6 @@
 package com.tiktok.notificationservice.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.notification.NotificationCreatedEvent;
 import com.tiktok.notificationservice.entity.Notification;
 import com.tiktok.notificationservice.entity.NotificationType;
@@ -27,7 +26,7 @@ class NotificationEventPublisherTest {
     @Mock
     private KafkaTemplate<String, String> kafkaTemplate;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private Notification stored() {
         return Notification.builder()

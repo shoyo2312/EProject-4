@@ -1,6 +1,6 @@
 package com.tiktok.authservice.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.authservice.config.OAuthProperties;
 import com.tiktok.authservice.entity.AuthProvider;
 import com.tiktok.authservice.exception.InvalidSocialTokenException;

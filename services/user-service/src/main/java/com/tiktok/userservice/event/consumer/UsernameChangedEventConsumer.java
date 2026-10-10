@@ -1,6 +1,6 @@
 package com.tiktok.userservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.common.id.SnowflakeIdGenerator;
 import com.tiktok.event.user.UsernameChangedEvent;
 import com.tiktok.userservice.repository.InboxEventRepository;
