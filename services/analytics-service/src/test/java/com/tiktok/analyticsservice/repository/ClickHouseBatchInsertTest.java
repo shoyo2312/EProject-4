@@ -74,6 +74,9 @@ class ClickHouseBatchInsertTest {
     @Autowired
     private KafkaListenerEndpointRegistry listeners;
 
+    @Autowired
+    private WatchEventRepository watchEventRepository;
+
     @BeforeEach
     void cleanUp() {
         for (String table : List.of("watch_events", "engagement_events", "video_tags", "user_signup_events")) {
@@ -124,6 +127,30 @@ class ClickHouseBatchInsertTest {
     private Instant storedAt(String table, String column) {
         return Instant.ofEpochMilli(jdbcTemplate.queryForObject(
                 "SELECT toUnixTimestamp64Milli(%s) FROM %s".formatted(column, table), Long.class));
+    }
+
+    /**
+     * The console's "as of" window: from inclusive, to exclusive. Here rather than in a class of
+     * its own to share this container.
+     */
+    @Test
+    void theMostWatchedWindowEndsWhereItIsAsked() {
+        watchAt("before", "v-old", T0.minusSeconds(86_400));
+        watchAt("first", "v-in", T0.minusSeconds(86_400 - 1));
+        watchAt("last", "v-in", T0.minusMillis(1));
+        watchAt("at-end", "v-late", T0);
+
+        assertThat(watchEventRepository.findTopVideos(T0.minusSeconds(86_400 - 1), T0, 10))
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(row.videoId()).isEqualTo("v-in");
+                    assertThat(row.views()).isEqualTo(2);
+                });
+    }
+
+    private void watchAt(String eventId, String videoId, Instant at) {
+        trainingDataRepository.insertWatches(List.of(
+                new TrainingDataRepository.WatchRow(eventId, videoId, 7L, 9_000L, 10_000L, false, at)));
     }
 
     @Test
