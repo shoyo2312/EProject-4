@@ -159,7 +159,7 @@ class UserProfileServiceImplTest {
     @Transactional
     void applyMirroredAvatar_replacesTheProviderUrlAndFillsGaps_butNeverTheUsersOwn() {
         String source = "https://lh3.googleusercontent.com/a/x";
-        String mirrored = "http://localhost:9000/video-media/avatars/1.jpg";
+        String mirrored = "http://localhost:9000/video-media/avatars/1";
 
         userProfileService.createFromRegisteredEvent(1L, "seeded", source);
         userProfileService.createFromRegisteredEvent(2L, "empty", null);

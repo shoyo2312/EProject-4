@@ -100,8 +100,8 @@ Response `data` → `UserProfileResponse` (giống mục 3.1, đã áp dụng th
 Đăng ký/đăng nhập bằng Google hoặc Facebook thì profile tự có ảnh của provider, client không phải làm gì:
 
 1. auth-service gửi kèm ảnh provider trong `UserRegisteredEvent` → profile mới có `avatarUrl` ngay (URL của Google/Facebook).
-2. Mỗi lần đăng nhập social, auth-service phát `SocialAvatarDiscoveredEvent` (topic `auth.social-avatar-events`; lần tạo tài khoản thì đi qua outbox ngay sau `UserRegisteredEvent`, để không tới trước profile). media-worker tải ảnh về MinIO (`avatars/{userId}.jpg`) rồi phát `AvatarMirroredEvent` (topic `media.avatar-events`).
-3. user-service đổi `avatarUrl` sang bản trong MinIO — ví dụ `http://localhost:9000/video-media/avatars/123.jpg`. Cần bước này vì URL ảnh Facebook hết hạn sau vài ngày.
+2. Mỗi lần đăng nhập social, auth-service phát `SocialAvatarDiscoveredEvent` (topic `auth.social-avatar-events`; lần tạo tài khoản thì đi qua outbox ngay sau `UserRegisteredEvent`, để không tới trước profile). media-worker tải ảnh về MinIO (`avatars/{userId}`) rồi phát `AvatarMirroredEvent` (topic `media.avatar-events`).
+3. user-service đổi `avatarUrl` sang bản trong MinIO — ví dụ `http://localhost:9000/video-media/avatars/123`. Cần bước này vì URL ảnh Facebook hết hạn sau vài ngày.
 
 Bước 3 **chỉ** ghi đè khi `avatarUrl` đang trống hoặc vẫn đúng URL provider vừa được sao chép. Ảnh user tự đặt qua `PATCH /me` không bao giờ bị thay. Tài khoản social tạo trước tính năng này (`avatarUrl` null) được điền ảnh ở lần đăng nhập kế tiếp.
 
@@ -117,9 +117,9 @@ Upload ảnh đại diện. `multipart/form-data`, đúng một part tên `file`
 - Tối đa 5 MB (`AVATAR_MAX_BYTES`). Quá cỡ → `INVALID_AVATAR` (400 nếu qua được servlet, 413 nếu bị chặn ở giới hạn multipart).
 - Sai định dạng / part rỗng → `INVALID_AVATAR` (400).
 
-Server ghi file vào MinIO tại `avatars/{userId}.jpg` (đúng key media-worker dùng khi mirror ảnh social, nên một user chỉ có một object ảnh), rồi tự set `avatarUrl` và trả về **cả profile** — `UserProfileResponse` như mục 3.1. Client refresh từ response này giống hệt sau `PATCH /me`.
+Server ghi file vào MinIO tại `avatars/{userId}` — không có đuôi file, content type (đọc từ chính các byte) lưu trên object (đúng key media-worker dùng khi mirror ảnh social, nên một user chỉ có một object ảnh), rồi tự set `avatarUrl` và trả về **cả profile** — `UserProfileResponse` như mục 3.1. Client refresh từ response này giống hệt sau `PATCH /me`.
 
-URL trả về có đuôi `?v={epochSeconds}`, ví dụ `http://localhost:9000/video-media/avatars/123.jpg?v=1756000000`. Key cố định nên nếu thiếu query này, lần upload thứ hai trả đúng URL cũ và trình duyệt/CDN vẫn phục vụ ảnh cũ. **Client phải lưu nguyên URL kèm query**, không cắt bỏ.
+URL trả về có đuôi `?v={epochSeconds}`, ví dụ `http://localhost:9000/video-media/avatars/123?v=1756000000`. Key cố định nên nếu thiếu query này, lần upload thứ hai trả đúng URL cũ và trình duyệt/CDN vẫn phục vụ ảnh cũ. **Client phải lưu nguyên URL kèm query**, không cắt bỏ.
 
 Luồng đúng ở client: chọn ảnh → chỉ preview local (object URL / file path), **chưa gọi API** → khi user bấm Save mới `POST /me/avatar`; upload lỗi thì huỷ luôn cả lần save đó, đừng để đổi được tên mà ảnh thì không.
 

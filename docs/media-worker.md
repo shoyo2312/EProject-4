@@ -8,7 +8,7 @@ Tài liệu cho người **vận hành**, không phải client. `media-worker` (
 |---|---|---|---|
 | Transcode video | `video.video-events` (`VideoPublishedEvent`) | `media.video-transcoded-events` (`VideoTranscodedEvent`) | `hls/{videoId}/source.mp4` + `thumbnails/{videoId}.jpg` + `previews/{videoId}.webp` |
 | Dọn media khi hết hạn thùng rác | `video.video-events` (`VideoPurgedEvent`) | — | xoá `thumbnails/{id}.jpg`, `previews/{id}.webp`, mọi object dưới `hls/{id}/`, và file raw |
-| Sao ảnh đại diện social | `auth.social-avatar-events` (`SocialAvatarDiscoveredEvent`) | `media.avatar-events` (`AvatarMirroredEvent`) | `avatars/{userId}.jpg` |
+| Sao ảnh đại diện social | `auth.social-avatar-events` (`SocialAvatarDiscoveredEvent`) | `media.avatar-events` (`AvatarMirroredEvent`) | `avatars/{userId}` |
 
 Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi đè cùng key với cùng nội dung (no-op an toàn khi redeliver). Việc idempotent thật nằm ở consumer phía sau (`video-service` / `user-service`), nơi có bảng inbox.
 
@@ -109,7 +109,7 @@ Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file t�
 `SocialAvatarDiscoveredEvent` (auth-service phát mỗi lần đăng nhập social có ảnh; lần tạo tài khoản thì qua outbox, ngay sau `UserRegisteredEvent`) → `AvatarMirrorService.mirror(userId, providerUrl)`:
 - Chỉ fetch từ host trong `media.avatar.allowed-hosts` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, `graph.facebook.com`, `scontent.xx.fbcdn.net`). Host khác → từ chối.
 - Chỉ nhận ảnh, tối đa `media.avatar.max-bytes` (5 MB).
-- Ghi `avatars/{userId}.jpg` (một key/user, ghi đè — profile trỏ vào URL này).
+- Ghi `avatars/{userId}` — một key/user, profile trỏ vào URL này. Không có đuôi file: định dạng là thứ provider trả về, content type đi theo object. Key đã có thì **bỏ qua**, không tải lại — ảnh user tự upload qua `POST /me/avatar` nằm đúng key này nên không bị ảnh provider đè.
 - Phát `AvatarMirroredEvent(userId, sourceUrl, mirroredUrl)`. `user-service` chỉ ghi đè `avatarUrl` khi nó đang trống hoặc đúng bằng `sourceUrl` — ảnh user tự đặt không bị đụng. Profile chưa tồn tại thì user-service throw để event được retry.
 
 URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) → sau các lần thử của `kafka-lib` thì vào `auth.social-avatar-events.DLT`. Không sao: lần đăng nhập sau phát lại URL mới, profile giữ ảnh cũ trong lúc chờ.
@@ -153,7 +153,7 @@ Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown c
 | (HLS thật, tương lai) | `hls/{videoId}/master.m3u8` + segment | chưa làm | cleanup (list prefix) |
 | Thumbnail | `thumbnails/{videoId}.jpg` | media-worker transcode | cleanup |
 | Hover preview | `previews/{videoId}.webp` | media-worker transcode | cleanup |
-| Avatar | `avatars/{userId}.jpg` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; ghi đè) |
+| Avatar | `avatars/{userId}` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; upload ghi đè, mirror bỏ qua key đã có) |
 | Bản quarantine | `quarantine/` + key gốc | quarantine (§3.1) | restore khi hết hold (dời về key gốc), hoặc cleanup |
 | Hold marker | `quarantine/holds/{videoId}/{HOLD}` | quarantine (§3.1) | restore, hoặc cleanup |
 

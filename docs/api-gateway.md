@@ -61,7 +61,7 @@ Response `data` → `MeResponse`:
   "createdAt": "2026-08-01T10:00:00Z",
   "displayName": "Minh Hùng",
   "bio": "Xin chào",
-  "avatarUrl": "http://localhost:9000/video-media/avatars/123.jpg",
+  "avatarUrl": "http://localhost:9000/video-media/avatars/123",
   "followerCount": 10,
   "followingCount": 5,
   "profileReady": true,
