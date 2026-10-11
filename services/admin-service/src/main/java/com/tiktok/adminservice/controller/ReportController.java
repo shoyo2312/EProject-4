@@ -18,6 +18,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Instant;
+
 @RestController
 @RequestMapping("/api/v1/admin/reports")
 @RequiredArgsConstructor
@@ -39,9 +41,12 @@ public class ReportController {
             @RequestParam(required = false) ReportTargetType targetType,
             @RequestParam(required = false) String targetId,
             @RequestParam(required = false) Long reporterId,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
             Pageable pageable) {
-        return ApiResponse.success(
-                adminService.listReports(status, targetType, targetId, reporterId, pageable));
+        return ApiResponse.success(adminService.listReports(
+                status, targetType, targetId, reporterId, q, from, to, pageable));
     }
 
     /**

@@ -173,7 +173,7 @@ class ReportQueueRepositoryTest {
         report("v1", SPAM, hoursAgo(3));
         report("v2", SELF_HARM, hoursAgo(2));
 
-        assertThat(reportRepository.findFiltered(null, null, null, null, PageRequest.of(0, 10)))
+        assertThat(reportRepository.findFiltered(null, null, null, null, null, null, null, null, PageRequest.of(0, 10)))
                 .hasSize(2);
     }
 
@@ -183,7 +183,7 @@ class ReportQueueRepositoryTest {
         filedBy(43L, "v2");
         filedBy(44L, "v3");
 
-        assertThat(reportRepository.findFiltered(null, null, null, 42L, PageRequest.of(0, 10)))
+        assertThat(reportRepository.findFiltered(null, null, null, 42L, null, null, null, null, PageRequest.of(0, 10)))
                 .extracting(Report::getId)
                 .containsExactly(mine.getId());
     }
@@ -196,7 +196,7 @@ class ReportQueueRepositoryTest {
         reportRepository.saveAndFlush(resolved);
         filedBy(43L, "v3");
 
-        assertThat(reportRepository.findFiltered(ReportStatus.PENDING, null, null, 42L, PageRequest.of(0, 10)))
+        assertThat(reportRepository.findFiltered(ReportStatus.PENDING, null, null, 42L, null, null, null, null, PageRequest.of(0, 10)))
                 .extracting(Report::getId)
                 .containsExactly(pending.getId());
     }
@@ -211,9 +211,9 @@ class ReportQueueRepositoryTest {
                 .executeUpdate();
         entityManager.clear();
 
-        assertThat(reportRepository.findFiltered(null, ReportTargetType.VIDEO, null, null, PageRequest.of(0, 10)))
+        assertThat(reportRepository.findFiltered(null, ReportTargetType.VIDEO, null, null, null, null, null, null, PageRequest.of(0, 10)))
                 .hasSize(1);
-        assertThat(reportRepository.findFiltered(null, ReportTargetType.USER, null, null, PageRequest.of(0, 10)))
+        assertThat(reportRepository.findFiltered(null, ReportTargetType.USER, null, null, null, null, null, null, PageRequest.of(0, 10)))
                 .isEmpty();
     }
 
@@ -224,8 +224,60 @@ class ReportQueueRepositoryTest {
         report("v-other", SPAM, hoursAgo(1));
 
         assertThat(reportRepository.findFiltered(
-                null, ReportTargetType.VIDEO, "v-wanted", null, PageRequest.of(0, 10)))
+                null, ReportTargetType.VIDEO, "v-wanted", null, null, null, null, null, PageRequest.of(0, 10)))
                 .hasSize(2);
+    }
+
+    @Test
+    void theLedgerSearchesTheReasonAndEitherHalfOfACommentTarget() {
+        Report spam = report("v1", SPAM, hoursAgo(3));
+        Report onComment = report("v2:c77", SELF_HARM, hoursAgo(2));
+        report("v3", SELF_HARM, hoursAgo(1));
+
+        assertThat(search("%spam%", null)).extracting(Report::getId).containsExactly(spam.getId());
+        assertThat(search("%c77%", null)).extracting(Report::getId).containsExactly(onComment.getId());
+    }
+
+    @Test
+    void theLedgerFindsOneReportByItsId() {
+        report("v1", SPAM, hoursAgo(3));
+        Report wanted = report("v2", SPAM, hoursAgo(2));
+
+        assertThat(search("%" + wanted.getId() + "%", wanted.getId()))
+                .extracting(Report::getId)
+                .containsExactly(wanted.getId());
+    }
+
+    /** The service escapes LIKE's wildcards with a backslash; this is the query honouring that. */
+    @Test
+    void anEscapedWildcardMatchesOnlyItself() {
+        Report literal = report("v1", "Says 100% legit", hoursAgo(3));
+        report("v2", "Says 1000 legit", hoursAgo(2));
+
+        assertThat(search("%100\\%%", null)).extracting(Report::getId).containsExactly(literal.getId());
+    }
+
+    /** From inclusive, to exclusive, the same as the audit log, so consecutive days tile. */
+    @Test
+    void theLedgerNarrowsToATimeRange() {
+        Instant dayStart = Instant.parse("2026-10-06T00:00:00Z");
+        Instant dayEnd = Instant.parse("2026-10-07T00:00:00Z");
+        report("v1", SPAM, dayStart.minusMillis(1));
+        Report first = report("v2", SPAM, dayStart);
+        Report last = report("v3", SPAM, dayEnd.minusMillis(1));
+        report("v4", SPAM, dayEnd);
+        entityManager.clear();
+
+        assertThat(reportRepository.findFiltered(null, null, null, null, null, null, dayStart, dayEnd,
+                PageRequest.of(0, 10)))
+                .extracting(Report::getId)
+                .containsExactlyInAnyOrder(first.getId(), last.getId());
+    }
+
+    private List<Report> search(String pattern, Long reportId) {
+        entityManager.clear();
+        return reportRepository.findFiltered(null, null, null, null, pattern, reportId, null, null,
+                PageRequest.of(0, 10)).getContent();
     }
 
     /** A report by a named reporter — the filter tests turn on who filed it, not when. */

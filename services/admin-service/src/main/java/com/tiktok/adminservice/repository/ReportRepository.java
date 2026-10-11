@@ -23,11 +23,17 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
             Long reporterId, ReportTargetType targetType, String targetId);
 
     /**
-     * The report ledger, narrowed by any combination of the three filters the console offers.
-     * A null filter is not applied, so all-null is the whole ledger.
+     * The report ledger, narrowed by any combination of the filters the console offers. A null
+     * filter is not applied, so all-null is the whole ledger.
      *
-     * <p>One query rather than a derived method per combination: four filters would be sixteen
-     * derived methods, and the console asks for a different subset on every page.
+     * <p>{@code pattern} is a lower-cased LIKE pattern over the reason and the target id, its
+     * wildcards escaped with a backslash; {@code reportId} is the same search read as a report's
+     * own id, null when it is not a number. {@code from} is inclusive and {@code to} exclusive,
+     * like the audit log's, so the ledger covers exactly the days the console's figures do.
+     *
+     * <p>One query rather than a derived method per combination: seven filters would be over a
+     * hundred derived methods, and the console asks for a different subset on every page. The
+     * instants are cast in their null checks for the reason given on the audit log's query.
      */
     @Query("""
             SELECT r FROM Report r
@@ -36,11 +42,21 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
               AND (:targetType IS NULL OR r.targetType = :targetType)
               AND (:targetId IS NULL OR r.targetId = :targetId)
               AND (:reporterId IS NULL OR r.reporterId = :reporterId)
+              AND (:pattern IS NULL
+                   OR LOWER(r.reason) LIKE :pattern ESCAPE '\\'
+                   OR LOWER(r.targetId) LIKE :pattern ESCAPE '\\'
+                   OR r.id = :reportId)
+              AND (CAST(:from AS Instant) IS NULL OR r.createdAt >= :from)
+              AND (CAST(:to AS Instant) IS NULL OR r.createdAt < :to)
             """)
     Page<Report> findFiltered(@Param("status") ReportStatus status,
                               @Param("targetType") ReportTargetType targetType,
                               @Param("targetId") String targetId,
                               @Param("reporterId") Long reporterId,
+                              @Param("pattern") String pattern,
+                              @Param("reportId") Long reportId,
+                              @Param("from") Instant from,
+                              @Param("to") Instant to,
                               Pageable pageable);
 
     long countByStatusAndDeletedAtIsNull(ReportStatus status);

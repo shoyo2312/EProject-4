@@ -29,11 +29,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The console's direct account actions and the audit log's filters, through the real security
- * chain and argument binding. A filter that silently fails to bind answers with the whole log,
- * which reads as "nothing else happened".
+ * The console's direct account actions and the filters of the audit log and the report ledger,
+ * through the real security chain and argument binding. A filter that silently fails to bind
+ * answers with the whole log, which reads as "nothing else happened".
  */
-@WebMvcTest(controllers = {UserModerationController.class, ModerationActionController.class})
+@WebMvcTest(controllers = {UserModerationController.class, ModerationActionController.class,
+        ReportController.class})
 @Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class})
 @TestPropertySource(properties = "jwt.secret=" + ModerationControllersTest.JWT_SECRET)
 class ModerationControllersTest {
@@ -111,6 +112,20 @@ class ModerationControllersTest {
                 .andExpect(status().isOk());
 
         verify(adminService).listActions(isNull(), isNull(), eq(7L), eq(ModerationActionType.BAN_USER),
+                eq(Instant.parse("2026-10-06T00:00:00Z")), eq(Instant.parse("2026-10-07T00:00:00Z")),
+                any(Pageable.class));
+    }
+
+    @Test
+    void theLedgerBindsTheSearchAndTheDays() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/reports")
+                        .header("Authorization", bearer(7L, "ADMIN"))
+                        .param("q", "spam")
+                        .param("from", "2026-10-06T00:00:00Z")
+                        .param("to", "2026-10-07T00:00:00Z"))
+                .andExpect(status().isOk());
+
+        verify(adminService).listReports(isNull(), isNull(), isNull(), isNull(), eq("spam"),
                 eq(Instant.parse("2026-10-06T00:00:00Z")), eq(Instant.parse("2026-10-07T00:00:00Z")),
                 any(Pageable.class));
     }

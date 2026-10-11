@@ -390,6 +390,27 @@ class AdminServiceImplTest {
                 ModerationActionType.BAN_USER, from, to, Pageable.unpaged());
     }
 
+    /** The search reaches the query as an escaped LIKE pattern, and as an id only when it is one. */
+    @Test
+    void listReports_searchIsEscapedAndReadAsAnIdOnlyWhenNumeric() {
+        Instant from = Instant.parse("2026-10-06T00:00:00Z");
+        Instant to = Instant.parse("2026-10-07T00:00:00Z");
+        when(reportRepository.findFiltered(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        adminService.listReports(null, null, null, null, "  50%_Off ", from, to, Pageable.unpaged());
+        verify(reportRepository).findFiltered(null, null, null, null, "%50\\%\\_off%", null, from, to,
+                Pageable.unpaged());
+
+        adminService.listReports(null, null, null, null, "367120", null, null, Pageable.unpaged());
+        verify(reportRepository).findFiltered(null, null, null, null, "%367120%", 367120L, null, null,
+                Pageable.unpaged());
+
+        adminService.listReports(null, null, null, null, "   ", null, null, Pageable.unpaged());
+        verify(reportRepository).findFiltered(null, null, null, null, null, null, null, null,
+                Pageable.unpaged());
+    }
+
     @Test
     void submitReport_targetAlreadyTakenDown_closesTheReportOnArrival() {
         SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "Nudity and sexual content");

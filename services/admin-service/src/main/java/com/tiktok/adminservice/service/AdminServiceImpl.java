@@ -35,6 +35,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
@@ -111,11 +112,34 @@ public class AdminServiceImpl implements AdminService {
 
     @Override
     public Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType,
-                                            String targetId, Long reporterId, Pageable pageable) {
+                                            String targetId, Long reporterId, String q,
+                                            Instant from, Instant to, Pageable pageable) {
         // Canonical only when the type says how: a bare targetId filter is matched as typed.
         String id = targetType != null && targetId != null ? targetType.canonicalTargetId(targetId) : targetId;
-        return reportRepository.findFiltered(status, targetType, id, reporterId, pageable)
+        String term = q == null || q.isBlank() ? null : q.strip();
+        // Contains, not equals, on the target id: a comment target is "videoId:commentId", and the
+        // id an admin has to hand is usually one half of it.
+        String pattern = term == null ? null : "%" + escapeLike(term.toLowerCase(Locale.ROOT)) + "%";
+        return reportRepository.findFiltered(status, targetType, id, reporterId, pattern,
+                        term == null ? null : asReportId(term), from, to, pageable)
                 .map(adminMapper::toResponse);
+    }
+
+    /** LIKE's own characters, escaped with the backslash the query names, so they match as typed. */
+    private static String escapeLike(String term) {
+        return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
+    /** The search read as a report id, or null when it is not one. */
+    private static Long asReportId(String term) {
+        if (term.isEmpty() || !term.chars().allMatch(Character::isDigit)) {
+            return null;
+        }
+        try {
+            return Long.valueOf(term);
+        } catch (NumberFormatException tooLong) {
+            return null;
+        }
     }
 
     @Override

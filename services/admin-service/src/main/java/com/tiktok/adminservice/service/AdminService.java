@@ -23,10 +23,13 @@ public interface AdminService {
     /**
      * The report ledger. Every filter is optional: {@code reporterId} narrows it to what one
      * account has filed and {@code targetId} to what was filed against one target, which is
-     * both halves of what an account's activity history reads.
+     * both halves of what an account's activity history reads. {@code q} searches the reason and
+     * the target id, and a report's own id when it is a number. {@code from} is inclusive,
+     * {@code to} exclusive.
      */
     Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType,
-                                     String targetId, Long reporterId, Pageable pageable);
+                                     String targetId, Long reporterId, String q,
+                                     Instant from, Instant to, Pageable pageable);
 
     /**
      * The queue an admin works: one row per reported target, heaviest first. Separate from
