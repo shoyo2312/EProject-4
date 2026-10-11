@@ -341,11 +341,7 @@ services:
   # ─────────────────────────────────────────────────────────────────
 
   minio:
-    # Not pinned to a release tag on purpose: MinIO stopped publishing community images (Docker Hub
-    # answers 404, quay.io requires an account), so no tag can be pulled any more and this one only
-    # resolves from a local copy (`docker load`). It is RELEASE.2025-09-07T16-13-09Z; a release tag
-    # here would make compose try to pull it and fail.
-    image: quay.io/minio/minio:latest
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     container_name: tt-minio
     command: server /data --console-address ":9001"
     environment:
@@ -376,8 +372,7 @@ services:
   # ilm import replaces the whole config rather than appending, which is what makes re-running
   # this container a no-op instead of a duplicate-rule error.
   minio-init:
-    # Unpinned for the same reason as minio above; it is RELEASE.2025-08-13T08-35-41Z.
-    image: quay.io/minio/mc:latest
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
     container_name: tt-minio-init
     depends_on:
       minio:

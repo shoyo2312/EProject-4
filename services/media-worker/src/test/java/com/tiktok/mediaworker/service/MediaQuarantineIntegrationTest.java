@@ -36,9 +36,9 @@ class MediaQuarantineIntegrationTest {
     private static final String BUCKET = "video-media";
 
     @Container
-    // minio/minio:latest 404s on Docker Hub — MinIO stopped publishing new tags there and moved to quay.io.
+    // minio/minio:latest 404s on Docker Hub — MinIO stopped publishing community images; use the pgsty fork.
     static MinIOContainer MINIO = new MinIOContainer(
-            DockerImageName.parse("quay.io/minio/minio:latest").asCompatibleSubstituteFor("minio/minio"));
+            DockerImageName.parse("pgsty/minio:RELEASE.2026-08-04T00-00-00Z").asCompatibleSubstituteFor("minio/minio"));
 
     private final HttpClient http = HttpClient.newHttpClient();
     private MinioClient minioClient;
