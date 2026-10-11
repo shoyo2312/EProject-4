@@ -17,9 +17,13 @@ import java.util.Optional;
 public interface ModerationActionRepository extends JpaRepository<ModerationAction, Long> {
 
     /**
-     * The audit log, newest first, narrowed by any combination of the console's filters. A null
-     * filter is not applied, so all-null is the whole log. {@code from} is inclusive and {@code to}
-     * exclusive, so consecutive days tile without a row landing in both.
+     * The audit log, narrowed by any combination of the console's filters. A null filter is not
+     * applied, so all-null is the whole log. {@code from} is inclusive and {@code to} exclusive, so
+     * consecutive days tile without a row landing in both.
+     *
+     * <p>Ordered by the pageable's sort alone. An ORDER BY written here would come first and the
+     * pageable's would be appended after it, where it never decides anything — which is how the
+     * console's sort controls once did nothing. {@code AdminServiceImpl} supplies the default.
      *
      * <p>One query rather than a derived method per combination, like the report ledger's. The two
      * instants are cast in their null checks because PgJDBC sends a timestamp parameter untyped,
@@ -33,7 +37,6 @@ public interface ModerationActionRepository extends JpaRepository<ModerationActi
               AND (:actionType IS NULL OR a.actionType = :actionType)
               AND (CAST(:from AS Instant) IS NULL OR a.createdAt >= :from)
               AND (CAST(:to AS Instant) IS NULL OR a.createdAt < :to)
-            ORDER BY a.createdAt DESC, a.id DESC
             """)
     Page<ModerationAction> findFiltered(@Param("targetType") ReportTargetType targetType,
                                         @Param("targetId") String targetId,

@@ -13,6 +13,7 @@ import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.event.producer.AdminEventProducer;
 import com.tiktok.adminservice.exception.InvalidModerationTargetException;
+import com.tiktok.adminservice.exception.InvalidSortException;
 import com.tiktok.adminservice.exception.ReportAlreadyResolvedException;
 import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
@@ -30,6 +31,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 
 import java.sql.SQLException;
 import java.time.Instant;
@@ -386,8 +388,49 @@ class AdminServiceImplTest {
         adminService.listActions(ReportTargetType.USER, "+042", 7L, ModerationActionType.BAN_USER,
                 from, to, Pageable.unpaged());
 
-        verify(moderationActionRepository).findFiltered(ReportTargetType.USER, "42", 7L,
-                ModerationActionType.BAN_USER, from, to, Pageable.unpaged());
+        verify(moderationActionRepository).findFiltered(eq(ReportTargetType.USER), eq("42"), eq(7L),
+                eq(ModerationActionType.BAN_USER), eq(from), eq(to), any(Pageable.class));
+    }
+
+    @Test
+    void listActions_noSortAsked_readsNewestFirst() {
+        assertThat(auditPageFor(PageRequest.of(2, 25)))
+                .satisfies(page -> {
+                    assertThat(page.getPageNumber()).isEqualTo(2);
+                    assertThat(page.getPageSize()).isEqualTo(25);
+                    assertThat(page.getSort()).isEqualTo(Sort.by(Sort.Direction.DESC, "createdAt", "id"));
+                });
+    }
+
+    /** Ties on the asked-for column go newest first, so a page boundary never splits them unevenly. */
+    @Test
+    void listActions_sortedByType_breaksTiesByTimeThenId() {
+        assertThat(auditPageFor(PageRequest.of(0, 25, Sort.by(Sort.Direction.ASC, "actionType"))).getSort())
+                .isEqualTo(Sort.by(Sort.Direction.ASC, "actionType")
+                        .and(Sort.by(Sort.Direction.DESC, "createdAt", "id")));
+    }
+
+    @Test
+    void listActions_oldestFirst_breaksTiesTheSameWay() {
+        assertThat(auditPageFor(PageRequest.of(0, 25, Sort.by(Sort.Direction.ASC, "createdAt"))).getSort())
+                .isEqualTo(Sort.by(Sort.Direction.ASC, "createdAt", "id"));
+    }
+
+    @Test
+    void listActions_sortOnAnotherProperty_rejected() {
+        assertThatThrownBy(() -> adminService.listActions(null, null, null, null, null, null,
+                PageRequest.of(0, 25, Sort.by("reason"))))
+                .isInstanceOf(InvalidSortException.class);
+        verifyNoInteractions(moderationActionRepository);
+    }
+
+    private Pageable auditPageFor(Pageable requested) {
+        when(moderationActionRepository.findFiltered(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+        adminService.listActions(null, null, null, null, null, null, requested);
+        ArgumentCaptor<Pageable> sent = ArgumentCaptor.forClass(Pageable.class);
+        verify(moderationActionRepository).findFiltered(any(), any(), any(), any(), any(), any(), sent.capture());
+        return sent.getValue();
     }
 
     /** The search reaches the query as an escaped LIKE pattern, and as an id only when it is one. */

@@ -68,8 +68,10 @@ public interface AdminService {
     long countStrikes(ReportTargetType targetType, String targetId);
 
     /**
-     * The audit log, newest first. Every filter is optional; {@code targetType} and
-     * {@code targetId} only make sense together. {@code from} is inclusive, {@code to} exclusive.
+     * The audit log, newest first unless the pageable sorts by {@code createdAt},
+     * {@code actionType} or {@code targetType}; any other sort is a 400. Every filter is optional;
+     * {@code targetType} and {@code targetId} only make sense together. {@code from} is inclusive,
+     * {@code to} exclusive.
      */
     Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Long adminId,
                                                ModerationActionType actionType, Instant from, Instant to,

@@ -15,6 +15,7 @@ import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.event.producer.AdminEventProducer;
 import com.tiktok.adminservice.exception.InvalidModerationTargetException;
+import com.tiktok.adminservice.exception.InvalidSortException;
 import com.tiktok.adminservice.exception.ReportAlreadyResolvedException;
 import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
@@ -28,6 +29,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -253,8 +255,38 @@ public class AdminServiceImpl implements AdminService {
         }
 
         String id = targetType != null ? targetType.canonicalTargetId(targetId) : null;
-        return moderationActionRepository.findFiltered(targetType, id, adminId, actionType, from, to, pageable)
+        return moderationActionRepository.findFiltered(
+                        targetType, id, adminId, actionType, from, to, auditOrder(pageable))
                 .map(adminMapper::toResponse);
+    }
+
+    /**
+     * The orders the audit log can be read in: the action's own columns worth sorting by. Spring
+     * Data answers any other property with a 500, and the reason is free text that no one orders
+     * a log by.
+     */
+    private static final List<String> AUDIT_SORT_PROPERTIES = List.of("createdAt", "actionType", "targetType");
+
+    /**
+     * Newest first when the caller asks for nothing, and every order finished with createdAt and
+     * then id. Rows that tie on the requested column — most of them, sorted by type — would
+     * otherwise come back in whatever order Postgres likes, and a row could land on two pages or
+     * on none.
+     */
+    static Pageable auditOrder(Pageable pageable) {
+        Sort requested = pageable.getSort();
+        for (Sort.Order order : requested) {
+            if (!AUDIT_SORT_PROPERTIES.contains(order.getProperty())) {
+                throw new InvalidSortException("The audit log cannot be sorted by " + order.getProperty());
+            }
+        }
+        Sort sort = requested.getOrderFor("createdAt") != null
+                ? requested
+                : requested.and(Sort.by(Sort.Direction.DESC, "createdAt"));
+        sort = sort.and(Sort.by(sort.getOrderFor("createdAt").getDirection(), "id"));
+        return pageable.isPaged()
+                ? PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort)
+                : Pageable.unpaged(sort);
     }
 
     @Override

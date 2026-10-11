@@ -9,6 +9,7 @@ import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabas
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -42,7 +43,9 @@ class ModerationActionRepositoryTest {
         registry.add("spring.datasource.password", POSTGRES::getPassword);
     }
 
-    private static final PageRequest FIRST_PAGE = PageRequest.of(0, 50);
+    /** The order AdminServiceImpl asks for when the console names none; the query sets no order. */
+    private static final PageRequest FIRST_PAGE =
+            PageRequest.of(0, 50, Sort.by(Sort.Direction.DESC, "createdAt", "id"));
 
     @Autowired
     private ModerationActionRepository repository;
@@ -57,6 +60,26 @@ class ModerationActionRepositoryTest {
 
         assertThat(ids(repository.findFiltered(null, null, null, null, null, null, FIRST_PAGE).getContent()))
                 .containsExactly(newer.getId(), older.getId());
+    }
+
+    /**
+     * The order comes from the pageable. It used to be written into the query, ahead of anything
+     * the pageable appended, so asking for another order changed nothing.
+     */
+    @Test
+    void ordersByTheRequestedColumnWithTimeBreakingTies() {
+        ModerationAction oldBan = action(1L, ModerationActionType.BAN_USER, "100", hoursAgo(5));
+        ModerationAction warning = action(1L, ModerationActionType.WARN_USER, "200", hoursAgo(3));
+        ModerationAction newBan = action(1L, ModerationActionType.BAN_USER, "300", hoursAgo(1));
+
+        PageRequest byType = PageRequest.of(0, 50, Sort.by(Sort.Direction.ASC, "actionType")
+                .and(Sort.by(Sort.Direction.DESC, "createdAt", "id")));
+        assertThat(ids(repository.findFiltered(null, null, null, null, null, null, byType).getContent()))
+                .containsExactly(newBan.getId(), oldBan.getId(), warning.getId());
+
+        PageRequest oldestFirst = PageRequest.of(0, 50, Sort.by(Sort.Direction.ASC, "createdAt", "id"));
+        assertThat(ids(repository.findFiltered(null, null, null, null, null, null, oldestFirst).getContent()))
+                .containsExactly(oldBan.getId(), warning.getId(), newBan.getId());
     }
 
     @Test
