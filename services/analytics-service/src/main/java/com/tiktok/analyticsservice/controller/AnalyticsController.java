@@ -28,9 +28,14 @@ public class AnalyticsController {
 
     private final AnalyticsService analyticsService;
 
+    /**
+     * Engagement events per day and type. Three years like the other daily series: the console
+     * asks for a year of trend ending on its "as of" day, plus the gap back to that day from
+     * today, and a cap of one year turned every earlier date into a 400.
+     */
     @GetMapping("/engagement/daily")
     public ApiResponse<List<DailyCountResponse>> getDailyEngagement(
-            @RequestParam(defaultValue = "7") @Min(1) @Max(365) int days) {
+            @RequestParam(defaultValue = "7") @Min(1) @Max(1095) int days) {
         return ApiResponse.success(analyticsService.getDailyEngagement(days));
     }
 
