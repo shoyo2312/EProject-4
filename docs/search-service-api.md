@@ -46,6 +46,7 @@ Phân trang bằng query param chuẩn Spring: `?page=0&size=20&sort=field,dir`.
 - Điều kiện dừng infinite scroll: `last == true` (hoặc `number + 1 >= totalPages`). `content` ngắn hơn `size` ở trang cuối là bình thường.
 - `sort` mặc định theo **điểm liên quan (relevance)** của Elasticsearch khi có `q`; không truyền `q` thì thứ tự không xác định — nên truyền `sort=createdAt,desc` nếu muốn thứ tự ổn định cho danh mục.
 - `sort` chỉ nhận `_score`, `createdAt`, `viewCount`, `likeCount`, `commentCount`, `shareCount`. Field khác (vd. `title` — field text, Elasticsearch không sort được) → `400 INVALID_SORT`.
+- `totalElements` / `totalPages` chỉ đếm tới **10 000** (`track_total_hits` = cửa sổ phân trang bên dưới): quá số đó thì vẫn trả 10 000. Đếm chính xác bắt Elasticsearch duyệt mọi kết quả khớp, cho một con số không ai lật tới được. Dùng để dừng cuộn thì vẫn đúng; đừng hiển thị như "tổng số kết quả".
 - Chỉ phân trang được trong **10 000 kết quả đầu** (`(page + 1) * size <= 10000`, giới hạn `max_result_window` của Elasticsearch). Vượt quá → `400 PAGE_TOO_DEEP`; thu hẹp `q`/`hashtag` thay vì lật tiếp.
 
 Phía Dart: có thể tái dùng wrapper `PageResponse<T>` bằng cách đọc đúng 4 field `content` / `number` / `totalElements` / `totalPages`, bỏ qua phần còn lại.
@@ -69,7 +70,7 @@ Query param (tất cả optional, nhưng nên có **ít nhất một** trong `q`
 - `hashtag` xếp hạng theo độ khớp: `#cat` → tag `cat` trước, rồi tag bắt đầu bằng `cat` (`catdance`), rồi tag lệch một ký tự hoặc chung tiền tố (`capcut`, `car`), cuối cùng video chỉ nhắc nó trong `description`.
 - Tên tác giả do `user-service` trả về lúc tìm (50 tài khoản nhiều follower nhất khớp tên). `user-service` lỗi/chậm quá 500ms thì vẫn trả kết quả, chỉ thiếu phần khớp tác giả.
 
-Chỉ trả về video ở trạng thái **`PUBLISHED`**. Video đang `PROCESSING`, `FAILED`, `TAKEN_DOWN`, `PRIVATE` hoặc đã xoá **không** xuất hiện, kể cả với chủ video (service này không biết ai đang gọi).
+Chỉ trả về video ở trạng thái **`PUBLISHED`**. Video đang `PROCESSING`, `FAILED`, `TAKEN_DOWN`, `PRIVATE` hoặc đã xoá **không** xuất hiện, kể cả với chủ video (service này không biết ai đang gọi). Video của tài khoản **đang bị ban** cũng bị loại (index `owner_bans`, lọc lúc đọc theo `bannedUntil > now`), nên ban tạm hết hạn là video tự hiện lại, không cần event nào.
 
 Response `data.content[]` → `VideoSearchResponse`:
 ```json
@@ -111,9 +112,10 @@ Mọi thay đổi tới từ Kafka nên có độ trễ:
 
 | Thao tác | Khi nào xuất hiện / biến mất trong kết quả tìm kiếm |
 |---|---|
-| Đăng video mới | Vào index với `status: PROCESSING` gần như ngay (không lọt kết quả vì chỉ trả `PUBLISHED`); chuyển `PUBLISHED` sau khi transcode xong (`media.video-transcoded-events`) |
+| Đăng video mới | Vào index với `status: PROCESSING` gần như ngay (không lọt kết quả vì chỉ trả `PUBLISHED`); transcode xong → `PENDING_MODERATION`, chỉ thành `PUBLISHED` khi kiểm duyệt tự động duyệt (`media.video-moderation-events`) |
 | Xoá video | Còn xuất hiện ~5 giây (chu kỳ outbox poll của video-service) rồi biến mất |
-| Admin takedown | Không tự biến mất khỏi search ngay — search-service **không** nghe `admin.moderation-events`; document vẫn `PUBLISHED` cho tới khi có event khác đụng vào. Đây là hạn chế đã biết |
+| Admin takedown / restore | Biến mất / xuất hiện lại sau vài giây (`admin.moderation-events`) |
+| Ban / unban tài khoản | Mọi video của tài khoản biến mất / xuất hiện lại sau vài giây; ban tạm hết hạn thì tự hiện lại |
 | Like/unlike, comment, share | Counter trong `VideoSearchResponse` cập nhật sau vài giây; đừng dựa vào |
 
 Client nên tự ẩn video vừa xoá ở phía mình thay vì đợi search load lại.
@@ -144,7 +146,8 @@ search-service **chỉ tiêu thụ**, không phát event nào. Toàn bộ index 
 | `interaction.view-events` | — | `VideoViewedEvent` | `viewCount++` |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | `commentCount++` / `commentCount--` (kẹp ≥ 0) |
 | `interaction.share-events` | — | `VideoSharedEvent` | `shareCount++` |
-| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` | 2 event trên | `status = TAKEN_DOWN` (chưa có `pendingStatus` thì ghi status bị thay vào đó, để restore không nhảy thẳng lên `PUBLISHED` khi video còn đang transcode) / restore: video đang TAKEN_DOWN thì trả về `pendingStatus`; video không bị gỡ mà đang `PENDING_REVIEW`/`REJECTED` thì đó là admin duyệt → `PUBLISHED` (khớp `Video.markRestored` bên video-service). Event khác trên topic (UserBanned…) bị bỏ qua |
+| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` | 2 event trên | `status = TAKEN_DOWN` (chưa có `pendingStatus` thì ghi status bị thay vào đó, để restore không nhảy thẳng lên `PUBLISHED` khi video còn đang transcode) / restore: video đang TAKEN_DOWN thì trả về `pendingStatus`; video không bị gỡ mà đang `PENDING_REVIEW`/`REJECTED` thì đó là admin duyệt → `PUBLISHED` (khớp `Video.markRestored` bên video-service) |
+| `admin.moderation-events` | `UserBannedEvent` / `UserUnbannedEvent` | 2 event trên | Ghi / gỡ bản ghi trong index `owner_bans` (`bannedUntil`, vĩnh viễn nếu null); không đụng document video. Event cũ hơn bản ghi đang giữ (`changedAt`) bị bỏ qua. Không claim `eventId` — ghi ban là một phép gán, redelivery ra cùng kết quả. Event khác trên topic bị bỏ qua |
 
 Mọi consumer **claim `eventId` trước khi xử lý** (`op_type=create` trên index `processed_events`, 409 ⇒ đã xử lý) chứ không đọc-rồi-ghi: trên Elasticsearch một document vừa ghi chưa đọc lại được cho tới lần refresh kế tiếp (mặc định 1s), nên check-then-act để lọt mọi redelivery trong cửa sổ đó. Mọi cập nhật counter là scripted partial update kèm `retry_on_conflict`, không phải đọc-sửa-ghi cả document.
 

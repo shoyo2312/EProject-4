@@ -313,6 +313,18 @@ Quan hệ giữa người gọi và `userId` — đủ cho nút Follow trong **m
 - Nút Follow: `following` → "Following"; `requested` → "Requested"; còn lại → "Follow". Không cần tự dò danh sách following của mình nữa.
 - Không có lỗi `404`: id không tồn tại chỉ trả toàn `false`.
 
+
+### 3.18 `GET /search?q=...&page=0&size=20` — tìm người dùng
+**Bắt buộc token.** Khớp `q` ở **giữa** cả `username` lẫn `displayName` (không phân biệt hoa thường), xếp theo **số follower giảm dần**. Trả `data` → `Page<UserProfileResponse>` (format phân trang ở mục 2), mỗi phần tử như mục 3.1.
+
+- `q` rỗng hoặc chỉ toàn khoảng trắng → trang rỗng, **không** phải toàn bộ user.
+- Ký tự `%`/`_` trong `q` được hiểu theo nghĩa đen.
+- Tài khoản đang chặn người gọi (hoặc bị người gọi chặn) bị loại ngay trong query, nên `totalElements` khớp với số trang thật sự lật được.
+- Tham số `sort` bị bỏ qua — thứ tự luôn là follower.
+
+### 3.19 `GET /stats/batch?ids=1,2,3` — số follower/following của nhiều người
+Qua gateway thì **bắt buộc token**. Trả `data` → `[{ "userId": 1, "followerCount": 10, "followingCount": 3 }]`. Chỉ có số đếm, không có thông tin cá nhân. Id không có profile không xuất hiện trong kết quả; id trùng được gộp. Tối đa **100** id → quá thì `TOO_MANY_PROFILE_IDS` (400).
+
 ## 4. Enums
 
 | Enum | Giá trị | Dùng ở đâu |

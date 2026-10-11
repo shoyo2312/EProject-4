@@ -1,15 +1,15 @@
 # Interaction Service — API Contract cho Flutter Mobile
 
-Tài liệu này mô tả **những gì client (Flutter/Dart) cần biết** để tích hợp đúng với `interaction-service`: like, comment, share, view (đếm lượt xem) và watch (báo cáo phiên xem). Không phải tài liệu thiết kế backend — chỉ phần hợp đồng API (contract). Đọc kèm `docs/auth-service-api.md` để lấy `accessToken`, và `docs/video-service-api.md` vì các counter hiển thị trên màn video đến từ **cả hai** service.
+Tài liệu này mô tả **những gì client (Flutter/Dart) cần biết** để tích hợp đúng với `interaction-service`: like, comment, share, save (yêu thích), repost, view (đếm lượt xem) và watch (báo cáo phiên xem). Không phải tài liệu thiết kế backend — chỉ phần hợp đồng API (contract). Đọc kèm `docs/auth-service-api.md` để lấy `accessToken`, và `docs/video-service-api.md` vì các counter hiển thị trên màn video đến từ **cả hai** service.
 
-Quy tắc token ở đây: **mọi thao tác ghi (`POST`/`DELETE`) đều bắt buộc token**; chỉ ba endpoint đọc là public (`GET /counts`, `GET /comments`, `GET /like-status`). Ở `GET /like-status` thì có token hay không **vẫn đổi kết quả** — xem mục 3.3.
+Quy tắc token ở đây: **mọi thao tác ghi (`POST`/`DELETE`) đều bắt buộc token**; chỉ năm endpoint đọc là public (`GET /counts`, `GET /counts/batch`, `GET /comments`, `GET /like-status`, `GET /users/{userId}/reposts`). Mọi `GET` khác — kể cả `GET /comments/{id}/replies` — đều bắt buộc token. Ở `GET /like-status` thì có token hay không **vẫn đổi kết quả** — xem mục 3.3.
 
 ## 1. Tech stack liên quan đến client
 
 | Thành phần | Công nghệ |
 |---|---|
 | Giao thức | REST/HTTP, JSON |
-| Auth | JWT access token, Bearer scheme — bắt buộc với `POST`/`DELETE`, optional với 3 `GET` public |
+| Auth | JWT access token, Bearer scheme — bắt buộc với `POST`/`DELETE`, optional với 5 `GET` public |
 | Entry point cho mobile | **api-gateway** (`:8080`), KHÔNG gọi thẳng `interaction-service:8085` |
 | Base URL (qua gateway) | `http://<gateway-host>:8080/api/v1/interactions` |
 | Docs tương tác | `http://localhost:8085/swagger-ui.html` (chạy trực tiếp interaction-service khi dev) |
@@ -39,13 +39,13 @@ Lỗi:
 }
 ```
 
-**Không có `PageResponse` ở service này.** Chỉ một endpoint có danh sách (`GET /comments`) và nó phân trang bằng **cursor**, không phải `page` — xem mục 3.5.
+**Không có `PageResponse` ở service này.** Mọi danh sách (comment, reply, video đã like/lưu/repost) phân trang bằng **cursor**, không phải `page` — xem mục 3.5.
 
 > **`videoId` ở đây là số (`Long`), không phải chuỗi như `id` của video-service.** Đây là điểm dễ sai nhất khi ghép hai service: `VideoResponse.id` là `String` (Snowflake 19 chữ số, parse thành `int` sẽ tràn trên Flutter Web), còn mọi path param và mọi field `videoId`/`commentId`/`shareId` trong service này server trả về dạng **số**. Phía Dart: giữ `String` cho id video lấy từ video-service, ghép thẳng vào URL (`/api/v1/interactions/videos/$videoId/like`) — đừng `int.parse` rồi ghép, và khi đọc `videoId` trả về trong response thì đọc thành `int` (Dart native) hoặc `num` rồi `.toString()`, đừng ép kiểu `String` trực tiếp sẽ ném lỗi.
 
 ## 3. Endpoints
 
-Base path: `/api/v1/interactions`. Mọi endpoint đều nằm dưới `/videos/{videoId}/...`.
+Base path: `/api/v1/interactions`. Phần lớn endpoint nằm dưới `/videos/{videoId}/...`; các endpoint theo lô nằm dưới `/videos/.../batch`, còn danh sách theo người dùng nằm dưới `/users/...` (mục 3.11, 3.15). `/admin/**` (ADMIN) và `/internal/**` (chỉ service nội bộ) không dành cho client.
 
 **Mọi thao tác ghi hỏi video-service trước** (`GET /api/v1/videos/{id}` kèm token của người gọi): video không tồn tại, riêng tư, chưa publish, hoặc người gọi và chủ video đang chặn nhau → `404 VIDEO_NOT_FOUND`. video-service không trả lời được (sập, timeout) thì thao tác vẫn đi qua — một sự cố ở đó không được làm tê liệt mọi lượt like.
 
@@ -83,7 +83,13 @@ Lỗi: `INTERACTION_CONFLICT` (409), `401`.
 - Không token: `liked` **luôn `false`**, không có lỗi nào báo. `likeCount` vẫn đúng.
 - Token hết hạn: gateway trả `401` — refresh một lần rồi gửi lại. Không bị hạ xuống khách, nên tim của người đã đăng nhập không tự rỗng.
 
-Endpoint này chỉ cho **một** video. Không có API hỏi trạng thái like của cả một danh sách video, nên khi render feed thì hoặc gọi song song cho từng video đang hiển thị, hoặc chỉ gọi cho video đang phát và cache lại — đừng gọi cho toàn bộ 20 item của trang feed cùng lúc (rate-limit gateway theo IP, mục 6).
+Endpoint này chỉ cho **một** video. Render cả trang feed thì dùng bản theo lô ở mục 3.3b — đừng gọi endpoint này cho từng item (rate-limit gateway theo IP, mục 6).
+
+### 3.3b `GET /videos/like-status/batch?ids=1,2,3` — trạng thái like của cả một trang
+**Bắt buộc token** (khác 3.3: khách không có gì để hỏi — mọi `liked` đều `false`, dùng `GET /counts/batch` nếu chỉ cần số). Trả `200 OK`, `data` → `LikeStatusResponse[]`, mỗi phần tử như mục 3.3.
+
+- Tối đa **50 id** mỗi lần; id trùng bị gộp trước khi tính, phần vượt 50 bị bỏ qua (không lỗi).
+- Không hỏi video-service: id không tồn tại vẫn trả `liked: false`, `likeCount: 0`.
 
 ### 3.4 `POST /videos/{videoId}/comments` — bình luận
 **Bắt buộc token.** Trả `201 Created`.
@@ -107,7 +113,8 @@ Response `data` → `CommentResponse`:
   "parentId": 7312458901234999,  // null nếu là comment gốc; id comment gốc nếu là reply
   "replyToUserId": 123456789012300, // chỉ có khi reply nhắm vào một reply khác — userId tác giả reply đó, để hiện nhãn "A > B". null với comment gốc và reply thẳng vào comment gốc
   "likeCount": 0,                // số like của comment này
-  "likedByMe": false            // user gọi đã like chưa — luôn false khi list không kèm token
+  "likedByMe": false,           // user gọi đã like chưa — luôn false khi list không kèm token
+  "replyCount": 3               // số reply còn sống, cho nút "Xem 3 phản hồi". Luôn 0 với một reply
 }
 ```
 
@@ -150,8 +157,8 @@ Chủ video được miễn `FRIENDS_ONLY` nhưng vẫn nhận `COMMENTS_DISABLE
 
 Lỗi: `VIDEO_NOT_FOUND` (404 — video không tồn tại hoặc người gọi không được xem), `401`.
 
-### 3.5 `GET /videos/{videoId}/comments` — danh sách bình luận
-Không cần token. **Phân trang bằng cursor.** Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CommentPageResponse`:
+### 3.5 `GET /videos/{videoId}/comments` — danh sách bình luận gốc
+Không cần token. **Chỉ trả comment gốc** (`parentId: null`), **mới nhất trước**; reply lấy riêng qua mục 3.5b. **Phân trang bằng cursor.** Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CommentPageResponse`:
 
 ```json
 {
@@ -168,13 +175,18 @@ Cách dùng:
 
 `nextCursor` là **chuỗi mờ (opaque)** — base64 của paging state Cassandra. Truyền lại y nguyên, không parse, không tự dựng, không lưu lâu dài (nó gắn với câu query của lần gọi đó, đổi `size` giữa chừng thì đừng dùng lại cursor cũ).
 
-> **Một trang có thể trả ít hơn `size` item, thậm chí `items: []`, mà `hasMore` vẫn `true`.** Comment bị xoá được lọc **sau** khi Cassandra đã cắt trang, nên một trang toàn comment đã xoá sẽ rỗng. Đây là hành vi bình thường, **không** phải hết dữ liệu. Client phải lặp theo `hasMore`/`nextCursor`, tuyệt đối đừng dừng khi thấy trang rỗng — và đừng dùng `items.length < size` làm điều kiện dừng.
+> **Một trang có thể trả ít hơn `size` item, thậm chí `items: []`, mà `hasMore` vẫn `true`.** Comment bị xoá được lọc **sau** khi Cassandra đã cắt trang. Server tự đọc tiếp tối đa 5 trang khi gặp trang rỗng, nhưng một chuỗi dài comment đã xoá vẫn có thể ra trang rỗng. Đây là hành vi bình thường, **không** phải hết dữ liệu. Client phải lặp theo `hasMore`/`nextCursor`, tuyệt đối đừng dừng khi thấy trang rỗng — và đừng dùng `items.length < size` làm điều kiện dừng.
 
-`size` mặc định 20. **Không có chặn trên ở server** (khác video-service kẹp ở 50), nên đây là chỗ client tự giữ kỷ luật: xin 20–50 là hợp lý, xin vài nghìn thì tự làm app mình chậm.
+`size` mặc định 20, bị kẹp vào khoảng **1–50**. Không nhận tham số `sort`. Cursor hỏng/không giải mã được → `INVALID_COMMENT_CURSOR` (400).
 
-Thứ tự trả về là thứ tự phân mảnh của Cassandra theo `commentId` trong cùng video, **không cấu hình được** và không nhận tham số `sort`.
+Video đã tắt comment (hoặc tài khoản chủ đặt `NO_ONE`) → trang rỗng, `hasMore: false`, không lỗi.
 
-**Reply nằm chung danh sách phẳng này**, không có endpoint riêng: mỗi item có `parentId` — `null` là comment gốc, khác `null` là reply thuộc comment gốc đó. Client tự gom `parentId` để dựng cây một tầng. Vì phân trang cắt theo `commentId`, một reply và comment gốc của nó có thể rơi vào hai trang khác nhau; client giữ lại reply nào chưa thấy cha rồi gắn khi trang sau nạp về.
+### 3.5b `GET /videos/{videoId}/comments/{commentId}/replies` — reply của một comment
+**Bắt buộc token.** Cùng cách phân trang và cùng response `CommentPageResponse` như 3.5, nhưng thứ tự **cũ nhất trước** (đọc như một cuộc hội thoại) và `size` mặc định **3** (đủ cho lần bấm "Xem phản hồi" đầu tiên; tối đa 50).
+
+- `commentId` là id comment gốc. Comment không tồn tại hoặc không có reply → trang rỗng, **không** 404.
+- Video tắt comment → trang rỗng như 3.5. Video không xem được → `VIDEO_NOT_FOUND` (404).
+- Dùng `replyCount` ở mục 3.4 để biết có nên hiện nút hay không, thay vì gọi thử.
 
 ### 3.6 `DELETE /videos/{videoId}/comments/{commentId}` — xoá bình luận của mình
 **Bắt buộc token.** Trả `200 OK`, `data` null. Xoá mềm: comment biến mất khỏi mục 3.5 ngay và `commentCount` giảm 1.
@@ -287,7 +299,7 @@ Endpoint này **không đổi bất kỳ counter nào** — `viewCount`, `likeCo
 
 Lỗi: `VALIDATION_ERROR` (400 — thiếu field, `watchedMs` âm, `durationMs` <= 0), `401`.
 
-### 3.10 `GET /videos/{videoId}/counts` — 4 counter của một video
+### 3.10 `GET /videos/{videoId}/counts` — 6 counter của một video
 Không cần token. Trả `200 OK`, `data` → `InteractionCountResponse`:
 
 ```json
@@ -296,13 +308,18 @@ Không cần token. Trả `200 OK`, `data` → `InteractionCountResponse`:
   "likeCount": 42,
   "commentCount": 8,
   "shareCount": 7,
-  "viewCount": 1043
+  "viewCount": 1043,
+  "saveCount": 5,
+  "repostCount": 2
 }
 ```
 
-Đây là **nguồn sự thật** của 4 con số này. Số cùng tên trong `VideoResponse` của video-service đến qua Kafka nên trễ hơn — xem mục 4.
+Đây là **nguồn sự thật** của các con số này. Số cùng tên trong `VideoResponse` của video-service đến qua Kafka nên trễ hơn — xem mục 4.
 
 `videoId` chưa có tương tác nào trả về **tất cả bằng 0**, không phải 404.
+
+### 3.10b `GET /videos/counts/batch?videoIds=1,2,3` — counter của cả một trang
+Không cần token. Trả `data` → `InteractionCountResponse[]` theo thứ tự id gửi lên (đã bỏ trùng). Tối đa **50 id**, phần vượt bị bỏ qua. Lưu ý tên param là `videoIds`, khác `ids` của 3.3b/3.14.
 
 ### 3.11 `GET /users/{userId}/reposts` — tab Reposts của một profile
 Nằm ngoài `/videos/...`. Không bắt buộc token, **nhưng gửi nếu đã đăng nhập**. Query param: `?cursor=<nextCursor>&size=20` (tối đa 50). Trả `200 OK`, `data` → `VideoIdPageResponse`:
@@ -318,6 +335,42 @@ Nằm ngoài `/videos/...`. Không bắt buộc token, **nhưng gửi nếu đã
 - Tài khoản công khai: ai cũng xem được, giống chính chủ.
 - Tài khoản **riêng tư**: chỉ chủ và follower. Người khác (kể cả không token) → `PRIVATE_ACCOUNT` (403). Token là cách server nhận ra follower, nên thiếu token là bị coi như người lạ.
 - Mỗi lần mở tab của người khác, service hỏi user-service. user-service không trả lời được thì tab vẫn không mở (fail-closed), nhưng lỗi là `PRIVACY_CHECK_UNAVAILABLE` (503) chứ không phải `PRIVATE_ACCOUNT`: đây là lỗi tạm thời, thử lại được, và không có nghĩa tài khoản riêng tư — đừng hiện "tài khoản riêng tư". Tab của chính chủ không hỏi user-service nên không bị ảnh hưởng.
+
+### 3.12 `POST` / `DELETE /videos/{videoId}/save` — lưu / bỏ lưu (yêu thích)
+**Bắt buộc token.** Trả `200 OK`, `data` → `SaveStatusResponse`:
+
+```json
+{ "videoId": 7312458901234567, "saved": true }
+```
+
+Idempotent như like (LWT): lưu hai lần chỉ tính một, bỏ lưu khi chưa lưu là no-op. Không kèm số đếm — danh sách lưu là riêng tư; `saveCount` công khai lấy ở mục 3.10. Lưu cần video xem được (`VIDEO_NOT_FOUND` 404 nếu không).
+
+`GET /videos/{videoId}/save-status` (**bắt buộc token**) trả cùng shape, để vẽ icon khi mở một video.
+
+Lỗi: `VIDEO_NOT_FOUND` (404), `SAVE_RATE_LIMITED` (429), `INTERACTION_CONFLICT` (409), `INTERACTION_NOT_RECORDED` (503), `401`.
+
+### 3.13 `POST` / `DELETE /videos/{videoId}/repost` — repost / bỏ repost
+**Bắt buộc token.** Trả `200 OK`, `data` → `RepostStatusResponse`:
+
+```json
+{ "videoId": 7312458901234567, "reposted": true, "repostCount": 2 }
+```
+
+Idempotent như like. Video được repost hiện ở tab Reposts của người repost (mục 3.11).
+
+Lỗi: `VIDEO_NOT_FOUND` (404), `REPOST_RATE_LIMITED` (429), `INTERACTION_CONFLICT` (409), `INTERACTION_NOT_RECORDED` (503), `401`.
+
+### 3.14 `GET /videos/repost-context/batch?ids=1,2,3` — badge repost của một trang feed
+**Bắt buộc token.** Trả `data` → `RepostContextResponse[]`:
+
+```json
+{ "videoId": 7312458901234567, "repostedByMe": false, "reposterIds": [123, 456] }
+```
+
+`reposterIds` là **mẫu tối đa 20 người** đã repost, không theo thứ tự nào. Service này không đọc được đồ thị follow, nên client tự giao `reposterIds` với danh sách mình đang follow để hiện "X đã repost". `repostedByMe` đúng kể cả khi người gọi nằm ngoài mẫu. Tối đa 50 id mỗi lần.
+
+### 3.15 `GET /users/me/likes`, `GET /users/me/saves` — video mình đã like / đã lưu
+**Bắt buộc token.** `?cursor=<nextCursor>&size=20` (1–50). Trả `data` → `VideoIdPageResponse` (cùng shape mục 3.11), **mới nhất trước**. Chỉ có id — đổi sang video qua `GET /api/v1/videos/batch` của video-service. Chỉ xem được của chính mình; không có endpoint xem like/lưu của người khác. Cursor hỏng → `INVALID_CURSOR` (400).
 
 ## 4. Counter đến từ hai nơi — đọc số nào, khi nào
 
@@ -340,11 +393,14 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `content` rỗng/quá 1000 ký tự (mục 3.4); thiếu `watchedMs`/`durationMs`, `watchedMs` âm, `durationMs` <= 0 (mục 3.9) |
+| `INVALID_COMMENT_CURSOR` | 400 | `cursor` của danh sách comment/reply không giải mã được (mục 3.5, 3.5b) |
+| `INVALID_CURSOR` | 400 | `cursor` của danh sách video đã like/lưu/repost không giải mã được (mục 3.11, 3.15) |
 | `NOT_COMMENT_OWNER` | 403 | Xoá bình luận của người khác (mục 3.6) |
 | `COMMENTS_DISABLED` | 403 | Chủ video đã tắt comment cho **video đó** (mục 3.4). Listing (mục 3.5) không lỗi mà trả trang rỗng — tài khoản đặt `NO_ONE` cũng trả trang rỗng như vậy |
 | `COMMENTS_NOT_ALLOWED` | 403 | Cài đặt **tài khoản** của chủ video không nhận comment từ người gọi — `NO_ONE`, hoặc `FRIENDS` mà không follow lẫn nhau (mục 3.4) |
 | `PRIVATE_ACCOUNT` | 403 | Tab Reposts (mục 3.11) của tài khoản riêng tư mà người gọi không phải chủ hay follower |
 | `COMMENT_NOT_FOUND` | 404 | Bình luận không tồn tại, đã xoá, hoặc `videoId` trên URL không khớp với bình luận đó |
+| `LIKE_RATE_LIMITED`, `COMMENT_RATE_LIMITED`, `COMMENT_LIKE_RATE_LIMITED`, `SAVE_RATE_LIMITED`, `REPOST_RATE_LIMITED`, `SHARE_RATE_LIMITED`, `VIEW_RATE_LIMITED`, `WATCH_RATE_LIMITED` | 429 | Vượt 60 lần/giờ cho cùng một (người dùng, video) — hoặc (người dùng, comment) với like comment. Xem mục 6 |
 | `INTERACTION_CONFLICT` | 409 | Ghi vào Cassandra không xác nhận được kết quả sau 3 lần thử (like/unlike ở mục 3.1–3.2, view ở mục 3.8). Xem bên dưới |
 | `PRIVACY_CHECK_UNAVAILABLE` | 503 | Tab Reposts (mục 3.11) của người khác khi không hỏi được user-service tài khoản có riêng tư không. Thử lại; **không** có nghĩa tài khoản riêng tư |
 | `INTERACTION_NOT_RECORDED` | 503 | Kafka không nhận event đi kèm thao tác nên thao tác đã được **hoàn tác** — like/unlike, repost, save, comment (tạo/xoá), share, view. Xem bên dưới |
@@ -361,12 +417,16 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của interaction-service
 ## 6. Rate limiting
 
 - Chỉ có rate-limit **ở tầng gateway** (`:8080`, theo IP — 20 request/giây, burst 40, dùng chung toàn bộ API, tức là chia sẻ hạn mức với auth/user/video).
-- **Không có** giới hạn riêng theo tài khoản ở interaction-service: không giới hạn số comment mỗi phút, số like mỗi phút, hay số lần share.
+- Ở interaction-service: mỗi thao tác ghi có hạn mức **60 lần/giờ cho mỗi cặp (người dùng, video)** — like comment thì theo (người dùng, comment). Mỗi loại thao tác một bucket riêng (like và unlike chung bucket `like`, save/unsave chung bucket `save`…), vượt thì trả mã `*_RATE_LIMITED` (429) tương ứng (mục 5). Người dùng thật không chạm ngưỡng này; chạm nghĩa là client đang lặp request. Cửa sổ cố định theo giờ. Redis chết thì bỏ qua giới hạn (fail-open).
 - Hạn mức theo IP là lý do **không** gọi `/like-status` cho cả 20 video của một trang feed cùng lúc (mục 3.3), và **không** gửi `/watch` theo tick (mục 3.9). Nhiều thiết bị sau cùng một NAT dùng chung hạn mức này.
 
 ## 7. Sự kiện Kafka (Events)
 
-Phần này cho người tích hợp backend. `interaction-service` **chỉ phát**, không tiêu thụ event nào (không có `@KafkaListener`, không dùng `kafka-lib`). Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+Phần này cho người tích hợp backend. Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+
+### Tiêu thụ (consumer) — `AdminModerationEventConsumer`
+
+Một consumer duy nhất (dùng `kafka-lib`): `admin.moderation-events`, route theo header `eventType`, chỉ xử lý `CommentRemovedEvent` → `CommentService.removeByAdmin()`; event khác trên topic bị bỏ qua. Không có bảng inbox: thao tác ghi duy nhất là LWT `markDeletedIfNotDeleted`, redelivery thấy comment đã xoá thì không giảm counter lần hai. `targetId` dạng `"videoId:commentId"`.
 
 ### Phát (producer) — `InteractionEventPublisher`
 
@@ -380,6 +440,9 @@ Không có outbox (Cassandra không có transaction đa bảng để ghép). Tha
 | `interaction.comment-events` | `CommentCreatedEvent` (header `eventType=CommentCreatedEvent`) | `eventId, occurredAt, commentId, videoId, userId, content` | `POST /comments` | có |
 | `interaction.comment-events` | `CommentDeletedEvent` (header `eventType=CommentDeletedEvent`) | `eventId, occurredAt, commentId, videoId, userId` | `DELETE /comments/{id}` | có |
 | `interaction.share-events` | `VideoSharedEvent` | `eventId, occurredAt, shareId, videoId, userId` | `POST /share` (mỗi lần một event) | có |
+| `interaction.comment-like-events` | `CommentLikeChangedEvent` | `eventId, occurredAt, commentId, videoId, userId, liked, likeCount, commentAuthorId` | `POST`/`DELETE /comments/{id}/like` | **không** (số chuẩn đã nằm trong Cassandra và trả về trong response) |
+| `interaction.save-events` | `VideoSavedEvent` | `eventId, occurredAt, videoId, userId, saved` | `POST`/`DELETE /save` (chỉ khi hàng LWT thực sự đổi) | có |
+| `interaction.repost-events` | `VideoRepostedEvent` | `eventId, occurredAt, videoId, userId, reposted` | `POST`/`DELETE /repost` (chỉ khi hàng LWT thực sự đổi) | có |
 | `interaction.view-events` | `VideoViewedEvent` | `eventId, occurredAt, videoId, userId` | `POST /view` — **chỉ** view sống sót qua dedupe theo `playId` | có |
 | `interaction.watch-events` | `VideoWatchEvent` | `eventId, occurredAt, videoId, userId, watchedMs, durationMs, completed` | `POST /watch` — **mọi** phiên, kể cả xem lại | **không** (fire-and-forget, chỉ log khi lỗi) |
 
@@ -389,10 +452,13 @@ Vì sao `watch-events` không chờ ack: không counter nào phụ thuộc nó (
 
 | Topic | Consumer | Dùng để |
 |---|---|---|
-| `interaction.like-events` | video-service, recommendation-service, search-service | `likeCount`; điểm trending; `likeCount` trong search index |
-| `interaction.comment-events` | video-service, recommendation-service, search-service | `commentCount`; điểm trending (giảm khi comment bị xoá); `commentCount` search |
-| `interaction.share-events` | recommendation-service, search-service | điểm trending; `shareCount` search |
-| `interaction.view-events` | video-service | `viewCount` |
+| `interaction.like-events` | video-service, recommendation-service, search-service, notification-service, chat-service, analytics-service | `likeCount`; điểm trending; `likeCount` trong search index; thông báo; đẩy số realtime; thống kê |
+| `interaction.comment-events` | video-service, recommendation-service, search-service, notification-service, chat-service, analytics-service | `commentCount`; điểm trending (giảm khi comment bị xoá); `commentCount` search; thông báo; realtime; thống kê |
+| `interaction.comment-like-events` | notification-service, chat-service | thông báo cho tác giả comment; đẩy số like comment realtime |
+| `interaction.share-events` | recommendation-service, search-service, notification-service, chat-service, analytics-service | điểm trending; `shareCount` search; thông báo; realtime; thống kê |
+| `interaction.save-events` | chat-service | đẩy số realtime |
+| `interaction.repost-events` | — | chưa có consumer |
+| `interaction.view-events` | video-service, search-service, chat-service | `viewCount`; `viewCount` search; realtime |
 | `interaction.watch-events` | recommendation-service, analytics-service | tag affinity + quality score; sink training data cho `rank-service` |
 
 ## 8. Những điều KHÔNG nên làm phía Flutter
@@ -401,10 +467,11 @@ Vì sao `watch-events` không chờ ack: không counter nào phụ thuộc nó (
 - Không gọi `/view` theo tick thời gian, và không gọi `/watch` theo tiến độ phát — `/view` một lần lúc bắt đầu, `/watch` một lần lúc kết thúc.
 - Không coi `counted: false` ở mục 3.8 là lỗi — đó là "hôm nay bạn đã được tính rồi".
 - Không dừng phân trang comment khi gặp trang rỗng — lặp theo `hasMore`, vì comment đã xoá được lọc sau khi cắt trang (mục 3.5).
+- Không gọi `/like-status` hay `/counts` từng video cho cả trang feed — dùng `/like-status/batch`, `/counts/batch`, `/repost-context/batch` (mục 3.3b, 3.10b, 3.14).
 - Không parse hay tự dựng `nextCursor` — chuỗi mờ, truyền lại nguyên văn.
 - Không ép `videoId` trong response thành `String` bằng cast — server trả về số; ngược lại, id lấy từ video-service phải giữ nguyên `String` (mục 2).
 - Không quên gửi token ở `GET /like-status` khi user đã đăng nhập — sẽ luôn ra `liked: false` mà không có lỗi nào báo.
 - Không hardcode ngưỡng 90% để tự tính `completed` — server quyết định và ngưỡng có thể đổi (mục 3.9).
 - Không dựa vào `viewCount` trong `VideoResponse` để xác nhận `/view` vừa thành công — số đó đến sau qua Kafka (mục 4).
-- Không tự kiểm tra "video có tồn tại không" bằng cách gọi endpoint tương tác — chúng chấp nhận mọi `videoId` (mục 3).
+- Không tự kiểm tra "video có tồn tại không" bằng cách gọi endpoint tương tác — thao tác ghi trả `VIDEO_NOT_FOUND` nhưng **cho qua** khi video-service không trả lời (fail-open), còn các endpoint đọc theo lô chấp nhận mọi id (mục 3).
 - Không gọi thẳng `interaction-service:8085` từ production build — luôn qua gateway `:8080`.

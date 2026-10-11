@@ -270,7 +270,7 @@ local, `make run-*` cho mọi service trừ gateway bind `127.0.0.1` (`make run-
 
 | Tài liệu | Đối tượng | Nội dung |
 |---|---|---|
-| [`api-gateway.md`](api-gateway.md) | client + backend | Bảng route, path công khai, `GET /api/v1/me` gộp, rate limit theo IP |
+| [`api-gateway.md`](api-gateway.md) | client + backend | Bảng route, path công khai, `GET /api/v1/me` gộp, rate limit theo IP (admin theo tài khoản) |
 | [`auth-service-api.md`](auth-service-api.md) | client (Flutter) | Đăng ký / đăng nhập / refresh rotation / OTP / social login + §9 events |
 | [`user-service-api.md`](user-service-api.md) | client | Profile, avatar upload, follow/block/mute + §8 events |
 | [`video-service-api.md`](video-service-api.md) | client | Upload URL, publish, feed cursor, feed/following, batch, delete + §8 events |

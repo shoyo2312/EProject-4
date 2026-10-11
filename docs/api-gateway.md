@@ -97,13 +97,18 @@ Lỗi sinh ở tầng gateway (route không khớp, downstream chết/không k�
 
 `RequestRateLimiter` (Redis token bucket), **default-filter áp cho mọi route**:
 
-- **20 request/giây, burst 40**, theo **key = client IP**.
+- **20 request/giây, burst 40**, theo **key = client IP** — trừ admin đã đăng nhập, key theo tài khoản (`admin:<userId>`).
 - Vượt ngưỡng → `429 Too Many Requests`.
 - Đây là giới hạn **duy nhất** ở tầng gateway; auth-service có thêm rate-limit riêng theo tài khoản/email (xem `docs/auth-service-api.md` §7).
 
-### Key resolver — cách xác định IP
+### Key resolver
 
-`ipKeyResolver` (`RateLimiterConfig`): bắt đầu từ `getRemoteAddress()`; **chỉ khi** địa chỉ đó thuộc `gateway.rate-limit.trusted-proxies` (env `RATE_LIMIT_TRUSTED_PROXIES`, mặc định loopback + dải private) thì mới đọc `X-Forwarded-For`, và đọc **từ phải sang trái**: còn là proxy tin cậy thì lùi thêm một hop, gặp địa chỉ đầu tiên không phải proxy thì đó là client. Entry không phải IP literal (hostname, `ip:port`…) thì dừng ở proxy vừa chuyển nó tới. Không có remote address thì literal `"unknown"`.
+`clientKeyResolver` (`RateLimiterConfig`):
+
+- **Principal có `ROLE_ADMIN`** → key `admin:<userId>`. Admin console gọi gateway từ server của nó, nên mọi admin cùng một địa chỉ và vài người mở trang videos là cạn chung bucket 20 req/s. Key theo tài khoản không giả được: filter xác thực đã verify token trước khi tới route filter, token hỏng là 401 chứ không thành khách. **Chỉ admin** — ai cũng tạo được account thường, key theo account cho họ là phát bucket mới cho mỗi lần đăng ký.
+- **Mọi request khác** → key theo IP client, cách xác định như dưới.
+
+Xác định IP: bắt đầu từ `getRemoteAddress()`; **chỉ khi** địa chỉ đó thuộc `gateway.rate-limit.trusted-proxies` (env `RATE_LIMIT_TRUSTED_PROXIES`, mặc định loopback + dải private) thì mới đọc `X-Forwarded-For`, và đọc **từ phải sang trái**: còn là proxy tin cậy thì lùi thêm một hop, gặp địa chỉ đầu tiên không phải proxy thì đó là client. Entry không phải IP literal (hostname, `ip:port`…) thì dừng ở proxy vừa chuyển nó tới. Không có remote address thì literal `"unknown"`.
 
 - Web client qua Next.js proxy `/api/*` từ server của nó → nếu chỉ dùng `getRemoteAddress()` thì **cả site chung một bucket 20 req/s** (một trang feed 20 video + lookup tác giả là hết). Vì thế cần `X-Forwarded-For`.
 - Trước đây lấy **entry đầu tiên** — chính là phần client tự viết, proxy chỉ append vào cuối. Đổi IP bịa mỗi request là được bucket mới mỗi lần. Giờ các entry bên trái địa chỉ client không bao giờ được đọc, và gọi thẳng vào gateway từ địa chỉ public thì header bị bỏ qua.

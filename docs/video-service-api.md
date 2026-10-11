@@ -148,7 +148,7 @@ Response `data` → `VideoResponse`:
 
 > **`id` là `String`, không phải `int`.** Khai báo `String id` trong model Dart. Đây là Snowflake id 19 chữ số — parse thành số vẫn vừa `int` 64-bit của Dart native, nhưng **tràn trên Flutter Web** (JS number chỉ chính xác tới 2^53) và sẽ sai âm thầm. Riêng `userId` thì server trả về dạng số.
 
-> **`201` KHÔNG có nghĩa là video xem được.** Video vào trạng thái `PROCESSING`, chưa có `hlsUrl` để phát, và **chưa xuất hiện trên `/feed`**. Việc transcode chạy bất đồng bộ qua Kafka, mất từ vài giây tới vài phút. Client phải poll `GET /{videoId}` cho tới khi `status` là `PUBLISHED` (phát được) hoặc `FAILED` (hỏng, báo user đăng lại). Poll giãn dần (vd. 2s → 5s → 10s, dừng sau ~5 phút và hiện "đang xử lý, quay lại sau") thay vì poll dày — gateway giới hạn 20 request/giây theo IP.
+> **`201` KHÔNG có nghĩa là video xem được.** Video vào trạng thái `PROCESSING`, chưa có `hlsUrl` để phát, và **chưa xuất hiện trên `/feed`**. Việc transcode chạy bất đồng bộ qua Kafka, mất từ vài giây tới vài phút. Transcode xong video sang `PENDING_MODERATION` (kiểm duyệt tự động), rồi mới thành `PUBLISHED`, `PENDING_REVIEW` (chờ admin) hoặc `REJECTED`. Client phải poll `GET /{videoId}` cho tới khi `status` rời khỏi `PROCESSING`/`PENDING_MODERATION` — `PUBLISHED` là phát được, `FAILED` là hỏng (báo user đăng lại), `PENDING_REVIEW` là "đang chờ duyệt", `REJECTED` là bị từ chối. Poll giãn dần (vd. 2s → 5s → 10s, dừng sau ~5 phút và hiện "đang xử lý, quay lại sau") thay vì poll dày — gateway giới hạn 20 request/giây theo IP.
 
 > **`FAILED` có `failureReason` — hiện thẳng cho user.** Khi `status = FAILED`, `failureReason` là chuỗi giải thích do media-worker sinh ra, ví dụ `"Video is 12m30s; the maximum is 10m00s."` (clip dài quá 10 phút) hoặc `"Video is 812 MB; the maximum is 500 MB."` (file lọt qua client nhưng media-worker vẫn từ chối vì vượt kích thước). Với mọi `status` khác, `failureReason` là `null`. Nếu `failureReason` là `null` mà vẫn `FAILED` (lỗi transcode không phân loại được), hiện thông điệp mặc định kiểu "Xử lý video thất bại, thử đăng lại".
 
@@ -238,13 +238,26 @@ Không có lỗi `USER_NOT_FOUND` — `userId` không tồn tại chỉ trả v�
 
 Lỗi: `VIDEO_NOT_FOUND` (404 — id không tồn tại hoặc đã xoá), `NOT_VIDEO_OWNER` (403 — video tồn tại nhưng của người khác), `401`.
 
-Xoá mềm nên video biến mất khỏi mọi endpoint đọc ngay lập tức, và **kết quả transcode đến sau sẽ bị bỏ qua** thay vì làm video sống lại. Xoá là một chiều, không có API khôi phục.
+Xoá mềm nên video biến mất khỏi mọi endpoint đọc ngay lập tức, và **kết quả transcode đến sau sẽ bị bỏ qua** thay vì làm video sống lại. Với chủ video, xoá là một chiều — không có API khôi phục cho client (chỉ admin khôi phục được trong thời gian giữ thùng rác).
 
 Ở các service khác thì **không tức thì**: `200 OK` chỉ nói video-service đã ghi xong. `VideoDeletedEvent` đi qua Kafka trong vòng ~5 giây (chu kỳ outbox poll), rồi search-service mới xoá document và recommendation-service mới gỡ video khỏi trending cùng các tag index. Trong khoảng đó video vẫn có thể xuất hiện ở kết quả tìm kiếm hoặc trong feed đề xuất, và bấm vào sẽ nhận `VIDEO_NOT_FOUND`. Client nên tự ẩn video vừa xoá ở phía mình thay vì đợi list load lại.
 
-Video bị xoá **trong vòng ~5 giây đầu sau khi publish** có thể chưa từng được công bố ra ngoài; khi đó không có `VideoDeletedEvent` nào cả, vì không service nào từng biết tới nó.
+File trên MinIO (bản gốc, thumbnail, và toàn bộ output HLS) **không** bị xoá ngay: media-worker chỉ cách ly (không còn đọc công khai theo URL), và giữ trong thùng rác `video.trash.retention` (mặc định 30 ngày) để admin còn xem lại. Hết hạn, video-service phát `VideoPurgedEvent` và media-worker mới xoá hẳn. Video bị xoá trước khi kịp công bố vẫn phát cả `VideoDeletedEvent` lẫn `VideoPurgedEvent` — file raw đã nằm trên MinIO.
 
-File trên MinIO (bản gốc, thumbnail, và toàn bộ output HLS) do media-worker xoá khi nhận event này. Không có API nào để lấy lại.
+### 3.7 `PATCH /{videoId}/visibility` — đổi ai được xem
+**Bắt buộc token, chỉ chủ video.** Request `{ "visibility": "PUBLIC" | "FRIENDS" | "PRIVATE" }` (bắt buộc). Trả `200 OK`, `data` → `VideoResponse` đã cập nhật.
+
+Có hiệu lực ngay ở video-service. Search, feed đề xuất và trending nhận `VideoVisibilityChangedEvent` qua outbox (~5 giây), nên chuyển sang `PRIVATE` thì video còn có thể lộ ở đó vài giây.
+
+Lỗi: `VALIDATION_ERROR` (400 — thiếu/sai giá trị), `NOT_VIDEO_OWNER` (403), `VIDEO_NOT_FOUND` (404 — không tồn tại hoặc đã xoá), `401`.
+
+### 3.8 `PATCH /{videoId}/comments-setting` — bật/tắt comment của một video
+**Bắt buộc token, chỉ chủ video.** Request `{ "disabled": true }` (bắt buộc). Trả `200 OK`, `data` → `VideoResponse` với `commentsDisabled` mới. Đây là công tắc "Allow comments" của chủ video; interaction-service đọc cờ này mỗi lần có comment, nên có hiệu lực ngay. Comment cũ không bị xoá, chỉ bị ẩn (`GET /comments` trả trang rỗng).
+
+Lỗi: như 3.7.
+
+### 3.9 `GET /users/stats/batch?ids=1,2,3` — số liệu profile của nhiều người
+Không cần token. Trả `data` → `UserVideoStatsResponse[]` (`userId, videoCount, totalLikes, totalViews`), cùng con số công khai như `GET /users/{userId}/stats`. Tối đa 50 id (`max-page-size`), id trùng bị gộp.
 
 ## 4. Enums
 
@@ -254,12 +267,15 @@ File trên MinIO (bản gốc, thumbnail, và toàn bộ output HLS) do media-wo
 | `PROCESSING` | Vừa đăng, đang transcode. Chưa có `hlsUrl`/`thumbnailUrl`/`previewUrl`, chưa lên feed. Hiện spinner/placeholder. |
 | `PUBLISHED` | Phát được, đã có `hlsUrl`. Trạng thái duy nhất xuất hiện trên `/feed`. |
 | `FAILED` | Transcode hỏng, hoặc file bị từ chối vì vượt 500 MB / 10 phút. `failureReason` mang lý do (xem mục 3.2). Chỉ chủ video nhìn thấy; UI nên hiện `failureReason` và cho xoá + đăng lại. |
+| `PENDING_MODERATION` | Transcode xong, đang chờ kiểm duyệt tự động (thường vài giây). Chỉ chủ video thấy. Vẫn hiện "đang xử lý". |
+| `PENDING_REVIEW` | Kiểm duyệt tự động không chắc chắn (hoặc không chạy được) — chờ admin duyệt. Chỉ chủ video thấy. Hiện "đang chờ duyệt". |
+| `REJECTED` | Bị kiểm duyệt tự động từ chối. Chỉ chủ video thấy. Admin có thể khôi phục → `PUBLISHED`. |
 | `TAKEN_DOWN` | Bị admin gỡ vì vi phạm. Chỉ chủ video nhìn thấy. Nếu được khôi phục, video quay lại **đúng trạng thái trước khi gỡ** (không mặc định thành `PUBLISHED`) — client đừng tự đoán trạng thái sau khôi phục, cứ đọc lại từ server. |
 
-`status` chỉ do server đổi (qua sự kiện transcode/moderation), **không có API cho client đổi**. Client cũng không đổi được `visibility` sau khi đăng — chưa có endpoint update.
+`status` chỉ do server đổi (qua sự kiện transcode/moderation), **không có API cho client đổi**. `visibility` thì chủ video đổi được qua mục 3.7.
 
 ### `VideoVisibility`
-`PUBLIC` | `PRIVATE`. Đặt lúc đăng và cố định. `PRIVATE` = chỉ chủ video xem được (mục 3.4, 3.5).
+`PUBLIC` | `FRIENDS` | `PRIVATE`. Đặt lúc đăng, chủ video đổi được bằng mục 3.7. `PUBLIC` = ai cũng xem (trừ khi tài khoản chủ riêng tư — xem mục 3.4); `FRIENDS` = chỉ người follow lẫn nhau với chủ, không bao giờ lên feed; `PRIVATE` = chỉ chủ video (mục 3.4, 3.5).
 
 ## 5. Counter (`viewCount` / `likeCount` / `commentCount`)
 
@@ -308,12 +324,14 @@ Phần này cho người tích hợp backend, không phải client mobile. `vide
 
 ### Phát (producer) — `VideoEventPublisher`
 
-Cả hai loại đi chung topic **`video.video-events`**, key = `videoId`, nên Kafka đảm bảo thứ tự publish→delete theo từng video. Dùng **outbox** (cờ per-document trên `Video`, không có collection riêng vì Mongo deployment này không có replica set → không có transaction đa document). Poll mỗi 5s, đánh dấu published **sau** khi broker ack (`OutboxDispatcher` của `kafka-lib`).
+Cả bốn loại đi chung topic **`video.video-events`**, key = `videoId`, nên Kafka đảm bảo thứ tự publish→delete theo từng video. Dùng **outbox** (cờ per-document trên `Video`, không có collection riêng vì Mongo deployment này không có replica set → không có transaction đa document). Poll mỗi 5s, đánh dấu published **sau** khi broker ack (`OutboxDispatcher` của `kafka-lib`).
 
 | eventType header | Event | Payload | Khi nào |
 |---|---|---|---|
 | `VideoPublishedEvent` | `VideoPublishedEvent` | `eventId, occurredAt, videoId, userId, title, description, rawFileUrl, visibility, tags[]` | Sau `POST /` — `eventId` derive từ `videoId` (publish đúng 1 lần dù outbox retry) |
-| `VideoDeletedEvent` | `VideoDeletedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Sau `DELETE /{id}`. Phát cả khi video bị xoá trước lúc `VideoPublishedEvent` kịp đi (media-worker vẫn cần dọn file raw) |
+| `VideoDeletedEvent` | `VideoDeletedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Ngay sau `DELETE /{id}` — gỡ video khỏi search và feed đề xuất; media-worker chỉ cách ly media |
+| `VideoPurgedEvent` | `VideoPurgedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Khi hết `video.trash.retention` (mặc định 30 ngày) kể từ lúc xoá — chỉ media-worker xử lý, xoá hẳn media. Phát cả cho video bị xoá trước khi kịp công bố |
+| `VideoVisibilityChangedEvent` | `VideoVisibilityChangedEvent` | `eventId, occurredAt, videoId, userId, visibility` (audience thực tế, xem dưới) | Sau `PATCH /{id}/visibility`, hoặc khi tài khoản chủ đổi riêng tư/công khai trong lúc video đang publish. Chỉ gửi sau khi `VideoPublishedEvent` của video đó đã được ack |
 
 `description` và `tags` được mang trên `VideoPublishedEvent` vì `search-service`/`recommendation-service` không có đường đọc vào Mongo của video-service. `tags` không bao giờ null (list rỗng).
 

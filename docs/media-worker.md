@@ -75,6 +75,8 @@ Không có bước Dockerfile nào. `JaveFfmpeg` dùng chính binary mà JAVE2 (
 | faststart remux, still frame, animated preview | 120s | copy stream / decode 1 frame — chặn bởi disk, không theo độ dài video |
 | normalize | 600s | decode + encode từng frame — có tỉ lệ với độ dài video |
 
+**Input bị khoá về file local mp4/mov/webm.** Mọi lệnh chạy qua `JaveFfmpeg.run` đều được thêm input option `-protocol_whitelist file -format_whitelist mov,matroska` (ghi gọn ở các lệnh mục 1–2 cho dễ đọc). ffmpeg chọn demuxer theo **nội dung** file chứ không theo tên: một HLS playlist upload dưới đuôi `.mp4` từng được đọc như playlist, và segment của nó có thể trỏ tới bất kỳ file nào worker đọc được — kể cả upload của người khác — rồi lọt vào video transcode của kẻ upload. Bước probe (`JaveVideoProbe`, `MultimediaObject.getInfo()`) đi đường riêng của JAVE nên **không** nhận whitelist này; nó chỉ đọc metadata.
+
 Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file tạm**, không phải pipe: pipe không ai đọc sẽ đầy buffer và ffmpeg block vĩnh viễn ở lệnh write — không timeout nào trên `waitFor` bắt được.
 
 ### Retry & báo lỗi

@@ -115,6 +115,8 @@ Lỗi: `VALIDATION_ERROR` (400), `INVALID_CREDENTIALS` (401), `EMAIL_NOT_VERIFIE
 
 Lưu ý về counter rate-limit: nhập đúng mật khẩu nhưng chưa verify email **không** bị tính là 1 lần login sai, nên user không bị khoá 429 vì lặp lại thao tác này.
 
+**Tài khoản ADMIN (admin console) có thêm factor thứ hai.** Request nhận thêm hai field tuỳ chọn: `turnstileToken` (bắt buộc với admin — thiếu/sai → `TURNSTILE_VERIFICATION_FAILED` 403) và `deviceToken` (lấy từ lần `/login/otp` trước có tick "ghi nhớ thiết bị"). Mật khẩu đúng mà thiết bị chưa được ghi nhớ → server gửi OTP qua email và trả `MFA_REQUIRED` (401), **chưa** cấp token; hoàn tất ở mục 3.17. Tài khoản USER không bị ảnh hưởng — hai field này bị bỏ qua.
+
 ### 3.3 `POST /refresh`
 Không cần Bearer token (dùng chính `refreshToken`). Trả `200 OK`.
 
@@ -245,7 +247,7 @@ Ngược lại, email chưa verify mà **chưa ai giữ** thì vẫn được l�
 
 Ghép tài khoản: server tìm theo `(provider, provider_uid)` trước. Nếu chưa từng thấy, **chỉ khi provider khẳng định email đã verify** mới ghép thẳng vào tài khoản sẵn có cùng email. Nếu provider không khẳng định (Facebook không bao giờ khẳng định) mà email đó đã có chủ, server **không** ghép và cũng **không** tạo tài khoản thứ hai — nó trả `409` và mở luồng ở mục 3.11. Ranh giới nằm đúng ở chỗ "được đòi tài khoản sẵn có": nếu email chưa verify mà đòi được tài khoản thì bất kỳ ai khai email của bạn trên Facebook đều chiếm được tài khoản của bạn ở đây. Khi ghép vào tài khoản sẵn có mà **chính tài khoản đó chưa từng verify email** (ghép thẳng vì provider khẳng định, hoặc qua mã ở mục 3.11), server **xoá mật khẩu** của tài khoản đó và đánh dấu email đã verify. Lý do: ai cũng đăng ký được `victim@gmail.com` kèm mật khẩu do mình chọn — nó chỉ nằm ở trạng thái chưa verify vì kẻ đó không đọc được mail. Giữ nguyên mật khẩu ấy thì ngay khi địa chỉ được verify, kẻ đăng ký trước có một cách đăng nhập hợp lệ vào tài khoản chủ thật đang dùng. Chủ thật muốn đăng nhập bằng mật khẩu thì đặt lại qua `forgot-password` → `reset-password`. Tài khoản đã verify email thì giữ nguyên mật khẩu. Tài khoản tạo bằng social có `password_hash = NULL` → gọi `/login` bằng mật khẩu luôn trả `401 INVALID_CREDENTIALS` cho tới khi user đặt mật khẩu qua `forgot-password` → `reset-password` (cần có email trước).
 
-Lỗi: `VALIDATION_ERROR` (400), `INVALID_SOCIAL_TOKEN` (401 — token sai/hết hạn/**cấp cho app khác**), `INVALID_CREDENTIALS` (401 — tài khoản bị khoá), `SOCIAL_LINK_VERIFICATION_REQUIRED` (409 — email đã có chủ, xem mục 3.11), `INTERNAL_ERROR` (500 — provider timeout hoặc lỗi 5xx; đây là lỗi phía ta, cho user retry).
+Lỗi: `VALIDATION_ERROR` (400), `INVALID_SOCIAL_TOKEN` (401 — token sai/hết hạn/**cấp cho app khác**), `INVALID_CREDENTIALS` (401 — tài khoản bị khoá), `SOCIAL_LINK_VERIFICATION_REQUIRED` (409 — email đã có chủ, xem mục 3.11), `SOCIAL_SIGN_IN_NOT_ALLOWED` (403 — tài khoản đích là ADMIN; admin chỉ đăng nhập bằng password + Turnstile + OTP), `INTERNAL_ERROR` (500 — provider timeout hoặc lỗi 5xx; đây là lỗi phía ta, cho user retry).
 
 **Riêng web (Next.js)**: gọi 2 endpoint này qua route handler của Next.js (BFF proxy) chứ không gọi thẳng từ browser. Lý do: refresh token 7 ngày phải nằm trong cookie `httpOnly` để XSS không đọc được, còn access token giữ trong memory. Gọi thẳng từ browser vừa buộc phải mở CORS ở gateway, vừa đẩy refresh token vào JS.
 
@@ -354,6 +356,29 @@ Response `data` → `UserResponse` (giống mục 3.1) với `username` mới v�
 
 Lỗi: `VALIDATION_ERROR` (400), `USERNAME_ALREADY_EXISTS` (409 — không phân biệt hoa thường), `USERNAME_CHANGE_TOO_SOON` (429 — chưa đủ 30 ngày từ lần đổi trước; xem `usernameChangeableAt` ở `GET /me`), `CONCURRENT_MODIFICATION` (409 — hai lần đổi gửi cùng lúc, chỉ một lần thắng), `401` nếu thiếu/sai access token.
 
+
+### 3.17 `POST /login/otp` — bước 2 đăng nhập admin
+Chỉ dùng sau khi `/login` trả `MFA_REQUIRED`. Không cần token.
+
+```json
+{
+  "usernameOrEmail": "admin@example.com",
+  "otp": "123456",
+  "turnstileToken": "...",   // token Turnstile MỚI — token của bước /login đã dùng rồi
+  "rememberDevice": true      // tuỳ chọn: ghi nhớ trình duyệt này 30 ngày
+}
+```
+
+Trả `200 OK`, `data` → `TokenResponse` như mục 3.2, kèm `deviceToken` khi `rememberDevice: true`. Lưu `deviceToken` và gửi lại ở các lần `/login` sau để bỏ qua bước OTP trong 30 ngày.
+
+Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `INVALID_OTP` (400 — sai, đã dùng hoặc hết hạn), `TOO_MANY_OTP_REQUESTS` (429).
+
+### 3.18 Endpoint cho admin console — `/admin/**`
+**Bắt buộc token có role ADMIN**; app mobile không dùng.
+
+- `GET /admin/users`, `GET /admin/users/{userId}` — danh bạ tài khoản (`status`, `role`), xem `CLAUDE.md` §Ban.
+- `GET /admin/users/{userId}/security-events?page=0&size=25` — nhật ký bảo mật của một tài khoản, **mới nhất trước**: đăng nhập thành công/thất bại, reset mật khẩu, đổi email, OTP admin. Không ghi lại refresh token và lệnh ban (ban nằm ở audit log của admin-service). Mỗi phần tử: `id, eventType, ipAddress, userAgent, deviceLabel, deviceModel, detail, createdAt`.
+
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
 1. `register` → `verify-email` (OTP 6 số gửi qua mail) → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext). Bỏ qua bước verify thì `login` trả `403 EMAIL_NOT_VERIFIED`. Luồng web thì khác: `register/start` → `register/verify` → `register/complete` (mục 3.13–3.15), bước cuối trả token luôn.
@@ -385,6 +410,8 @@ ACTIVE, LOCKED
 | `INVALID_CREDENTIALS` | 401 | Sai username/email hoặc password khi login |
 | `INVALID_REFRESH_TOKEN` | 401 | Refresh token sai/hết hạn/**đã bị xoay** ở lần `/refresh` trước (xem mục 3.3 — trình lại token đã xoay còn kích hoạt replay detection, giết mọi phiên) |
 | `EMAIL_NOT_VERIFIED` | 403 | Mật khẩu đúng nhưng email chưa xác thực → điều hướng sang màn hình nhập OTP, KHÔNG gộp với `INVALID_CREDENTIALS` |
+| `MFA_REQUIRED` | 401 | Tài khoản ADMIN, mật khẩu đúng, thiết bị chưa được ghi nhớ — OTP đã gửi qua email, tiếp tục ở `/login/otp` (mục 3.17) |
+| `SOCIAL_SIGN_IN_NOT_ALLOWED` | 403 | Đăng nhập Google/Facebook vào tài khoản ADMIN (mục 3.10) |
 | `TOO_MANY_LOGIN_ATTEMPTS` | 429 | Quá 5 lần login sai trong 15 phút (theo tài khoản) |
 | `USERNAME_ALREADY_EXISTS` | 409 | Đăng ký hoặc đổi username (mục 3.16) trùng username của tài khoản khác, không phân biệt hoa thường |
 | `USERNAME_CHANGE_TOO_SOON` | 429 | Đổi username khi chưa đủ 30 ngày từ lần đổi trước (mục 3.16). Retry vô ích cho tới `usernameChangeableAt` |
