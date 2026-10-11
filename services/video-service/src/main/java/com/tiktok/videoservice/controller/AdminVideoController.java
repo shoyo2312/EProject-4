@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Separate from {@link VideoController} because the access rule is the opposite one: every GET
@@ -66,6 +67,19 @@ public class AdminVideoController {
      * screen; the lower bound keeps a hand-edited zero or a negative from asking Mongo for a
      * window in the future, which comes back empty and reads as lost data.
      */
+    /**
+     * Every status with how many videos the listing's filters match in it, zero included — the
+     * console's status totals in one request instead of one listing request per status.
+     */
+    @GetMapping("/stats/by-status")
+    public ApiResponse<Map<VideoStatus, Long>> countByStatus(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) List<Long> ownerId,
+            @RequestParam(required = false) Boolean deleted,
+            @RequestParam(required = false) Boolean purged) {
+        return ApiResponse.success(adminVideoDirectory.countByStatus(q, ownerId, deleted, purged));
+    }
+
     @GetMapping("/stats/daily")
     public ApiResponse<List<DailyVideoStatsResponse>> dailyStats(
             @RequestParam(defaultValue = "7") @Min(1) @Max(1095) int days) {

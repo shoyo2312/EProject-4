@@ -99,6 +99,15 @@ public interface VideoRepositoryCustom {
             Boolean deleted, Boolean purged, org.springframework.data.domain.Pageable pageable);
 
     /**
+     * How many videos stand in each status among those {@link #findForAdmin} matches for the same
+     * filters, in one aggregation. The console's status totals were a one-row listing per status:
+     * five requests through the gateway on every render of the videos page. A status with no
+     * video in it is absent from the map.
+     */
+    java.util.Map<VideoStatus, Long> countForAdminByStatus(
+            String term, java.util.Collection<Long> ownerIds, Boolean deleted, Boolean purged);
+
+    /**
      * Transcode succeeded: the media fields it produced, plus where the outcome was recorded, and
      * {@code publishedAt} for a verdict that was waiting on it and publishes the video now.
      *

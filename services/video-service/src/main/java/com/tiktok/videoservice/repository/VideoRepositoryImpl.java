@@ -24,7 +24,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -90,6 +92,34 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     @Override
     public Page<Video> findForAdmin(VideoStatus status, String term, Collection<Long> ownerIds,
                                     Boolean deleted, Boolean purged, Pageable pageable) {
+        Criteria criteria = adminCriteria(status, term, ownerIds, deleted, purged);
+        Query query = Query.query(criteria).with(pageable);
+        List<Video> videos = mongoTemplate.find(query, Video.class);
+        // The count repeats the match without the paging, which is what Page needs for its total.
+        long total = mongoTemplate.count(Query.query(criteria), Video.class);
+        return new PageImpl<>(videos, pageable, total);
+    }
+
+    @Override
+    public Map<VideoStatus, Long> countForAdminByStatus(String term, Collection<Long> ownerIds,
+                                                        Boolean deleted, Boolean purged) {
+        Aggregation aggregation = Aggregation.newAggregation(
+                Aggregation.match(adminCriteria(null, term, ownerIds, deleted, purged)),
+                Aggregation.group("status").count().as("videos"));
+
+        Map<VideoStatus, Long> counts = new EnumMap<>(VideoStatus.class);
+        for (Document row : mongoTemplate.aggregate(aggregation, Video.class, Document.class)) {
+            counts.put(VideoStatus.valueOf(row.getString("_id")), asLong(row.get("videos")));
+        }
+        return counts;
+    }
+
+    /**
+     * The admin listing's match, shared by the listing and its per-status totals so that a total
+     * is always a count of exactly the rows the same filters list.
+     */
+    private static Criteria adminCriteria(VideoStatus status, String term, Collection<Long> ownerIds,
+                                          Boolean deleted, Boolean purged) {
         // Owner-deleted videos are included by default, unlike every other read path here: the
         // admin console is the one place that has to account for a video after its owner removed
         // it. `deleted` narrows to just the one side when a moderator wants only deleted rows, or
@@ -122,12 +152,7 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         if (!matches.isEmpty()) {
             criteria = criteria.andOperator(new Criteria().orOperator(matches.toArray(new Criteria[0])));
         }
-
-        Query query = Query.query(criteria).with(pageable);
-        List<Video> videos = mongoTemplate.find(query, Video.class);
-        // The count repeats the match without the paging, which is what Page needs for its total.
-        long total = mongoTemplate.count(Query.query(criteria), Video.class);
-        return new PageImpl<>(videos, pageable, total);
+        return criteria;
     }
 
     @Override

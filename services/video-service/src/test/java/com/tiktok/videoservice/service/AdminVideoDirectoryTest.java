@@ -51,6 +51,21 @@ class AdminVideoDirectoryTest {
     private final AdminVideoDirectory directory = new AdminVideoDirectory(videoRepository, new VideoMapperImpl(),
             new QuarantinedMediaUrls(minioClient, MINIO));
 
+    /** Every status is in the answer, so the console never reads a missing key as a count. */
+    @Test
+    void statusTotalsNameEveryStatusAndTrimTheSearch() {
+        when(videoRepository.countForAdminByStatus("cats", null, null, null))
+                .thenReturn(java.util.Map.of(VideoStatus.PUBLISHED, 3L));
+
+        assertThat(directory.countByStatus("  cats ", null, null, null))
+                .hasSize(VideoStatus.values().length)
+                .containsEntry(VideoStatus.PUBLISHED, 3L)
+                .containsEntry(VideoStatus.PENDING_REVIEW, 0L);
+
+        directory.countByStatus("   ", null, null, null);
+        verify(videoRepository).countForAdminByStatus(null, null, null, null);
+    }
+
     private void quarantinedCopy(boolean present) throws Exception {
         if (present) {
             doReturn(mock(StatObjectResponse.class)).when(minioClient).statObject(any(StatObjectArgs.class));

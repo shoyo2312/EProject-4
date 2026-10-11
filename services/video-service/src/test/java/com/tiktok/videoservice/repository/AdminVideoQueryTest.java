@@ -224,6 +224,39 @@ class AdminVideoQueryTest {
                 });
     }
 
+    @Test
+    void countsEveryStatusTheListingWouldShow() {
+        assertThat(videoRepository.countForAdminByStatus(null, null, null, null))
+                .as("deleted rows count too, as they are listed")
+                .containsOnly(
+                        java.util.Map.entry(VideoStatus.PUBLISHED, 4L),
+                        java.util.Map.entry(VideoStatus.TAKEN_DOWN, 1L),
+                        java.util.Map.entry(VideoStatus.PROCESSING, 1L));
+    }
+
+    @Test
+    void countsUnderTheSameSearchAndFilters() {
+        assertThat(videoRepository.countForAdminByStatus(null, java.util.List.of(2L), null, null))
+                .containsOnly(
+                        java.util.Map.entry(VideoStatus.PUBLISHED, 1L),
+                        java.util.Map.entry(VideoStatus.TAKEN_DOWN, 1L));
+        assertThat(videoRepository.countForAdminByStatus("cook", null, null, null))
+                .containsOnly(java.util.Map.entry(VideoStatus.PUBLISHED, 1L));
+        assertThat(videoRepository.countForAdminByStatus(null, null, false, null))
+                .containsEntry(VideoStatus.PUBLISHED, 3L);
+    }
+
+    /** The totals and the listing share one match, so they cannot drift apart. */
+    @Test
+    void theTotalsAddUpToTheListing() {
+        long listed = videoRepository.findForAdmin(null, "o", java.util.List.of(2L), null, null, FIRST_PAGE)
+                .getTotalElements();
+
+        assertThat(videoRepository.countForAdminByStatus("o", java.util.List.of(2L), null, null).values()
+                .stream().mapToLong(Long::longValue).sum())
+                .isEqualTo(listed);
+    }
+
     private void save(String title, VideoStatus status, Instant deletedAt, long userId) {
         videoRepository.save(Video.builder()
                 .id(Video.newId())

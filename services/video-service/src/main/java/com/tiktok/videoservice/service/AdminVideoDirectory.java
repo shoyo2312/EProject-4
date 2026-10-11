@@ -14,7 +14,9 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The admin console's video listing.
@@ -44,6 +46,21 @@ public class AdminVideoDirectory {
         return videoRepository.findForAdmin(status, term, ownerIds, deleted, purged, pageable)
                 .map(videoMapper::toAdminResponse)
                 .map(quarantinedMediaUrls::forAdmin);
+    }
+
+    /**
+     * Every status with how many videos stand in it for the listing's own filters, a status with
+     * none included as zero — so a total the console shows is never a missing key it had to guess.
+     */
+    public Map<VideoStatus, Long> countByStatus(String query, Collection<Long> ownerIds,
+                                                Boolean deleted, Boolean purged) {
+        String term = (query == null || query.isBlank()) ? null : query.trim();
+        Map<VideoStatus, Long> counts = new EnumMap<>(VideoStatus.class);
+        for (VideoStatus status : VideoStatus.values()) {
+            counts.put(status, 0L);
+        }
+        counts.putAll(videoRepository.countForAdminByStatus(term, ownerIds, deleted, purged));
+        return counts;
     }
 
     /**
