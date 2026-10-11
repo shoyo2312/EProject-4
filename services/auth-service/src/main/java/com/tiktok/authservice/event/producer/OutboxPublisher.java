@@ -32,7 +32,8 @@ public class OutboxPublisher {
      */
     private static final Map<String, String> TOPICS = Map.of(
             UserEventProducer.USER_AGGREGATE, "auth.user-events",
-            UserEventProducer.USERNAME_AGGREGATE, "auth.username-events");
+            UserEventProducer.USERNAME_AGGREGATE, "auth.username-events",
+            UserEventProducer.SOCIAL_AVATAR_AGGREGATE, SocialAvatarEventProducer.TOPIC);
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxDispatcher outboxDispatcher;

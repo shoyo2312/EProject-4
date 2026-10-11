@@ -106,11 +106,11 @@ Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file t�
 
 ## 4. Sao ảnh đại diện (avatar mirror)
 
-`SocialAvatarDiscoveredEvent` (auth-service phát mỗi lần đăng nhập social có ảnh) → `AvatarMirrorService.mirror(userId, providerUrl)`:
+`SocialAvatarDiscoveredEvent` (auth-service phát mỗi lần đăng nhập social có ảnh; lần tạo tài khoản thì qua outbox, ngay sau `UserRegisteredEvent`) → `AvatarMirrorService.mirror(userId, providerUrl)`:
 - Chỉ fetch từ host trong `media.avatar.allowed-hosts` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, `graph.facebook.com`, `scontent.xx.fbcdn.net`). Host khác → từ chối.
 - Chỉ nhận ảnh, tối đa `media.avatar.max-bytes` (5 MB).
 - Ghi `avatars/{userId}.jpg` (một key/user, ghi đè — profile trỏ vào URL này).
-- Phát `AvatarMirroredEvent(userId, sourceUrl, mirroredUrl)`. `user-service` chỉ ghi đè `avatarUrl` khi nó đang trống hoặc đúng bằng `sourceUrl` — ảnh user tự đặt không bị đụng.
+- Phát `AvatarMirroredEvent(userId, sourceUrl, mirroredUrl)`. `user-service` chỉ ghi đè `avatarUrl` khi nó đang trống hoặc đúng bằng `sourceUrl` — ảnh user tự đặt không bị đụng. Profile chưa tồn tại thì user-service throw để event được retry.
 
 URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) → sau các lần thử của `kafka-lib` thì vào `auth.social-avatar-events.DLT`. Không sao: lần đăng nhập sau phát lại URL mới, profile giữ ảnh cũ trong lúc chờ.
 

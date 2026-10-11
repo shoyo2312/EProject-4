@@ -8,6 +8,8 @@ import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.exception.SocialSignInNotAllowedException;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
+import com.tiktok.authservice.service.SocialAccountRegistrar.Registration;
+import com.tiktok.event.user.SocialAvatarDiscoveredEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -32,6 +34,7 @@ import static org.mockito.Mockito.when;
 class SocialAccountRegistrarTest {
 
     private static final String UID = "1850497406314145";
+    private static final String PICTURE = "https://lh3.googleusercontent.com/a/x";
 
     private final UserRepository userRepository = mock(UserRepository.class);
     private final UserIdentityRepository identityRepository = mock(UserIdentityRepository.class);
@@ -94,10 +97,58 @@ class SocialAccountRegistrarTest {
                 .thenReturn(Optional.of(owner));
 
         User result = registrar.register(
-                new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true));
+                new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true)).user();
 
         assertThat(result).isSameAs(owner);
         verify(userRepository, never()).saveAndFlush(any());
+    }
+
+    /**
+     * Queued after the registration, in its transaction, so the outbox poll that hands user-service
+     * the registration hands media-worker the picture — instead of the picture going out a whole
+     * poll ahead of the profile it is for.
+     */
+    @Test
+    void newAccountQueuesItsAvatarBehindTheRegistration() {
+        when(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("a@example.com"))
+                .thenReturn(Optional.empty());
+
+        Registration result = registrar.register(
+                new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true, PICTURE));
+
+        assertThat(result.avatarAnnounced()).isTrue();
+        ArgumentCaptor<SocialAvatarDiscoveredEvent> announced =
+                ArgumentCaptor.forClass(SocialAvatarDiscoveredEvent.class);
+        InOrder order = inOrder(eventProducer);
+        order.verify(eventProducer).publishUserRegistered(any());
+        order.verify(eventProducer).publishSocialAvatarDiscovered(announced.capture());
+        assertThat(announced.getValue().avatarUrl()).isEqualTo(PICTURE);
+    }
+
+    @Test
+    void newAccountWithoutAPictureQueuesNoAnnouncement() {
+        when(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("a@example.com"))
+                .thenReturn(Optional.empty());
+
+        Registration result = registrar.register(
+                new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true));
+
+        assertThat(result.avatarAnnounced()).isFalse();
+        verify(eventProducer, never()).publishSocialAvatarDiscovered(any());
+    }
+
+    /** An account that already existed has its profile, so the caller's direct send can land on it. */
+    @Test
+    void claimedAccountLeavesTheAvatarToTheCaller() {
+        User owner = existing("a@example.com");
+        when(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("a@example.com"))
+                .thenReturn(Optional.of(owner));
+
+        Registration result = registrar.register(
+                new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true, PICTURE));
+
+        assertThat(result.avatarAnnounced()).isFalse();
+        verify(eventProducer, never()).publishSocialAvatarDiscovered(any());
     }
 
     /**

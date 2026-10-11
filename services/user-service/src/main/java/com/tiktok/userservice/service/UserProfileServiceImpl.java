@@ -249,12 +249,21 @@ public class UserProfileServiceImpl implements UserProfileService {
     @Override
     @Transactional
     public void applyMirroredAvatar(Long userId, String sourceUrl, String avatarUrl) {
+        // A copy that overtook the registration creating its profile — the two travel on different
+        // topics. Thrown so the delivery is retried, as in applyUsernameChange. Written off, it left
+        // every new social account on the provider's URL until its owner happened to sign in again,
+        // and a Facebook URL stops resolving within days. Checked before the update rather than
+        // after a miss: a profile committed between the two would pass for one whose owner chose a
+        // picture, and the copy would be dropped after all.
+        if (!userProfileRepository.existsByUserIdAndDeletedAtIsNull(userId)) {
+            throw new UserProfileNotFoundException(userId);
+        }
+
         int updated = userProfileRepository.replaceProviderAvatar(userId, sourceUrl, avatarUrl);
 
         if (updated == 0) {
             // Not an error, and the common case once an account has been around: the user picked
-            // their own picture, or the profile does not exist yet because this raced the
-            // registration that creates it. The next sign-in announces the same avatar again.
+            // their own picture.
             log.debug("Left the avatar of user {} alone; it is not the provider's to replace", userId);
         }
     }

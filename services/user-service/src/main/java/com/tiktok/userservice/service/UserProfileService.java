@@ -123,6 +123,9 @@ public interface UserProfileService {
      *
      * <p>Also how an account that predates provider avatars gets one at all: a profile with no
      * avatar takes the copy too. A profile whose owner has since chosen a picture keeps it.
+     *
+     * <p>Throws when the profile does not exist yet, so the delivery is retried — three more
+     * times, a second apart, before kafka-lib parks it on the topic's DLT.
      */
     void applyMirroredAvatar(Long userId, String sourceUrl, String avatarUrl);
 }

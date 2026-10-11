@@ -175,6 +175,25 @@ class UserProfileServiceImplTest {
         assertThat(userProfileService.getByUserId(3L, 3L).avatarUrl()).isEqualTo(OWN_AVATAR);
     }
 
+    /**
+     * A new account's copy can land before the registration creating its profile. Dropped, that
+     * profile came up on the provider's URL and stayed there; thrown, the redelivery after the
+     * registration puts the copy on it.
+     */
+    @Test
+    void applyMirroredAvatar_beforeTheProfileExists_throwsSoTheRetryCanApplyIt() {
+        String source = "https://lh3.googleusercontent.com/a/x";
+        String mirrored = "http://localhost:9000/video-media/avatars/1";
+
+        assertThatThrownBy(() -> userProfileService.applyMirroredAvatar(1L, source, mirrored))
+                .isInstanceOf(UserProfileNotFoundException.class);
+
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", source);
+        userProfileService.applyMirroredAvatar(1L, source, mirrored);
+
+        assertThat(userProfileService.getByUserId(1L, 1L).avatarUrl()).isEqualTo(mirrored);
+    }
+
     @Test
     @Transactional
     void createFromRegisteredEvent_replay_isNoOp() {

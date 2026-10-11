@@ -63,6 +63,28 @@ class OutboxPublisherTest {
         verify(outboxEventRepository).markPublished(eq(List.of(1L, 2L)), any(Instant.class));
     }
 
+    /**
+     * A new account's picture rides the outbox behind its registration, but media-worker listens
+     * only where the direct sends go — so that is where it has to end up, in the same poll.
+     */
+    @Test
+    void aNewAccountsAvatar_followsItsRegistrationOntoTheDirectSendsTopic() {
+        when(outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc()).thenReturn(List.of(
+                row(1L, "USER", "7"),
+                row(2L, "SOCIAL_AVATAR", "7")));
+        when(kafkaOperations.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher().publishPending();
+
+        ArgumentCaptor<ProducerRecord<String, String>> sent = ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaOperations, times(2)).send(sent.capture());
+        assertThat(sent.getAllValues())
+                .extracting(ProducerRecord::topic, ProducerRecord::key)
+                .containsExactly(
+                        tuple("auth.user-events", "7"),
+                        tuple("auth.social-avatar-events", "7"));
+    }
+
     @Test
     void aRowWithAnUnknownAggregateType_staysPending() {
         when(outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc())

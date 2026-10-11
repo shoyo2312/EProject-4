@@ -7,6 +7,7 @@ import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
+import com.tiktok.event.user.SocialAvatarDiscoveredEvent;
 import com.tiktok.event.user.UserRegisteredEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -34,8 +35,18 @@ public class SocialAccountRegistrar {
     private final UserEventProducer userEventProducer;
     private final IdentityReconfirmation identityReconfirmation;
 
+    /**
+     * The account a provider sign-in resolved to.
+     *
+     * @param avatarAnnounced whether the provider picture is already on its way to media-worker —
+     *                        queued behind the registration of the account this call created. The
+     *                        caller announces it otherwise, as for any account that already existed.
+     */
+    public record Registration(User user, boolean avatarAnnounced) {
+    }
+
     @Transactional
-    public User register(SocialProfile profile) {
+    public Registration register(SocialProfile profile) {
         // Verification decides two separate things, and conflating them costs the user a screen for
         // nothing. It decides whether we may hand over an account we already hold — there it is
         // absolute, since anyone can register victim@example.com at a provider. It does not have to
@@ -53,7 +64,7 @@ public class SocialAccountRegistrar {
             SocialSignInPolicy.requireAllowed(existing);
             if (profile.emailVerified()) {
                 claim(existing, profile);
-                return existing;
+                return new Registration(existing, false);
             }
             // Address already has an owner and the provider vouches for nothing. Both ways out of
             // here are wrong on their own: claiming the account hands it over on an unverified
@@ -91,7 +102,18 @@ public class SocialAccountRegistrar {
         userEventProducer.publishUserRegistered(UserRegisteredEvent.of(
                 user.getId(), user.getUsername(), user.getEmail(), profile.avatarUrl()));
 
-        return user;
+        // Queued behind the registration rather than left to the caller's direct send. That send
+        // went out the moment this returned, up to one outbox poll — five seconds — ahead of the
+        // registration, so the copy reached user-service before the profile it belongs to and was
+        // dropped: every new account stayed on the provider's URL. Leaving in the same poll, the two
+        // arrive together, and user-service retries a copy that still lands first.
+        boolean avatarAnnounced = profile.avatarUrl() != null;
+        if (avatarAnnounced) {
+            userEventProducer.publishSocialAvatarDiscovered(
+                    SocialAvatarDiscoveredEvent.of(user.getId(), profile.avatarUrl()));
+        }
+
+        return new Registration(user, avatarAnnounced);
     }
 
     /**

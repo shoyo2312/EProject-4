@@ -63,6 +63,7 @@ public class OAuthServiceImpl implements OAuthService {
         Optional<UserIdentity> link = userIdentityRepository
                 .findByProviderAndProviderUid(profile.provider(), profile.uid());
         User user;
+        boolean avatarAnnounced = false;
         if (link.isPresent()) {
             user = ownerOf(link.get());
             SocialSignInPolicy.requireAllowed(user);
@@ -75,7 +76,9 @@ public class OAuthServiceImpl implements OAuthService {
                 throw new SocialLinkVerificationRequiredException();
             }
         } else {
-            user = registerOrJoinWinner(profile);
+            SocialAccountRegistrar.Registration registration = registerOrJoinWinner(profile);
+            user = registration.user();
+            avatarAnnounced = registration.avatarAnnounced();
         }
 
         // A locked account must not be handed a session by the side door. Same answer the password
@@ -83,7 +86,9 @@ public class OAuthServiceImpl implements OAuthService {
         requireStillActive(user);
         SocialSignInPolicy.requireAllowed(user);
 
-        announceAvatar(user, profile);
+        if (!avatarAnnounced) {
+            announceAvatar(user, profile);
+        }
 
         // Not checked: emailVerified. The provider has already proven the user controls the
         // account, and an account with no address at all could never satisfy it.
@@ -144,11 +149,9 @@ public class OAuthServiceImpl implements OAuthService {
      * has no other moment where a provider picture is in reach — the token that could fetch one
      * only exists while the user is signing in.
      *
-     * <p>Sent for a brand-new account too, whose registration already carried the same URL. The two
-     * are not redundant: the registration seeds the profile so the picture shows immediately, this
-     * one starts the copy into our own storage. Both are idempotent about it, and if this one wins
-     * the race against the profile being created it simply finds nothing to update and the next
-     * sign-in repeats it.
+     * <p>Not from here for an account the sign-in created: {@link SocialAccountRegistrar#register}
+     * queues that one behind the registration instead. Sent from here it beat the registration to
+     * user-service by up to an outbox poll, and the copy had no profile to land on.
      */
     private void announceAvatar(User user, SocialProfile profile) {
         if (profile.avatarUrl() != null) {
@@ -166,7 +169,7 @@ public class OAuthServiceImpl implements OAuthService {
         }
     }
 
-    private User registerOrJoinWinner(SocialProfile profile) {
+    private SocialAccountRegistrar.Registration registerOrJoinWinner(SocialProfile profile) {
         try {
             return attemptRegister(profile);
         } catch (DataIntegrityViolationException e) {
@@ -187,7 +190,11 @@ public class OAuthServiceImpl implements OAuthService {
             // that transaction is already doomed by the violation and can read nothing.
             log.info("Concurrent first login for {} uid {} — retrying against the winner's state",
                     profile.provider(), profile.uid());
-            return findLinked(profile).orElseGet(() -> attemptRegister(profile));
+            return findLinked(profile)
+                    // The winner's sign-in announces the avatar, whichever branch it took. Again
+                    // from here, it could overtake the registration the winner queued it behind.
+                    .map(winner -> new SocialAccountRegistrar.Registration(winner, true))
+                    .orElseGet(() -> attemptRegister(profile));
         }
     }
 
@@ -198,7 +205,7 @@ public class OAuthServiceImpl implements OAuthService {
      * is not a race any more, so the second violation propagates as a 500 with its stack trace
      * rather than being retried again.
      */
-    private User attemptRegister(SocialProfile profile) {
+    private SocialAccountRegistrar.Registration attemptRegister(SocialProfile profile) {
         try {
             return registrar.register(profile);
         } catch (SocialLinkRequiredSignal signal) {

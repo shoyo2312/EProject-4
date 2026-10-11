@@ -16,6 +16,7 @@ import com.tiktok.authservice.exception.SocialLinkVerificationRequiredException;
 import com.tiktok.authservice.exception.SocialSignInNotAllowedException;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
+import com.tiktok.authservice.service.SocialAccountRegistrar.Registration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -36,6 +37,7 @@ import static org.mockito.Mockito.when;
 class OAuthServiceImplTest {
 
     private static final String UID = "107841234567890123456";
+    private static final String PICTURE = "https://lh3.googleusercontent.com/a/x";
     private static final SocialLoginRequest REQUEST = new SocialLoginRequest("provider-token");
 
     private final SocialTokenVerifier verifier = mock(SocialTokenVerifier.class);
@@ -75,7 +77,7 @@ class OAuthServiceImplTest {
     void firstLoginRegisters() {
         when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
                 .thenReturn(Optional.empty());
-        when(registrar.register(any())).thenReturn(activeUser("a@example.com"));
+        when(registrar.register(any())).thenReturn(new Registration(activeUser("a@example.com"), false));
 
         service.login(AuthProvider.GOOGLE, REQUEST);
 
@@ -101,6 +103,53 @@ class OAuthServiceImplTest {
     @Test
     void signInWithoutAProviderPictureAnnouncesNothing() {
         linkedTo(activeUser("a@example.com"));
+
+        service.login(AuthProvider.GOOGLE, REQUEST);
+
+        verify(avatarEventProducer, never()).publish(any(), any());
+    }
+
+    /**
+     * The registration queues a new account's picture behind itself. Announced from here as well,
+     * the copy reached user-service before the profile it belongs to, and every new account stayed
+     * on the provider's URL.
+     */
+    @Test
+    void firstSignInLeavesTheAvatarToTheRegistration() {
+        withProviderPicture();
+        when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
+                .thenReturn(Optional.empty());
+        when(registrar.register(any())).thenReturn(new Registration(activeUser("a@example.com"), true));
+
+        service.login(AuthProvider.GOOGLE, REQUEST);
+
+        verify(avatarEventProducer, never()).publish(any(), any());
+    }
+
+    /** An existing account the provider's verified address claimed already has a profile to land on. */
+    @Test
+    void firstSignInIntoAnExistingAccountAnnouncesTheAvatar() {
+        withProviderPicture();
+        User owner = activeUser("a@example.com");
+        when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
+                .thenReturn(Optional.empty());
+        when(registrar.register(any())).thenReturn(new Registration(owner, false));
+
+        service.login(AuthProvider.GOOGLE, REQUEST);
+
+        verify(avatarEventProducer).publish(owner.getId(), PICTURE);
+    }
+
+    /** The double tap's other request announces it — possibly queued behind the registration. */
+    @Test
+    void loserOfTheRegistrationRaceLeavesTheAvatarToTheWinner() {
+        withProviderPicture();
+        User winner = activeUser("a@example.com");
+        when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(identityFor(winner)));
+        when(userRepository.findById(any())).thenReturn(Optional.of(winner));
+        when(registrar.register(any())).thenThrow(new DataIntegrityViolationException("uq_identity"));
 
         service.login(AuthProvider.GOOGLE, REQUEST);
 
@@ -154,7 +203,7 @@ class OAuthServiceImplTest {
                 .thenReturn(Optional.empty());
         when(registrar.register(any()))
                 .thenThrow(new DataIntegrityViolationException("uq_users_username"))
-                .thenReturn(activeUser("a@example.com"));
+                .thenReturn(new Registration(activeUser("a@example.com"), false));
 
         assertThat(service.login(AuthProvider.GOOGLE, REQUEST).tokens().accessToken()).isEqualTo("access");
         verify(registrar, times(2)).register(any());
@@ -316,6 +365,11 @@ class OAuthServiceImplTest {
                 .thenReturn(Optional.of(flagged));
         when(userRepository.findById(any())).thenReturn(Optional.of(user));
         return flagged;
+    }
+
+    private void withProviderPicture() {
+        when(verifier.verify(REQUEST.token()))
+                .thenReturn(new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true, PICTURE));
     }
 
     private void linkedTo(User user) {
