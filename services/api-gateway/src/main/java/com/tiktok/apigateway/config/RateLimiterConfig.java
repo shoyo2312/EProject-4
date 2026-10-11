@@ -6,10 +6,12 @@ import org.springframework.cloud.gateway.filter.ratelimit.KeyResolver;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.security.core.Authentication;
 import reactor.core.publisher.Mono;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.security.Principal;
 import java.util.Arrays;
 import java.util.List;
 
@@ -20,8 +22,16 @@ public class RateLimiterConfig {
     private static final String FORWARDED_FOR = "X-Forwarded-For";
 
     /**
-     * Rate-limits by client IP so one abusive caller can't exhaust the bucket for everyone
-     * behind a shared account (relevant before login even establishes an identity).
+     * Rate-limits a signed-in admin by account, and every other request by client IP so one
+     * abusive caller can't exhaust the bucket for everyone behind a shared account (relevant
+     * before login even establishes an identity).
+     *
+     * <p>Admins by account because the admin console calls this gateway from its own server: every
+     * admin it serves arrives from that one address, and a few of them on the videos page empty a
+     * shared 20 req/s bucket between them. The account is a key nobody can forge — the
+     * authentication filter has verified the token before any route filter runs, and a token that
+     * fails is a 401 there, not a guest. Only admins: anyone can create an ordinary account, and
+     * keying those by account would hand out a fresh bucket per sign-up.
      *
      * <p>The web client reaches us through Next.js, which proxies {@code /api/*} here from its own
      * server, so {@code getRemoteAddress()} is that one server for every viewer on the site — the
@@ -41,9 +51,19 @@ public class RateLimiterConfig {
      * of it (Vercel's edge does), or the web path stays spoofable whatever this resolver does.
      */
     @Bean
-    public KeyResolver ipKeyResolver(RateLimitProperties properties) {
+    public KeyResolver clientKeyResolver(RateLimitProperties properties) {
         TrustedProxies trusted = TrustedProxies.parse(properties.trustedProxies());
-        return exchange -> Mono.just(clientAddress(exchange.getRequest(), trusted));
+        return exchange -> exchange.getPrincipal()
+                .filter(RateLimiterConfig::isAdmin)
+                .map(admin -> "admin:" + admin.getName())
+                .switchIfEmpty(Mono.fromSupplier(() -> clientAddress(exchange.getRequest(), trusted)));
+    }
+
+    private static boolean isAdmin(Principal principal) {
+        return principal instanceof Authentication authentication
+                && authentication.isAuthenticated()
+                && authentication.getAuthorities().stream()
+                        .anyMatch(authority -> "ROLE_ADMIN".equals(authority.getAuthority()));
     }
 
     static String clientAddress(ServerHttpRequest request, TrustedProxies trusted) {

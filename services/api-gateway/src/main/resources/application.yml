@@ -80,7 +80,7 @@ spring:
               args:
                 redis-rate-limiter.replenishRate: 20
                 redis-rate-limiter.burstCapacity: 40
-                key-resolver: "#{@ipKeyResolver}"
+                key-resolver: "#{@clientKeyResolver}"
 
 gateway:
   rate-limit:

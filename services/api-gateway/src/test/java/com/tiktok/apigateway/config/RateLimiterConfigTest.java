@@ -5,8 +5,13 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import reactor.core.publisher.Mono;
 
 import java.net.InetSocketAddress;
+import java.security.Principal;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -27,9 +32,39 @@ class RateLimiterConfigTest {
         if (forwardedFor.length > 0) {
             request.header("X-Forwarded-For", forwardedFor);
         }
-        return new RateLimiterConfig().ipKeyResolver(PROPERTIES)
+        return new RateLimiterConfig().clientKeyResolver(PROPERTIES)
                 .resolve(MockServerWebExchange.from(request))
                 .block();
+    }
+
+    private String keyFor(Authentication signedIn, String peer) {
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .get("/api/v1/videos/admin")
+                .remoteAddress(new InetSocketAddress(peer, 40000)));
+        return new RateLimiterConfig().clientKeyResolver(PROPERTIES)
+                .resolve(exchange.mutate().principal(Mono.<Principal>just(signedIn)).build())
+                .block();
+    }
+
+    private static Authentication signedIn(long userId, String role) {
+        return new UsernamePasswordAuthenticationToken(
+                userId, "token", List.of(new SimpleGrantedAuthority("ROLE_" + role)));
+    }
+
+    /**
+     * Every admin reaches the gateway from the console's one server; by address they would share
+     * one bucket. By account, each has their own wherever they connect from.
+     */
+    @Test
+    void aSignedInAdmin_isCountedByAccount() {
+        assertThat(keyFor(signedIn(7L, "ADMIN"), "10.0.0.5")).isEqualTo("admin:7");
+        assertThat(keyFor(signedIn(8L, "ADMIN"), "10.0.0.5")).isEqualTo("admin:8");
+    }
+
+    /** Anyone can make an ordinary account, so one is no reason for a bucket of its own. */
+    @Test
+    void anyOtherAccount_isStillCountedByAddress() {
+        assertThat(keyFor(signedIn(7L, "USER"), "203.0.113.7")).isEqualTo("203.0.113.7");
     }
 
     @Test
