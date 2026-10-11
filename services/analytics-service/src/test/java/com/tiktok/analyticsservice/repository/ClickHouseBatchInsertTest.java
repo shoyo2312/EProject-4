@@ -16,6 +16,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -35,8 +37,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 class ClickHouseBatchInsertTest {
 
+    private static final Instant T0 = Instant.parse("2026-09-23T10:00:00Z");
+
+    /**
+     * A zone the JVM is not in. An instant bound the wrong way lands off by exactly the distance
+     * between the two — seven hours on a laptop in Hanoi, nothing at all on a runner where both are
+     * UTC, which is how every row came to be written seven hours late without a test noticing.
+     */
+    private static final String SERVER_ZONE =
+            ZoneId.systemDefault().getRules().getOffset(T0).equals(ZoneOffset.ofHours(14)) ? "UTC" : "Pacific/Kiritimati";
+
     @Container
-    static final ClickHouseContainer CLICKHOUSE = new ClickHouseContainer("clickhouse/clickhouse-server:24.8-alpine");
+    static final ClickHouseContainer CLICKHOUSE = new ClickHouseContainer("clickhouse/clickhouse-server:24.8-alpine")
+            .withEnv("TZ", SERVER_ZONE);
 
     @DynamicPropertySource
     static void clickhouse(DynamicPropertyRegistry registry) {
@@ -46,13 +59,14 @@ class ClickHouseBatchInsertTest {
         registry.add("spring.datasource.password", CLICKHOUSE::getPassword);
     }
 
-    private static final Instant T0 = Instant.parse("2026-09-23T10:00:00Z");
-
     @Autowired
     private TrainingDataRepository trainingDataRepository;
 
     @Autowired
     private EngagementEventRepository engagementEventRepository;
+
+    @Autowired
+    private UserSignupEventRepository userSignupEventRepository;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -62,7 +76,7 @@ class ClickHouseBatchInsertTest {
 
     @BeforeEach
     void cleanUp() {
-        for (String table : List.of("watch_events", "engagement_events", "video_tags")) {
+        for (String table : List.of("watch_events", "engagement_events", "video_tags", "user_signup_events")) {
             jdbcTemplate.execute("TRUNCATE TABLE " + table);
         }
     }
@@ -86,6 +100,30 @@ class ClickHouseBatchInsertTest {
 
         assertThat(rows("watch_events")).isEqualTo(200);
         assertThat(activeParts("watch_events")).isEqualTo(1);
+    }
+
+    /**
+     * Every write path, read back to the millisecond. The daily charts bucket by the stored day, so
+     * a row written hours off moves the evening's activity into the wrong day.
+     */
+    @Test
+    void everyInsertKeepsTheInstantItWasGiven() {
+        Instant at = T0.plusMillis(123);
+        trainingDataRepository.insertWatches(List.of(
+                new TrainingDataRepository.WatchRow("w", "v1", 7L, 9_000L, 10_000L, true, at)));
+        trainingDataRepository.insertTags("v1", List.of("dance"), at);
+        engagementEventRepository.insert("e", "LIKED", "v1", 7L, at);
+        userSignupEventRepository.insert("s", 7L, "alice", at);
+
+        assertThat(storedAt("watch_events", "occurred_at")).isEqualTo(at);
+        assertThat(storedAt("video_tags", "published_at")).isEqualTo(at);
+        assertThat(storedAt("engagement_events", "occurred_at")).isEqualTo(at);
+        assertThat(storedAt("user_signup_events", "occurred_at")).isEqualTo(at);
+    }
+
+    private Instant storedAt(String table, String column) {
+        return Instant.ofEpochMilli(jdbcTemplate.queryForObject(
+                "SELECT toUnixTimestamp64Milli(%s) FROM %s".formatted(column, table), Long.class));
     }
 
     @Test
@@ -129,4 +167,5 @@ class ClickHouseBatchInsertTest {
     private static boolean isBatch(MessageListenerContainer container) {
         return container.getContainerProperties().getMessageListener() instanceof BatchMessageListener<?, ?>;
     }
+
 }

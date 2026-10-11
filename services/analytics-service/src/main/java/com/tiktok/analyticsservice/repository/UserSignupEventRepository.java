@@ -5,7 +5,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 
@@ -15,10 +14,11 @@ public class UserSignupEventRepository {
 
     private final JdbcTemplate jdbcTemplate;
 
+    /** The time goes in as the {@code Instant} itself — see {@link EngagementEventRepository#insertAll}. */
     public void insert(String eventId, Long userId, String username, Instant occurredAt) {
         jdbcTemplate.update(
                 "INSERT INTO user_signup_events (event_id, user_id, username, occurred_at) VALUES (?, ?, ?, ?)",
-                eventId, userId, username, Timestamp.from(occurredAt));
+                eventId, userId, username, occurredAt);
     }
 
     public List<DailySignupResponse> findDailySignups(int days) {

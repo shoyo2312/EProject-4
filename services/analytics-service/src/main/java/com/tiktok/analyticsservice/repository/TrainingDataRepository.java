@@ -4,7 +4,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 
@@ -13,6 +12,9 @@ import java.util.List;
  * {@link EngagementEventRepository} because nothing reads them over HTTP — they exist to be
  * queried offline by the trainer in {@code services/rank-service}, and the shape that suits a
  * dashboard is not the shape that suits a training set.
+ *
+ * <p>Times go in as the {@code Instant} itself — see {@link EngagementEventRepository#insertAll}.
+ * The trainer cuts its sets at a point in time, so a row stored hours off lands on the wrong side.
  */
 @Repository
 @RequiredArgsConstructor
@@ -37,7 +39,7 @@ public class TrainingDataRepository {
                 """,
                 rows.stream()
                         .map(row -> new Object[]{row.eventId(), row.videoId(), row.userId(), row.watchedMs(),
-                                row.durationMs(), row.completed() ? 1 : 0, Timestamp.from(row.occurredAt())})
+                                row.durationMs(), row.completed() ? 1 : 0, row.occurredAt()})
                         .toList());
     }
 
@@ -56,6 +58,6 @@ public class TrainingDataRepository {
         // One INSERT for all of a video's tags, not one each.
         jdbcTemplate.batchUpdate(
                 "INSERT INTO video_tags (video_id, tag, published_at) VALUES (?, ?, ?)",
-                tags.stream().map(tag -> new Object[]{videoId, tag, Timestamp.from(publishedAt)}).toList());
+                tags.stream().map(tag -> new Object[]{videoId, tag, publishedAt}).toList());
     }
 }
