@@ -77,7 +77,7 @@ class OtpReissueCollisionTest {
     void resendVerification_drawingTheSameOtp_replacesItInsteadOfFailing() {
         authService.register(new RegisterRequest("johndoe", "john@example.com", "password123", "test-turnstile-token"));
 
-        assertThatCode(() -> authService.resendVerification(new ResendVerificationRequest("john@example.com", "test-turnstile-token")))
+        assertThatCode(() -> authService.resendVerification(new ResendVerificationRequest("john@example.com", "test-turnstile-token", null)))
                 .as("re-issuing the same digits must replace the old token, not violate its unique index")
                 .doesNotThrowAnyException();
 

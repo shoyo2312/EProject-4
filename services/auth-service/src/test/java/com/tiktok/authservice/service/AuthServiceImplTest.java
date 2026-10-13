@@ -826,7 +826,7 @@ class AuthServiceImplTest {
 
     @Test
     void forgotPassword_withUnknownEmail_doesNotThrow() {
-        authService.forgotPassword(new ForgotPasswordRequest("ghost@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("ghost@example.com", "test-turnstile-token", null));
     }
 
     @Test
@@ -834,7 +834,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
 
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
@@ -859,7 +859,7 @@ class AuthServiceImplTest {
         authService.register(validRegisterRequest());
         verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), org.mockito.ArgumentMatchers.anyString());
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
 
@@ -881,7 +881,7 @@ class AuthServiceImplTest {
         UserIdentity squattersFacebook = userIdentityRepository.save(UserIdentity.builder()
                 .userId(squatted.id()).provider(AuthProvider.FACEBOOK).providerUid("squatter-fb").build());
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
         authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
@@ -897,7 +897,7 @@ class AuthServiceImplTest {
         UserIdentity ownGoogle = userIdentityRepository.save(UserIdentity.builder()
                 .userId(owner.id()).provider(AuthProvider.GOOGLE).providerUid("owner-google").build());
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
         authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
@@ -1105,7 +1105,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse attacker = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
 
@@ -1246,7 +1246,7 @@ class AuthServiceImplTest {
         registerVerified();
         arriveFrom("203.0.113.7", null);
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
         authService.resetPassword(

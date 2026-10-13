@@ -14,6 +14,7 @@ import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.request.VerifySignupRequest;
+import com.tiktok.authservice.dto.response.OtpSentResponse;
 import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
@@ -80,6 +81,7 @@ public class AuthServiceImpl implements AuthService {
     private final SessionRevoker sessionRevoker;
     private final TokenIssuer tokenIssuer;
     private final TurnstileService turnstileService;
+    private final OtpSendGate otpSendGate;
     private final AdminMfaService adminMfaService;
     private final SecurityEventRecorder securityEventRecorder;
     private final IdentityReconfirmation identityReconfirmation;
@@ -109,15 +111,17 @@ public class AuthServiceImpl implements AuthService {
      * with no transaction to commit it would never fire. Nothing here writes to Postgres.
      *
      * <p>Answering 409 for a taken address says the address has an account, exactly as
-     * {@link #register} always has; the same Turnstile gate stands in front of both. Checked ahead
-     * of the send budget, as {@link #addEmail} does, so a mistyped address costs no mail.
+     * {@link #register} always has; the same Turnstile gate stands in front of both, and a resend
+     * ticket only covers the address that already passed it. Checked ahead of the send budget, as
+     * {@link #addEmail} does, so a mistyped address costs no mail.
      */
     @Override
     @Transactional(readOnly = true)
-    public void startSignup(StartSignupRequest request) {
-        turnstileService.verify(request.turnstileToken());
-
+    public OtpSentResponse startSignup(StartSignupRequest request) {
         String email = request.email().toLowerCase(Locale.ROOT);
+        String resendTicket = otpSendGate.admit(PURPOSE_SIGNUP, email,
+                request.turnstileToken(), request.resendTicket());
+
         if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
             throw new EmailAlreadyExistsException(email);
         }
@@ -128,6 +132,7 @@ public class AuthServiceImpl implements AuthService {
         signupChallenge.storeCode(email, otp,
                 Duration.ofMillis(otpProperties.emailVerificationExpiryMillis()));
         eventPublisher.publishEvent(new EmailVerificationRequestedEvent(email, otp));
+        return new OtpSentResponse(resendTicket);
     }
 
     /**
@@ -444,10 +449,12 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
-    public void addEmail(Long userId, AddEmailRequest request) {
-        turnstileService.verify(request.turnstileToken());
-
+    public OtpSentResponse addEmail(Long userId, AddEmailRequest request) {
         String email = request.email().toLowerCase(Locale.ROOT);
+        // Takes no ticket: once this has run the address is the account's own, so sending to it
+        // again is resendVerification's job, and the ticket handed back is for that.
+        String resendTicket = otpSendGate.admit(PURPOSE_EMAIL_VERIFICATION, email,
+                request.turnstileToken(), null);
 
         User user = userRepository.findById(userId)
                 .filter(u -> !u.isDeleted())
@@ -477,6 +484,7 @@ public class AuthServiceImpl implements AuthService {
         otpService.issue(user, VerificationTokenType.EMAIL_VERIFICATION,
                 otpProperties.emailVerificationExpiryMillis(),
                 otp -> new EmailVerificationRequestedEvent(email, otp));
+        return new OtpSentResponse(resendTicket);
     }
 
     @Override
@@ -493,8 +501,9 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional
-    public void resendVerification(ResendVerificationRequest request) {
-        turnstileService.verify(request.turnstileToken());
+    public OtpSentResponse resendVerification(ResendVerificationRequest request) {
+        String resendTicket = otpSendGate.admit(PURPOSE_EMAIL_VERIFICATION, request.email(),
+                request.turnstileToken(), request.resendTicket());
         otpRateLimiter.checkAllowed(PURPOSE_EMAIL_VERIFICATION, request.email());
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
@@ -502,12 +511,16 @@ public class AuthServiceImpl implements AuthService {
                 .ifPresent(user -> otpService.issue(user, VerificationTokenType.EMAIL_VERIFICATION,
                         otpProperties.emailVerificationExpiryMillis(),
                         otp -> new EmailVerificationRequestedEvent(user.getEmail(), otp)));
+        // Handed back whether or not a code went out; otherwise the ticket would tell which
+        // addresses belong to an unverified account.
+        return new OtpSentResponse(resendTicket);
     }
 
     @Override
     @Transactional
-    public void forgotPassword(ForgotPasswordRequest request) {
-        turnstileService.verify(request.turnstileToken());
+    public OtpSentResponse forgotPassword(ForgotPasswordRequest request) {
+        String resendTicket = otpSendGate.admit(PURPOSE_PASSWORD_RESET, request.email(),
+                request.turnstileToken(), request.resendTicket());
         otpRateLimiter.checkAllowed(PURPOSE_PASSWORD_RESET, request.email());
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
@@ -519,6 +532,9 @@ public class AuthServiceImpl implements AuthService {
                     securityEventRecorder.record(user.getId(),
                             SecurityEventType.PASSWORD_RESET_REQUESTED);
                 });
+        // Handed back whether or not the address has an account; otherwise the ticket would tell
+        // which ones do.
+        return new OtpSentResponse(resendTicket);
     }
 
     @Override

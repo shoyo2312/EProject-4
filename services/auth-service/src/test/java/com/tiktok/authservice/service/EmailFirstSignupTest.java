@@ -111,7 +111,7 @@ class EmailFirstSignupTest {
 
     /** Starts a signup and returns the code that was mailed for it. */
     private String startAndReadCode(String email) {
-        authService.startSignup(new StartSignupRequest(email, TURNSTILE));
+        authService.startSignup(new StartSignupRequest(email, TURNSTILE, null));
         ArgumentCaptor<String> otp = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendVerificationOtp(eq(email), otp.capture());
         return otp.getValue();
@@ -148,7 +148,7 @@ class EmailFirstSignupTest {
         verify(mailService, timeout(2000)).sendVerificationOtp(eq(EMAIL), anyString());
         reset(mailService);
 
-        assertThatThrownBy(() -> authService.startSignup(new StartSignupRequest("NEW@example.com", TURNSTILE)))
+        assertThatThrownBy(() -> authService.startSignup(new StartSignupRequest("NEW@example.com", TURNSTILE, null)))
                 .isInstanceOf(EmailAlreadyExistsException.class);
 
         verify(mailService, after(500).never()).sendVerificationOtp(anyString(), anyString());
@@ -173,8 +173,8 @@ class EmailFirstSignupTest {
 
     @Test
     void resend_killsThePreviousCode() {
-        authService.startSignup(new StartSignupRequest(EMAIL, TURNSTILE));
-        authService.startSignup(new StartSignupRequest(EMAIL, TURNSTILE));
+        authService.startSignup(new StartSignupRequest(EMAIL, TURNSTILE, null));
+        authService.startSignup(new StartSignupRequest(EMAIL, TURNSTILE, null));
         ArgumentCaptor<String> otps = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000).times(2)).sendVerificationOtp(eq(EMAIL), otps.capture());
         String first = otps.getAllValues().get(0);

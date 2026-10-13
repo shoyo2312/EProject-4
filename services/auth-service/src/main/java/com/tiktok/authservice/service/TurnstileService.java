@@ -18,7 +18,9 @@ import java.time.Duration;
 /**
  * Gates every OTP-issuing call (register, startSignup, addEmail, resendVerification,
  * forgotPassword) behind Cloudflare Turnstile — called first, before any other check or side
- * effect. Fails closed: an unreachable Cloudflare should deny the send, not wave it through.
+ * effect, and skipped only for a resend carrying the ticket an earlier pass earned (see
+ * {@link OtpSendGate}). Fails closed: an unreachable Cloudflare should deny the send, not wave it
+ * through.
  *
  * <p>The two timeouts below are why the client is built by hand instead of taken from
  * {@code RestClient.create()}, whose default factory has none at all. The call runs on the request

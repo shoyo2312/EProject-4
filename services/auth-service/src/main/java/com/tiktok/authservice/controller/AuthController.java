@@ -13,6 +13,7 @@ import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.request.VerifySignupRequest;
+import com.tiktok.authservice.dto.response.OtpSentResponse;
 import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
@@ -55,12 +56,12 @@ public class AuthController {
      */
     @PostMapping("/register/start")
     @Operation(summary = "Email-first signup: mail a code to a new address",
-            description = "Nothing is created yet. Call again to resend; the previous code stops "
+            description = "Nothing is created yet. Call again to resend, with the resendTicket "
+                    + "this answered in place of a Turnstile token; the previous code stops "
                     + "working. 409 EMAIL_ALREADY_EXISTS for an address that has an account, "
                     + "429 TOO_MANY_OTP_REQUESTS past the send budget.")
-    public ApiResponse<Void> startSignup(@Valid @RequestBody StartSignupRequest request) {
-        authService.startSignup(request);
-        return ApiResponse.success(null);
+    public ApiResponse<OtpSentResponse> startSignup(@Valid @RequestBody StartSignupRequest request) {
+        return ApiResponse.success(authService.startSignup(request));
     }
 
     @PostMapping("/register/verify")
@@ -161,11 +162,11 @@ public class AuthController {
     @PostMapping("/email")
     @Operation(summary = "Give a social-only account an email address",
             description = "Authenticated. 409 EMAIL_ALREADY_LINKED once an address is verified — "
-                    + "replacing a confirmed address is how an account gets stolen.")
-    public ApiResponse<Void> addEmail(@AuthenticationPrincipal Long userId,
-                                      @Valid @RequestBody AddEmailRequest request) {
-        authService.addEmail(userId, request);
-        return ApiResponse.success(null);
+                    + "replacing a confirmed address is how an account gets stolen. The "
+                    + "resendTicket in the answer is for /resend-verification.")
+    public ApiResponse<OtpSentResponse> addEmail(@AuthenticationPrincipal Long userId,
+                                                 @Valid @RequestBody AddEmailRequest request) {
+        return ApiResponse.success(authService.addEmail(userId, request));
     }
 
     @PostMapping("/verify-email")
@@ -178,20 +179,20 @@ public class AuthController {
 
     @PostMapping("/resend-verification")
     @Operation(summary = "Mail the verification code again",
-            description = "Silent about whether the address exists or is already verified. "
+            description = "Takes the resendTicket of the previous send in place of a Turnstile "
+                    + "token. Silent about whether the address exists or is already verified. "
                     + "429 TOO_MANY_OTP_REQUESTS past the send budget.")
-    public ApiResponse<Void> resendVerification(@Valid @RequestBody ResendVerificationRequest request) {
-        authService.resendVerification(request);
-        return ApiResponse.success(null);
+    public ApiResponse<OtpSentResponse> resendVerification(@Valid @RequestBody ResendVerificationRequest request) {
+        return ApiResponse.success(authService.resendVerification(request));
     }
 
     @PostMapping("/forgot-password")
     @Operation(summary = "Mail a password-reset code",
-            description = "Silent about whether the address exists. 429 TOO_MANY_OTP_REQUESTS "
+            description = "Takes the resendTicket of the previous send in place of a Turnstile "
+                    + "token. Silent about whether the address exists. 429 TOO_MANY_OTP_REQUESTS "
                     + "past the send budget.")
-    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
-        authService.forgotPassword(request);
-        return ApiResponse.success(null);
+    public ApiResponse<OtpSentResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return ApiResponse.success(authService.forgotPassword(request));
     }
 
     @PostMapping("/reset-password")

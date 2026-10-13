@@ -58,6 +58,13 @@ Base path: `/api/v1/auth`
 
 Các lời gọi **gửi OTP** — `register`, `register/start`, `email`, `resend-verification`, `forgot-password` — bắt buộc có field `turnstileToken` (token Cloudflare Turnstile) trong body. Server kiểm tra nó trước mọi thứ khác: thiếu hoặc sai trả `403 TURNSTILE_VERIFICATION_FAILED`, không gửi mail nào.
 
+**Gửi lại mã thì không phải giải Turnstile lần nữa.** `register/start`, `email`, `resend-verification` và `forgot-password` trả `data.resendTicket`. Lần gửi sau tới **đúng địa chỉ đó, trong cùng luồng đó** gửi `resendTicket` thay cho `turnstileToken`:
+- Ticket sống **15 phút** tính từ lần qua Turnstile đã sinh ra nó, và dùng nó không làm nó sống lâu thêm. Ticket hết hạn, sai địa chỉ hoặc sai luồng được coi như không có, và server đòi `turnstileToken` như cũ (`403 TURNSTILE_VERIFICATION_FAILED`). Client khi đó hiện widget Turnstile rồi gửi lại.
+- Gửi bằng ticket vẫn tính vào giới hạn **3 lần / 15 phút** theo email (mục 7).
+- Gửi lại thành công thì server trả lại đúng ticket đó, nên client cứ giữ ticket của response mới nhất. `resendTicket` có thể là `null` (Redis lỗi lúc cấp), và lần gửi sau lại cần Turnstile.
+- Ticket của `POST /email` dùng cho `resend-verification`, vì các lần gửi lại mã cho địa chỉ đó đều đi qua endpoint này. `register` (mục 3.1) không trả ticket.
+- `forgot-password` và `resend-verification` trả ticket dù email có tài khoản hay không, nên ticket không dùng để dò email được.
+
 ### 3.1 `POST /register`
 Không cần token. Trả `201 Created`.
 
@@ -165,28 +172,28 @@ Xác thực mã OTP 6 số gửi qua email lúc `register` (hoặc `resend-verif
 Lỗi: `VALIDATION_ERROR` (400 — otp không đúng định dạng 6 số), `INVALID_OTP` (400 — sai email/otp, đã dùng, hoặc hết hạn), `TOO_MANY_OTP_REQUESTS` (429 — nhập sai OTP quá **5 lần/15 phút** theo email, độc lập với giới hạn gửi lại OTP ở mục 3.7).
 
 ### 3.7 `POST /resend-verification`
-Không cần token. Trả `204 No Content` (luôn trả 204 kể cả khi email không tồn tại hoặc đã verify — tránh lộ thông tin tài khoản).
+Không cần token. Trả `200 OK`, `data` → `{ "resendTicket": "..." }` (luôn như vậy kể cả khi email không tồn tại hoặc đã verify — tránh lộ thông tin tài khoản).
 
 Request:
 ```json
-{ "email": "a@b.com", "turnstileToken": "..." }
+{ "email": "a@b.com", "turnstileToken": "..." }   // hoặc "resendTicket" thay cho turnstileToken — xem đầu mục 3
 ```
 
 Gửi lại OTP xác thực email mới (OTP cũ bị hủy). Giới hạn **3 lần / 15 phút** theo email.
 
-Lỗi: `VALIDATION_ERROR` (400), `TOO_MANY_OTP_REQUESTS` (429).
+Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `TOO_MANY_OTP_REQUESTS` (429).
 
 ### 3.8 `POST /forgot-password`
-Không cần token. Trả `204 No Content` (luôn trả 204 dù email có tồn tại hay không — chống dò email).
+Không cần token. Trả `200 OK`, `data` → `{ "resendTicket": "..." }` (luôn như vậy dù email có tồn tại hay không — chống dò email).
 
 Request:
 ```json
-{ "email": "a@b.com", "turnstileToken": "..." }
+{ "email": "a@b.com", "turnstileToken": "..." }   // hoặc "resendTicket" thay cho turnstileToken — xem đầu mục 3
 ```
 
 Nếu email tồn tại và tài khoản đang `ACTIVE`, gửi OTP reset password (15 phút, dùng 1 lần). Giới hạn **3 lần / 15 phút** theo email.
 
-Lỗi: `VALIDATION_ERROR` (400), `TOO_MANY_OTP_REQUESTS` (429).
+Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `TOO_MANY_OTP_REQUESTS` (429).
 
 ### 3.9 `POST /reset-password`
 Không cần token. Trả `204 No Content`.
@@ -274,7 +281,7 @@ Không có API gửi lại mã cho luồng này: mã được sinh bởi chính 
 Lỗi: `VALIDATION_ERROR` (400 — thiếu token, hoặc otp không đúng dạng 6 số), `INVALID_OTP` (400 — sai, đã dùng, hết hạn, hoặc chưa từng có challenge nào cho địa chỉ này), `INVALID_SOCIAL_TOKEN` (401), `INVALID_CREDENTIALS` (401 — tài khoản đích bị khoá), `TOO_MANY_OTP_REQUESTS` (429).
 
 ### 3.12 `POST /email`
-**Cần Bearer token.** Trả `204 No Content`. Dành cho tài khoản social chưa có email.
+**Cần Bearer token.** Trả `200 OK`, `data` → `{ "resendTicket": "..." }`, ticket dùng cho `resend-verification` (xem đầu mục 3). Dành cho tài khoản social chưa có email.
 
 Request:
 ```json
@@ -286,16 +293,16 @@ Server lưu email ở trạng thái **chưa xác thực** rồi gửi OTP 6 số
 Lỗi: `VALIDATION_ERROR` (400), `EMAIL_ALREADY_EXISTS` (409 — email đang thuộc tài khoản khác), `EMAIL_ALREADY_LINKED` (409 — tài khoản này đã có email **đã verify**; đổi email đã verify là thao tác khác, chưa hỗ trợ), `TOO_MANY_OTP_REQUESTS` (429 — dùng chung counter với `resend-verification`), `401` nếu thiếu/sai access token.
 
 ### 3.13 `POST /register/start`
-Không cần token. Trả `200 OK` (`data` là `null`).
+Không cần token. Trả `200 OK`, `data` → `{ "resendTicket": "..." }`.
 
 Bước 1 của **luồng đăng ký email-first** mà web đang dùng: chứng minh hòm thư trước, chọn mật khẩu và username sau, và tài khoản chỉ được tạo ở bước cuối (mục 3.15). `register` (mục 3.1) vẫn giữ cho client tạo tài khoản trước rồi verify sau.
 
 Request:
 ```json
-{ "email": "a@b.com", "turnstileToken": "..." }
+{ "email": "a@b.com", "turnstileToken": "..." }   // hoặc "resendTicket" thay cho turnstileToken — xem đầu mục 3
 ```
 
-Chưa tạo gì cả — server chỉ gửi mã 6 số tới địa chỉ, sống **15 phút**. Gọi lại là gửi lại, và mã cũ hết hiệu lực. Email đã có tài khoản bị từ chối **ngay ở bước này** và không có mail nào được gửi.
+Chưa tạo gì cả — server chỉ gửi mã 6 số tới địa chỉ, sống **15 phút**. Gọi lại (kèm `resendTicket`) là gửi lại, và mã cũ hết hiệu lực. Email đã có tài khoản bị từ chối **ngay ở bước này** và không có mail nào được gửi.
 
 Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `EMAIL_ALREADY_EXISTS` (409), `TOO_MANY_OTP_REQUESTS` (429 — quá **3 lần/15 phút** theo email, counter riêng của luồng này, xem mục 7).
 
@@ -422,7 +429,7 @@ ACTIVE, LOCKED
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
 | `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`, `register/verify`) |
 | `SIGNUP_SESSION_EXPIRED` | 400 | `signupToken` sai, hết hạn (30 phút) hoặc đã dùng ở `register/complete` → quay lại `register/start` |
-| `TURNSTILE_VERIFICATION_FAILED` | 403 | Thiếu hoặc sai `turnstileToken` ở một lời gọi gửi OTP (xem đầu mục 3) |
+| `TURNSTILE_VERIFICATION_FAILED` | 403 | Thiếu hoặc sai `turnstileToken` ở một lời gọi gửi OTP, hoặc `resendTicket` gửi kèm đã hết hạn / không phải của địa chỉ và luồng này (xem đầu mục 3) |
 | `TOO_MANY_OTP_REQUESTS` | 429 | (a) Quá 3 lần gọi `resend-verification`/`forgot-password`/`register/start` trong 15 phút (theo email), **hoặc** (b) quá 5 lần nhập sai OTP trong 15 phút ở `verify-email`/`reset-password`/`register/verify` (theo email) — 2 counter độc lập, client cần xử lý cả hai trường hợp |
 | `CONCURRENT_MODIFICATION` | 409 | Hai request cùng sửa 1 bản ghi đúng lúc (vd. 2 lần `verify-email`/`reset-password` gửi song song). An toàn để **thử lại 1 lần** sau khi đọc lại trạng thái — khác hẳn các mã 409 khác vốn là lỗi nghiệp vụ không nên retry |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định — hiển thị generic error, không show message raw cho user |
@@ -440,6 +447,8 @@ ACTIVE, LOCKED
   - Nhập sai mã social-link (mục 3.11): 5 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`, cũng namespace riêng.
   - Gửi mã đăng ký email-first (`register/start`, mục 3.13): 3 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`, **namespace riêng** — địa chỉ chưa có tài khoản nên không dùng chung counter với `resend-verification`.
   - Nhập sai mã đăng ký (`register/verify`, mục 3.14): 5 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`, cũng namespace riêng.
+
+Gửi lại bằng `resendTicket` (đầu mục 3) vẫn tính vào các counter gửi OTP ở trên: ticket chỉ thay cho Turnstile, không thay cho giới hạn.
 
 Khi gặp `429`, UI nên disable nút tương ứng tạm thời + hiển thị thông báo rõ ràng, tránh user bấm liên tục. Riêng màn hình OTP nên đếm số lần nhập sai ở local để cảnh báo user trước khi chạm ngưỡng, vì server không trả về số lần còn lại.
 

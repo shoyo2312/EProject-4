@@ -12,6 +12,7 @@ import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
 import com.tiktok.authservice.dto.request.VerifySignupRequest;
+import com.tiktok.authservice.dto.response.OtpSentResponse;
 import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
@@ -24,7 +25,7 @@ public interface AuthService {
      * Email-first signup, step one: refuses an address that already has an account, otherwise
      * mails a code to it. Nothing is created yet. Calling it again is the resend.
      */
-    void startSignup(StartSignupRequest request);
+    OtpSentResponse startSignup(StartSignupRequest request);
 
     /** Step two: spends the code and hands back the ticket that proves the mailbox. */
     SignupTicketResponse verifySignup(VerifySignupRequest request);
@@ -53,15 +54,16 @@ public interface AuthService {
 
     /**
      * Gives an account created by a social login the address it never had, and sends the code that
-     * will prove it. The address only counts once {@link #verifyEmail} accepts that code.
+     * will prove it. The address only counts once {@link #verifyEmail} accepts that code. Its resend
+     * ticket is for {@link #resendVerification}, where the resends of that code go.
      */
-    void addEmail(Long userId, AddEmailRequest request);
+    OtpSentResponse addEmail(Long userId, AddEmailRequest request);
 
     void verifyEmail(VerifyEmailRequest request);
 
-    void resendVerification(ResendVerificationRequest request);
+    OtpSentResponse resendVerification(ResendVerificationRequest request);
 
-    void forgotPassword(ForgotPasswordRequest request);
+    OtpSentResponse forgotPassword(ForgotPasswordRequest request);
 
     void resetPassword(ResetPasswordRequest request);
 }
