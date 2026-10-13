@@ -76,11 +76,12 @@ public class SecurityConfig {
                                 "/api/v1/users/{userId:\\d+}",
                                 "/api/v1/users/by-username/*").permitAll()
                         // The reads interaction-service leaves public itself, so a signed-out
-                        // viewer sees a video's counts and comments; like-status answers a guest
-                        // liked=false rather than refusing one. Missing here, the catch-all below
-                        // answered all four 401 whatever the service said.
+                        // viewer sees a video's counts, comments and their replies; like-status
+                        // answers a guest liked=false rather than refusing one. Missing here, the
+                        // catch-all below answered them 401 whatever the service said.
                         .pathMatchers(HttpMethod.GET,
                                 "/api/v1/interactions/videos/*/comments",
+                                "/api/v1/interactions/videos/*/comments/*/replies",
                                 "/api/v1/interactions/videos/*/counts",
                                 "/api/v1/interactions/videos/counts/batch",
                                 "/api/v1/interactions/videos/*/like-status").permitAll()

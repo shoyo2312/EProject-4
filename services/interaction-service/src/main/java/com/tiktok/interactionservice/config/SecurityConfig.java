@@ -38,7 +38,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/internal/**")
                         .access(new InternalCallerAuthorization(internalApiToken))
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/like-status").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/comments").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/comments",
+                                "/api/v1/interactions/videos/*/comments/*/replies").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/counts/batch").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/interactions/videos/*/counts").permitAll()
                         // A repost is public, exactly like the videos a profile posted.

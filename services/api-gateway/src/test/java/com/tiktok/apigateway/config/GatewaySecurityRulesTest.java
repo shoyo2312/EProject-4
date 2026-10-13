@@ -129,6 +129,7 @@ class GatewaySecurityRulesTest {
     @Test
     void publicInteractionReads_passWithoutAToken_butWritesDoNot() {
         for (String uri : List.of("/api/v1/interactions/videos/123/comments",
+                "/api/v1/interactions/videos/123/comments/456/replies",
                 "/api/v1/interactions/videos/123/counts",
                 "/api/v1/interactions/videos/counts/batch?videoIds=1,2",
                 "/api/v1/interactions/videos/123/like-status")) {
@@ -170,7 +171,9 @@ class GatewaySecurityRulesTest {
                 "/api/v1/users/by-username/alice", "/api/v1/users",
                 "/api/v1/videos/123/policy", "/api/v1/videos/123",
                 "/api/v1/interactions/internal/videos/1/comments/2/author",
-                "/api/v1/interactions/videos/123/comments", "/api/v1/interactions/videos/123/counts",
+                "/api/v1/interactions/videos/123/comments",
+                "/api/v1/interactions/videos/123/comments/456/replies",
+                "/api/v1/interactions/videos/123/counts",
                 "/api/v1/interactions/videos/counts/batch", "/api/v1/interactions/videos/123/like-status"})
         Mono<String> ok() {
             return Mono.just("ok");
