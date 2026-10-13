@@ -322,6 +322,20 @@ class UserProfileServiceImplTest {
         assertThat(userProfileService.getByUserId(3L, 2L).displayName()).isEqualTo("bob");
     }
 
+    /** A signed-out reader is a null viewer: a block between two others hides nothing from them. */
+    @Test
+    @Transactional
+    void aGuest_seesProfilesByIdHandleAndBatch() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
+        blockService.block(1L, 2L);
+
+        assertThat(userProfileService.getByUserId(null, 1L).displayName()).isEqualTo("alice");
+        assertThat(userProfileService.getByUsername(null, "bob").userId()).isEqualTo(2L);
+        assertThat(userProfileService.getByUserIds(null, List.of(1L, 2L)))
+                .extracting(UserProfileResponse::userId).containsExactly(1L, 2L);
+    }
+
     @Test
     @Transactional
     void updateOwnProfile_updatesDisplayNameBioAndAvatar() {

@@ -92,7 +92,10 @@ public class UserProfileServiceImpl implements UserProfileService {
             return List.of();
         }
 
-        Set<Long> hidden = Set.copyOf(userBlockRepository.findBlockedIdsAmong(viewerId, wanted));
+        // A guest has no blocks, so there is nothing to ask.
+        Set<Long> hidden = viewerId == null
+                ? Set.of()
+                : Set.copyOf(userBlockRepository.findBlockedIdsAmong(viewerId, wanted));
         Map<Long, UserProfile> byUserId = userProfileRepository.findByUserIdInAndDeletedAtIsNull(wanted).stream()
                 .collect(Collectors.toMap(UserProfile::getUserId, Function.identity()));
 

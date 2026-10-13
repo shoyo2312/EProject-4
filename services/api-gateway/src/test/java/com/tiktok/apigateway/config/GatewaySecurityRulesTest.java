@@ -141,11 +141,33 @@ class GatewaySecurityRulesTest {
                 .expectStatus().isUnauthorized();
     }
 
+    /**
+     * A profile opens for a signed-out viewer by id, by handle and as a batch of comment authors.
+     * The id rule is numeric on purpose: /me, /search and the follower lists share the prefix and
+     * one segment, and must keep answering 401 without a token.
+     */
+    @Test
+    void profileReads_passWithoutAToken_butTheRestOfUsersDoesNot() {
+        for (String uri : List.of("/api/v1/users/42", "/api/v1/users/by-username/alice",
+                "/api/v1/users?ids=1,2")) {
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isOk();
+        }
+        for (String uri : List.of("/api/v1/users/me", "/api/v1/users/search?q=alice",
+                "/api/v1/users/42/followers")) {
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isUnauthorized();
+        }
+    }
+
     @RestController
     static class Stub {
 
         @GetMapping({"/api/v1/users/internal/blocks", "/api/v1/users/internal/settings",
                 "/api/v1/users/internal/friendship", "/api/v1/users/42",
+                "/api/v1/users/by-username/alice", "/api/v1/users",
                 "/api/v1/videos/123/policy", "/api/v1/videos/123",
                 "/api/v1/interactions/internal/videos/1/comments/2/author",
                 "/api/v1/interactions/videos/123/comments", "/api/v1/interactions/videos/123/counts",

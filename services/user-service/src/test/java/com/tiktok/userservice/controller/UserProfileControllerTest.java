@@ -112,12 +112,35 @@ class UserProfileControllerTest {
                 .andExpect(jsonPath("$.data[0].userId").value(2));
     }
 
+    /** A profile is public: without a token the service is asked as a null viewer, not refused. */
     @Test
-    void getProfiles_withoutToken_isRejectedBeforeReachingService() throws Exception {
-        mockMvc.perform(get("/api/v1/users").param("ids", "2,3"))
-                .andExpect(status().isForbidden());
+    void profileReads_withoutToken_answerAsAGuest() throws Exception {
+        UserProfileResponse bob = new UserProfileResponse(99L, "bob", "Bob", null, null, 0, 0, false, null);
+        when(userProfileService.getByUserId(null, 99L)).thenReturn(bob);
+        when(userProfileService.getByUsername(null, "bob")).thenReturn(bob);
+        when(userProfileService.getByUserIds(null, List.of(99L))).thenReturn(List.of(bob));
 
-        verify(userProfileService, never()).getByUserIds(any(), any());
+        mockMvc.perform(get("/api/v1/users/99"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.userId").value(99));
+        mockMvc.perform(get("/api/v1/users/by-username/bob"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.userId").value(99));
+        mockMvc.perform(get("/api/v1/users").param("ids", "99"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].userId").value(99));
+    }
+
+    /** The guest rule matches a numeric id, not every one-segment path beside it. */
+    @Test
+    void otherUserReads_withoutToken_stayRejected() throws Exception {
+        for (String uri : List.of("/api/v1/users/search?q=bob", "/api/v1/users/99/followers")) {
+            mockMvc.perform(get(uri))
+                    .andExpect(status().isForbidden());
+        }
+
+        verify(userProfileService, never()).search(any(), any(), any());
+        verify(followService, never()).listFollowers(any(), any(), any());
     }
 
     @Test

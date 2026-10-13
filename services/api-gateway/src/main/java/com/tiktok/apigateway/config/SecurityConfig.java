@@ -68,6 +68,13 @@ public class SecurityConfig {
                         // A repost is public, like the videos on a profile — the Reposts tab
                         // has to load for a signed-out viewer too.
                         .pathMatchers(HttpMethod.GET, "/api/v1/interactions/users/*/reposts").permitAll()
+                        // A profile is public like the videos on it: a signed-out viewer opens
+                        // /@handle and sees who wrote a comment. A numeric id only, so /me,
+                        // /search and every other one-segment read beside it keep the token.
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/users",
+                                "/api/v1/users/{userId:\\d+}",
+                                "/api/v1/users/by-username/*").permitAll()
                         // The reads interaction-service leaves public itself, so a signed-out
                         // viewer sees a video's counts and comments; like-status answers a guest
                         // liked=false rather than refusing one. Missing here, the catch-all below
