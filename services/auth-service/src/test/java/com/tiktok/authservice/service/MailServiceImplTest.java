@@ -16,6 +16,10 @@ class MailServiceImplTest {
 
     /** Builds the verification mail and returns every text part concatenated, already decoded. */
     private String render(String logoUrl) throws Exception {
+        return render(logoUrl, (mail) -> mail.sendVerificationOtp("user@example.com", "123456"));
+    }
+
+    private String render(String logoUrl, java.util.function.Consumer<MailServiceImpl> send) throws Exception {
         MimeMessage[] captured = new MimeMessage[1];
         JavaMailSenderImpl capturing = new JavaMailSenderImpl() {
             @Override
@@ -25,7 +29,7 @@ class MailServiceImplTest {
         };
         MailProperties props =
                 new MailProperties("no-reply@example.dev", "Nowaa", logoUrl, "https://example.dev");
-        new MailServiceImpl(capturing, props, OTP).sendVerificationOtp("user@example.com", "123456");
+        send.accept(new MailServiceImpl(capturing, props, OTP));
         return captured[0].getSubject() + "\n" + text(captured[0]);
     }
 
@@ -59,5 +63,16 @@ class MailServiceImplTest {
 
         assertThat(mail).doesNotContain("<img");
         assertThat(mail).contains("Nowaa");
+    }
+
+    @Test
+    void securityMailsStateWhenTheyWereRequestedAndOtpMailsDoNot() throws Exception {
+        String admin = render("", mail -> mail.sendAdminLoginOtp("user@example.com", "123456"));
+        String social = render("", mail -> mail.sendSocialLinkOtp("user@example.com", "123456", "Google"));
+        String reset = render("", mail -> mail.sendPasswordResetOtp("user@example.com", "123456"));
+
+        assertThat(admin).containsPattern("Requested at \\d{1,2} \\w{3} \\d{4}, \\d{2}:\\d{2} \\(GMT\\+7\\)");
+        assertThat(social).contains("Requested at ");
+        assertThat(reset).doesNotContain("Requested at");
     }
 }
