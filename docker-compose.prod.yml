@@ -1,0 +1,368 @@
+# =====================================================================
+# Production stack for Coolify (Docker Compose build pack).
+#
+# Phase 1: the services behind the user app's core loop — sign-in, profiles, upload, feed
+# reactions. Not here yet: story, recommendation, chat, notification, search, admin, analytics,
+# rank (and Elasticsearch / ClickHouse with them). Add each the same way as the ones below.
+#
+# Nothing publishes a port. Coolify's proxy is the only way in, and only two services get a
+# domain in its UI:
+#   api-gateway  → http://api.nowaa.site:8080
+#   minio        → http://media.nowaa.site:9000   (browsers upload to and read media from it)
+# http://, not https://: Cloudflare terminates TLS in front of the tunnel.
+#
+# Every ${VAR:?} must be set in Coolify's Environment Variables. No password has a default.
+# =====================================================================
+
+x-java: &java
+  build:
+    context: .
+  restart: unless-stopped
+  # The image runs with -XX:MaxRAMPercentage=75, so this is what sizes the heap.
+  mem_limit: 1g
+
+# Both must be identical in every Java service: a mismatched INTERNAL_API_TOKEN turns every
+# service-to-service call into a 403.
+x-secrets: &secrets
+  JWT_SECRET: ${JWT_SECRET:?}
+  INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?}
+
+services:
+
+  # ─────────────────────────────── infrastructure ───────────────────────────────
+
+  postgres-auth:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: auth_db
+      POSTGRES_USER: ${DB_USERNAME:?}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?}
+    volumes:
+      - postgres-auth-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d auth_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-user:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: user_db
+      POSTGRES_USER: ${DB_USERNAME:?}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?}
+    volumes:
+      - postgres-user-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d user_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:?}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?}
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: [ "CMD-SHELL", "mongosh --quiet --eval 'db.runCommand(\"ping\").ok' localhost:27017/test" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # noeviction: Redis holds token revocations and rate-limit counters, not only cache.
+  # See docker-compose.yml for the full reasoning.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  cassandra:
+    image: cassandra:5.0
+    restart: unless-stopped
+    environment:
+      CASSANDRA_CLUSTER_NAME: tiktok-cluster
+      CASSANDRA_DC: dc1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      MAX_HEAP_SIZE: 1G
+      HEAP_NEWSIZE: 256M
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+    healthcheck:
+      test: [ "CMD-SHELL", "cqlsh -e 'describe keyspaces'" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+
+  # Baked into an image rather than bind-mounted: Coolify does not mount files from the repo
+  # checkout, a ./scripts/... volume arrives as an empty directory.
+  cassandra-init:
+    build:
+      context: ./scripts
+      dockerfile_inline: |
+        FROM cassandra:5.0
+        COPY cassandra-init.cql /init.cql
+    entrypoint: [ "cqlsh", "cassandra", "-f", "/init.cql" ]
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    restart: "no"
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+
+  # One listener: every client is on this network, nothing on the host needs it.
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    restart: unless-stopped
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: [ "CMD", "kafka-topics", "--bootstrap-server", "kafka:29092", "--list" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Bucket + the rule expiring abandoned raw uploads. See docker-compose.yml.
+  minio-init:
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -e
+        mc alias set tt http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
+        mc mb --ignore-existing "tt/$$MINIO_BUCKET"
+        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}}]}' \
+          | mc ilm import "tt/$$MINIO_BUCKET"
+    restart: "no"
+
+  # NSFW frame + caption/comment classifier. First build downloads a few hundred MB of model.
+  moderation-service:
+    build: ./services/moderation-service
+    restart: unless-stopped
+    mem_limit: 2g
+    environment:
+      MODERATION_REVIEW_THRESHOLD: ${MODERATION_REVIEW_THRESHOLD:-0.60}
+      MODERATION_REJECT_THRESHOLD: ${MODERATION_REJECT_THRESHOLD:-0.90}
+      MODERATION_MIN_REJECT_FRAMES: ${MODERATION_MIN_REJECT_FRAMES:-2}
+      AZURE_CONTENT_SAFETY_ENDPOINT: ${AZURE_CONTENT_SAFETY_ENDPOINT:-}
+      AZURE_CONTENT_SAFETY_KEY: ${AZURE_CONTENT_SAFETY_KEY:-}
+      TEXT_HATE_HOLD_THRESHOLD: ${TEXT_HATE_HOLD_THRESHOLD:-0.90}
+      TEXT_MODERATION_MODEL_VERSION: ${TEXT_MODERATION_MODEL_VERSION:-hsd-v1}
+    healthcheck:
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health')\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  # ─────────────────────────────── Java services ───────────────────────────────
+
+  api-gateway:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: api-gateway }
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      SNOWFLAKE_NODE_ID: 1
+      <<: *secrets
+      REDIS_HOST: redis
+      AUTH_SERVICE_URI: http://auth-service:8081
+      USER_SERVICE_URI: http://user-service:8082
+      VIDEO_SERVICE_URI: http://video-service:8083
+      INTERACTION_SERVICE_URI: http://interaction-service:8085
+
+  auth-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: auth-service }
+    depends_on:
+      postgres-auth: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 2
+      <<: *secrets
+      DB_HOST: postgres-auth
+      DB_PORT: 5432
+      DB_USERNAME: ${DB_USERNAME:?}
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MAIL_HOST: smtp.resend.com
+      MAIL_USERNAME: resend
+      MAIL_PASSWORD: ${RESEND_API_KEY:?}
+      MAIL_FROM: ${MAIL_FROM:?}
+      MAIL_SITE_URL: ${SITE_URL:?}
+      MAIL_LOGO_URL: ${MAIL_LOGO_URL:-}
+      GOOGLE_CLIENT_IDS: ${GOOGLE_CLIENT_IDS:-}
+      FB_APP_ID: ${FB_APP_ID:-}
+      FB_APP_SECRET: ${FB_APP_SECRET:-}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+
+  # MINIO_ENDPOINT, here and below, is the PUBLIC address: the services build the media URLs they
+  # store and hand to browsers from it. Server-side MinIO calls therefore go out through Cloudflare
+  # and back in.
+  # ponytail: hairpin through the tunnel; split the endpoint into internal/public in MinioConfig if
+  # media-worker's transfers get slow.
+  user-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: user-service }
+    depends_on:
+      postgres-user: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 3
+      <<: *secrets
+      DB_HOST: postgres-user
+      DB_PORT: 5432
+      DB_USERNAME: ${DB_USERNAME:?}
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+      MEDIA_ALLOWED_HOSTS: ${MEDIA_HOST:?}
+
+  video-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: video-service }
+    depends_on:
+      mongodb: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 4
+      <<: *secrets
+      MONGO_HOST: mongodb
+      MONGO_USERNAME: ${MONGO_USERNAME:?}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?}
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      USER_SERVICE_URI: http://user-service:8082
+      MODERATION_SERVICE_URL: http://moderation-service:8099
+      MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+      MEDIA_ALLOWED_HOSTS: ${MEDIA_HOST:?}
+      # Cloudflare Free rejects request bodies over 100 MB, and the browser's upload is one POST.
+      VIDEO_MAX_BYTES: ${VIDEO_MAX_BYTES:-94371840}
+
+  media-worker:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: media-worker }
+    mem_limit: 2g
+    depends_on:
+      kafka: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    environment:
+      <<: *secrets
+      SNOWFLAKE_NODE_ID: 5
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      MODERATION_SERVICE_URL: http://moderation-service:8099
+      MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+      VIDEO_MAX_BYTES: ${VIDEO_MAX_BYTES:-94371840}
+
+  interaction-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: interaction-service }
+    depends_on:
+      cassandra-init: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 6
+      <<: *secrets
+      CASSANDRA_CONTACT_POINTS: cassandra
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      USER_SERVICE_URI: http://user-service:8082
+      VIDEO_SERVICE_URI: http://video-service:8083
+      MODERATION_SERVICE_URL: http://moderation-service:8099
+
+volumes:
+  postgres-auth-data:
+  postgres-user-data:
+  mongodb-data:
+  redis-data:
+  cassandra-data:
+  zookeeper-data:
+  zookeeper-log:
+  kafka-data:
+  minio-data:
