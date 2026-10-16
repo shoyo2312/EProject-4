@@ -90,7 +90,7 @@ Luồng đầy đủ phía client:
 
 Không có bước "báo upload xong": nếu client bỏ ngang giữa chừng thì chỉ còn một object mồ côi trong bucket, không có bản ghi Video nào được tạo. Object mồ côi tự hết hạn sau 7 ngày — bucket có lifecycle rule trên prefix `raw/` (khai ở service `minio-init` trong `docker-compose.yml`). Nghĩa là **POST file xong thì gọi `POST /` (mục 3.2) trong vòng 7 ngày**, quá hạn file biến mất dù `fileUrl` vẫn còn trong tay client.
 
-Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không ký được URL — lỗi phía server, không phải request sai.
+Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token), `UPLOAD_RATE_LIMITED` (429) khi tài khoản đã xin quá 30 URL trong một giờ hoặc 100 URL trong một ngày (mục 7), `UPLOAD_URL_UNAVAILABLE` (503) khi server không ký được URL — lỗi phía server, không phải request sai.
 
 ### 3.2 `POST /` — đăng video
 **Bắt buộc token.** Trả `201 Created`.
@@ -98,13 +98,21 @@ Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, 
 Request (`CreateVideoRequest`):
 ```json
 {
-  "title": "Tiêu đề",                                // bắt buộc, tối đa 150 ký tự, không được toàn khoảng trắng
+  "title": "Tiêu đề",                                // bắt buộc, một dòng, tối đa 150 ký tự, không được rỗng sau khi làm sạch
   "description": "Mô tả",                             // optional, tối đa 2000 ký tự
   "rawFileUrl": "s3://video-media/raw/123456789012345/7312.mp4",  // bắt buộc, tối đa 500 ký tự, xem ràng buộc bên dưới
   "visibility": "PUBLIC",                             // bắt buộc: PUBLIC | PRIVATE
   "tags": ["dance", "food"]                           // optional, tối đa 10 tag, mỗi tag tối đa 50 ký tự
 }
 ```
+
+**Làm sạch trước khi kiểm tra độ dài.** Server chuẩn hoá NFC (tiếng Việt gõ kiểu tổ hợp được ghép lại), bỏ ký tự vô hình (zero-width, đảo chiều U+202E, ký tự "lấp chỗ" Hangul/Braille), gộp khoảng trắng, tối đa một dòng trống liên tiếp trong `description`, và đổi xuống dòng trong `title`/tag thành dấu cách. Mọi giới hạn ký tự tính theo **code point** sau khi làm sạch (emoji tính 1) — đếm phía client bằng `text.runes.length` (Dart) / `[...text].length` (JS). Tiêu đề chỉ toàn ký tự vô hình → `VALIDATION_ERROR` (400).
+
+**Kiểm duyệt chữ.** `title`, `description` và danh sách tag cuối cùng (kể cả hashtag lấy từ mô tả) được đọc bằng bộ luật chữ (blocklist tiếng Việt + tín hiệu spam) **trước khi lưu**:
+- Từ ngữ nặng nhất trong blocklist → `422` với mã theo trường: `VIDEO_TITLE_REJECTED`, `VIDEO_DESCRIPTION_REJECTED` hoặc `VIDEO_TAGS_REJECTED` (kiểm theo thứ tự đó, báo trường đầu tiên vi phạm). **Không lưu gì** — file đã upload vẫn còn, sửa chữ rồi gửi lại **đúng `rawFileUrl` cũ**, không cần upload lại. Server không nói từ nào; hiện thông báo dưới đúng ô nhập.
+- Thô tục/xúc phạm mức vừa, link (trừ link tới YouTube, Facebook, Instagram, TikTok, X, Threads), số điện thoại, email, cờ bạc → video **vẫn được tạo** (`201`) và chạy pipeline như thường, nhưng kiểm duyệt xong sẽ thành `PENDING_REVIEW` thay vì `PUBLISHED` — chờ admin, kể cả khi hình ảnh không có vấn đề gì.
+- Sau bộ luật, một model phân loại tiếng Việt (PhoBERT, chỉ bắt lời lẽ thù ghét) đọc cả ba trường. Model **chỉ có thể** đưa video vào `PENDING_REVIEW`, không bao giờ trả `422`. Model không chạy được thì bộ luật quyết một mình.
+- Chữ không bao giờ tự làm video thành `REJECTED`.
 
 `rawFileUrl` **không phải URL client tự nghĩ ra**. Nó là `fileUrl` trả về từ `POST /upload-url` (mục 3.1), và server chặn theo allow-list:
 - scheme phải là `https` hoặc `s3` — mọi scheme khác (`http`, `file:`, `data:`, `javascript:`) bị từ chối;
@@ -152,7 +160,9 @@ Response `data` → `VideoResponse`:
 
 > **`FAILED` có `failureReason` — hiện thẳng cho user.** Khi `status = FAILED`, `failureReason` là chuỗi giải thích do media-worker sinh ra, ví dụ `"Video is 12m30s; the maximum is 10m00s."` (clip dài quá 10 phút) hoặc `"Video is 812 MB; the maximum is 500 MB."` (file lọt qua client nhưng media-worker vẫn từ chối vì vượt kích thước). Với mọi `status` khác, `failureReason` là `null`. Nếu `failureReason` là `null` mà vẫn `FAILED` (lỗi transcode không phân loại được), hiện thông điệp mặc định kiểu "Xử lý video thất bại, thử đăng lại".
 
-Lỗi: `VALIDATION_ERROR` (400), `401` (thiếu/hết hạn token).
+**Giới hạn đăng video theo tài khoản:** tối đa 10 video trong một giờ và 30 video trong một ngày. Vượt thì nhận `429 UPLOAD_RATE_LIMITED` kèm header `Retry-After` (số giây). Lượt đăng được tính **trước mọi kiểm tra khác**, nên lần bị từ chối vì caption (`VIDEO_*_REJECTED`), `FOREIGN_UPLOAD` hay `RAW_FILE_ALREADY_PUBLISHED` vẫn tốn một lượt. Như vậy không ai dò được blocklist bằng cách gửi caption liên tục. Sửa caption rồi gửi lại cũng tốn thêm một lượt.
+
+Lỗi: `VALIDATION_ERROR` (400), `FOREIGN_UPLOAD` (400), `RAW_FILE_ALREADY_PUBLISHED` (400), `VIDEO_TITLE_REJECTED` / `VIDEO_DESCRIPTION_REJECTED` / `VIDEO_TAGS_REJECTED` (422), `UPLOAD_RATE_LIMITED` (429), `401` (thiếu/hết hạn token).
 
 ### 3.3 `GET /feed`
 Không cần token. **Phân trang bằng cursor, không phải `page`** — khác mục 3.5. Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CursorPage<VideoResponse>`:
@@ -268,7 +278,7 @@ Không cần token. Trả `data` → `UserVideoStatsResponse[]` (`userId, videoC
 | `PUBLISHED` | Phát được, đã có `hlsUrl`. Trạng thái duy nhất xuất hiện trên `/feed`. |
 | `FAILED` | Transcode hỏng, hoặc file bị từ chối vì vượt 500 MB / 10 phút. `failureReason` mang lý do (xem mục 3.2). Chỉ chủ video nhìn thấy; UI nên hiện `failureReason` và cho xoá + đăng lại. |
 | `PENDING_MODERATION` | Transcode xong, đang chờ kiểm duyệt tự động (thường vài giây). Chỉ chủ video thấy. Vẫn hiện "đang xử lý". |
-| `PENDING_REVIEW` | Kiểm duyệt tự động không chắc chắn (hoặc không chạy được) — chờ admin duyệt. Chỉ chủ video thấy. Hiện "đang chờ duyệt". |
+| `PENDING_REVIEW` | Kiểm duyệt tự động không chắc chắn (hoặc không chạy được), hoặc tiêu đề/mô tả/tag bị giữ lại (mục 3.2) — chờ admin duyệt. Chỉ chủ video thấy. Hiện "đang chờ duyệt". |
 | `REJECTED` | Bị kiểm duyệt tự động từ chối. Chỉ chủ video thấy. Admin có thể khôi phục → `PUBLISHED`. |
 | `TAKEN_DOWN` | Bị admin gỡ vì vi phạm. Chỉ chủ video nhìn thấy. Nếu được khôi phục, video quay lại **đúng trạng thái trước khi gỡ** (không mặc định thành `PUBLISHED`) — client đừng tự đoán trạng thái sau khôi phục, cứ đọc lại từ server. |
 
@@ -296,15 +306,19 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
-| `VALIDATION_ERROR` | 400 | `title` rỗng/quá 150 ký tự, `description` quá 2000, `visibility` thiếu hoặc sai giá trị enum, `rawFileUrl` sai scheme/host/bucket (mục 3.2) |
+| `VALIDATION_ERROR` | 400 | `title` rỗng sau khi làm sạch/quá 150 ký tự, `description` quá 2000, tag quá 50, `visibility` thiếu hoặc sai giá trị enum, `rawFileUrl` sai scheme/host/bucket (mục 3.2) |
 | `UNSUPPORTED_UPLOAD_TYPE` | 400 | `contentType` ở mục 3.1 không phải `video/mp4`, `video/quicktime` hoặc `video/webm` |
 | `FOREIGN_UPLOAD` | 400 | `rawFileUrl` trỏ vào file của tài khoản khác, hoặc vào key không do mục 3.1 cấp. Chỉ publish được đúng `fileUrl` mà chính token này vừa nhận |
 | `RAW_FILE_ALREADY_PUBLISHED` | 400 | `rawFileUrl` này đã có video rồi. Thường là retry sau timeout — lần trước đã thành công |
 | `INVALID_FEED_CURSOR` | 400 | `cursor` ở mục 3.3 không phải do server cấp. Bỏ cursor đang giữ, tải lại feed từ đầu |
 | `TOO_MANY_FOLLOWED_USERS` | 400 | `followedUserIds` ở mục 3.3b quá 500 id. Cắt danh sách following theo trang thay vì gửi hết một lần |
 | `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
+| `VIDEO_TITLE_REJECTED` | 422 | `title` chứa từ ngữ bị cấm hẳn; không lưu gì, sửa rồi gửi lại cùng `rawFileUrl` (mục 3.2) |
+| `VIDEO_DESCRIPTION_REJECTED` | 422 | Như trên, cho `description` |
+| `VIDEO_TAGS_REJECTED` | 422 | Như trên, cho tag (đọc liền nhau, nên một cụm bị cấm tách ra nhiều tag vẫn bị bắt) |
 | `PRIVATE_ACCOUNT` | 403 | Lưới video (mục 3.5) của tài khoản riêng tư mà người gọi không follow |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |
+| `UPLOAD_RATE_LIMITED` | 429 | Tài khoản đã xin quá nhiều URL upload (mục 3.1) hoặc đăng quá nhiều video (mục 3.2) trong giờ/ngày này. Đọc header `Retry-After` (số giây) rồi mới cho thử lại |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 | `UPLOAD_URL_UNAVAILABLE` | 503 | Không ký được presigned URL ở mục 3.1. Cấu hình storage sai hoặc storage chết — retry được, nhưng sửa request không giúp gì |
 
@@ -314,9 +328,16 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của video-service, đ�
 
 ## 7. Rate limiting
 
-- Chỉ có rate-limit **ở tầng gateway** (`:8080`, theo IP — 20 request/giây, burst 40, dùng chung toàn bộ API).
-- **Không có** giới hạn riêng theo tài khoản ở video-service (không giới hạn số video đăng mỗi ngày).
+- Rate-limit **ở tầng gateway** (`:8080`, theo IP — 20 request/giây, burst 40, dùng chung toàn bộ API).
 - Giới hạn theo IP là lý do phải poll giãn dần ở mục 3.2: nhiều thiết bị sau cùng một NAT dùng chung hạn mức này.
+- **Theo tài khoản**, ở video-service, chỉ cho việc upload:
+
+| Endpoint | Mỗi giờ | Mỗi ngày |
+|---|---|---|
+| `POST /upload-url` (mục 3.1) | 30 | 100 |
+| `POST /` (mục 3.2) | 10 | 30 |
+
+Vượt thì nhận `429 UPLOAD_RATE_LIMITED`. Header `Retry-After` là số giây (ít nhất 1) tới khi mức đã chặn mở lại; server không nói đó là mức giờ hay mức ngày. Upload hỏng hoặc bỏ dở thì xin URL mới, nên mức cho URL cao hơn mức đăng video.
 
 ## 8. Sự kiện Kafka (Events)
 
@@ -328,12 +349,14 @@ Cả bốn loại đi chung topic **`video.video-events`**, key = `videoId`, nê
 
 | eventType header | Event | Payload | Khi nào |
 |---|---|---|---|
-| `VideoPublishedEvent` | `VideoPublishedEvent` | `eventId, occurredAt, videoId, userId, title, description, rawFileUrl, visibility, tags[]` | Sau `POST /` — `eventId` derive từ `videoId` (publish đúng 1 lần dù outbox retry) |
+| `VideoPublishedEvent` | `VideoPublishedEvent` | `eventId, occurredAt, videoId, userId, title, description, rawFileUrl, visibility, tags[], textVerdict` | Sau `POST /` — `eventId` derive từ `videoId` (publish đúng 1 lần dù outbox retry) |
 | `VideoDeletedEvent` | `VideoDeletedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Ngay sau `DELETE /{id}` — gỡ video khỏi search và feed đề xuất; media-worker chỉ cách ly media |
 | `VideoPurgedEvent` | `VideoPurgedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Khi hết `video.trash.retention` (mặc định 30 ngày) kể từ lúc xoá — chỉ media-worker xử lý, xoá hẳn media. Phát cả cho video bị xoá trước khi kịp công bố |
 | `VideoVisibilityChangedEvent` | `VideoVisibilityChangedEvent` | `eventId, occurredAt, videoId, userId, visibility` (audience thực tế, xem dưới) | Sau `PATCH /{id}/visibility`, hoặc khi tài khoản chủ đổi riêng tư/công khai trong lúc video đang publish. Chỉ gửi sau khi `VideoPublishedEvent` của video đó đã được ack |
 
 `description` và `tags` được mang trên `VideoPublishedEvent` vì `search-service`/`recommendation-service` không có đường đọc vào Mongo của video-service. `tags` không bao giờ null (list rỗng).
+
+`textVerdict` là kết quả kiểm duyệt chữ (mục 3.2): `APPROVED`, `REVIEW`, hoặc `null` (video cũ, hoặc `moderation.text.enforce=false`). media-worker chép nó sang `VideoTranscodedEvent.textVerdict` rồi gộp vào verdict kiểm duyệt hình — hình `APPROVED` + chữ `REVIEW` ra `VideoModerationCompletedEvent` với `REVIEW` — nên mọi nơi đọc verdict (status ở đây, search, recommendation, chat) giữ video lại như nhau. Xem `docs/moderation.md` §Text. Chi tiết (cờ nào, trường nào) lưu ở `video.textModeration`, chỉ trả về trên đường đọc của admin.
 
 `visibility` trên `VideoPublishedEvent` và `VideoVisibilityChangedEvent` là **audience thực tế**, không phải giá trị lưu: video `PUBLIC` của tài khoản riêng tư đi ra là `FOLLOWERS`. Mọi consumer giữ bản sao (search, recommendation, chat) coi mọi thứ khác `PUBLIC` là ẩn, nên video đó rời khỏi tìm kiếm, For You và trending mà các service kia không phải sửa gì. `VideoResponse.visibility` vẫn là giá trị lưu (`PUBLIC`/`FRIENDS`/`PRIVATE`) để chủ video thấy đúng lựa chọn của mình. chat-service chuyển nguyên chữ này xuống trình duyệt trong frame `state` — client phải hiểu `FOLLOWERS` là "không công khai" và không ghi nó vào công tắc visibility của chủ video.
 

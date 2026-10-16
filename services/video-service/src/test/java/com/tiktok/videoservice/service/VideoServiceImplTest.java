@@ -12,8 +12,10 @@ import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoModeration;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.AlreadyPublishedException;
+import com.tiktok.videoservice.exception.CaptionRejectedException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.InvalidFeedCursorException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
@@ -101,6 +103,9 @@ class VideoServiceImplTest {
 
     @Autowired
     private OwnerBanRepository ownerBanRepository;
+
+    @Autowired
+    private AdminVideoDirectory adminVideoDirectory;
 
     @BeforeEach
     void cleanUp() {
@@ -350,6 +355,84 @@ class VideoServiceImplTest {
                 "Untagged", null, "s3://video-media/raw/1/untagged.mp4", VideoVisibility.PUBLIC, null));
 
         assertThat(response.tags()).isEmpty();
+    }
+
+    @Test
+    void publish_storesTheSanitizedCaption() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
+                "  Vi\u0065\u0302\u0323t\u200B Nam\n ", "dòng 1\n\n\n\ndòng 2",
+                "s3://video-media/raw/1/clean.mp4", VideoVisibility.PUBLIC, null));
+
+        assertThat(response.title()).isEqualTo("Việt Nam");
+        assertThat(response.description()).isEqualTo("dòng 1\n\ndòng 2");
+    }
+
+    /**
+     * The worst terms refuse the request before anything exists — no document, no event, no
+     * transcode — so the same upload publishes once the caption is fixed.
+     */
+    @Test
+    void publish_aRefusedTitle_storesNothing_andTheUploadCanBePublishedAgain() {
+        String upload = "s3://video-media/raw/1/refused.mp4";
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "địt mẹ mày", null, upload, VideoVisibility.PUBLIC, null)))
+                .isInstanceOf(CaptionRejectedException.class)
+                .extracting("code").isEqualTo("VIDEO_TITLE_REJECTED");
+        assertThat(videoRepository.count()).isZero();
+
+        assertThat(videoService.publish(1L, new CreateVideoRequest(
+                "Video mới", null, upload, VideoVisibility.PUBLIC, null)).status())
+                .isEqualTo(VideoStatus.PROCESSING);
+    }
+
+    @Test
+    void publish_aRefusedDescription_namesTheDescription() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Bình thường", "đồ con đĩ", "s3://video-media/raw/1/desc.mp4", VideoVisibility.PUBLIC, null)))
+                .extracting("code").isEqualTo("VIDEO_DESCRIPTION_REJECTED");
+    }
+
+    /** Tags are read as one text, so a phrase spelled across them is still the phrase. */
+    @Test
+    void publish_aRefusedPhraseSpreadAcrossTags_namesTheTags() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Bình thường", null, "s3://video-media/raw/1/tags.mp4", VideoVisibility.PUBLIC,
+                List.of("địt", "mẹ", "mày"))))
+                .extracting("code").isEqualTo("VIDEO_TAGS_REJECTED");
+    }
+
+    /**
+     * Held, not refused: the video is created and goes down the pipeline like any other. The
+     * verdict sits on the document for the console and rides on the publication for media-worker.
+     */
+    @Test
+    void publish_aFlaggedCaption_isRecordedForReview_andNeverShownPublicly() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
+                "Săn sale", "mua tại abc.xyz hoặc gọi 0912345678", "s3://video-media/raw/1/sale.mp4",
+                VideoVisibility.PUBLIC, null));
+
+        VideoTextModeration recorded = videoRepository.findById(response.id()).orElseThrow().getTextModeration();
+        assertThat(recorded.getVerdict()).isEqualTo(ModerationVerdict.REVIEW);
+        assertThat(recorded.getFlags())
+                .containsExactly("DESCRIPTION:SPAM:link:abc.xyz", "DESCRIPTION:PERSONAL_INFO:phone");
+        assertThat(recorded.isEnforced()).isTrue();
+        assertThat(recorded.getVersion()).startsWith("rules-");
+        assertThat(response.status()).isEqualTo(VideoStatus.PROCESSING);
+        assertThat(response.textModeration()).isNull();
+        assertThat(adminVideoDirectory.getById(response.id()).textModeration().verdict())
+                .isEqualTo(ModerationVerdict.REVIEW);
+    }
+
+    /** Creators link their other profiles; those domains need no review in a caption. */
+    @Test
+    void publish_aCaptionLinkingTheCreatorsOwnProfile_isApproved() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
+                "Nấu phở", "Công thức đầy đủ trên youtube.com/@bepnha #phở", "s3://video-media/raw/1/pho.mp4",
+                VideoVisibility.PUBLIC, null));
+
+        assertThat(videoRepository.findById(response.id()).orElseThrow().getTextModeration().getVerdict())
+                .isEqualTo(ModerationVerdict.APPROVED);
     }
 
     @Test

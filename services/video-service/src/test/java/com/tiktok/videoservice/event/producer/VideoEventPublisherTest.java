@@ -2,9 +2,12 @@ package com.tiktok.videoservice.event.producer;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
+import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.repository.VideoRepository;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -383,6 +386,47 @@ class VideoEventPublisherTest {
                 .visibility(VideoVisibility.PUBLIC)
                 .tags(List.of("dance"))
                 .status(VideoStatus.PUBLISHED)
+                .build();
+    }
+
+    /**
+     * The caption's verdict rides on the publication for media-worker to fold into the moderation
+     * verdict — only when it was enforced: a verdict that was only measured must not hold the video
+     * downstream, and a video from before text moderation has nothing to say.
+     */
+    @Test
+    void publishPending_carriesTheCaptionVerdict_onlyWhenItWasEnforced() throws Exception {
+        Video held = withCaption(ModerationVerdict.REVIEW, true);
+        Video measured = withCaption(ModerationVerdict.REVIEW, false);
+        Video older = pendingVideo();
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(held, measured, older));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPending();
+
+        ArgumentCaptor<ProducerRecord<String, String>> captor = ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaOperations, times(3)).send(captor.capture());
+        List<ModerationVerdict> sent = new java.util.ArrayList<>();
+        for (ProducerRecord<String, String> record : captor.getAllValues()) {
+            sent.add(objectMapper.readValue(record.value(), VideoPublishedEvent.class).textVerdict());
+        }
+        assertThat(sent).containsExactly(ModerationVerdict.REVIEW, null, null);
+    }
+
+    private Video withCaption(ModerationVerdict verdict, boolean enforced) {
+        return Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("Săn sale")
+                .rawFileUrl("s3://video-media/raw/1.mp4")
+                .visibility(VideoVisibility.PUBLIC)
+                .tags(List.of())
+                .status(VideoStatus.PROCESSING)
+                .textModeration(VideoTextModeration.builder()
+                        .verdict(verdict).flags(List.of("DESCRIPTION:SPAM:link:abc.xyz"))
+                        .version("rules-test").enforced(enforced).checkedAt(Instant.now()).build())
                 .build();
     }
 

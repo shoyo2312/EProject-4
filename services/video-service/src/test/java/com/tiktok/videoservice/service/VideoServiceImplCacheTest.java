@@ -1,7 +1,9 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.videoservice.client.OwnerCommentSettings;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
+import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -76,7 +78,9 @@ class VideoServiceImplCacheTest {
                 userSettingsClient,
                 followClient,
                 mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class),
-                mock(com.tiktok.videoservice.repository.OwnerBanRepository.class));
+                mock(com.tiktok.videoservice.repository.OwnerBanRepository.class),
+                mock(CaptionModeration.class),
+                mock(UploadRateLimiter.class));
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
@@ -160,7 +164,7 @@ class VideoServiceImplCacheTest {
     void getByIds_filtersAPrivateCachedVideoOutForAStranger() {
         VideoResponse privateVideo = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, null, 10, 1080, 1920, VideoStatus.PUBLISHED,
-                VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
+                VideoVisibility.PRIVATE, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
 
         when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", privateVideo));
 
@@ -177,7 +181,7 @@ class VideoServiceImplCacheTest {
     void friendsVideo_isVisibleOnlyToAConfirmedFriend() {
         VideoResponse friendsVideo = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, null, 10, 1080, 1920, VideoStatus.PUBLISHED,
-                VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
+                VideoVisibility.FRIENDS, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
         when(videoCache.get("A")).thenReturn(Optional.of(friendsVideo));
 
         when(friendshipClient.areFriends(OWNER, 7L)).thenReturn(true);
@@ -206,11 +210,17 @@ class VideoServiceImplCacheTest {
      * /policy is where interaction-service picks it up, on a call it was already making.
      */
     @Test
-    void getPolicy_carriesTheOwnersCommentAudience() {
+    void getPolicy_carriesTheOwnersCommentAudience_andTheirCommentFilters() {
         when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(publicVideo(VIDEO_ID)));
-        when(userSettingsClient.commentAudience(OWNER)).thenReturn("FRIENDS");
+        when(userSettingsClient.commentSettings(OWNER)).thenReturn(
+                new OwnerCommentSettings("FRIENDS", false, true, List.of("spoiler")));
 
-        assertThat(videoService.getPolicy(VIDEO_ID).commentAudience()).isEqualTo("FRIENDS");
+        VideoPolicyResponse policy = videoService.getPolicy(VIDEO_ID);
+
+        assertThat(policy.commentAudience()).isEqualTo("FRIENDS");
+        assertThat(policy.filterSpamOffensive()).isFalse();
+        assertThat(policy.filterAllComments()).isTrue();
+        assertThat(policy.commentKeywords()).containsExactly("spoiler");
     }
 
     /**
@@ -235,11 +245,16 @@ class VideoServiceImplCacheTest {
 
     /** Nobody could say, so the policy says nothing and the guard downstream lets comments through. */
     @Test
-    void getPolicy_whenUserServiceCannotBeReached_carriesNoAudience() {
+    void getPolicy_whenUserServiceCannotBeReached_carriesNoAudienceAndNoFilters() {
         when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(publicVideo(VIDEO_ID)));
-        when(userSettingsClient.commentAudience(OWNER)).thenReturn(null);
+        when(userSettingsClient.commentSettings(OWNER)).thenReturn(null);
 
-        assertThat(videoService.getPolicy(VIDEO_ID).commentAudience()).isNull();
+        VideoPolicyResponse policy = videoService.getPolicy(VIDEO_ID);
+
+        assertThat(policy.commentAudience()).isNull();
+        assertThat(policy.filterSpamOffensive()).isNull();
+        assertThat(policy.filterAllComments()).isNull();
+        assertThat(policy.commentKeywords()).isNull();
     }
 
     @Test
@@ -298,7 +313,7 @@ class VideoServiceImplCacheTest {
         VideoResponse inReview = new VideoResponse(
                 "A", OWNER, "t", "d", null, null, "http://localhost:9000/video-media/hls/A/source.mp4",
                 10, 1080, 1920, VideoStatus.PENDING_REVIEW, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
-                Instant.now(), null, null, null, null, null, null, null, null, false, false);
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
         when(videoCache.get("A")).thenReturn(Optional.of(inReview));
         when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
 
@@ -376,12 +391,12 @@ class VideoServiceImplCacheTest {
         return new VideoResponse(
                 id, owner, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
                 10, 1080, 1920, VideoStatus.PUBLISHED, visibility, 0, 0, 0L, false, List.of(), Instant.now(),
-                null, null, null, null, null, null, null, null, false, true);
+                null, null, null, null, null, null, null, null, false, true, null);
     }
 
     private static VideoResponse publicVideo(String id) {
         return new VideoResponse(
                 id, OWNER, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
-                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
+                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
     }
 }

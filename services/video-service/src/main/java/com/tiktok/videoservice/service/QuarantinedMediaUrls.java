@@ -73,7 +73,7 @@ public class QuarantinedMediaUrls {
                 video.tags(), video.createdAt(), video.updatedAt(), video.publishedAt(), video.rawFileUrl(),
                 video.failureReason(), video.takedownReason(), video.deletedAt(),
                 video.purgeEventPublishedAt(), video.moderation(), video.accountCommentsOff(),
-                video.ownerPrivate());
+                video.ownerPrivate(), video.textModeration());
     }
 
     private String signed(String url) {

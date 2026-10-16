@@ -19,22 +19,23 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * A video owner's comment audience, for {@code GET /videos/{id}/policy} to carry to
- * interaction-service. Only user-service knows it, and interaction-service has no client of its
- * own to ask with — widening the policy response is what keeps that path at one round trip.
+ * A video owner's comment settings — their comment audience and their comment filters — for
+ * {@code GET /videos/{id}/policy} to carry to interaction-service. Only user-service knows them,
+ * and interaction-service has no client of its own to ask with — widening the policy response is
+ * what keeps that path at one round trip.
  *
  * <p>Cached, because {@code /policy} is read on every comment post and every raw comment-list
  * load while a settings change is rare. {@link UserSettingsCache} holds the bound on staleness.
  *
- * <p>No token: the internal prefix is denied at the gateway and {@code permitAll} in user-service,
- * the same arrangement {@link BlockClient} uses. Its own client, on a timeout well under the one
- * {@code /policy}'s callers allow — see {@code DownstreamRestClientConfig.userSettingsRestClient}.
+ * <p>Carries the internal token like every downstream client here, against user-service's internal
+ * prefix, which the gateway denies. Its own client, on a timeout well under the one {@code /policy}'s
+ * callers allow — see {@code DownstreamRestClientConfig.userSettingsRestClient}.
  *
  * <p><b>Fails open</b> — an unreachable user-service answers null, which the comment guard reads
- * as no restriction. That matches the guard it sits next to: {@code commentsDisabled} already
- * fails open so a user-service outage cannot stop commenting platform-wide. Note this is the
- * opposite of chat-service's DM check, which fails closed; the asymmetry is deliberate and both
- * sides say so.
+ * as no restriction and the filters as their defaults. That matches the guard it sits next to:
+ * {@code commentsDisabled} already fails open so a user-service outage cannot stop commenting
+ * platform-wide. Note this is the opposite of chat-service's DM check, which fails closed; the
+ * asymmetry is deliberate and both sides say so.
  */
 @Slf4j
 @Component
@@ -44,20 +45,25 @@ public class UserSettingsClient {
     private final RestClient userSettingsRestClient;
     private final UserSettingsCache userSettingsCache;
 
+    /**
+     * user-service's answer for one account. The filter fields are absent from a user-service older
+     * than them, and stay null here rather than turning into a default this service would be making up.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record SettingsPolicyView(Long userId, String commentAudience) {
+    private record SettingsPolicyView(Long userId, String commentAudience, Boolean filterSpamOffensive,
+                                      Boolean filterAllComments, List<String> commentKeywords) {
     }
 
     /** The one audience that closes a video to everyone, its owner included. */
     private static final String NO_ONE = "NO_ONE";
 
-    /** The enum name user-service holds, or null when nobody could say. */
-    public String commentAudience(Long userId) {
+    /** What user-service holds for this account, or null when nobody could say. */
+    public OwnerCommentSettings commentSettings(Long userId) {
         if (userId == null) {
             return null;
         }
 
-        String cached = userSettingsCache.getCommentAudience(userId).orElse(null);
+        OwnerCommentSettings cached = userSettingsCache.get(userId).orElse(null);
         return cached != null ? cached : fetch(List.of(userId)).get(userId);
     }
 
@@ -65,7 +71,7 @@ public class UserSettingsClient {
      * The accounts among {@code userIds} that accept comments from no one — every video they own
      * reads as comments off. Cache first, then a single call for the rest, so a feed page of
      * fifty videos is at most one trip to user-service rather than fifty. Fails open like
-     * {@link #commentAudience}: an account nobody could answer for is not closed. The cache is
+     * {@link #commentSettings}: an account nobody could answer for is not closed. The cache is
      * read in one MGET for the whole page, not a GET per owner.
      */
     public Set<Long> closedToComments(Collection<Long> userIds) {
@@ -75,12 +81,12 @@ public class UserSettingsClient {
             return Set.of();
         }
 
-        Map<Long, String> audiences = new HashMap<>(userSettingsCache.getCommentAudiences(owners));
-        audiences.putAll(fetch(owners.stream().filter(owner -> !audiences.containsKey(owner)).toList()));
+        Map<Long, OwnerCommentSettings> settings = new HashMap<>(userSettingsCache.getAll(owners));
+        settings.putAll(fetch(owners.stream().filter(owner -> !settings.containsKey(owner)).toList()));
 
         Set<Long> closed = new HashSet<>();
-        audiences.forEach((userId, audience) -> {
-            if (NO_ONE.equals(audience)) {
+        settings.forEach((userId, owner) -> {
+            if (NO_ONE.equals(owner.commentAudience())) {
                 closed.add(userId);
             }
         });
@@ -91,7 +97,7 @@ public class UserSettingsClient {
      * One call for all of {@code userIds}, each answer cached. Empty when user-service could not
      * say — every caller reads a missing id as "no restriction".
      */
-    private Map<Long, String> fetch(List<Long> userIds) {
+    private Map<Long, OwnerCommentSettings> fetch(List<Long> userIds) {
         if (userIds.isEmpty()) {
             return Map.of();
         }
@@ -112,13 +118,14 @@ public class UserSettingsClient {
                 return Map.of();
             }
 
-            Map<Long, String> audiences = new HashMap<>();
+            Map<Long, OwnerCommentSettings> settings = new HashMap<>();
             response.data().stream()
                     .filter(Objects::nonNull)
                     .filter(view -> view.userId() != null && view.commentAudience() != null)
-                    .forEach(view -> audiences.put(view.userId(), view.commentAudience()));
-            userSettingsCache.putCommentAudiences(audiences);
-            return audiences;
+                    .forEach(view -> settings.put(view.userId(), new OwnerCommentSettings(view.commentAudience(),
+                            view.filterSpamOffensive(), view.filterAllComments(), view.commentKeywords())));
+            userSettingsCache.putAll(settings);
+            return settings;
         } catch (RestClientException e) {
             log.warn("Could not read settings for users {}; leaving comments unrestricted", userIds, e);
             return Map.of();

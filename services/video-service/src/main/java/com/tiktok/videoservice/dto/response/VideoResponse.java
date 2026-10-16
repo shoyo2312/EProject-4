@@ -70,7 +70,9 @@ public record VideoResponse(
          * {@code visibility} still says PUBLIC, because that is what the owner chose for the video.
          * Clients can show a lock. Entries cached before this existed read as {@code false}.
          */
-        boolean ownerPrivate
+        boolean ownerPrivate,
+        /** What the text rules made of the caption. Null on every public read path — admin console only. */
+        TextModerationResponse textModeration
 ) {
 
     /** This response for a video whose owner accepts comments from no one. */
@@ -78,6 +80,6 @@ public record VideoResponse(
         return new VideoResponse(id, userId, title, description, thumbnailUrl, previewUrl, hlsUrl,
                 durationSeconds, width, height, status, visibility, viewCount, likeCount, null,
                 commentsDisabled, tags, createdAt, updatedAt, publishedAt, rawFileUrl, failureReason,
-                takedownReason, deletedAt, purgeEventPublishedAt, moderation, true, ownerPrivate);
+                takedownReason, deletedAt, purgeEventPublishedAt, moderation, true, ownerPrivate, textModeration);
     }
 }

@@ -2,6 +2,7 @@ package com.tiktok.videoservice;
 
 import com.tiktok.common.validation.MediaUrlProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
+import com.tiktok.videoservice.config.UploadRateLimitProperties;
 import com.tiktok.videoservice.config.UserSettingsCacheProperties;
 import com.tiktok.videoservice.config.VideoCacheProperties;
 import org.springframework.boot.SpringApplication;
@@ -21,7 +22,7 @@ import static org.springframework.data.web.config.EnableSpringDataWebSupport.Pag
 @SpringBootApplication
 @EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)
 @EnableConfigurationProperties({MediaUrlProperties.class, VideoCacheProperties.class,
-        UploadLimitProperties.class, UserSettingsCacheProperties.class})
+        UploadLimitProperties.class, UploadRateLimitProperties.class, UserSettingsCacheProperties.class})
 public class VideoServiceApplication {
     public static void main(String[] args) {
         SpringApplication.run(VideoServiceApplication.class, args);

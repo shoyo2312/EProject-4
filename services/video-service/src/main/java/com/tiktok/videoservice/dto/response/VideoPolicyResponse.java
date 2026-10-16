@@ -1,5 +1,7 @@
 package com.tiktok.videoservice.dto.response;
 
+import java.util.List;
+
 /**
  * What another service needs to know about a video to enforce rules on its behalf: who owns it,
  * and whether its owner has switched comments off.
@@ -22,14 +24,23 @@ package com.tiktok.videoservice.dto.response;
  * enforces the setting to deal with, not a reason for this response to fail. Null means nobody
  * could say — user-service was unreachable — and the guard reads that as no restriction.
  *
- * <p>Nothing here is more than a videoId already reveals to somebody who has one. An audience is
- * visible from the video's own comment box anyway.
+ * <p>The owner's comment filters ride along for the same reason — interaction-service applies them
+ * to every comment posted under the video: {@code filterSpamOffensive}, {@code filterAllComments},
+ * {@code commentKeywords}, relayed as user-service holds them. Each is null when nobody could say,
+ * which interaction-service reads as that filter's default (spam and offence filtered, nothing else).
+ *
+ * <p>Nothing here is more than a videoId already reveals to somebody who has one, except the
+ * keywords — which is one more reason this path is denied at the gateway and checks the internal
+ * token. An audience is visible from the video's own comment box anyway.
  */
 public record VideoPolicyResponse(
         String videoId,
         Long userId,
         boolean commentsDisabled,
         Integer durationSeconds,
-        String commentAudience
+        String commentAudience,
+        Boolean filterSpamOffensive,
+        Boolean filterAllComments,
+        List<String> commentKeywords
 ) {
 }

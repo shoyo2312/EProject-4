@@ -6,6 +6,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -27,8 +28,12 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 class UserSettingsClientTest {
 
     private static final String ONE_POLICY = """
-            {"success": true, "data": [{"userId": 7, "commentAudience": "NO_ONE"}]}
+            {"success": true, "data": [{"userId": 7, "commentAudience": "NO_ONE", "dmAudience": "EVERYONE",
+              "filterSpamOffensive": false, "filterAllComments": true, "commentKeywords": ["spoiler"]}]}
             """;
+
+    private static final OwnerCommentSettings SEVEN =
+            new OwnerCommentSettings("NO_ONE", false, true, List.of("spoiler"));
 
     private final RestClient.Builder builder = RestClient.builder().baseUrl("http://user-service");
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
@@ -36,35 +41,48 @@ class UserSettingsClientTest {
     private final UserSettingsClient client = new UserSettingsClient(builder.build(), cache);
 
     @Test
-    void commentAudience_onACacheHit_neverCallsUserService() {
-        when(cache.getCommentAudience(7L)).thenReturn(Optional.of("FRIENDS"));
+    void commentSettings_onACacheHit_neverCallUserService() {
+        OwnerCommentSettings cached = new OwnerCommentSettings("FRIENDS", true, false, List.of());
+        when(cache.get(7L)).thenReturn(Optional.of(cached));
 
-        assertThat(client.commentAudience(7L)).isEqualTo("FRIENDS");
+        assertThat(client.commentSettings(7L)).isEqualTo(cached);
 
         server.verify();
     }
 
     @Test
-    void commentAudience_onAMiss_readsUserServiceAndPopulatesTheCache() {
-        when(cache.getCommentAudience(7L)).thenReturn(Optional.empty());
+    void commentSettings_onAMiss_readUserService_filtersIncluded_andPopulateTheCache() {
+        when(cache.get(7L)).thenReturn(Optional.empty());
         server.expect(requestTo("http://user-service/api/v1/users/internal/settings?ids=7"))
                 .andRespond(withSuccess(ONE_POLICY, MediaType.APPLICATION_JSON));
 
-        assertThat(client.commentAudience(7L)).isEqualTo("NO_ONE");
+        assertThat(client.commentSettings(7L)).isEqualTo(SEVEN);
 
-        verify(cache).putCommentAudiences(Map.of(7L, "NO_ONE"));
+        verify(cache).putAll(Map.of(7L, SEVEN));
         server.verify();
     }
 
+    /** A user-service from before the filters: relayed as unknown, not as a default made up here. */
     @Test
-    void commentAudience_whenUserServiceFails_answersNothingAndCachesNothing() {
-        when(cache.getCommentAudience(7L)).thenReturn(Optional.empty());
+    void anOlderUserService_withoutTheFilters_relaysThemAsUnknown() {
+        when(cache.get(7L)).thenReturn(Optional.empty());
+        server.expect(requestTo("http://user-service/api/v1/users/internal/settings?ids=7"))
+                .andRespond(withSuccess("""
+                        {"success": true, "data": [{"userId": 7, "commentAudience": "EVERYONE"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThat(client.commentSettings(7L)).isEqualTo(new OwnerCommentSettings("EVERYONE", null, null, null));
+    }
+
+    @Test
+    void commentSettings_whenUserServiceFails_answerNothingAndCacheNothing() {
+        when(cache.get(7L)).thenReturn(Optional.empty());
         server.expect(requestTo("http://user-service/api/v1/users/internal/settings?ids=7"))
                 .andRespond(withServerError());
 
-        assertThat(client.commentAudience(7L)).isNull();
+        assertThat(client.commentSettings(7L)).isNull();
 
-        verify(cache).getCommentAudience(7L);
+        verify(cache).get(7L);
         server.verify();
     }
 
@@ -75,21 +93,22 @@ class UserSettingsClientTest {
     @Test
     void closedToComments_asksUserServiceOnceForTheMissesOnly() {
         // One MGET for the page: 7 misses, 8 and 9 answer from the cache.
-        when(cache.getCommentAudiences(Set.of(7L, 8L, 9L))).thenReturn(Map.of(8L, "EVERYONE", 9L, "NO_ONE"));
+        when(cache.getAll(Set.of(7L, 8L, 9L))).thenReturn(Map.of(
+                8L, new OwnerCommentSettings("EVERYONE", true, false, List.of()),
+                9L, new OwnerCommentSettings("NO_ONE", true, false, List.of())));
         server.expect(requestTo("http://user-service/api/v1/users/internal/settings?ids=7"))
                 .andRespond(withSuccess(ONE_POLICY, MediaType.APPLICATION_JSON));
 
-        assertThat(client.closedToComments(java.util.List.of(7L, 8L, 9L, 9L)))
-                .containsExactlyInAnyOrder(7L, 9L);
+        assertThat(client.closedToComments(List.of(7L, 8L, 9L, 9L))).containsExactlyInAnyOrder(7L, 9L);
 
-        verify(cache).putCommentAudiences(Map.of(7L, "NO_ONE"));
+        verify(cache).putAll(Map.of(7L, SEVEN));
         server.verify();
     }
 
     /** No owner, no question to ask — an unmapped video should not cost a round trip. */
     @Test
-    void commentAudience_withNoUserId_asksNobody() {
-        assertThat(client.commentAudience(null)).isNull();
+    void commentSettings_withNoUserId_askNobody() {
+        assertThat(client.commentSettings(null)).isNull();
 
         verifyNoInteractions(cache);
         server.verify();

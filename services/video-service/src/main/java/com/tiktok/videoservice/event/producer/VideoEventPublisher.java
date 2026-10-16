@@ -10,6 +10,7 @@ import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.repository.VideoRepository;
+import com.tiktok.videoservice.service.CaptionModeration;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -185,7 +186,8 @@ public class VideoEventPublisher {
     private ProducerRecord<String, String> toPublishedRecord(Video video) {
         VideoPublishedEvent event = VideoPublishedEvent.of(
                 video.getId(), video.getUserId(), video.getTitle(), video.getDescription(),
-                video.getRawFileUrl(), audience(video), video.getTags());
+                video.getRawFileUrl(), audience(video), video.getTags(),
+                CaptionModeration.eventVerdict(video.getTextModeration()));
         try {
             return record(video.getId(), "VideoPublishedEvent", objectMapper.writeValueAsString(event));
         } catch (JacksonException ex) {

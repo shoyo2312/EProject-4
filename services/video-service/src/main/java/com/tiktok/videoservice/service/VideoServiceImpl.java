@@ -4,6 +4,7 @@ import com.tiktok.common.storage.ObjectKeys;
 import com.tiktok.videoservice.client.BlockClient;
 import com.tiktok.videoservice.client.FollowClient;
 import com.tiktok.videoservice.client.FriendshipClient;
+import com.tiktok.videoservice.client.OwnerCommentSettings;
 import com.tiktok.videoservice.client.UserSettingsClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
@@ -18,6 +19,7 @@ import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.AlreadyPublishedException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
@@ -118,6 +120,8 @@ public class VideoServiceImpl implements VideoService {
     private final FollowClient followClient;
     private final OwnerPrivacyRepository ownerPrivacyRepository;
     private final OwnerBanRepository ownerBanRepository;
+    private final CaptionModeration captionModeration;
+    private final UploadRateLimiter uploadRateLimiter;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -134,6 +138,7 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
+        uploadRateLimiter.requireUploadUrl(userId);
         String contentType = mediaType(request.contentType());
         String extension = UPLOAD_EXTENSIONS.get(contentType);
         if (extension == null) {
@@ -168,7 +173,14 @@ public class VideoServiceImpl implements VideoService {
 
     @Override
     public VideoResponse publish(Long userId, CreateVideoRequest request) {
+        // First: a publish refused for anything after this — a foreign upload, its caption — still
+        // spends budget, so neither can be probed at speed.
+        uploadRateLimiter.requirePublish(userId);
         String rawFileUrl = storedUrl(requireOwnUpload(userId, request.rawFileUrl()));
+        List<String> tags = normalizeTags(request.tags(), request.description());
+        // Before the insert: a caption refused here leaves nothing behind, so the same upload can
+        // be published again once the text is fixed.
+        VideoTextModeration textModeration = captionModeration.screen(request.title(), request.description(), tags);
 
         Video video = Video.builder()
                 .id(Video.newId())
@@ -178,7 +190,8 @@ public class VideoServiceImpl implements VideoService {
                 .rawFileUrl(rawFileUrl)
                 .visibility(request.visibility())
                 .ownerPrivate(isPrivateOwner(userId))
-                .tags(normalizeTags(request.tags(), request.description()))
+                .tags(tags)
+                .textModeration(textModeration)
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)
                 .likeCount(0)
@@ -306,7 +319,7 @@ public class VideoServiceImpl implements VideoService {
      * Owner and comment settings, and nothing the caller has to be allowed to see — so no
      * visibility check runs here. {@link VideoPolicyResponse} has the reason.
      *
-     * <p>The account-level comment audience is fetched rather than read off the video, and
+     * <p>The account-level comment settings are fetched rather than read off the video, and
      * deliberately not denormalised onto the document: this endpoint is already a per-request
      * lookup, so a cached call is O(1) and near-fresh, while denormalising would mean rewriting
      * every document a creator owns each time they change the setting. The feed filter, which
@@ -315,8 +328,13 @@ public class VideoServiceImpl implements VideoService {
     @Override
     public VideoPolicyResponse getPolicy(String videoId) {
         VideoResponse video = load(videoId);
-        return new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled(),
-                video.durationSeconds(), userSettingsClient.commentAudience(video.userId()));
+        OwnerCommentSettings owner = userSettingsClient.commentSettings(video.userId());
+        return owner == null
+                ? new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled(),
+                        video.durationSeconds(), null, null, null, null)
+                : new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled(),
+                        video.durationSeconds(), owner.commentAudience(), owner.filterSpamOffensive(),
+                        owner.filterAllComments(), owner.commentKeywords());
     }
 
     /**

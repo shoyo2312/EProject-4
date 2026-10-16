@@ -13,6 +13,8 @@ public interface VideoMapper {
     @Mapping(target = "commentCount",
             expression = "java(video.isCommentsDisabled() ? null : video.getCommentCount())")
     @Mapping(target = "moderation", ignore = true)
+    // Same reasoning as moderation: which word sent a video to review is not for its uploader.
+    @Mapping(target = "textModeration", ignore = true)
     // The raw upload path is an internal MinIO object key; it never leaves on a public read.
     @Mapping(target = "rawFileUrl", ignore = true)
     // A deleted video is unreachable on every public path, so this would always be null there
@@ -26,8 +28,9 @@ public interface VideoMapper {
     VideoResponse toResponse(Video video);
 
     /**
-     * The same response with the classifier's numbers attached. A machine-removed video sets no
-     * takedownReason, so this is the only account of why it went down.
+     * The same response with the classifier's numbers and the text rules' flags attached. A
+     * machine-removed video sets no takedownReason, so this is the only account of why it went
+     * down — or, for a video held over its caption, why it is waiting.
      */
     @Mapping(target = "commentCount",
             expression = "java(video.isCommentsDisabled() ? null : video.getCommentCount())")

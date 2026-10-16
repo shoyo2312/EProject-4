@@ -146,6 +146,12 @@ public class Video {
      */
     private VideoModeration moderation;
 
+    /**
+     * What the text rules made of the title, description and tags, recorded at publish. Null for
+     * videos published before text moderation existed. See {@link VideoTextModeration}.
+     */
+    private VideoTextModeration textModeration;
+
     private VideoVisibility visibility;
 
     /**

@@ -12,6 +12,7 @@ import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import com.tiktok.videoservice.exception.CaptionRejectedException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.service.VideoService;
@@ -133,7 +134,7 @@ class VideoControllerTest {
     void publish_withValidToken_createsVideo() throws Exception {
         CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, List.of());
         VideoResponse response = new VideoResponse("v1", 42L, "title", "desc", null, null, null, null, null, null,
-                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
         when(videoService.publish(eq(42L), any())).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/videos")
@@ -161,6 +162,58 @@ class VideoControllerTest {
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 
         verify(videoService, never()).publish(any(), any());
+    }
+
+    /** Fillers and zero-width characters render as nothing; sanitized away, the title is blank. */
+    @Test
+    void publish_titleOfOnlyInvisibleCharacters_returnsValidationError() throws Exception {
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title": "\u3164\u200B\u3164", "rawFileUrl": "s3://video-media/raw/1.mp4", "visibility": "PUBLIC"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verify(videoService, never()).publish(any(), any());
+    }
+
+    /** 150 emoji are 300 UTF-16 units: @Size refused them, a reader counts 150. */
+    @Test
+    void publish_titleLimit_countsWhatAReaderCounts() throws Exception {
+        VideoResponse response = new VideoResponse("v1", 1L, "t", null, null, null, null, null, null, null,
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoService.publish(eq(1L), any())).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateVideoRequest(
+                                "🔥".repeat(150), null, "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, null))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateVideoRequest(
+                                "🔥".repeat(151), null, "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, null))))
+                .andExpect(status().isBadRequest());
+    }
+
+    /** One code per field: the client puts the message under the box that holds the problem. */
+    @Test
+    void publish_aRefusedCaption_answers422NamingTheField() throws Exception {
+        when(videoService.publish(eq(1L), any()))
+                .thenThrow(new CaptionRejectedException(CaptionRejectedException.Field.DESCRIPTION));
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateVideoRequest(
+                                "title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, null))))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("VIDEO_DESCRIPTION_REJECTED"));
     }
 
     /**
@@ -193,7 +246,7 @@ class VideoControllerTest {
     void publish_rawFileUrlOnOurStorage_isAccepted(String rawFileUrl) throws Exception {
         CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC, List.of());
         VideoResponse response = new VideoResponse("v1", 1L, "title", "desc", null, null, null, null, null, null,
-                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false);
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
         when(videoService.publish(eq(1L), any())).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/videos")
