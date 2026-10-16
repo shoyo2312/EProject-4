@@ -77,6 +77,15 @@ admin:
     # Cheap: the unpublished rows are a partial index (idx_outbox_events_unpublished).
     poll-millis: 500
 
+moderation:
+  text:
+    # The console's preview asks the same classifier the services do. Unreachable: the preview says
+    # so (classifierAnswered=false) and shows the rules' verdict alone.
+    classifier:
+      base-url: ${MODERATION_SERVICE_URL:http://localhost:8099}
+    # No admin-terms base-url here: this service is where the terms live, and the preview reads them
+    # straight from its own database.
+
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 

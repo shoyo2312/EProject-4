@@ -85,6 +85,12 @@
             <groupId>com.tiktok</groupId>
             <artifactId>kafka-lib</artifactId>
         </dependency>
+        <!-- Admin-managed moderation terms: validated and keyed the way every service matches them,
+             and the console's preview, which runs the same rules and classifier they do. -->
+        <dependency>
+            <groupId>com.tiktok</groupId>
+            <artifactId>moderation-lib</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.tiktok</groupId>
             <artifactId>security-lib</artifactId>

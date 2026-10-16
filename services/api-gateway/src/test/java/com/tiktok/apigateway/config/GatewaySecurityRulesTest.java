@@ -91,6 +91,23 @@ class GatewaySecurityRulesTest {
                 .expectStatus().isUnauthorized();
     }
 
+    /**
+     * admin-service's internal prefix hands out the moderation word list — every admin term,
+     * including what is exempted. Only the services that screen text may read it, and an admin's
+     * own token does not make a caller one of them.
+     */
+    @Test
+    void internalAdminEndpoints_areRefusedWithAndWithoutAToken() {
+        String uri = "/api/v1/admin/internal/blocklist";
+        client.get().uri(uri)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                .exchange()
+                .expectStatus().isForbidden();
+        client.get().uri(uri)
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
     @Test
     void ordinaryUserEndpoints_stillPassForASignedInCaller() {
         client.get().uri("/api/v1/users/42")
@@ -171,6 +188,7 @@ class GatewaySecurityRulesTest {
                 "/api/v1/users/by-username/alice", "/api/v1/users",
                 "/api/v1/videos/123/policy", "/api/v1/videos/123",
                 "/api/v1/interactions/internal/videos/1/comments/2/author",
+                "/api/v1/admin/internal/blocklist",
                 "/api/v1/interactions/videos/123/comments",
                 "/api/v1/interactions/videos/123/comments/456/replies",
                 "/api/v1/interactions/videos/123/counts",

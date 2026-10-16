@@ -1,6 +1,7 @@
 package com.tiktok.adminservice.controller;
 
 import com.tiktok.adminservice.config.SecurityConfig;
+import com.tiktok.common.config.InternalApiAutoConfiguration;
 import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.service.AdminService;
@@ -35,8 +36,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @WebMvcTest(controllers = {UserModerationController.class, ModerationActionController.class,
         ReportController.class})
-@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class})
-@TestPropertySource(properties = "jwt.secret=" + ModerationControllersTest.JWT_SECRET)
+@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, InternalApiAutoConfiguration.class})
+@TestPropertySource(properties = {"jwt.secret=" + ModerationControllersTest.JWT_SECRET,
+        "INTERNAL_API_TOKEN=internal-token-for-tests-0123456789abcdef"})
 class ModerationControllersTest {
 
     static final String JWT_SECRET = "test-secret-at-least-32-bytes-long-0123456789";
