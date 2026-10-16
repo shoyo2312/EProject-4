@@ -2,6 +2,7 @@ package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
+import com.tiktok.authservice.dto.request.CompletePasswordResetRequest;
 import com.tiktok.authservice.dto.request.CompleteSignupRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
@@ -11,8 +12,10 @@ import com.tiktok.authservice.dto.request.ResendVerificationRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifyPasswordResetRequest;
 import com.tiktok.authservice.dto.request.VerifySignupRequest;
 import com.tiktok.authservice.dto.response.OtpSentResponse;
+import com.tiktok.authservice.dto.response.PasswordResetTicketResponse;
 import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
@@ -66,4 +69,9 @@ public interface AuthService {
     OtpSentResponse forgotPassword(ForgotPasswordRequest request);
 
     void resetPassword(ResetPasswordRequest request);
+
+    /** Spends the reset code on its own and answers the ticket {@link #completePasswordReset} redeems. */
+    PasswordResetTicketResponse verifyPasswordReset(VerifyPasswordResetRequest request);
+
+    void completePasswordReset(CompletePasswordResetRequest request);
 }

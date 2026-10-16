@@ -30,6 +30,7 @@ public class SecurityConfig {
                                 "/api/v1/auth/refresh", "/api/v1/auth/logout",
                                 "/api/v1/auth/verify-email", "/api/v1/auth/resend-verification",
                                 "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
+                                "/api/v1/auth/reset-password/verify", "/api/v1/auth/reset-password/complete",
                                 // Sign-in endpoints: requiring a session to start one is circular.
                                 "/api/v1/auth/oauth/google", "/api/v1/auth/oauth/facebook",
                                 "/api/v1/auth/oauth/google/link", "/api/v1/auth/oauth/facebook/link").permitAll()

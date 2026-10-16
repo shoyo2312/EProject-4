@@ -13,6 +13,7 @@ public record AuthMeResponse(
         String role,
         String status,
         Instant createdAt,
-        Instant usernameChangeableAt
+        Instant usernameChangeableAt,
+        boolean hasPassword
 ) {
 }

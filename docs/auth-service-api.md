@@ -88,7 +88,8 @@ Response `data` → `UserResponse`:
   "status": "ACTIVE",         // enum: xem UserStatus
   "emailVerified": false,     // luôn false ngay sau khi đăng ký — xem mục 3.6
   "createdAt": "2026-08-01T10:00:00Z",
-  "usernameChangeableAt": null // khi nào được đổi username lần tới; null = đổi được ngay (mục 3.16)
+  "usernameChangeableAt": null, // khi nào được đổi username lần tới; null = đổi được ngay (mục 3.16)
+  "hasPassword": true         // false = tài khoản social chưa đặt mật khẩu; đặt qua forgot-password → reset (mục 3.8, 3.9)
 }
 ```
 
@@ -210,6 +211,24 @@ Mã được gửi tới hòm thư, nên dùng được mã cũng là chứng mi
 Hệ quả cho client: thiết bị vừa reset password **cũng** mất phiên — sau `204` phải điều hướng về màn hình đăng nhập và cho user login lại bằng mật khẩu mới, không được giữ token cũ trong app.
 
 Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400), `TOO_MANY_OTP_REQUESTS` (429 — nhập sai OTP quá **5 lần/15 phút** theo email, độc lập với giới hạn gửi lại OTP ở mục 3.8).
+
+#### Reset hai bước: `POST /reset-password/verify` → `POST /reset-password/complete`
+Cùng kết quả với `/reset-password` ở trên, nhưng tách làm hai để client báo **OTP sai ngay ở màn nhập mã**, trước khi hỏi mật khẩu mới — giống `register/verify` → `register/complete`. Web app dùng luồng này; `/reset-password` một bước vẫn giữ nguyên (admin console đang dùng).
+
+`/reset-password/verify` — không cần token, trả `200 OK`:
+```json
+{ "email": "a@b.com", "otp": "192837" }
+```
+```json
+{ "resetToken": "<opaque>", "expiresInMillis": 900000 }
+```
+Mã OTP bị **tiêu luôn** ở bước này và tính chung ngân sách đoán sai với `/reset-password` (5 lần/15 phút theo email). Chưa có gì của tài khoản thay đổi. Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400), `TOO_MANY_OTP_REQUESTS` (429).
+
+`/reset-password/complete` — không cần token, trả `204 No Content`:
+```json
+{ "resetToken": "<opaque>", "newPassword": "N3wP@ssw0rd" }
+```
+Làm mọi thứ `/reset-password` làm khi thành công (đổi mật khẩu, verify email nếu chưa, **cắt mọi phiên**). `resetToken` sống 15 phút và chỉ dùng được một lần. Lỗi: `VALIDATION_ERROR` (400), `RESET_SESSION_EXPIRED` (400 — ticket hết hạn/đã dùng: xin mã mới qua `forgot-password`).
 
 ### 3.10 `POST /oauth/google` và `POST /oauth/facebook`
 Không cần token. Trả `200 OK`. **Đăng ký và đăng nhập là cùng một lời gọi** — client không thể biết tài khoản đã tồn tại hay chưa, đó là chuyện chỉ server biết.
@@ -427,7 +446,8 @@ ACTIVE, LOCKED
 | `EMAIL_ALREADY_LINKED` | 409 | Tài khoản đã có email đã verify nên không dùng `POST /email` được nữa (mục 3.12) |
 | `SOCIAL_LINK_VERIFICATION_REQUIRED` | 409 | Email sau tài khoản provider đã có chủ ở hệ thống ta và provider không khẳng định nó đã verify. Server đã gửi mã tới địa chỉ đó — **giữ lại token provider** rồi hoàn tất bằng mục 3.11. Không phải lỗi để hiển thị rồi thôi: bỏ token đi là bắt user đăng nhập provider lại từ đầu |
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
-| `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`, `register/verify`) |
+| `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`, `reset-password/verify`, `register/verify`) |
+| `RESET_SESSION_EXPIRED` | 400 | `resetToken` của `reset-password/complete` hết hạn hoặc đã dùng — xin mã mới |
 | `SIGNUP_SESSION_EXPIRED` | 400 | `signupToken` sai, hết hạn (30 phút) hoặc đã dùng ở `register/complete` → quay lại `register/start` |
 | `TURNSTILE_VERIFICATION_FAILED` | 403 | Thiếu hoặc sai `turnstileToken` ở một lời gọi gửi OTP, hoặc `resendTicket` gửi kèm đã hết hạn / không phải của địa chỉ và luồng này (xem đầu mục 3) |
 | `TOO_MANY_OTP_REQUESTS` | 429 | (a) Quá 3 lần gọi `resend-verification`/`forgot-password`/`register/start` trong 15 phút (theo email), **hoặc** (b) quá 5 lần nhập sai OTP trong 15 phút ở `verify-email`/`reset-password`/`register/verify` (theo email) — 2 counter độc lập, client cần xử lý cả hai trường hợp |

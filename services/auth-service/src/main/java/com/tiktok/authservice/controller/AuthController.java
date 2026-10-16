@@ -3,6 +3,7 @@ package com.tiktok.authservice.controller;
 import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
 import com.tiktok.authservice.dto.request.ChangeUsernameRequest;
+import com.tiktok.authservice.dto.request.CompletePasswordResetRequest;
 import com.tiktok.authservice.dto.request.CompleteSignupRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
@@ -12,8 +13,10 @@ import com.tiktok.authservice.dto.request.ResendVerificationRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifyPasswordResetRequest;
 import com.tiktok.authservice.dto.request.VerifySignupRequest;
 import com.tiktok.authservice.dto.response.OtpSentResponse;
+import com.tiktok.authservice.dto.response.PasswordResetTicketResponse;
 import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
@@ -201,6 +204,26 @@ public class AuthController {
                     + "usually done because the account is suspected stolen.")
     public ApiResponse<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
         authService.resetPassword(request);
+        return ApiResponse.success(null);
+    }
+
+    @PostMapping("/reset-password/verify")
+    @Operation(summary = "Two-step reset: spend the code",
+            description = "Answers the resetToken that /reset-password/complete redeems, good for "
+                    + "15 minutes, so a wrong code is reported before a new password is asked for. "
+                    + "400 INVALID_OTP on a wrong or expired code, 429 TOO_MANY_OTP_REQUESTS after "
+                    + "repeated guesses — the same budget /reset-password spends.")
+    public ApiResponse<PasswordResetTicketResponse> verifyPasswordReset(
+            @Valid @RequestBody VerifyPasswordResetRequest request) {
+        return ApiResponse.success(authService.verifyPasswordReset(request));
+    }
+
+    @PostMapping("/reset-password/complete")
+    @Operation(summary = "Two-step reset: set the new password",
+            description = "Everything /reset-password does on success, every session revoked "
+                    + "included. 400 RESET_SESSION_EXPIRED means ask for a new code.")
+    public ApiResponse<Void> completePasswordReset(@Valid @RequestBody CompletePasswordResetRequest request) {
+        authService.completePasswordReset(request);
         return ApiResponse.success(null);
     }
 }

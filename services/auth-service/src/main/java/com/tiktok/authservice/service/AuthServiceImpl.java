@@ -4,6 +4,7 @@ import com.tiktok.authservice.config.JwtProperties;
 import com.tiktok.authservice.config.OtpProperties;
 import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
+import com.tiktok.authservice.dto.request.CompletePasswordResetRequest;
 import com.tiktok.authservice.dto.request.CompleteSignupRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
@@ -13,8 +14,10 @@ import com.tiktok.authservice.dto.request.ResendVerificationRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifyPasswordResetRequest;
 import com.tiktok.authservice.dto.request.VerifySignupRequest;
 import com.tiktok.authservice.dto.response.OtpSentResponse;
+import com.tiktok.authservice.dto.response.PasswordResetTicketResponse;
 import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
@@ -33,6 +36,7 @@ import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
+import com.tiktok.authservice.exception.InvalidResetTokenException;
 import com.tiktok.authservice.exception.InvalidSignupTokenException;
 import com.tiktok.authservice.exception.MfaRequiredException;
 import com.tiktok.authservice.exception.UserNotFoundException;
@@ -86,6 +90,7 @@ public class AuthServiceImpl implements AuthService {
     private final SecurityEventRecorder securityEventRecorder;
     private final IdentityReconfirmation identityReconfirmation;
     private final SignupChallenge signupChallenge;
+    private final PasswordResetChallenge passwordResetChallenge;
     private final OtpGenerator otpGenerator;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -542,13 +547,46 @@ public class AuthServiceImpl implements AuthService {
     public void resetPassword(ResetPasswordRequest request) {
         User user = otpService.consume(PURPOSE_PASSWORD_RESET, VerificationTokenType.PASSWORD_RESET,
                 request.email(), request.otp());
+        setNewPassword(user, request.newPassword());
+    }
 
+    /**
+     * The code is spent here, not at completion, so a wrong one is answered on the code screen —
+     * under the same guess budget as {@link #resetPassword}, since {@link OtpService#consume}
+     * counts it. Nothing about the account changes until the ticket is redeemed.
+     */
+    @Override
+    @Transactional
+    public PasswordResetTicketResponse verifyPasswordReset(VerifyPasswordResetRequest request) {
+        User user = otpService.consume(PURPOSE_PASSWORD_RESET, VerificationTokenType.PASSWORD_RESET,
+                request.email(), request.otp());
+        return new PasswordResetTicketResponse(passwordResetChallenge.issueTicket(user.getId()),
+                PasswordResetChallenge.TICKET_TTL.toMillis());
+    }
+
+    /**
+     * Spent before anything is written: there is no retryable failure after it, unlike a taken
+     * username at {@link #completeSignup}, so a ticket worth keeping does not exist. An account
+     * deleted since the code was spent is answered like an expired ticket.
+     */
+    @Override
+    @Transactional
+    public void completePasswordReset(CompletePasswordResetRequest request) {
+        User user = passwordResetChallenge.spendTicket(request.resetToken())
+                .flatMap(userRepository::findById)
+                .filter(u -> !u.isDeleted())
+                .orElseThrow(InvalidResetTokenException::new);
+        setNewPassword(user, request.newPassword());
+    }
+
+    /** What a proven reset does, whichever of the two flows proved it. */
+    private void setNewPassword(User user, String newPassword) {
         // Before the address is marked verified below, which would move the cutoff this reads: the
         // provider links attached before the address was proven may be a squatter's, and a reset is
         // the mailbox owner taking the account over. See IdentityReconfirmation.
         identityReconfirmation.onMailboxOwnerTakesOver(user);
 
-        user.changePasswordHash(HashUtils.bcryptHash(request.newPassword()));
+        user.changePasswordHash(HashUtils.bcryptHash(newPassword));
         // The code was mailed to the address, so spending it proves the address. Without this an
         // account created through a social login that never asserted its address could set a
         // password here and still not log in with it: login refuses unverified addresses.

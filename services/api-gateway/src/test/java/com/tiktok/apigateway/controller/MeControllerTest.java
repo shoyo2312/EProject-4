@@ -33,7 +33,7 @@ class MeControllerTest {
     void getMe_forwardsAuthorizationHeaderAndWrapsResultInApiResponse() {
         MeResponse meResponse = new MeResponse(
                 1L, "alice", "alice@example.com", "USER", "ACTIVE", Instant.parse("2024-01-01T00:00:00Z"),
-                "Alice A", "hello", "https://example.com/avatar.png", 10L, 5L, true, null, null);
+                "Alice A", "hello", "https://example.com/avatar.png", 10L, 5L, true, null, null, true);
         when(meService.getMe(anyString())).thenReturn(Mono.just(meResponse));
 
         WebTestClient client = WebTestClient.bindToController(new MeController(meService)).build();
@@ -47,7 +47,8 @@ class MeControllerTest {
                 .jsonPath("$.data.id").isEqualTo(1)
                 .jsonPath("$.data.username").isEqualTo("alice")
                 .jsonPath("$.data.displayName").isEqualTo("Alice A")
-                .jsonPath("$.data.profileReady").isEqualTo(true);
+                .jsonPath("$.data.profileReady").isEqualTo(true)
+                .jsonPath("$.data.hasPassword").isEqualTo(true);
 
         ArgumentCaptor<String> headerCaptor = ArgumentCaptor.forClass(String.class);
         verify(meService).getMe(headerCaptor.capture());
@@ -58,7 +59,7 @@ class MeControllerTest {
     void getMe_whenProfileNotReady_returnsNullProfileFieldsButStillOk() {
         MeResponse meResponse = new MeResponse(
                 1L, "alice", "alice@example.com", "USER", "ACTIVE", Instant.parse("2024-01-01T00:00:00Z"),
-                null, null, null, null, null, false, null, null);
+                null, null, null, null, null, false, null, null, false);
         when(meService.getMe(anyString())).thenReturn(Mono.just(meResponse));
 
         WebTestClient client = WebTestClient.bindToController(new MeController(meService)).build();

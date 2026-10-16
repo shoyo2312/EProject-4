@@ -16,6 +16,7 @@ public interface UserMapper {
 
     @Mapping(target = "usernameChangeableAt",
             expression = "java(UsernameCooldown.changeableAt(user.getUsernameChangedAt(), Instant.now()))")
+    @Mapping(target = "hasPassword", expression = "java(user.getPasswordHash() != null)")
     UserResponse toResponse(User user);
 
     /**

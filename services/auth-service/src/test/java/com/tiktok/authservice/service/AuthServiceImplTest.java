@@ -1,11 +1,13 @@
 package com.tiktok.authservice.service;
 
+import com.tiktok.authservice.dto.request.CompletePasswordResetRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifyPasswordResetRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.entity.AuthProvider;
@@ -15,12 +17,14 @@ import com.tiktok.authservice.entity.RefreshToken;
 import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserIdentity;
+import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
+import com.tiktok.authservice.exception.InvalidResetTokenException;
 import com.tiktok.authservice.exception.TooManyLoginAttemptsException;
 import com.tiktok.authservice.exception.TooManyOtpRequestsException;
 import com.tiktok.authservice.exception.UserNotFoundException;
@@ -846,6 +850,89 @@ class AuthServiceImplTest {
 
         TokenResponse relogin = authService.login(new LoginRequest("johndoe", "newpassword123"));
         assertThat(relogin.accessToken()).isNotBlank();
+    }
+
+    /** The two-step reset answers a wrong code at the code step, before a password is asked for. */
+    @Test
+    void verifyPasswordReset_withWrongOtp_isRefusedAndChangesNothing() {
+        registerVerified();
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+        String wrong = otpCaptor.getValue().equals("000000") ? "111111" : "000000";
+
+        assertThatThrownBy(() -> authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("john@example.com", wrong)))
+                .isInstanceOf(InvalidOtpException.class);
+
+        // The right code is still good after a wrong one.
+        assertThat(authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("john@example.com", otpCaptor.getValue())).resetToken())
+                .isNotBlank();
+        assertThat(authService.login(new LoginRequest("johndoe", "password123")).accessToken()).isNotBlank();
+    }
+
+    @Test
+    void completePasswordReset_withTheTicket_changesPasswordAndRevokesSessions() {
+        registerVerified();
+        TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+
+        String ticket = authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("john@example.com", otpCaptor.getValue())).resetToken();
+        authService.completePasswordReset(new CompletePasswordResetRequest(ticket, "newpassword123"));
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(tokens.refreshToken())))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+        assertThat(authService.login(new LoginRequest("johndoe", "newpassword123")).accessToken()).isNotBlank();
+    }
+
+    @Test
+    void completePasswordReset_ticketIsSpentOnce_andTheCodeWithIt() {
+        registerVerified();
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+
+        String ticket = authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("john@example.com", otpCaptor.getValue())).resetToken();
+        authService.completePasswordReset(new CompletePasswordResetRequest(ticket, "newpassword123"));
+
+        assertThatThrownBy(() -> authService.completePasswordReset(
+                new CompletePasswordResetRequest(ticket, "attackerpass123")))
+                .isInstanceOf(InvalidResetTokenException.class);
+        assertThatThrownBy(() -> authService.resetPassword(
+                new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "attackerpass123")))
+                .as("verifying spent the code; it must not also work at the one-step endpoint")
+                .isInstanceOf(InvalidOtpException.class);
+    }
+
+    /** A social account has no password until the reset flow gives it one, and /me says so. */
+    @Test
+    void hasPassword_isFalseForASocialAccountUntilTheResetSetsOne() {
+        assertThat(authService.getCurrentUser(registerVerified().id()).hasPassword()).isTrue();
+
+        User social = User.builder()
+                .username("socialjane")
+                .email("jane@example.com")
+                .role(UserRole.USER)
+                .status(UserStatus.ACTIVE)
+                .build();
+        social.markEmailVerified();
+        Long socialId = userRepository.save(social).getId();
+        assertThat(authService.getCurrentUser(socialId).hasPassword()).isFalse();
+
+        authService.forgotPassword(new ForgotPasswordRequest("jane@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("jane@example.com"), otpCaptor.capture());
+        String ticket = authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("jane@example.com", otpCaptor.getValue())).resetToken();
+        authService.completePasswordReset(new CompletePasswordResetRequest(ticket, "newpassword123"));
+
+        assertThat(authService.getCurrentUser(socialId).hasPassword()).isTrue();
+        assertThat(authService.login(new LoginRequest("socialjane", "newpassword123")).accessToken()).isNotBlank();
     }
 
     /**
