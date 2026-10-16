@@ -186,7 +186,8 @@
     "description" : "description-6",
     "rawFileUrl" : "rawFileUrl-7",
     "visibility" : "visibility-8",
-    "tags" : [ "tags-a", "tags-b" ]
+    "tags" : [ "tags-a", "tags-b" ],
+    "textVerdict" : "REVIEW"
   },
   "VideoPurgeRequestedEvent" : {
     "eventId" : "eventId-1",
@@ -248,7 +249,8 @@
     "durationSeconds" : 8,
     "width" : 9,
     "height" : 10,
-    "failureReason" : "failureReason-11"
+    "failureReason" : "failureReason-11",
+    "textVerdict" : "APPROVED"
   },
   "VideoViewedEvent" : {
     "eventId" : "eventId-1",
