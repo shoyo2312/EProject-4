@@ -14,6 +14,8 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
+import java.util.List;
+
 /**
  * Answers "does this account own that video", "are comments off" and "how long is it really", for
  * the callers who need something outside interaction-service's own data: a video's owner may delete
@@ -32,9 +34,14 @@ public class VideoOwnershipClient {
 
     private final RestClient videoServiceRestClient;
 
+    /**
+     * The filters are null when video-service could not reach user-service, or relays from one older
+     * than them — {@link #commentPolicy} reads each null as that filter's default.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record VideoPolicyView(Long userId, boolean commentsDisabled, Integer durationSeconds,
-                                   String commentAudience) {
+                                   String commentAudience, Boolean filterSpamOffensive,
+                                   Boolean filterAllComments, List<String> commentKeywords) {
     }
 
     /** The one field of {@code GET /videos/{id}} this client reads. */
@@ -114,21 +121,25 @@ public class VideoOwnershipClient {
     }
 
     /**
-     * The per-video switch, the owner and the owner's account-level audience, from one read.
+     * The per-video switch, the owner, the owner's account-level audience and comment filters, from
+     * one read.
      *
-     * <p>Posting a comment needs all three, and asking {@link #areCommentsDisabled} and then
+     * <p>Posting a comment needs all of them, and asking {@link #areCommentsDisabled} and then
      * {@link #isOwnedBy} would be two {@code /policy} calls for one guard. The listing paths still
      * use the single-question method above, which is the only thing they need.
      *
      * <p>Fails open in every direction a lookup can fail: no owner, comments not disabled,
-     * audience EVERYONE.
+     * audience EVERYONE, filters at their defaults (spam and offence held, nothing else).
      */
     public CommentPolicy commentPolicy(Long videoId) {
         VideoPolicyView view = fetch(videoId);
         if (view == null) {
             return CommentPolicy.unrestricted();
         }
-        return new CommentPolicy(view.userId(), view.commentsDisabled(), audienceOf(view.commentAudience()));
+        return new CommentPolicy(view.userId(), view.commentsDisabled(), audienceOf(view.commentAudience()),
+                view.filterSpamOffensive() == null || view.filterSpamOffensive(),
+                view.filterAllComments() != null && view.filterAllComments(),
+                view.commentKeywords());
     }
 
     /**

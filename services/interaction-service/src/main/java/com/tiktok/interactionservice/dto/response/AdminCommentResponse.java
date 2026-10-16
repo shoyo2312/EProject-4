@@ -1,5 +1,7 @@
 package com.tiktok.interactionservice.dto.response;
 
+import com.tiktok.interactionservice.entity.CommentStatus;
+
 import java.time.Instant;
 
 /**
@@ -33,6 +35,10 @@ public record AdminCommentResponse(
          */
         boolean hasReplies,
         Instant createdAt,
-        Instant deletedAt
+        Instant deletedAt,
+        /** HELD while it waits for the video's owner; such a comment was never public. */
+        CommentStatus status,
+        /** What the text rules flagged, e.g. {@code SPAM:link:bit.ly}; null when nothing was. */
+        String moderationReason
 ) {
 }

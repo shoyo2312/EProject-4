@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -40,9 +41,14 @@ class InternalCommentControllerTest extends AbstractInteractionServiceIT {
     @MockitoBean
     private VideoOwnershipClient videoOwnershipClient;
 
+    @Autowired
+    private StringRedisTemplate redisTemplate;
+
     @BeforeEach
     void permissivePolicy() {
         when(videoOwnershipClient.commentPolicy(anyLong())).thenReturn(CommentPolicy.unrestricted());
+        // Two tests seed the same comment; the duplicate guard remembers the first in Redis.
+        redisTemplate.getConnectionFactory().getConnection().flushAll();
     }
 
     @Test

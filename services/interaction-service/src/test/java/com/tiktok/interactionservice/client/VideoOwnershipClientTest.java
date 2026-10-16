@@ -179,4 +179,37 @@ class VideoOwnershipClientTest {
 
         assertThat(client.isOwnedBy(42L, 7L)).isFalse();
     }
+    /** The owner's comment filters ride on the same /policy read. */
+    @Test
+    void commentPolicy_carriesTheOwnersCommentFilters() {
+        server.expect(requestTo("http://video-service/api/v1/videos/42/policy"))
+                .andRespond(withSuccess("""
+                        {"success": true, "data": {"userId": 7, "commentAudience": "EVERYONE",
+                          "filterSpamOffensive": false, "filterAllComments": true, "commentKeywords": ["spoiler"]}}
+                        """, MediaType.APPLICATION_JSON));
+
+        CommentPolicy policy = client.commentPolicy(42L);
+
+        assertThat(policy.filterSpamOffensive()).isFalse();
+        assertThat(policy.filterAllComments()).isTrue();
+        assertThat(policy.commentKeywords()).containsExactly("spoiler");
+    }
+
+    /**
+     * Unknown filters — user-service unreachable, or a video-service older than them — are their
+     * defaults: spam and offence held, nothing else. Holding every comment would be failing closed.
+     */
+    @Test
+    void commentPolicy_withoutFilters_readsTheirDefaults() {
+        server.expect(requestTo("http://video-service/api/v1/videos/42/policy"))
+                .andRespond(withSuccess("""
+                        {"success": true, "data": {"userId": 7, "commentAudience": null}}
+                        """, MediaType.APPLICATION_JSON));
+
+        CommentPolicy policy = client.commentPolicy(42L);
+
+        assertThat(policy.filterSpamOffensive()).isTrue();
+        assertThat(policy.filterAllComments()).isFalse();
+        assertThat(policy.commentKeywords()).isEmpty();
+    }
 }

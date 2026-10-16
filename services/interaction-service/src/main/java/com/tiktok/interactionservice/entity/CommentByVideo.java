@@ -56,12 +56,37 @@ public class CommentByVideo {
     @CassandraType(type = CassandraType.Name.TIMESTAMP)
     private Instant deletedAt;
 
+    /** Null on rows written before held comments existed — read it through {@link #effectiveStatus()}. */
+    @Column("status")
+    private CommentStatus status;
+
+    /** Why the text rules held it: every flag, most severe first. Null for a comment nothing flagged. */
+    @Column("mod_reason")
+    private String modReason;
+
+    /** Which rules held it, e.g. {@code rules-2026.10.13}. Null for a comment nothing flagged. */
+    @Column("mod_version")
+    private String modVersion;
+
     public static Long newId() {
         return SnowflakeIdGenerator.nextId();
     }
 
     public boolean isDeleted() {
         return deletedAt != null;
+    }
+
+    public CommentStatus effectiveStatus() {
+        return status == null ? CommentStatus.VISIBLE : status;
+    }
+
+    public boolean isHeld() {
+        return effectiveStatus() == CommentStatus.HELD;
+    }
+
+    /** Not deleted and not held: a comment viewers may read, like and reply to. */
+    public boolean isLive() {
+        return !isDeleted() && !isHeld();
     }
 
     public int likeCount() {

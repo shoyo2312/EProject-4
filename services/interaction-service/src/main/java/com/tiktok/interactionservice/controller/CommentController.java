@@ -84,6 +84,29 @@ public class CommentController {
                 videoId, commentId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE), currentUserId));
     }
 
+    /**
+     * The comments the text rules held on the caller's video, newest first — the owner's review
+     * queue. Not under {@code /comments/}, where the segment after it is a comment id.
+     */
+    @GetMapping("/videos/{videoId}/held-comments")
+    public ApiResponse<CommentPageResponse> listHeldComments(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long videoId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success(commentService.listHeld(
+                videoId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE), currentUserId));
+    }
+
+    /** The owner publishes a held comment. Rejecting one is deleting it, below. */
+    @PostMapping("/videos/{videoId}/comments/{commentId}/approve")
+    public ApiResponse<CommentResponse> approveComment(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long videoId,
+            @PathVariable Long commentId) {
+        return ApiResponse.success(commentService.approveComment(videoId, commentId, currentUserId));
+    }
+
     @DeleteMapping("/videos/{videoId}/comments/{commentId}")
     public ApiResponse<Void> deleteComment(
             @AuthenticationPrincipal Long currentUserId,

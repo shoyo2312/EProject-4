@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
+import com.tiktok.interactionservice.client.BlockClient;
 import com.tiktok.interactionservice.client.CommentAudience;
 import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.FriendshipClient;
@@ -11,6 +12,7 @@ import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.CommentsDisabledException;
 import com.tiktok.interactionservice.exception.CommentsNotAllowedException;
+import com.tiktok.interactionservice.exception.DuplicateCommentException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
@@ -53,6 +55,10 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     // Same reasoning: the FRIENDS branch of the audience guard asks user-service over HTTP.
     @MockitoBean
     private FriendshipClient friendshipClient;
+
+    // And the reply block check. Default false: nobody here has blocked anybody.
+    @MockitoBean
+    private BlockClient blockClient;
 
     /** What the real client answers when video-service cannot be reached: nothing restricted. */
     private static final CommentPolicy FAILED_OPEN = CommentPolicy.unrestricted();
@@ -122,6 +128,20 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
     void addComment_replyToMissingParent_isRejected() {
         assertThatThrownBy(() -> commentService.addComment(42L, 1L, "orphan", 999999L))
                 .isInstanceOf(CommentNotFoundException.class);
+    }
+
+    /** A creator thanks each fan the same way; anyone else's second copy in one place is refused. */
+    @Test
+    void addComment_theSameTextAgain_isADuplicate_exceptFromTheOwnerOnTheirOwnVideo() {
+        when(videoOwnershipClient.commentPolicy(43L)).thenReturn(ownedBy(9L, CommentAudience.EVERYONE));
+        CommentResponse fan = commentService.addComment(43L, 1L, "hay quá");
+
+        commentService.addComment(43L, 9L, "cảm ơn bạn", fan.commentId());
+        assertThat(commentService.addComment(43L, 9L, "Cảm ơn bạn!", fan.commentId()).content())
+                .isEqualTo("Cảm ơn bạn!");
+
+        assertThatThrownBy(() -> commentService.addComment(43L, 1L, "Hay quá!!"))
+                .isInstanceOf(DuplicateCommentException.class);
     }
 
     @Test

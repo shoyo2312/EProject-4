@@ -13,5 +13,6 @@ public interface CommentMapper {
     @Mapping(target = "likeCount", expression = "java(comment.likeCount())")
     @Mapping(target = "likedByMe", ignore = true)
     @Mapping(target = "replyCount", ignore = true)
+    @Mapping(target = "status", expression = "java(comment.effectiveStatus())")
     CommentResponse toResponse(CommentByVideo comment);
 }

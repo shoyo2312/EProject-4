@@ -1,6 +1,7 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
+import com.tiktok.interactionservice.client.CommentAudience;
 import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.request.AdminCommentFilter;
@@ -235,6 +236,26 @@ class AdminCommentDirectoryTest extends AbstractInteractionServiceIT {
                 adminCommentDirectory.listForAdmin(71L, AdminCommentFilter.REMOVED, null, 2);
 
         assertThat(page.items()).extracting(AdminCommentResponse::content).containsExactly("removed first");
+    }
+
+    /** A held comment has no row in the thread's index: this view is the only one that shows it. */
+    @Test
+    void listForAdmin_heldFilter_showsWhatWaitsForTheOwner_atBothLevels() {
+        // The owner holds every comment but their own for approval.
+        when(videoOwnershipClient.commentPolicy(73L))
+                .thenReturn(new CommentPolicy(9L, false, CommentAudience.EVERYONE, true, true, List.of()));
+        CommentResponse owners = commentService.addComment(73L, 9L, "the owner's own");
+        commentService.addComment(73L, 1L, "held comment");
+        commentService.addComment(73L, 2L, "held reply", owners.commentId());
+        CommentResponse withdrawn = commentService.addComment(73L, 3L, "held, then deleted");
+        commentService.deleteComment(73L, withdrawn.commentId(), 3L);
+
+        assertThat(adminCommentDirectory.listForAdmin(73L, AdminCommentFilter.HELD, null, 20).items())
+                .extracting(AdminCommentResponse::content)
+                .containsExactly("held reply", "held comment");
+        assertThat(adminCommentDirectory.listForAdmin(73L, AdminCommentFilter.THREAD, null, 20).items())
+                .extracting(AdminCommentResponse::content)
+                .containsExactly("the owner's own");
     }
 
     /** The parent a reply answers, looked up for the context line — removed parents included. */

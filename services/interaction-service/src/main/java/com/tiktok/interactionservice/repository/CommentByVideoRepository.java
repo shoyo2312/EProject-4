@@ -78,4 +78,37 @@ public interface CommentByVideoRepository extends CassandraRepository<CommentByV
     boolean restoreIfDeletedAt(@Param("videoId") Long videoId,
                                @Param("commentId") Long commentId,
                                @Param("deletedAt") Instant deletedAt);
+
+    /**
+     * The owner's approval of a held comment, as a lightweight transaction. Every caller counts the
+     * comment just before trying, so that it is never VISIBLE uncounted; only the one this applies
+     * for keeps that count and goes on to index and announce it, and any other takes its count back.
+     * Two taps, or the owner approving on two devices, both pass the read; without the condition both
+     * would count it. Also refuses a comment deleted since the read: approving a deleted comment would
+     * count something nobody can see.
+     */
+    @Query("UPDATE comments_by_video SET status = 'VISIBLE' "
+            + "WHERE video_id = :videoId AND comment_id = :commentId IF status = 'HELD' AND deleted_at = null")
+    boolean approveIfHeld(@Param("videoId") Long videoId, @Param("commentId") Long commentId);
+
+    /**
+     * Undoes one {@link #approveIfHeld} whose index row or announcement did not land, so the comment
+     * waits in the queue again rather than being visible but unlisted. False when a delete got to it
+     * first — a delete that has already taken it off the counters.
+     */
+    @Query("UPDATE comments_by_video SET status = 'HELD' "
+            + "WHERE video_id = :videoId AND comment_id = :commentId IF status = 'VISIBLE' AND deleted_at = null")
+    boolean holdAgainIfVisible(@Param("videoId") Long videoId, @Param("commentId") Long commentId);
+
+    /**
+     * Soft-deletes a comment only while it is still held. A held comment was never counted, so its
+     * deletion moves no counter — and the condition on the status is what makes that safe: an
+     * approval landing between the caller's read and this write has counted it, and then this
+     * matches nothing and the caller deletes it as the visible comment it now is.
+     */
+    @Query("UPDATE comments_by_video SET deleted_at = :deletedAt "
+            + "WHERE video_id = :videoId AND comment_id = :commentId IF status = 'HELD' AND deleted_at = null")
+    boolean markDeletedIfHeld(@Param("videoId") Long videoId,
+                              @Param("commentId") Long commentId,
+                              @Param("deletedAt") Instant deletedAt);
 }

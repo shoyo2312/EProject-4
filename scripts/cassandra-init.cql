@@ -58,6 +58,12 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
     -- flat list can render "A > B". Null for a top-level comment and for a direct reply to one.
     reply_to_user_id bigint,
     likes      int,
+    -- VISIBLE, or HELD while the text rules wait for the video owner's approval. Null on rows
+    -- written before held comments existed, which read as VISIBLE. mod_reason and mod_version say
+    -- what held it and which rules did — see docs/moderation.md.
+    status      text,
+    mod_reason  text,
+    mod_version text,
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
 
@@ -65,6 +71,31 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
 ALTER TABLE comments_by_video ADD IF NOT EXISTS parent_id bigint;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS reply_to_user_id bigint;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS likes int;
+-- Same, for clusters that predate held comments. Run before deploying the interaction-service that
+-- writes them: Spring's CREATE_IF_NOT_EXISTS adds tables, never columns, and every comment write
+-- names these.
+ALTER TABLE comments_by_video ADD IF NOT EXISTS status text;
+ALTER TABLE comments_by_video ADD IF NOT EXISTS mod_reason text;
+ALTER TABLE comments_by_video ADD IF NOT EXISTS mod_version text;
+
+-- A video owner's queue of held comments, newest first: ids only, one partition per video, the
+-- way comment_index serves the public threads. comments_by_video decides whether a row here still
+-- means anything — an approved or deleted comment's row is dropped when that happens, and skipped
+-- by the reader if dropping it failed.
+CREATE TABLE IF NOT EXISTS held_comments_by_video (
+    video_id   bigint,
+    comment_id bigint,
+    PRIMARY KEY ((video_id), comment_id)
+) WITH CLUSTERING ORDER BY (comment_id DESC);
+
+-- Who is banned, as admin-service decided — UserBannedEvent / UserUnbannedEvent on
+-- admin.moderation-events. The comment listings drop a banned author's comments while banned_until
+-- is in the future; changed_at keeps a late decision from undoing a newer one (an LWT on it).
+CREATE TABLE IF NOT EXISTS user_bans (
+    user_id      bigint PRIMARY KEY,
+    banned_until timestamp,
+    changed_at   timestamp
+);
 
 -- Index that makes both comment listings a single-partition read.
 --
