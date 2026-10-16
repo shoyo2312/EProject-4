@@ -13,6 +13,6 @@ public interface UserSettingsMapper {
     @Mapping(target = "privateAccount", source = "privateAccount")
     UserSettingsResponse toResponse(UserSettings settings, boolean privateAccount);
 
-    /** The two fields other services may see — see {@link UserSettingsPolicyResponse}. */
+    /** The fields other services enforce — see {@link UserSettingsPolicyResponse}. */
     UserSettingsPolicyResponse toPolicy(UserSettings settings);
 }

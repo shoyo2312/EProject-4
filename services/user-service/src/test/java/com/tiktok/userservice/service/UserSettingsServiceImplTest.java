@@ -359,4 +359,75 @@ class UserSettingsServiceImplTest {
         assertThat(userSettingsService.getOwnSettings(1L).privateAccount()).isFalse();
         assertThat(privacyEvents()).isEmpty();
     }
+    @Test
+    void commentFilters_defaultToFilteringSpamAndOffence_andNothingElse() {
+        UserSettingsResponse settings = userSettingsService.getOwnSettings(1L);
+
+        assertThat(settings.filterSpamOffensive()).isTrue();
+        assertThat(settings.filterAllComments()).isFalse();
+        assertThat(settings.commentKeywords()).isEmpty();
+    }
+
+    @Test
+    void commentKeywords_areStored_dedupedTheWayTheyMatch_andClearedWithAnEmptyList() {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        request.setCommentKeywords(List.of("Spoiler", "spoiler", "tạch", "tach", "giảm  giá"));
+        request.setFilterSpamOffensive(false);
+
+        UserSettingsResponse stored = userSettingsService.updateOwnSettings(1L, request);
+
+        // "Spoiler"/"spoiler" key the same; "tạch" and "tach" match differently, so both stay.
+        assertThat(stored.commentKeywords()).containsExactly("Spoiler", "tạch", "tach", "giảm giá");
+        assertThat(stored.filterSpamOffensive()).isFalse();
+        assertThat(userSettingsService.getOwnSettings(1L).commentKeywords())
+                .containsExactly("Spoiler", "tạch", "tach", "giảm giá");
+
+        UpdateUserSettingsRequest clear = new UpdateUserSettingsRequest();
+        clear.setCommentKeywords(List.of());
+        assertThat(userSettingsService.updateOwnSettings(1L, clear).commentKeywords()).isEmpty();
+        // Untouched by that patch.
+        assertThat(userSettingsService.getOwnSettings(1L).filterSpamOffensive()).isFalse();
+    }
+
+    /** A keyword of only emoji would never hold anything, and the creator would think it did. */
+    @Test
+    void aKeywordWithNothingToMatch_isRefused() {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        request.setCommentKeywords(List.of("ok", "🔥🔥"));
+
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, request))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("commentKeywords");
+    }
+
+    @Test
+    void anExplicitNull_onAFilter_isRefused() {
+        UpdateUserSettingsRequest keywords = new UpdateUserSettingsRequest();
+        keywords.setCommentKeywords(null);
+        UpdateUserSettingsRequest all = new UpdateUserSettingsRequest();
+        all.setFilterAllComments(null);
+
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, keywords))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("commentKeywords");
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, all))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("filterAllComments");
+    }
+
+    /** What video-service relays to interaction-service: the filters, defaults for accounts with no row. */
+    @Test
+    void thePolicy_carriesTheCommentFilters() {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        request.setFilterAllComments(true);
+        request.setCommentKeywords(List.of("spoiler"));
+        userSettingsService.updateOwnSettings(1L, request);
+
+        assertThat(userSettingsService.getSettingsPolicies(List.of(1L, 2L)))
+                .extracting(UserSettingsPolicyResponse::userId, UserSettingsPolicyResponse::filterSpamOffensive,
+                        UserSettingsPolicyResponse::filterAllComments, UserSettingsPolicyResponse::commentKeywords)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(1L, true, true, List.of("spoiler")),
+                        org.assertj.core.groups.Tuple.tuple(2L, true, false, List.of()));
+    }
 }

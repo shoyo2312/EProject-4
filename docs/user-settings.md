@@ -27,9 +27,14 @@ endpoint**. It deliberately stops short of:
   viewer reads it; follow requests are `user_follow_requests` (V12).
 - **Notification preferences** — belongs in notification-service (Mongo, `_id = userId`), gated in
   `NotificationServiceImpl.create` where `BlockClient` is already consulted.
-- **Keyword filters, data export, business verification.**
+- **Data export, business verification.**
 
 Those are listed so nobody reads this document as the whole of `/setting`.
+
+The **comment filters** (spam/offence switch, hold everything, keywords) were deferred here too and
+arrived later with text moderation Phase 2
+(`docs/superpowers/specs/2026-10-14-text-moderation-phase2-design.md`): stored in this table (V15),
+written through `PATCH /me/settings` like the rest, enforced by interaction-service — §4.1b.
 
 **Ads are not deferred, they are dropped.** The seven ads rows have been removed from the client's
 settings data outright rather than left inert, so there is no ads section on the page and no
@@ -82,6 +87,19 @@ This also means the defaults live in exactly one place that matters — the `DEF
 entity's field initialisers must agree, so state them once in the entity and let the migration
 mirror it.
 
+`V15__comment_filters.sql` adds the creator's comment filters (§4.1b), its `DEFAULT`s mirroring
+`UserSettings.defaultsFor()` the same way:
+
+```sql
+ALTER TABLE user_settings
+    ADD COLUMN filter_spam_offensive BOOLEAN NOT NULL DEFAULT TRUE,
+    ADD COLUMN filter_all_comments   BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN comment_keywords      TEXT[]  NOT NULL DEFAULT '{}';
+```
+
+The keywords are an array column, not a child table: at most fifty short strings, always read and
+replaced whole, never queried by element.
+
 ## 2. Public contract
 
 Base path `/api/v1/users`, both endpoints require a Bearer token like everything else in
@@ -98,7 +116,10 @@ user-service.
   "screenTimeLimitMinutes": null,
   "sleepHoursStart": null,
   "sleepHoursEnd": null,
-  "weeklyScreenTimeDigest": true
+  "weeklyScreenTimeDigest": true,
+  "filterSpamOffensive": true,
+  "filterAllComments": false,
+  "commentKeywords": []
 }
 ```
 
@@ -136,9 +157,9 @@ here: Jackson calls a setter only for keys the JSON carries, and that is the onl
 tell an absent key from an explicit `null` — a record component is `null` for both, and `Optional`
 does not help, since a missing creator parameter is filled with the deserializer's absent value,
 which for `Optional` is the same `Optional.empty()` an explicit null produces. An explicit `null`
-on one of the three NOT NULL fields is a `VALIDATION_ERROR` rather than a silent no-op. Unlike `PATCH /users/me` there is no
-empty-string-clears trap here — every field is a boolean, an enum or a nullable scalar, and an
-explicit `null` on a nullable field *is* the way to clear it. That difference is worth a line in
+on one of the NOT NULL fields is a `VALIDATION_ERROR` rather than a silent no-op. Unlike `PATCH /users/me` there is no
+empty-string-clears trap here — every field is a boolean, an enum, a nullable scalar or the keyword
+list (cleared with `[]`), and an explicit `null` on a nullable field *is* the way to clear it. That difference is worth a line in
 the client doc, because the two endpoints sit next to each other and behave differently on purpose.
 
 Validation:
@@ -147,6 +168,15 @@ Validation:
 - `screenTimeLimitMinutes` ∈ `[10, 1440]` or null
 - `sleepHoursStart`/`sleepHoursEnd` — both null or both set; equal start and end is a
   validation error, but start > end is **not** (a window that crosses midnight is the normal case)
+- `filterSpamOffensive`, `filterAllComments` — booleans; `null` is a `VALIDATION_ERROR`
+- `commentKeywords` — the **whole list**, replacing the stored one; `[]` clears it, `null` is a
+  `VALIDATION_ERROR`. At most 50. Each is sanitized like comment text (`TextSanitizer.sanitizeLine`:
+  invisible characters dropped, whitespace collapsed, one line) **in the setter, before validation**,
+  so the 1–30 limit counts the code points that get stored. Each must have a letter or a digit
+  (`Blocklist.isMatchable`): a keyword of only emoji or punctuation could never match, and the
+  creator would believe it held something. Duplicates are dropped by the key the matcher reads them
+  by (`Blocklist.keyOf`), first spelling kept — "Spoiler" and "spoiler" are one keyword, "tạch" and
+  "tach" stay two because they match different text
 
 Optimistic locking is inherited from `BaseEntity`, so two devices writing at once produce the
 existing `CONCURRENT_MODIFICATION` (409) — the one 409 the client is told to retry.
@@ -176,12 +206,23 @@ Precedents to copy: `GET /api/v1/users/internal/blocks` (`BlockController`) and
 `200 OK`, `data` → list of:
 
 ```json
-{ "userId": 123, "commentAudience": "EVERYONE", "dmAudience": "EVERYONE" }
+{
+  "userId": 123,
+  "commentAudience": "EVERYONE",
+  "dmAudience": "EVERYONE",
+  "filterSpamOffensive": true,
+  "filterAllComments": false,
+  "commentKeywords": []
+}
 ```
 
-Only the two enforcement-relevant fields. Nobody outside user-service needs to know what somebody's
+Only the fields another service enforces: the two audiences, and the comment filters video-service
+relays to interaction-service (§4.1b). Nobody outside user-service needs to know what somebody's
 screen-time preferences are, and an internal endpoint that hands them over anyway is a privacy leak
-waiting for its first careless caller.
+waiting for its first careless caller. The keywords are the first thing here a creator may not want
+read — they are the words being kept off their videos — so they travel only on internal paths:
+this one, and video-service's `/policy`, both denied at the gateway and both behind the internal
+token.
 
 **An id with no settings row comes back carrying the defaults — it is never omitted.** This is the
 opposite of `GET /users?ids=`, which drops profiles the viewer cannot see. Omitting here would make
@@ -285,6 +326,42 @@ site-wide". Audience follows it. Note this is the opposite of chat's block check
 closed; the asymmetry is deliberate and both call sites say so. Say it again in the new code, or
 somebody will "fix" one of them.
 
+### 4.1b Comment filters
+
+Also enforced in **interaction-service**, by `CommentScreening`, on every comment posted under one
+of the account's videos. It runs after the audience check above, so a commenter the audience
+refuses never reaches the filters. `moderation.md` ("Comments: held for the owner") has the full
+order the text goes through: the rules, then these filters, then the classifier.
+
+| Setting | Someone else's comment |
+|---|---|
+| `filterAllComments` | held, whatever it says (`CREATOR_FILTER`, rule `all`) |
+| a `commentKeywords` entry in it | held (`CREATOR_FILTER`, rule `term:<keyword>`) |
+| `filterSpamOffensive = false` | no longer held for profanity, insults or spam |
+
+- **Held, never refused.** A filtered comment is stored `HELD` for the owner's queue
+  (`interaction-service-api.md` §3.4b), and its author is told so. Holding is not a strike: strikes
+  come only from a rule refusing a comment and from an admin removing one.
+- **The owner's own comments are never held**, because they are the one who approves.
+- **Keywords match like the blocklist** (moderation-lib `KeywordFilter`). They match whole
+  syllables, so "spoiler" does not match "spoilers". A keyword written with diacritics matches only
+  the same diacritics; one written without them matches every spelling.
+- **`filterSpamOffensive = false` waives three categories and nothing else.** Hate, sexual content,
+  threats, scams and personal information still hold, and a REJECT is still refused, because those
+  protect the people reading the thread, not the creator's taste. The flags stay on the comment, so
+  the admin comment list shows what a waiver let through.
+
+Relay: `/internal/settings` (§3.1) → video-service `/policy` (`filterSpamOffensive`,
+`filterAllComments`, `commentKeywords`) → interaction-service `CommentPolicy`. This is the round trip
+§4.1 already pays; nothing is added. video-service caches the owner's audience and filters together,
+as JSON under `user-settings:comment-policy:{id}`. The older `comment-audience:` keys are never read
+again and expire on their TTL.
+
+**Fails open to the defaults**, like the audience. A field user-service did not send (it was
+unreachable, or predates V15) is relayed as null, and interaction-service reads a null as that
+filter's default: spam and offence filtered, nothing else held, no keywords. Holding every comment
+on the platform during a user-service outage would be the guard failing closed.
+
 ### 4.2 DM audience
 
 Enforced in **chat-service**, `ConversationServiceImpl.getOrCreate`, immediately after the existing
@@ -345,6 +422,9 @@ The TTL was later cut from 30s to 3s: once every `VideoResponse` carried `accoun
 stale entry became something the owner sees right after changing the setting, and half a minute of
 it read as a bug. An event would not have been faster — user-service's outbox polls every 5s.
 
+The comment filters (V15) ride in the same cache entry, so they take the same few seconds to apply
+and need no event either.
+
 `UserSettingsChangedEvent` becomes genuinely necessary in tier 3, when private-account state has to
 be denormalised onto video documents and the search index. Add it then, through the existing
 `OutboxPublisher`/`UserEventPublisher` pair in user-service, keyed on `userId` so one account's
@@ -358,7 +438,9 @@ changes stay ordered on one partition.
 | `MESSAGING_NOT_ALLOWED` | 403 | chat-service | Audience refuses this sender (§4.2) |
 | `DM_SETTINGS_UNAVAILABLE` | 503 | chat-service | Settings lookup failed; fails closed |
 
-`VALIDATION_ERROR`, `CONCURRENT_MODIFICATION` and `TOO_MANY_PROFILE_IDS` are reused as-is. All three
+`VALIDATION_ERROR`, `CONCURRENT_MODIFICATION` and `TOO_MANY_PROFILE_IDS` are reused as-is. The
+comment filters add no code. A bad keyword list is a `VALIDATION_ERROR`, and a filtered comment is
+not an error at all: it is a `201` with `status: HELD`. All three
 new codes need client copy in the web client's `lib/api/errors.ts` `MESSAGES` map, which is where
 user-facing wording lives — the contracts are explicit that the server's own `message` is not shown.
 
@@ -380,12 +462,25 @@ user-service:
 - sleep hours: both-or-neither, start == end rejected, start > end accepted
 - internal settings: unknown id returns defaults rather than being omitted; 101 ids → `TOO_MANY_PROFILE_IDS`
 - internal friendship: mutual true, one-way false, self false, unknown id false
+- comment filters: defaults are spam and offence filtered and nothing else; an explicit `null` on
+  any of them is refused; keywords are sanitized before they are counted; 51 keywords, a keyword of
+  31 code points, a blank one, or one with nothing to match are refused; duplicates collapse by
+  match key with the first spelling kept; `[]` clears; the internal policy carries all three
+
+video-service:
+- `/policy` relays the filters from user-service through the cache; a user-service without them
+  relays null rather than a made-up default; a failure caches nothing
+- the cache reads back what it wrote, one owner or a page at once; an entry that does not parse is a
+  miss
 
 interaction-service:
 - owner comments on their own `NO_ONE` video → allowed
 - `commentsDisabled` beats a permissive audience; `NO_ONE` closes a video whose switch is untouched
 - `FRIENDS`: mutual allowed, one-way refused, with `COMMENTS_NOT_ALLOWED` not `COMMENTS_DISABLED`
 - video-service unreachable → comment goes through (fail-open, as today)
+- `filterAllComments` holds everyone's comment but the owner's; a keyword holds the comments that
+  contain it; with `filterSpamOffensive` off a link is posted and keeps its flag; a clean comment
+  stores no reason
 
 chat-service:
 - `EVERYONE` opens; `NO_ONE` refuses; `FRIENDS` mutual opens and one-way refuses

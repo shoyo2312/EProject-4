@@ -32,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -49,7 +50,8 @@ class UserSettingsControllerTest {
     private static final String JWT_SECRET = "test-secret-at-least-32-bytes-long-0123456789";
 
     private static final UserSettingsResponse DEFAULTS = new UserSettingsResponse(
-            SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, false);
+            SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, false,
+            true, false, List.of());
 
     @Autowired
     private MockMvc mockMvc;
@@ -79,7 +81,8 @@ class UserSettingsControllerTest {
     void getOwnSettings_answersTheFlatKeyedObject() throws Exception {
         when(userSettingsService.getOwnSettings(1L)).thenReturn(new UserSettingsResponse(
                 SettingsAudience.FRIENDS, SettingsAudience.NO_ONE, 60,
-                LocalTime.of(22, 30), LocalTime.of(7, 0), false, false));
+                LocalTime.of(22, 30), LocalTime.of(7, 0), false, false,
+                false, true, List.of("spoiler")));
 
         mockMvc.perform(get("/api/v1/users/me/settings")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
@@ -90,7 +93,45 @@ class UserSettingsControllerTest {
                 // Minute precision both ways, so a client can PATCH back what it read.
                 .andExpect(jsonPath("$.data.sleepHoursStart").value("22:30"))
                 .andExpect(jsonPath("$.data.sleepHoursEnd").value("07:00"))
-                .andExpect(jsonPath("$.data.weeklyScreenTimeDigest").value(false));
+                .andExpect(jsonPath("$.data.weeklyScreenTimeDigest").value(false))
+                .andExpect(jsonPath("$.data.filterSpamOffensive").value(false))
+                .andExpect(jsonPath("$.data.filterAllComments").value(true))
+                .andExpect(jsonPath("$.data.commentKeywords[0]").value("spoiler"));
+    }
+
+    /** Sanitized in the setter, so the 30-character limit counts what would be stored. */
+    @Test
+    void patch_commentKeywords_areSanitizedBeforeTheyAreCounted() throws Exception {
+        when(userSettingsService.updateOwnSettings(eq(1L), any())).thenReturn(DEFAULTS);
+
+        mockMvc.perform(patch("/api/v1/users/me/settings")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"commentKeywords\": [\"  spo\u200biler \", \"giảm giá\"],"
+                                + " \"filterAllComments\": true}"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<UpdateUserSettingsRequest> captor =
+                ArgumentCaptor.forClass(UpdateUserSettingsRequest.class);
+        verify(userSettingsService).updateOwnSettings(eq(1L), captor.capture());
+        assertThat(captor.getValue().getCommentKeywords()).containsExactly("spoiler", "giảm giá");
+        assertThat(captor.getValue().isFilterAllCommentsSet()).isTrue();
+        assertThat(captor.getValue().isFilterSpamOffensiveSet()).isFalse();
+    }
+
+    @Test
+    void patch_commentKeywords_tooManyOrTooLongOrBlank_isAValidationError() throws Exception {
+        String tooMany = java.util.stream.IntStream.range(0, 51).mapToObj(i -> "\"k" + i + "\"")
+                .collect(java.util.stream.Collectors.joining(",", "[", "]"));
+        for (String keywords : List.of(tooMany, "[\"" + "a".repeat(31) + "\"]", "[\"\\u200b\"]")) {
+            mockMvc.perform(patch("/api/v1/users/me/settings")
+                            .header("Authorization", "Bearer " + tokenFor(1L))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"commentKeywords\": " + keywords + "}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+        }
+        verifyNoInteractions(userSettingsService);
     }
 
     /**
@@ -166,14 +207,18 @@ class UserSettingsControllerTest {
     @Test
     void internalSettings_answerWithoutAToken() throws Exception {
         when(userSettingsService.getSettingsPolicies(List.of(7L))).thenReturn(List.of(
-                new UserSettingsPolicyResponse(7L, SettingsAudience.NO_ONE, SettingsAudience.FRIENDS)));
+                new UserSettingsPolicyResponse(7L, SettingsAudience.NO_ONE, SettingsAudience.FRIENDS,
+                        false, true, List.of("spoiler"))));
 
         mockMvc.perform(get("/api/v1/users/internal/settings").param("ids", "7")
                         .header(InternalApiToken.HEADER, internalApiToken.value()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0].userId").value(7))
                 .andExpect(jsonPath("$.data[0].commentAudience").value("NO_ONE"))
-                .andExpect(jsonPath("$.data[0].dmAudience").value("FRIENDS"));
+                .andExpect(jsonPath("$.data[0].dmAudience").value("FRIENDS"))
+                .andExpect(jsonPath("$.data[0].filterSpamOffensive").value(false))
+                .andExpect(jsonPath("$.data[0].filterAllComments").value(true))
+                .andExpect(jsonPath("$.data[0].commentKeywords[0]").value("spoiler"));
     }
 
     /**
@@ -202,7 +247,8 @@ class UserSettingsControllerTest {
     @Test
     void patch_privateAccount_reachesTheServiceAndComesBack() throws Exception {
         when(userSettingsService.updateOwnSettings(eq(1L), any())).thenReturn(new UserSettingsResponse(
-                SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, true));
+                SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, true,
+                true, false, List.of()));
 
         mockMvc.perform(patch("/api/v1/users/me/settings")
                         .header("Authorization", "Bearer " + tokenFor(1L))

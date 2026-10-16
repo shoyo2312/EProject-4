@@ -10,8 +10,11 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalTime;
+import java.util.List;
 
 /**
  * One row per account that has ever changed a setting. Accounts that never have simply have no
@@ -53,6 +56,19 @@ public class UserSettings extends BaseEntity {
     @Column(name = "weekly_screen_time_digest", nullable = false)
     private boolean weeklyScreenTimeDigest;
 
+    /** False: comments on this account's videos are not held for profanity, insults or spam. See V15. */
+    @Column(name = "filter_spam_offensive", nullable = false)
+    private boolean filterSpamOffensive;
+
+    /** Every comment from someone else waits for this account's approval. */
+    @Column(name = "filter_all_comments", nullable = false)
+    private boolean filterAllComments;
+
+    /** A comment containing one of these waits for approval. As typed, at most 50. */
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    @Column(name = "comment_keywords", nullable = false, columnDefinition = "text[]")
+    private List<String> commentKeywords;
+
     /**
      * What an account with no row has. Transient — a read maps this without persisting it, so
      * reading somebody's settings never writes.
@@ -66,6 +82,9 @@ public class UserSettings extends BaseEntity {
                 .sleepHoursStart(null)
                 .sleepHoursEnd(null)
                 .weeklyScreenTimeDigest(true)
+                .filterSpamOffensive(true)
+                .filterAllComments(false)
+                .commentKeywords(List.of())
                 .build();
     }
 
@@ -88,5 +107,12 @@ public class UserSettings extends BaseEntity {
         this.sleepHoursStart = sleepHoursStart;
         this.sleepHoursEnd = sleepHoursEnd;
         this.weeklyScreenTimeDigest = weeklyScreenTimeDigest;
+    }
+
+    /** The comment filters, assigned whole like {@link #replaceWith} — merged and validated by the service. */
+    public void replaceCommentFilters(boolean filterSpamOffensive, boolean filterAllComments, List<String> commentKeywords) {
+        this.filterSpamOffensive = filterSpamOffensive;
+        this.filterAllComments = filterAllComments;
+        this.commentKeywords = List.copyOf(commentKeywords);
     }
 }

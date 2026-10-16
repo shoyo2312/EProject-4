@@ -1,5 +1,6 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.moderation.rules.Blocklist;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalTime;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -75,8 +77,19 @@ public class UserSettingsServiceImpl implements UserSettingsService {
 
         requireValidSleepWindow(sleepHoursStart, sleepHoursEnd);
 
+        boolean filterSpamOffensive = request.isFilterSpamOffensiveSet()
+                ? required("filterSpamOffensive", request.getFilterSpamOffensive())
+                : settings.isFilterSpamOffensive();
+        boolean filterAllComments = request.isFilterAllCommentsSet()
+                ? required("filterAllComments", request.getFilterAllComments())
+                : settings.isFilterAllComments();
+        List<String> commentKeywords = request.isCommentKeywordsSet()
+                ? commentKeywords(request.getCommentKeywords())
+                : settings.getCommentKeywords();
+
         settings.replaceWith(commentAudience, dmAudience, screenTimeLimitMinutes,
                 sleepHoursStart, sleepHoursEnd, weeklyDigest);
+        settings.replaceCommentFilters(filterSpamOffensive, filterAllComments, commentKeywords);
 
         // Insert on the first write, update on the rest: currentOrDefaults hands back either a
         // managed row or a transient one, and save covers both.
@@ -173,6 +186,26 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         // Already matched against the three names by @Pattern; null is what is left, and it means
         // the client sent the key explicitly set to null on a column that has no null.
         return SettingsAudience.valueOf(required(field, value));
+    }
+
+    /**
+     * The list as it will be stored: already sanitized and length-checked by the request, then each
+     * one checked for something to match — a keyword of only emoji or punctuation would never hold a
+     * thing, and the creator would believe it did — and duplicates dropped by the key the matcher
+     * reads them by, so "Spoiler" and "spoiler" are one keyword while "tạch" and "tach" (which
+     * match differently) stay two. The first spelling is the one kept.
+     */
+    private static List<String> commentKeywords(List<String> keywords) {
+        required("commentKeywords", keywords);
+        Map<String, String> byKey = new LinkedHashMap<>();
+        for (String keyword : keywords) {
+            if (!Blocklist.isMatchable(keyword)) {
+                throw new InvalidUserSettingsException(
+                        "commentKeywords: '" + keyword + "' has no letters or digits to match");
+            }
+            byKey.putIfAbsent(Blocklist.keyOf(keyword), keyword);
+        }
+        return List.copyOf(byKey.values());
     }
 
     private static <T> T required(String field, T value) {

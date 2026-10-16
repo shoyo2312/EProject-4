@@ -222,7 +222,10 @@ Cài đặt tài khoản (phần đứng sau trang `/setting` của web). **Bắ
   "sleepHoursStart": null,
   "sleepHoursEnd": null,
   "weeklyScreenTimeDigest": true,
-  "privateAccount": false
+  "privateAccount": false,
+  "filterSpamOffensive": true,
+  "filterAllComments": false,
+  "commentKeywords": []
 }
 ```
 
@@ -232,7 +235,7 @@ Cài đặt tài khoản (phần đứng sau trang `/setting` của web). **Bắ
 - `null` ở ba field screen-time nghĩa là **tắt** — không có cờ enable riêng, và `screenTimeLimitMinutes = 0` là lỗi validate chứ không phải cách thứ hai để nói "tắt".
 - `sleepHoursStart`/`sleepHoursEnd` là **giờ treo tường, không mang timezone** (`"22:30"`, định dạng `HH:mm`). Không tài khoản nào trên hệ thống này có timezone, nên hai field đó chỉ có thể hiểu là "22:30 theo giờ của chính máy người dùng" và **client là phía enforce**. Server không bao giờ hẹn được lịch từ hai field này.
 - Bốn field screen-time hiện **chỉ được lưu và trả lại, không có gì đọc chúng** ở server. Đó là trạng thái cố ý: giới hạn thời gian dùng app do client enforce, việc của server là sync cài đặt đó giữa các thiết bị.
-- `commentAudience` / `dmAudience` **có** hiệu lực thật, do interaction-service và chat-service enforce — xem mục 3.15.
+- `commentAudience` / `dmAudience` **có** hiệu lực thật, do interaction-service và chat-service enforce — xem mục 3.15. Ba bộ lọc comment (`filterSpamOffensive`, `filterAllComments`, `commentKeywords`) cũng vậy, do interaction-service áp lên comment dưới video của tài khoản này.
 - `privateAccount` được lưu trên **profile** chứ không phải bảng settings (mọi người xem đều cần nó — header profile, nút Follow), nhưng bật/tắt ở đây vì công tắc nằm trên trang `/setting`. Chưa có profile thì trả `false`.
 
 ### 3.15 `PATCH /me/settings`
@@ -248,7 +251,10 @@ Request (mọi field optional, `UpdateUserSettingsRequest`):
   "sleepHoursStart": "22:30",
   "sleepHoursEnd": "07:00",
   "weeklyScreenTimeDigest": false,
-  "privateAccount": true
+  "privateAccount": true,
+  "filterSpamOffensive": false,
+  "filterAllComments": false,
+  "commentKeywords": ["spoiler", "giảm giá"]
 }
 ```
 
@@ -258,7 +264,7 @@ Request (mọi field optional, `UpdateUserSettingsRequest`):
 |---|---|
 | **Không có key** trong JSON | Giữ nguyên giá trị cũ |
 | Key = `null`, với 3 field **nullable** (`screenTimeLimitMinutes`, `sleepHoursStart`, `sleepHoursEnd`) | **Xoá** giá trị (về `null` = tắt) |
-| Key = `null`, với `commentAudience` / `dmAudience` / `weeklyScreenTimeDigest` / `privateAccount` | `VALIDATION_ERROR` (400) — bốn cột này NOT NULL, không có `null` để xoá về |
+| Key = `null`, với `commentAudience` / `dmAudience` / `weeklyScreenTimeDigest` / `privateAccount` / `filterSpamOffensive` / `filterAllComments` / `commentKeywords` | `VALIDATION_ERROR` (400) — các cột này NOT NULL, không có `null` để xoá về. Xoá hết từ khoá thì gửi `"commentKeywords": []` |
 | Chuỗi rỗng `""` | **Không** phải cách xoá field ở endpoint này (khác mục 3.2) — sẽ là `VALIDATION_ERROR` |
 
 → Ở Flutter: build body bằng `Map<String, dynamic>` chỉ chứa key user vừa đổi. Muốn tắt giới hạn thời gian thì gửi đúng `{"screenTimeLimitMinutes": null}`, **phải có key**, đừng bỏ trống.
@@ -269,14 +275,19 @@ Validate:
 - `screenTimeLimitMinutes` ∈ `[10, 1440]` hoặc `null`.
 - `sleepHoursStart`/`sleepHoursEnd`: **cùng có hoặc cùng không** — set một cái và để cái kia `null` là `VALIDATION_ERROR`, kể cả khi cái kia đang có sẵn trong DB (luật được kiểm trên **kết quả sau khi merge**, không phải trên request). Hai đầu **bằng nhau** là lỗi; `start > end` thì **hợp lệ** (khung giờ vắt qua nửa đêm là chuyện thường).
 - Định dạng giờ là `HH:mm` đúng như response trả về — gửi `"22:30:00"` hoặc `"10:30 PM"` sẽ bị body parser từ chối với `400 BAD_REQUEST` (không phải `VALIDATION_ERROR`).
+- `commentKeywords`: **cả danh sách**, thay danh sách cũ (không phải thêm vào). Tối đa **50** từ khoá; mỗi từ được làm sạch như nội dung comment (bỏ ký tự vô hình, gộp khoảng trắng, một dòng) rồi phải dài **1–30 ký tự** (đếm theo code point) và có ít nhất một chữ cái hoặc chữ số — từ khoá chỉ có emoji/dấu câu sẽ không bao giờ khớp được nên bị từ chối (`VALIDATION_ERROR`). Trùng nhau (không phân biệt hoa thường: "Spoiler"/"spoiler") thì giữ cách viết đầu tiên. Response trả lại danh sách đã lưu.
 
 `CONCURRENT_MODIFICATION` (409) nếu hai thiết bị ghi cùng lúc — đọc lại rồi thử lại một lần, giống mục 3.5.
 
-**Hai field có hiệu lực thật, và chúng chỉ chặn lúc bắt đầu:**
+**Các field có hiệu lực thật ở service khác:**
 
 - `commentAudience` do **interaction-service** enforce khi post comment: `NO_ONE` chặn tất cả, `FRIENDS` chỉ cho người follow lẫn nhau → `COMMENTS_NOT_ALLOWED` (403). Cờ tắt comment của **từng video** vẫn thắng cài đặt tài khoản: video đã tắt comment thì tắt hẳn, và trả mã riêng `COMMENTS_DISABLED`. `NO_ONE` chặn cả chủ video — mọi video của tài khoản đó coi như đã tắt comment (ẩn ô nhập, ẩn số comment, ẩn danh sách). Chủ video chỉ được miễn `FRIENDS`.
 - `dmAudience` do **chat-service** enforce **lúc mở cuộc hội thoại**, không phải mỗi tin nhắn → `MESSAGING_NOT_ALLOWED` (403). Hội thoại đã mở trước khi người kia siết cài đặt thì vẫn gửi được (giống "người đang follow không bị ảnh hưởng" của private account). Chỉ cài đặt của **người nhận** được xét: người gửi dù đặt `NO_ONE` vẫn chủ động mở được hội thoại.
-- Đổi `commentAudience` có thể mất tới ~3 giây mới có tác dụng (kể cả `accountCommentsOff` trên video): video-service cache cài đặt của chủ video trong Redis với TTL ngắn (`USER_SETTINGS_CACHE_TTL`, mặc định 3s). Không có event invalidate.
+- **Bộ lọc comment** do **interaction-service** enforce khi có người comment dưới video của tài khoản này (`interaction-service-api.md` mục 3.4). Comment bị lọc **không bị từ chối** mà bị giữ lại chờ chủ video duyệt (`status: HELD`, hàng chờ ở mục 3.4b bên đó). Comment của chính chủ tài khoản không bao giờ bị giữ.
+  - `filterSpamOffensive` (mặc định `true`) — tắt đi thì comment chỉ bị gắn cờ thô tục, xúc phạm hoặc spam/link được đăng thẳng. Không tắt được phần bảo vệ người đọc: lời lẽ thù ghét, nội dung tình dục, đe doạ, lừa đảo/cờ bạc, số điện thoại/email vẫn bị giữ, và comment vi phạm nặng vẫn bị từ chối.
+  - `filterAllComments` (mặc định `false`) — mọi comment của người khác đều chờ duyệt.
+  - `commentKeywords` — comment chứa một trong các từ khoá thì chờ duyệt. Khớp **theo cả âm tiết** ("spoiler" không khớp "spoilers"); từ khoá **có dấu chỉ khớp đúng chữ có dấu** ("tạch" không khớp "tách"), từ khoá **không dấu khớp mọi cách viết** ("giam gia" khớp "Giảm GIÁ"). Giống cách blocklist của hệ thống khớp.
+- Đổi `commentAudience` hoặc bộ lọc comment có thể mất tới ~3 giây mới có tác dụng (kể cả `accountCommentsOff` trên video): video-service cache cài đặt của chủ video trong Redis với TTL ngắn (`USER_SETTINGS_CACHE_TTL`, mặc định 3s). Không có event invalidate.
 
 **`privateAccount`** — bật thì từ lúc đó chỉ người được duyệt mới follow được (mục 3.4, 3.16) và xem được video, danh sách followers/following, tab Reposts. **Follower hiện có giữ nguyên.** Gửi đúng giá trị đang có là no-op, không phát event. Tắt (về công khai) thì **mọi lời mời đang chờ được duyệt hết** trong cùng request — không còn gì chặn việc follow, và những người đó đã xin rồi. Chưa có profile → `USER_PROFILE_NOT_FOUND` (404). Video của tài khoản rời khỏi For You, trending, feed mới nhất và tìm kiếm trong vòng vài chục giây (video-service đánh dấu lại từng video, 100 video mỗi 5 giây).
 

@@ -1,12 +1,17 @@
 package com.tiktok.userservice.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.tiktok.moderation.text.MaxCodePoints;
+import com.tiktok.moderation.text.TextSanitizer;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.Getter;
 
 import java.time.LocalTime;
+import java.util.List;
 
 /**
  * PATCH body for {@code /users/me/settings}. Three-valued on purpose: a key can be <b>absent</b>
@@ -21,9 +26,10 @@ import java.time.LocalTime;
  * {@code Optional} is the same {@code Optional.empty()} an explicit null produces.
  *
  * <p>Clearing only applies to the three nullable fields. An explicit null on an audience, on
- * {@code weeklyScreenTimeDigest} or on {@code privateAccount} is a {@code VALIDATION_ERROR} rather
- * than a no-op: those columns are NOT NULL, and silently treating the key as absent is how "I set
- * it and it didn't save" happens.
+ * {@code weeklyScreenTimeDigest}, on {@code privateAccount} or on a comment filter is a
+ * {@code VALIDATION_ERROR} rather than a no-op: those columns are NOT NULL, and silently treating the
+ * key as absent is how "I set it and it didn't save" happens. {@code commentKeywords} is cleared
+ * with {@code []}.
  */
 @Getter
 public class UpdateUserSettingsRequest {
@@ -67,6 +73,20 @@ public class UpdateUserSettingsRequest {
     private Boolean privateAccount;
     private boolean privateAccountSet;
 
+    private Boolean filterSpamOffensive;
+    private boolean filterSpamOffensiveSet;
+
+    private Boolean filterAllComments;
+    private boolean filterAllCommentsSet;
+
+    /**
+     * The whole list, replacing the stored one. Sanitized in the setter, before validation, so the
+     * limit counts what is stored — the way a comment's own text is.
+     */
+    @Size(max = 50, message = "must have at most 50 keywords")
+    private List<@NotBlank @MaxCodePoints(30) String> commentKeywords;
+    private boolean commentKeywordsSet;
+
     public void setCommentAudience(String commentAudience) {
         this.commentAudience = commentAudience;
         this.commentAudienceSet = true;
@@ -100,5 +120,22 @@ public class UpdateUserSettingsRequest {
     public void setPrivateAccount(Boolean privateAccount) {
         this.privateAccount = privateAccount;
         this.privateAccountSet = true;
+    }
+
+    public void setFilterSpamOffensive(Boolean filterSpamOffensive) {
+        this.filterSpamOffensive = filterSpamOffensive;
+        this.filterSpamOffensiveSet = true;
+    }
+
+    public void setFilterAllComments(Boolean filterAllComments) {
+        this.filterAllComments = filterAllComments;
+        this.filterAllCommentsSet = true;
+    }
+
+    public void setCommentKeywords(List<String> commentKeywords) {
+        this.commentKeywords = commentKeywords == null
+                ? null
+                : commentKeywords.stream().map(TextSanitizer::sanitizeLine).toList();
+        this.commentKeywordsSet = true;
     }
 }

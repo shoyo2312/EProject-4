@@ -5,6 +5,7 @@ import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.entity.SettingsAudience;
 
 import java.time.LocalTime;
+import java.util.List;
 
 /**
  * Every setting the owner can change, as a flat keyed object. Deliberately not the section/group
@@ -27,6 +28,12 @@ public record UserSettingsResponse(
          * Read off the profile rather than the settings row, because every viewer needs it there —
          * see V11. False until the profile exists.
          */
-        boolean privateAccount
+        boolean privateAccount,
+        /** False: comments on this account's videos are not held for profanity, insults or spam. */
+        boolean filterSpamOffensive,
+        /** Every comment from someone else waits for approval. */
+        boolean filterAllComments,
+        /** A comment containing one of these waits for approval. */
+        List<String> commentKeywords
 ) {
 }
