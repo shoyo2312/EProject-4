@@ -53,4 +53,32 @@ class JwtHandshakeInterceptorTest {
     void aTokenWithoutARoleLeavesNone() {
         assertThat(handshakeWith(Map.of())).doesNotContainKey(JwtHandshakeInterceptor.ROLE_ATTRIBUTE);
     }
+
+    @Test
+    void noTokenOpensAGuestSession() {
+        Map<String, Object> attributes = new HashMap<>();
+
+        boolean accepted = new JwtHandshakeInterceptor(jwtProvider, revokedTokenChecker).beforeHandshake(
+                new ServletServerHttpRequest(new MockHttpServletRequest("GET", "/ws")),
+                new ServletServerHttpResponse(new MockHttpServletResponse()),
+                null, attributes);
+
+        assertThat(accepted).isTrue();
+        assertThat(attributes).isEmpty();
+    }
+
+    /** Not downgraded to a guest: the client refreshes on the 401 and comes back as itself. */
+    @Test
+    void aBadTokenIsRefused() {
+        MockHttpServletRequest servlet = new MockHttpServletRequest("GET", "/ws");
+        servlet.setQueryString("token=garbage");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        boolean accepted = new JwtHandshakeInterceptor(jwtProvider, revokedTokenChecker).beforeHandshake(
+                new ServletServerHttpRequest(servlet), new ServletServerHttpResponse(response),
+                null, new HashMap<>());
+
+        assertThat(accepted).isFalse();
+        assertThat(response.getStatus()).isEqualTo(401);
+    }
 }

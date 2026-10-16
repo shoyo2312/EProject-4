@@ -230,4 +230,40 @@ class StompSubscriptionInterceptorTest {
         assertThatThrownBy(() -> interceptor.preSend(subscribeTo("/topic/admin"), null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /** A socket opened without a token: no Principal, no session attributes. */
+    private Message<byte[]> asGuest(StompCommand command, String destination) {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(command);
+        accessor.setDestination(destination);
+        accessor.setLeaveMutable(true);
+        return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/topic/videos.v1", "/topic/videos.v1.comments", "/topic/users.42", "/topic/feed"})
+    void aGuestListensToThePublicTopics(String destination) {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        Message<byte[]> message = asGuest(StompCommand.SUBSCRIBE, destination);
+
+        assertThat(interceptor.preSend(message, null)).isSameAs(message);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/topic/conversations/c1", "/topic/admin"})
+    void aGuestIsRefusedTheGatedTopics(String destination) {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(asGuest(StompCommand.SUBSCRIBE, destination), null))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(conversationService);
+    }
+
+    @Test
+    void aGuestCannotSend() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(asGuest(StompCommand.SEND, "/app/chat.send/c1"), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

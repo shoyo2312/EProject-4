@@ -45,6 +45,10 @@ import java.util.regex.Pattern;
  *
  * <p>{@code /topic/admin} is the one role-gated destination: the handshake keeps the token's role,
  * and only {@code ADMIN} may subscribe.
+ *
+ * <p>A guest — a socket opened without a token — has no Principal and no role, so it gets the
+ * public destinations above and nothing else: no conversation, no admin topic, no SEND. Its
+ * {@code /user/queue/**} subscriptions resolve to its own session, where nothing is ever sent.
  */
 @Slf4j
 @Component
@@ -80,6 +84,10 @@ public class StompSubscriptionInterceptor implements ChannelInterceptor {
             if (destination == null || !destination.startsWith(APPLICATION_PREFIX)) {
                 log.warn("Refused send to {}", destination);
                 throw new IllegalArgumentException("Sending to " + destination + " is not allowed");
+            }
+            // A guest's socket only listens; the handlers read the sender off the Principal.
+            if (accessor.getUser() == null) {
+                throw new IllegalArgumentException("Not authenticated");
             }
             return message;
         }

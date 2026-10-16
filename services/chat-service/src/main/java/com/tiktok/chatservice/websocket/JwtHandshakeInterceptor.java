@@ -26,6 +26,12 @@ import java.util.Map;
  * SessionRevoker would otherwise keep receiving frames on an already-open connection. The token
  * itself is kept in the session attributes so {@link WebSocketSessionRegistry} can re-run both
  * checks for the life of the connection.
+ *
+ * <p>No token at all is a guest: the socket opens with no Principal, which
+ * {@link StompSubscriptionInterceptor} holds to the public topics — a signed-out viewer's counts
+ * and comments move live too. A token that fails is still a 401, not a quiet downgrade to guest,
+ * the gateway's rule: the client refreshes and reconnects as itself rather than losing its own
+ * queues without a word.
  */
 @Component
 @RequiredArgsConstructor
@@ -48,9 +54,12 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
                 .getQueryParams()
                 .get(TOKEN_PARAM);
         String token = tokenParams != null && !tokenParams.isEmpty() ? tokenParams.get(0) : null;
+        if (token == null) {
+            return true;
+        }
 
         // One signature check for the whole handshake; it used to verify the same token four times.
-        Claims claims = token == null ? null : jwtProvider.parseAccessToken(token);
+        Claims claims = jwtProvider.parseAccessToken(token);
         if (claims == null || revokedTokenChecker.isRevoked(claims)) {
             response.setStatusCode(HttpStatus.UNAUTHORIZED);
             return false;
