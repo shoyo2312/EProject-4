@@ -58,9 +58,9 @@ spring:
         max-page-size: 50
 
   mail:
-    host: ${MAIL_HOST:smtp-relay.brevo.com}
+    host: ${MAIL_HOST:smtp.resend.com}
     port: ${MAIL_PORT:587}
-    username: ${MAIL_USERNAME:}
+    username: ${MAIL_USERNAME:resend}
     password: ${MAIL_PASSWORD:}
     properties:
       mail:
