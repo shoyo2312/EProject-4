@@ -1,0 +1,150 @@
+# Text moderation blocklist — Vietnamese, plus the English that turns up in Vietnamese comments.
+#
+#   term | CATEGORY | severity
+#
+# severity 3  refused: a comment gets 422 COMMENT_REJECTED, a caption gets 422 VIDEO_*_REJECTED.
+#             Only for terms that are abuse in every context they appear in.
+# severity 2  held for a person: a comment waits for the video owner's approval, a video goes to
+#             admin review. Everything with an innocent reading belongs here, if anywhere.
+#
+# CATEGORY is one of PROFANITY, INSULT, HATE, SEXUAL, VIOLENCE, SCAM, SPAM, PERSONAL_INFO.
+#
+# HOW A TERM MATCHES DEPENDS ON HOW IT IS WRITTEN:
+#   - with diacritics (or đ)  -> matched only against text with the same diacritics.
+#                                "cặc" never matches "các", "lồn" never "lớn", "buồi" never "buổi".
+#   - in plain ASCII          -> matched against the text with every diacritic removed, so it
+#                                catches all spellings: "dm" matches "đm", "ĐM", "đ.m", "d m".
+#   Never add the ASCII form of a word whose folded spelling is an everyday word (cac, lon, buoi,
+#   di, deo, vay, ...): it would hold half of all comments. The same goes for a phrase: "ca cuoc"
+#   is "cá cược" and also "cả cuộc (đời)", "app vay" is also "app vậy", "vay online" "váy online".
+#
+# Matching is by whole syllables, never substrings: "sex" does not match "sexy". Repeated letters
+# (nguuuu), leetspeak inside a word (d1t), look-alike letters, invisible marks after a letter and
+# words spelled out letter by letter (v c l) are undone before matching. A term of two syllables or
+# more also matches written as one word, as a hashtag writes it: "nhà cái" catches "#nhàcái".
+#
+# Before adding a term, search for it in ordinary text: "óc chó" is an insult and also a walnut,
+# "xoạc" is crude and also the splits, "súc vật" is livestock. Mild intensifiers that are everyday
+# speech (vãi, vl, vcl, đéo) are left out on purpose.
+#
+# Bump the version on every change: it is stored with every held comment and every screened video.
+
+version: 2026.10.15
+
+# --- Profanity -------------------------------------------------------------------------------
+địt mẹ mày     | PROFANITY | 3
+địt cụ mày     | PROFANITY | 3
+đụ má mày      | PROFANITY | 3
+đụ mẹ mày      | PROFANITY | 3
+dit me may     | PROFANITY | 3
+dcm may        | PROFANITY | 3
+motherfucker   | PROFANITY | 3
+cunt           | PROFANITY | 3
+địt            | PROFANITY | 2
+đụ             | PROFANITY | 2
+địt mẹ         | PROFANITY | 2
+địt cụ         | PROFANITY | 2
+đụ má          | PROFANITY | 2
+đụ mẹ          | PROFANITY | 2
+dit me         | PROFANITY | 2
+dm             | PROFANITY | 2
+dmm            | PROFANITY | 2
+dcm            | PROFANITY | 2
+lồn            | PROFANITY | 2
+loz            | PROFANITY | 2
+cặc            | PROFANITY | 2
+buồi           | PROFANITY | 2
+fuck           | PROFANITY | 2
+fucking        | PROFANITY | 2
+fck            | PROFANITY | 2
+
+# --- Insults ---------------------------------------------------------------------------------
+con đĩ         | INSULT    | 3
+đĩ điếm        | INSULT    | 3
+con phò        | INSULT    | 3
+đĩ             | INSULT    | 2
+cmm            | INSULT    | 2
+con mẹ mày     | INSULT    | 2
+não tàn        | INSULT    | 2
+đồ ngu         | INSULT    | 2
+thằng ngu      | INSULT    | 2
+con ngu        | INSULT    | 2
+ngu như chó    | INSULT    | 2
+ngu như bò     | INSULT    | 2
+ngu như lợn    | INSULT    | 2
+thằng chó      | INSULT    | 2
+chó má         | INSULT    | 2
+đồ khốn        | INSULT    | 2
+thằng khốn     | INSULT    | 2
+khốn nạn       | INSULT    | 2
+đồ súc vật     | INSULT    | 2
+lũ súc vật     | INSULT    | 2
+bitch          | INSULT    | 2
+whore          | INSULT    | 2
+slut           | INSULT    | 2
+retard         | INSULT    | 2
+
+# --- Hate ------------------------------------------------------------------------------------
+parky          | HATE      | 3
+bắc kỳ chó     | HATE      | 3
+nam kỳ chó     | HATE      | 3
+tàu khựa       | HATE      | 3
+nigger         | HATE      | 3
+nigga          | HATE      | 3
+faggot         | HATE      | 3
+khựa           | HATE      | 2
+# "3 que" alone is also three sticks of incense ("thắp 3 que hương"): only aimed at someone.
+bọn 3 que      | HATE      | 2
+lũ 3 que       | HATE      | 2
+bọn ba que     | HATE      | 2
+lũ ba que      | HATE      | 2
+
+# --- Sexual ----------------------------------------------------------------------------------
+bú cặc         | SEXUAL    | 3
+bú lồn         | SEXUAL    | 3
+liếm lồn       | SEXUAL    | 3
+bú cu          | SEXUAL    | 2
+chịch          | SEXUAL    | 2
+thủ dâm        | SEXUAL    | 2
+phim sex       | SEXUAL    | 2
+clip sex       | SEXUAL    | 2
+sex            | SEXUAL    | 2
+porn           | SEXUAL    | 2
+
+# --- Violence --------------------------------------------------------------------------------
+giết mày       | VIOLENCE  | 2
+giết chết mày  | VIOLENCE  | 2
+mày chết đi    | VIOLENCE  | 2
+
+# --- Scams and gambling (brands with digits, like fb88 or 789bet, are caught by pattern) -------
+# Written without diacritics only where no everyday phrase folds to the same letters, so the version
+# typed without diacritics is caught too. The rest have such twins: "cá cược" folds to the same
+# letters as "cả cuộc (đời)", "đổi thưởng" as "đời thường", "nhà cái" as "...nha cái này", "soi kèo"
+# as "sợi keo", "tài xỉu" as "tai xíu". A loan ("vay") has no diacritics to write it with and folds
+# from "váy" and "vậy" too, so it is listed only next to "tien".
+ca cuoc bong da    | SCAM  | 2
+vay tien nhanh     | SCAM  | 2
+vay tien online    | SCAM  | 2
+app vay tien       | SCAM  | 2
+kiem tien online   | SCAM  | 2
+viec nhe luong cao | SCAM  | 2
+casino             | SCAM  | 2
+kubet              | SCAM  | 2
+shbet              | SCAM  | 2
+sunwin             | SCAM  | 2
+hitclub            | SCAM  | 2
+cá cược            | SCAM  | 2
+nhà cái            | SCAM  | 2
+tài xỉu            | SCAM  | 2
+soi kèo            | SCAM  | 2
+đổi thưởng         | SCAM  | 2
+cá độ              | SCAM  | 2
+lô đề              | SCAM  | 2
+nổ hũ              | SCAM  | 2
+
+# --- Links spelled out to dodge the link pattern ---------------------------------------------
+# "chấm com" with its diacritics: folded, it is also "chăm cơm" (as in "chăm cơm nước").
+chấm com       | SPAM      | 2
+chấm net       | SPAM      | 2
+cham vn        | SPAM      | 2
+dot com        | SPAM      | 2
