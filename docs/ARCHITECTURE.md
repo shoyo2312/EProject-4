@@ -116,6 +116,16 @@ kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
   ├── DltReplay (`make dlt-list` / `make dlt-replay`: gửi lại record DLT về topic gốc, có kiểm tra thứ tự theo key — §5b)
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean khi service thêm dependency, không cần @Configuration cục bộ
+
+moderation-lib   ← Text người xem đọc được: video-service (caption), interaction-service (comment), user-service (từ khoá của creator), admin-service (term + preview)
+  ├── TextSanitizer + @MaxCodePoints (NFC, bỏ ký tự vô hình/bidi, đếm độ dài theo code point)
+  ├── TextModerator (blocklist tiếng Việt + tín hiệu spam → ALLOW / HOLD / REJECT, in-process)
+  │   └── Counter `text_moderation_decisions_total{surface,decision,category,enforced}`
+  ├── TextClassifier (gọi moderation-service `POST /moderate/text`, PhoBERT; chỉ HOLD; fail-open + cooldown)
+  ├── AdminTermsSync (poll `GET /api/v1/admin/internal/blocklist` mỗi 60s, gộp term admin vào blocklist)
+  ├── KeywordFilter (từ khoá comment của creator, khớp như blocklist)
+  └── TextModerationAutoConfiguration (`moderation.text.*`; blocklist đọc lúc khởi động, hỏng thì không khởi động)
+      Xem docs/moderation.md §Text
 ```
 
 ### 5a. JWT Authentication — security-lib (Centralized)
@@ -189,13 +199,13 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 | `interaction.save-events` | interaction-service (chờ ack) | — | `VideoSavedEvent` | chat-service (`VideoStatsFanout`) |
 | `video.like-owner-events` | video-service (fire-and-forget, key `ownerId`) | — | `VideoLikeOwnerEvent` | chat-service (`UserStatsFanout`) |
 | `notification.created` | notification-service (chỉ announce, không outbox) | — | `NotificationCreatedEvent` | chat-service (`NotificationFanout`: đẩy badge xuống socket) |
-| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / `CommentRemovedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `VideoPurgeRequestedEvent` + `UserBannedEvent`/`UserUnbannedEvent` → `owner_bans`), search-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `UserBannedEvent`/`UserUnbannedEvent` → index `owner_bans`), recommendation-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), auth-service (`UserBannedEvent` + `UserUnbannedEvent` + `UserSessionsRevokedEvent`), interaction-service (`CommentRemovedEvent`), notification-service (`UserBannedEvent`, `VideoTakenDownEvent`, `UserWarnedEvent`), media-worker (`VideoTakenDownEvent` + `VideoRestoredEvent`: quarantine media), chat-service (mọi event) |
+| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / `CommentRemovedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `VideoPurgeRequestedEvent` + `UserBannedEvent`/`UserUnbannedEvent` → `owner_bans`), search-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `UserBannedEvent`/`UserUnbannedEvent` → index `owner_bans`), recommendation-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), auth-service (`UserBannedEvent` + `UserUnbannedEvent` + `UserSessionsRevokedEvent`), interaction-service (`CommentRemovedEvent` + `UserBannedEvent`/`UserUnbannedEvent` → `user_bans`), notification-service (`UserBannedEvent`, `VideoTakenDownEvent`, `UserWarnedEvent`), media-worker (`VideoTakenDownEvent` + `VideoRestoredEvent`: quarantine media), chat-service (mọi event) |
 | `admin.report-events` | admin-service (outbox) | `ReportSubmittedEvent` / `ReportResolvedEvent` / `StaleReportsDismissedEvent` | `ReportSubmittedEvent` (có report mới), `ReportResolvedEvent` (mọi report đang chờ của một target vừa được xử lý), `StaleReportsDismissedEvent` (một lô report quá hạn vừa bị `StaleReportSweep` tự đóng) | chat-service (`AdminFanout`, group riêng `admin-realtime-<uuid>` mỗi instance: chỉ báo console admin tải lại, không đọc payload; gộp mỗi loại event còn tối đa một frame trong mỗi cửa sổ `realtime.flush-interval-millis`) |
 
 Ghi chú:
 - **Topic trộn nhiều shape** (`video.video-events`, `interaction.comment-events`, `admin.moderation-events`, `admin.report-events`) route bằng Kafka header `eventType`, KHÔNG suy từ JSON. Thiếu route → Jackson vẫn parse sang class sai với field null, không exception. Xem `CLAUDE.md` §Kafka.
 - **DLT**: mọi service có consumer đều dùng error handler của `kafka-lib` (§5b). DLT chỉ nhận record lỗi do chính nó; dependency chết thì partition đứng chờ thay vì đẩy event vào DLT. Một topic `<topic>.DLT` gom record của **mọi** consumer group đọc topic đó.
-- **Ban**: video-service và search-service tự giữ bản ghi ban theo user (`owner_bans`) và lọc lúc đọc, theo `bannedUntil > now` — vì ban tạm hết hạn do `ExpiredBanSweep` của auth-service gỡ mà **không phát event**. Feed recommendation và trending đi qua `/videos/batch` nên cũng được lọc ở video-service.
+- **Ban**: video-service và search-service tự giữ bản ghi ban theo user (`owner_bans`) và lọc lúc đọc, theo `bannedUntil > now` — vì ban tạm hết hạn do `ExpiredBanSweep` của auth-service gỡ mà **không phát event**. Feed recommendation và trending đi qua `/videos/batch` nên cũng được lọc ở video-service. Comment: interaction-service giữ `user_bans` (Cassandra) và bỏ comment của người đang bị ban khỏi mọi danh sách, counter giữ nguyên.
 - **Restore vs verdict**: `VideoRestoredEvent` và verdict đi hai topic khác nhau. search-service và recommendation-service lưu thời điểm admin quyết định (`approvedAt` / `reco:video:approved-at:{id}`); verdict REVIEW/REJECTED sinh **trước** mốc đó được coi là đã duyệt.
 - `analytics-service` là consumer của `video.video-events` + `interaction.watch-events` (sink training data cho `rank-service`) — xem `docs/ranking-model.md`. Ngoài phạm vi các doc client.
 - Cách feature xếp hạng đi từ các event này tới `rank-service`: `docs/ranking-model.md` §2.
