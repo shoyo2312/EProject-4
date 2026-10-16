@@ -326,6 +326,11 @@ services:
       # Seconds for the whole second opinion; keep it at most a third of media-worker's
       # MODERATION_TIMEOUT_MILLIS, or media-worker gives up first and bills the frames again.
       MODERATION_ESCALATE_BUDGET: ${MODERATION_ESCALATE_BUDGET:-10}
+      # /moderate/text (comments, captions). Only HATE at or over this holds; bump
+      # TEXT_MODERATION_MODEL_VERSION whenever it changes. The model and its commit are baked in at
+      # build — see the Dockerfile.
+      TEXT_HATE_HOLD_THRESHOLD: ${TEXT_HATE_HOLD_THRESHOLD:-0.90}
+      TEXT_MODERATION_MODEL_VERSION: ${TEXT_MODERATION_MODEL_VERSION:-hsd-v1}
     healthcheck:
       # Unhealthy until the weights are in memory, which takes a few seconds on a cold start.
       test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health')\"" ]

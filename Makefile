@@ -23,7 +23,7 @@ endif
 	run-admin run-analytics run-search \
 	migrate-auth migrate-user \
 	migrate-admin migrate-all \
-	moderation-up moderation-test \
+	moderation-up moderation-test moderation-score-texts \
 	dlt-list dlt-replay
 
 # Hiển thị help
@@ -78,6 +78,7 @@ help:
 	@echo "    make rank-test          Run rank-service tests"
 	@echo "    make moderation-up      Start moderation-service :8099 (NSFW screening)"
 	@echo "    make moderation-test    Run moderation-service tests"
+	@echo "    make moderation-score-texts FILE=x  Precision of the text classifier on judged comments"
 	@echo ""
 	@echo "  Database:"
 	@echo "    make migrate-auth       Chạy Flyway migration cho auth-service"
@@ -264,6 +265,12 @@ moderation-test:
 	docker compose run --rm --no-deps --entrypoint sh \
 		-v "$$(pwd)/services/moderation-service:/app" moderation-service -c \
 		"pip install -q -r requirements-dev.txt && python -m pytest -q"
+
+# The text classifier against a file of comments you have judged ("+ " should hold, "- " should
+# not), on the running service: precision on this platform's text, before and after any change to
+# the threshold or the weights. FILE=path/to/comments.txt
+moderation-score-texts:
+	python3 services/moderation-service/score_texts.py $(FILE)
 
 # ─────────────────────────────────────────────────────────────────
 # rank-service (Python)
