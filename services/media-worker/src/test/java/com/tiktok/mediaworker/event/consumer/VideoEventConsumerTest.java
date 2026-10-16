@@ -1,6 +1,7 @@
 package com.tiktok.mediaworker.event.consumer;
 
 import tools.jackson.databind.ObjectMapper;
+import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPurgedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
@@ -71,6 +72,20 @@ class VideoEventConsumerTest {
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
         verify(quarantine).enforce("vid9");
+    }
+
+    /** The moderation step reads the transcode result, so the caption's verdict has to ride on it. */
+    @Test
+    void onMessage_successCarriesTheCaptionVerdictOfThePublication() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid5", 1L, "t", null, "s3://raw/vid5.mp4", "PUBLIC",
+                List.of(), ModerationVerdict.REVIEW);
+        when(transcodeService.transcode("vid5", "s3://raw/vid5.mp4"))
+                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        verify(eventProducer).publish(argThat(event -> event.success()
+                && event.textVerdict() == ModerationVerdict.REVIEW));
     }
 
     /** A failed transcode wrote nothing public, so there is nothing to hold. */

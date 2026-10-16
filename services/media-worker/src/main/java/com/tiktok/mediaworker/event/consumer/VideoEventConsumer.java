@@ -128,9 +128,12 @@ public class VideoEventConsumer {
         for (int attempt = 1; attempt <= transcodeAttempts; attempt++) {
             try {
                 TranscodeResult result = transcodeService.transcode(event.videoId(), event.rawFileUrl());
+                // The moderation step reads this event, not the publication, so the caption's
+                // verdict rides along to be folded into the frames' (see CaptionVerdict).
                 return VideoTranscodedEvent.success(
                         event.videoId(), result.thumbnailUrl(), result.previewUrl(),
-                        result.hlsUrl(), result.durationSeconds(), result.width(), result.height());
+                        result.hlsUrl(), result.durationSeconds(), result.width(), result.height())
+                        .withTextVerdict(event.textVerdict());
             } catch (MediaRejectedException e) {
                 // Permanently unacceptable — retrying re-probes the same file to the same answer.
                 log.warn("Rejecting video {}: {}", event.videoId(), e.getMessage());

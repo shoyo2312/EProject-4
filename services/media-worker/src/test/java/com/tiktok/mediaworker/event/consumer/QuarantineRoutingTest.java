@@ -19,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.nio.charset.StandardCharsets;
 
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -91,6 +92,24 @@ class QuarantineRoutingTest {
         moderation().onMessage(json(VideoTranscodedEvent.success("v4", "t", null, "h", 4)));
 
         verify(quarantine).hold("v4", Hold.MODERATION);
+    }
+
+    /**
+     * Approved frames under a caption the text rules held: the verdict that goes out is REVIEW, so
+     * search and recommendation hold the video too, and the media waits in quarantine like any
+     * other video nobody has cleared.
+     */
+    @Test
+    void heldCaption_turnsApprovedFramesIntoAHeldReview() throws Exception {
+        when(moderationService.moderate("v5", 4)).thenReturn(
+                VideoModerationCompletedEvent.of("v5", ModerationVerdict.APPROVED, "nsfw", 0.1, 0, 10, 5L, "m", "1", null));
+
+        moderation().onMessage(json(VideoTranscodedEvent.success("v5", "t", null, "h", 4)
+                .withTextVerdict(ModerationVerdict.REVIEW)));
+
+        verify(quarantine).hold("v5", Hold.MODERATION);
+        verify(moderationProducer).publish(argThat(event -> event.verdict() == ModerationVerdict.REVIEW
+                && event.videoId().equals("v5")));
     }
 
     @Test
