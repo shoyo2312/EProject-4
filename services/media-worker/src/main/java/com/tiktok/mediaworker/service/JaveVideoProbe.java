@@ -17,7 +17,11 @@ public class JaveVideoProbe implements VideoProbe {
     @Override
     public ProbedVideo probe(String url) {
         try {
-            MultimediaInfo info = new MultimediaObject(URI.create(url).toURL()).getInfo();
+            // A file: URL carries a drive letter on Windows that ffmpeg cannot open; hand it a File.
+            MultimediaObject media = url.startsWith("file:")
+                    ? new MultimediaObject(java.nio.file.Path.of(URI.create(url)).toFile())
+                    : new MultimediaObject(URI.create(url).toURL());
+            MultimediaInfo info = media.getInfo();
 
             long millis = info.getDuration();
             if (millis <= 0) {

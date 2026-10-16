@@ -69,6 +69,17 @@ public interface UserProfileService {
      */
     Page<UserProfileResponse> search(Long viewerId, String query, Pageable pageable);
 
+    /**
+     * Ids of the profiles {@link #search} would list first, for a caller with no viewer —
+     * search-service matching a video query against authors. Blank query is an empty list.
+     */
+    List<Long> searchIds(String query, int limit);
+
+    /**
+     * A changed display name is allowed once every 7 days ({@link DisplayNameCooldown}); the bio
+     * and avatar are not limited. The current name sent back is not a change, with or without
+     * whitespace around it, and a new name is stored stripped.
+     */
     UserProfileResponse updateOwnProfile(Long userId, UpdateProfileRequest request);
 
     /**
@@ -92,14 +103,29 @@ public interface UserProfileService {
      * <p>{@code avatarUrl} is the picture the identity provider already held for a social signup,
      * null for a password one. It only ever seeds the profile — any avatar after that is the
      * user's own, set through {@link #updateOwnProfile} and never overwritten from here.
+     *
+     * <p>Any other profile still showing the handle loses it, as in {@link #applyUsernameChange}.
      */
     void createFromRegisteredEvent(Long userId, String username, String avatarUrl);
+
+    /**
+     * Follows a rename made in auth-service, which owns the handle and has already checked it.
+     * Any other profile still showing that handle loses it: auth-service gives a handle to one
+     * account at a time, so that copy is one whose own rename has not arrived yet.
+     *
+     * <p>Throws when the profile does not exist yet, so the delivery is retried — three more
+     * times, a second apart, before kafka-lib parks it on the topic's DLT.
+     */
+    void applyUsernameChange(Long userId, String username);
 
     /**
      * Moves a profile off the provider's URL and onto our own copy of the same picture.
      *
      * <p>Also how an account that predates provider avatars gets one at all: a profile with no
      * avatar takes the copy too. A profile whose owner has since chosen a picture keeps it.
+     *
+     * <p>Throws when the profile does not exist yet, so the delivery is retried — three more
+     * times, a second apart, before kafka-lib parks it on the topic's DLT.
      */
     void applyMirroredAvatar(Long userId, String sourceUrl, String avatarUrl);
 }

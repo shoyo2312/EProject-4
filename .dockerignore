@@ -1,0 +1,17 @@
+# The root Dockerfile builds one Java service from the Maven sources; nothing else belongs in its
+# context. .env above all: it holds the real secrets and must never end up in an image layer.
+.env
+.git
+.idea
+.venv
+.claude
+.superpowers
+graphify-out
+postman
+docs
+**/target
+**/node_modules
+**/.DS_Store
+# Python services: their own Dockerfiles, built from their own directories.
+services/rank-service
+services/moderation-service

@@ -2,6 +2,8 @@ package com.tiktok.common.exception;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -10,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -54,8 +57,39 @@ class BaseExceptionHandlerTest {
                 .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
     }
 
+    /** A rate limit tells the client when to come back in a header, not only in prose. */
+    @Test
+    void domainException_carriesItsHeaders() throws Exception {
+        mockMvc.perform(get("/contended/throttled"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string(HttpHeaders.RETRY_AFTER, "7"))
+                .andExpect(jsonPath("$.code").value("SLOW_DOWN"));
+    }
+
+    @Test
+    void domainException_withoutHeaders_answersAsBefore() throws Exception {
+        mockMvc.perform(get("/contended/missing"))
+                .andExpect(status().isNotFound())
+                .andExpect(header().doesNotExist(HttpHeaders.RETRY_AFTER))
+                .andExpect(jsonPath("$.code").value("THING_NOT_FOUND"));
+    }
+
     @RestControllerAdvice
     static class TestExceptionHandler extends BaseExceptionHandler {
+    }
+
+    static class ThrottledException extends DomainException {
+
+        ThrottledException() {
+            super("SLOW_DOWN", "Too many requests", HttpStatus.TOO_MANY_REQUESTS);
+        }
+
+        @Override
+        public HttpHeaders getHeaders() {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set(HttpHeaders.RETRY_AFTER, "7");
+            return headers;
+        }
     }
 
     @RestController
@@ -74,6 +108,16 @@ class BaseExceptionHandlerTest {
         @GetMapping("/contended/broken")
         void broken() {
             throw new IllegalStateException("something genuinely unexpected");
+        }
+
+        @GetMapping("/contended/throttled")
+        void throttled() {
+            throw new ThrottledException();
+        }
+
+        @GetMapping("/contended/missing")
+        void missing() {
+            throw new ResourceNotFoundException("THING_NOT_FOUND", "No such thing");
         }
     }
 }

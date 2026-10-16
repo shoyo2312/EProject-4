@@ -47,6 +47,11 @@ public class CommentIndexBackfill implements ApplicationRunner {
         while (true) {
             Slice<CommentByVideo> slice = commentByVideoRepository.findAll(pageRequest);
             for (CommentByVideo comment : slice) {
+                // A held comment is in no listing until its owner approves it, and the approval
+                // writes its index row; indexing it here would publish it behind the owner's back.
+                if (comment.isHeld()) {
+                    continue;
+                }
                 Long videoId = comment.getKey().getVideoId();
                 Long commentId = comment.getKey().getCommentId();
                 Long parentId = comment.getParentId();

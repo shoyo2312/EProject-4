@@ -28,4 +28,13 @@ class CommentTargetTest {
         assertThatThrownBy(() -> CommentTarget.parse(null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    /** No Snowflake is zero or negative, so a pair holding one points at nothing. */
+    @Test
+    void rejectsIdsThatCannotExist() {
+        assertThatThrownBy(() -> CommentTarget.parse("0:7320000000000000001"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> CommentTarget.parse("7310000000000000000:-1"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

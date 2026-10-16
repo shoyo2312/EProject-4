@@ -2,6 +2,7 @@ package com.tiktok.recommendationservice.service;
 
 import com.tiktok.recommendationservice.dto.response.TrendingVideoResponse;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -28,7 +29,32 @@ public interface RecommendationService {
     /** Takes a video out of candidate generation while keeping what a restore needs to undo it. */
     void recordTakenDown(String videoId);
 
-    void recordRestored(String videoId);
+    /**
+     * The admin restore, which means what it means in video-service's {@code Video.markRestored}:
+     * on a taken-down video it lifts the takedown and puts the video back where it was, and on a
+     * held one it is the approval that puts it into the feed.
+     *
+     * @param restoredAt when the admin decided, which a verdict read after this is held against
+     */
+    void recordRestored(String videoId, Instant restoredAt);
+
+    /**
+     * Keeps a video moderation did not approve out of the feed, in a state an admin approval can
+     * lift. Unlike {@link #recordVideoDeleted} the stashed tags and owner stay, because the
+     * approval has nothing else to index the video from.
+     *
+     * @param checkedAt when the classifier produced the verdict
+     */
+    void recordHeld(String videoId, Instant checkedAt);
+
+    /**
+     * Keeps a video whose transcode failed out of the feed without forgetting it. A failure is not
+     * final: video-service leaves FAILED open for a redelivered publication to rescue, and the
+     * rescue comes in through {@link #recordVideoReady} like any first success. So unlike
+     * {@link #recordVideoDeleted} this leaves no tombstone and keeps the stashed tags, owner and
+     * private flag.
+     */
+    void recordTranscodeFailed(String videoId);
 
     /**
      * Puts a video into everything candidate generation reads — trending, the per-tag indexes,
@@ -46,7 +72,8 @@ public interface RecommendationService {
 
     void recordLike(String videoId, boolean liked);
 
-    void recordShare(String videoId);
+    /** Scores only the first share by {@code userId} of this video within the trending window. */
+    void recordShare(String videoId, Long userId);
 
     /**
      * @param created true for a new comment, false when one was removed — the engagement a

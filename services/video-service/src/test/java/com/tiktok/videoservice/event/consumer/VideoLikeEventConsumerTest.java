@@ -1,6 +1,6 @@
 package com.tiktok.videoservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -12,11 +12,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -35,7 +35,7 @@ class VideoLikeEventConsumerTest {
     @ServiceConnection
     static MongoDBContainer MONGO = new MongoDBContainer("mongo:7");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     @Autowired
@@ -152,20 +152,23 @@ class VideoLikeEventConsumerTest {
     }
 
     /**
-     * Same reason as the soft-deleted case above: a moderated video is off every read path, so
-     * likes still arriving are stale clients, and the count they build stays invisible right up
-     * until a restore puts the video back showing a number nobody can account for.
+     * Unlike a deletion, a takedown is lifted by a restore, and interaction-service keeps counting
+     * through it: an unlike is accepted on a taken-down video, and a like sent just before the
+     * takedown lands just after it. Skipping both dropped every unlike, so the restored video
+     * came back showing likes it no longer had.
      */
     @Test
-    void onMessage_takenDownVideo_leavesTheCountAlone() throws Exception {
+    void onMessage_takenDownVideo_stillCountsLikesAndUnlikes() throws Exception {
         Video video = publishedVideo();
         video.markTakenDown("policy violation");
         videoRepository.save(video);
+        Long videoId = Long.valueOf(video.getId());
 
-        consumer.onMessage(objectMapper.writeValueAsString(
-                VideoLikeEvent.of(Long.valueOf(video.getId()), 1L, true)));
+        consumer.onMessage(objectMapper.writeValueAsString(VideoLikeEvent.of(videoId, 1L, true)));
+        consumer.onMessage(objectMapper.writeValueAsString(VideoLikeEvent.of(videoId, 2L, true)));
+        consumer.onMessage(objectMapper.writeValueAsString(VideoLikeEvent.of(videoId, 1L, false)));
 
-        assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isZero();
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getLikeCount()).isEqualTo(1);
     }
 
     private Video publishedVideo() {

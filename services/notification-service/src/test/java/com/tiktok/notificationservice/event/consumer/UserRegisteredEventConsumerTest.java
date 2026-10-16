@@ -1,7 +1,6 @@
 package com.tiktok.notificationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.user.UserRegisteredEvent;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.repository.ProcessedEventRepository;
@@ -26,11 +25,11 @@ class UserRegisteredEventConsumerTest {
     @Mock
     private ProcessedEventRepository processedEventRepository;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private UserRegisteredEventConsumer consumer() {
         return new UserRegisteredEventConsumer(
-                new IdempotentEventProcessor(processedEventRepository), notificationService, objectMapper);
+                new IdempotentEventProcessor(processedEventRepository), notificationService, objectMapper, "Nowaa");
     }
 
     @Test
@@ -41,7 +40,9 @@ class UserRegisteredEventConsumerTest {
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(notificationService).create(eq(1L), isNull(), eq(NotificationType.SYSTEM), any(), bodyCaptor.capture(), isNull());
+        // The brand the welcome mail is signed with, not the product this one is modelled on.
+        verify(notificationService).create(eq(1L), isNull(), eq(NotificationType.SYSTEM),
+                eq("Welcome to Nowaa!"), bodyCaptor.capture(), isNull());
         assertThat(bodyCaptor.getValue()).contains("alice");
     }
 

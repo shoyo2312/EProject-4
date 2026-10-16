@@ -3,9 +3,12 @@ package com.tiktok.interactionservice.service;
 import com.tiktok.interactionservice.dto.request.AdminCommentFilter;
 import com.tiktok.interactionservice.dto.response.AdminCommentPageResponse;
 import com.tiktok.interactionservice.dto.response.AdminCommentResponse;
+import com.tiktok.interactionservice.dto.response.CommentAuthorResponse;
 import com.tiktok.interactionservice.entity.CommentByVideo;
+import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.entity.CommentCounters;
 import com.tiktok.interactionservice.entity.CommentIndex;
+import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
 import com.tiktok.interactionservice.repository.CommentCountersRepository;
@@ -39,12 +42,13 @@ import java.util.stream.Collectors;
  *       way {@link CommentServiceImpl} does: top-level comments and one comment's replies are each
  *       a single-partition read, so a thread of two hundred replies never lands in the page of
  *       top-level comments.
- *   <li>The Replies and Removed views read the {@code comments_by_video} partition and filter it,
- *       because neither question has an index and neither is worth one. Removal would have to
- *       write a second index row on a path that already does an LWT plus two counter updates, and
- *       "every reply on this video" spans every reply partition at once. Filtering a paged scan
- *       costs the admin a few extra reads on a screen nobody is watching latency on; the writes it
- *       would otherwise slow down are on every viewer's hot path.
+ *   <li>The Replies, Removed and Held views read the {@code comments_by_video} partition and filter
+ *       it, because none of the three has an index and none is worth one — a held comment is never
+ *       written to {@code comment_index}, which is why the thread view cannot show it. Removal would
+ *       have to write a second index row on a path that already does an LWT plus two counter
+ *       updates, and "every reply on this video" spans every reply partition at once. Filtering a
+ *       paged scan costs the admin a few extra reads on a screen nobody is watching latency on; the
+ *       writes it would otherwise slow down are on every viewer's hot path.
  * </ul>
  *
  * <p>What is deliberately <em>not</em> shared with the public listing is the dropping of removed
@@ -70,7 +74,7 @@ public class AdminCommentDirectory {
 
     /**
      * One page of a video's comments, newest first — which comments depends on the filter. Removed
-     * ones are included in every view; see the class note.
+     * ones are included in every view but Held, which is what still waits; see the class note.
      */
     public AdminCommentPageResponse listForAdmin(Long videoId, AdminCommentFilter filter,
                                                  String cursor, int size) {
@@ -78,6 +82,7 @@ public class AdminCommentDirectory {
             case THREAD -> indexPage(videoId, CommentIndex.TOP_LEVEL, cursor, size);
             case REPLIES -> scanPage(videoId, comment -> comment.getParentId() != null, cursor, size);
             case REMOVED -> scanPage(videoId, CommentByVideo::isDeleted, cursor, size);
+            case HELD -> scanPage(videoId, comment -> comment.isHeld() && !comment.isDeleted(), cursor, size);
         };
     }
 
@@ -197,6 +202,19 @@ public class AdminCommentDirectory {
     }
 
     /**
+     * Who wrote one comment, for a moderation decision that has to reach them — a warning filed
+     * against a comment names the comment, not its author. Removed comments answer too: a
+     * warning is as likely to follow a removal as to replace one, and the author is the same
+     * either way.
+     */
+    public CommentAuthorResponse authorOf(Long videoId, Long commentId) {
+        CommentByVideo comment = commentByVideoRepository
+                .findById(CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build())
+                .orElseThrow(() -> new CommentNotFoundException(commentId));
+        return new CommentAuthorResponse(videoId, commentId, comment.getUserId());
+    }
+
+    /**
      * The rows behind a page of ids. An id with no row is left out: {@link
      * CommentServiceImpl#addComment} rolls its index row back when the comment itself could not be
      * stored, and a page must not fail over the window in which only one of the two writes landed.
@@ -243,6 +261,8 @@ public class AdminCommentDirectory {
                 replyCount,
                 hasReplies,
                 comment.getCreatedAt(),
-                comment.getDeletedAt());
+                comment.getDeletedAt(),
+                comment.effectiveStatus(),
+                comment.getModReason());
     }
 }

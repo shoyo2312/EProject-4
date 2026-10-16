@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Separate from {@link VideoController} because the access rule is the opposite one: every GET
@@ -44,6 +45,8 @@ public class AdminVideoController {
     /**
      * @param deleted null for no filter (the default — both live and deleted rows match);
      *                {@code true} for deleted rows only; {@code false} for live rows only
+     * @param purged  the same three states on whether the media is erased — the console's trash
+     *                is {@code deleted=true&purged=false}
      */
     @GetMapping
     public ApiResponse<Page<VideoResponse>> list(
@@ -51,9 +54,10 @@ public class AdminVideoController {
             @RequestParam(required = false) VideoStatus status,
             @RequestParam(required = false) List<Long> ownerId,
             @RequestParam(required = false) Boolean deleted,
+            @RequestParam(required = false) Boolean purged,
             @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC)
             Pageable pageable) {
-        return ApiResponse.success(adminVideoDirectory.search(q, status, ownerId, deleted, pageable));
+        return ApiResponse.success(adminVideoDirectory.search(q, status, ownerId, deleted, purged, pageable));
     }
 
     /**
@@ -63,6 +67,19 @@ public class AdminVideoController {
      * screen; the lower bound keeps a hand-edited zero or a negative from asking Mongo for a
      * window in the future, which comes back empty and reads as lost data.
      */
+    /**
+     * Every status with how many videos the listing's filters match in it, zero included — the
+     * console's status totals in one request instead of one listing request per status.
+     */
+    @GetMapping("/stats/by-status")
+    public ApiResponse<Map<VideoStatus, Long>> countByStatus(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) List<Long> ownerId,
+            @RequestParam(required = false) Boolean deleted,
+            @RequestParam(required = false) Boolean purged) {
+        return ApiResponse.success(adminVideoDirectory.countByStatus(q, ownerId, deleted, purged));
+    }
+
     @GetMapping("/stats/daily")
     public ApiResponse<List<DailyVideoStatsResponse>> dailyStats(
             @RequestParam(defaultValue = "7") @Min(1) @Max(1095) int days) {

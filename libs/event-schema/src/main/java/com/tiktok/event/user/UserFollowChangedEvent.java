@@ -15,10 +15,22 @@ public record UserFollowChangedEvent(
         Instant occurredAt,
         Long followerId,
         Long followingId,
-        boolean followed
+        boolean followed,
+        /*
+         * The edge is a follow request its owner just approved, so the one to tell is the requester,
+         * not the owner. Absent from every event produced before private accounts existed, which
+         * deserialises to false.
+         */
+        boolean requestApproved
 ) implements DomainEvent {
 
     public static UserFollowChangedEvent of(Long followerId, Long followingId, boolean followed) {
-        return new UserFollowChangedEvent(UUID.randomUUID().toString(), Instant.now(), followerId, followingId, followed);
+        return of(followerId, followingId, followed, false);
+    }
+
+    public static UserFollowChangedEvent of(Long followerId, Long followingId, boolean followed,
+                                            boolean requestApproved) {
+        return new UserFollowChangedEvent(UUID.randomUUID().toString(), Instant.now(),
+                followerId, followingId, followed, requestApproved);
     }
 }

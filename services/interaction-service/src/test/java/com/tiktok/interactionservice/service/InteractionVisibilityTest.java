@@ -14,7 +14,7 @@ import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,7 +31,7 @@ class InteractionVisibilityTest extends AbstractInteractionServiceIT {
 
     private static final long HIDDEN = 990L;
 
-    @MockBean
+    @MockitoBean
     private VideoOwnershipClient videoOwnershipClient;
 
     @Autowired private LikeService likeService;

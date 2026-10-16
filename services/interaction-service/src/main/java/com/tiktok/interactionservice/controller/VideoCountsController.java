@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -39,16 +40,18 @@ public class VideoCountsController {
 
     @GetMapping("/counts/batch")
     public ApiResponse<List<InteractionCountResponse>> counts(@RequestParam List<Long> videoIds) {
-        List<InteractionCountResponse> counts = videoIds.stream()
+        List<Long> ids = videoIds.stream()
                 .filter(Objects::nonNull)
                 .distinct()
                 .limit(MAX_BATCH_SIZE)
+                .toList();
+        Map<Long, VideoCounts> counts = counterCacheService.getCounts(ids);
+        return ApiResponse.success(ids.stream()
                 .map(videoId -> {
-                    VideoCounts c = counterCacheService.getCounts(videoId);
+                    VideoCounts c = counts.getOrDefault(videoId, VideoCounts.ZERO);
                     return new InteractionCountResponse(videoId, c.likeCount(), c.commentCount(),
                             c.shareCount(), c.viewCount(), c.saveCount(), c.repostCount());
                 })
-                .toList();
-        return ApiResponse.success(counts);
+                .toList());
     }
 }

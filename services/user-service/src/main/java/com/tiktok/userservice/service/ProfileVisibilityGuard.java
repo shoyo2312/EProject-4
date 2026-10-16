@@ -20,8 +20,9 @@ public class ProfileVisibilityGuard {
 
     private final UserBlockRepository userBlockRepository;
 
+    /** A null viewer is a signed-out reader: they block nobody and nobody blocks them. */
     public void requireVisible(Long viewerId, Long targetUserId) {
-        if (viewerId.equals(targetUserId)) {
+        if (viewerId == null || viewerId.equals(targetUserId)) {
             return;
         }
         if (userBlockRepository.existsBlockBetween(viewerId, targetUserId)) {

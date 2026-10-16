@@ -36,6 +36,7 @@ public abstract class BaseExceptionHandler extends ResponseEntityExceptionHandle
     @ExceptionHandler(DomainException.class)
     public ResponseEntity<ApiResponse<Void>> handleDomainException(DomainException ex) {
         return ResponseEntity.status(ex.getStatus())
+                .headers(ex.getHeaders())
                 .body(ApiResponse.error(ex.getCode(), ex.getMessage()));
     }
 

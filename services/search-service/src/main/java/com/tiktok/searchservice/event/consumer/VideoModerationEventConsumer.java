@@ -1,6 +1,6 @@
 package com.tiktok.searchservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.searchservice.index.SearchIndexWriter;
 import lombok.RequiredArgsConstructor;
@@ -37,7 +37,7 @@ public class VideoModerationEventConsumer {
                 objectMapper.readValue(payload, VideoModerationCompletedEvent.class);
 
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
-                searchIndexWriter.applyOutcome(event.videoId(), statusOf(event), null, null));
+                searchIndexWriter.applyVerdict(event.videoId(), statusOf(event), event.occurredAt()));
     }
 
     /** Mirrors {@code Video.applyModeration} in video-service; the two must not drift. */

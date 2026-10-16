@@ -5,6 +5,7 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
@@ -18,7 +19,7 @@ import java.nio.charset.StandardCharsets;
  * issues tokens and has its own JwtProperties/JwtConfig, and api-gateway, which is WebFlux
  * and has no servlet API on its classpath).
  */
-@AutoConfiguration(afterName = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
+@AutoConfiguration(afterName = "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration")
 @EnableConfigurationProperties(JwtProperties.class)
 public class JwtSecurityAutoConfiguration {
 
@@ -38,9 +39,25 @@ public class JwtSecurityAutoConfiguration {
     }
 
     /**
-     * Fallback for services with no Redis on the classpath (product, order, admin, …): they can't
-     * see the logout blacklist, so a token stays usable until it expires. api-gateway still
-     * rejects revoked tokens at the edge, which covers all traffic that isn't service-to-service.
+     * The filter belongs inside the security chain, where each service's SecurityConfig puts it, and
+     * nowhere else. Boot also registers every Filter bean with the servlet container unless told not
+     * to, and on Boot 4 that copy runs ahead of the chain: it sets the authentication,
+     * SecurityContextHolderFilter then replaces the context, and the copy inside the chain skips
+     * itself as already applied — so every request reaches the controllers anonymous.
+     */
+    @Bean
+    public FilterRegistrationBean<JwtAuthenticationFilter> jwtAuthenticationFilterRegistration(
+            JwtAuthenticationFilter jwtAuthenticationFilter) {
+        FilterRegistrationBean<JwtAuthenticationFilter> registration = new FilterRegistrationBean<>(jwtAuthenticationFilter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    /**
+     * Fallback for services with no Redis on the classpath (admin, analytics, notification, story,
+     * user): they can't see the logout blacklist, so a token stays usable until it expires.
+     * api-gateway still rejects revoked tokens at the edge, which covers all traffic that isn't
+     * service-to-service.
      */
     @Bean
     @ConditionalOnMissingBean

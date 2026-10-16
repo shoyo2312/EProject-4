@@ -1,9 +1,9 @@
 package com.tiktok.adminservice.config;
 
+import com.tiktok.common.http.PooledRequestFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
@@ -23,9 +23,18 @@ public class DownstreamRestClientConfig {
         // A settings screen is worth a couple of seconds and no more: without a timeout a
         // classifier still loading its model would hold the request thread until the container
         // gave up on it.
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofMillis(timeoutMillis));
-        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
-        return RestClient.builder().baseUrl(moderationServiceUri).requestFactory(requestFactory).build();
+        Duration timeout = Duration.ofMillis(timeoutMillis);
+        return RestClient.builder().baseUrl(moderationServiceUri)
+                .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
+    }
+
+    /** Asked whether a ban's target is an admin account — see AccountRoleClient. */
+    @Bean
+    public RestClient authServiceRestClient(
+            @Value("${downstream.auth-service-uri:http://localhost:8081}") String authServiceUri,
+            @Value("${downstream.timeout-millis:2000}") long timeoutMillis) {
+        Duration timeout = Duration.ofMillis(timeoutMillis);
+        return RestClient.builder().baseUrl(authServiceUri)
+                .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
     }
 }

@@ -159,7 +159,14 @@ public class JaveFfmpeg implements Ffmpeg {
     }
 
     private boolean run(String what, long timeoutSeconds, List<String> arguments) {
-        List<String> command = new ArrayList<>(List.of(executable, "-nostdin", "-y", "-loglevel", "error"));
+        List<String> command = new ArrayList<>(List.of(executable, "-nostdin", "-y", "-loglevel", "error",
+                // The input is a user's upload, and ffmpeg picks a demuxer from its content rather
+                // than its name: an HLS playlist saved as .mp4 has segments that can be any file
+                // this worker can read, someone else's upload included. Input options, so they
+                // apply to the one -i every command here has, and only to it — the containers an
+                // upload may be (mp4/mov, webm) read straight from disk.
+                "-protocol_whitelist", "file",
+                "-format_whitelist", "mov,matroska"));
         command.addAll(arguments);
 
         Path diagnostics = null;

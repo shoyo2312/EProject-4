@@ -8,7 +8,7 @@ Tài liệu cho người **vận hành**, không phải client. `media-worker` (
 |---|---|---|---|
 | Transcode video | `video.video-events` (`VideoPublishedEvent`) | `media.video-transcoded-events` (`VideoTranscodedEvent`) | `hls/{videoId}/source.mp4` + `thumbnails/{videoId}.jpg` + `previews/{videoId}.webp` |
 | Dọn media khi hết hạn thùng rác | `video.video-events` (`VideoPurgedEvent`) | — | xoá `thumbnails/{id}.jpg`, `previews/{id}.webp`, mọi object dưới `hls/{id}/`, và file raw |
-| Sao ảnh đại diện social | `auth.social-avatar-events` (`SocialAvatarDiscoveredEvent`) | `media.avatar-events` (`AvatarMirroredEvent`) | `avatars/{userId}.jpg` |
+| Sao ảnh đại diện social | `auth.social-avatar-events` (`SocialAvatarDiscoveredEvent`) | `media.avatar-events` (`AvatarMirroredEvent`) | `avatars/{userId}` |
 
 Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi đè cùng key với cùng nội dung (no-op an toàn khi redeliver). Việc idempotent thật nằm ở consumer phía sau (`video-service` / `user-service`), nơi có bảng inbox.
 
@@ -16,7 +16,7 @@ Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi 
 
 `TranscodeServiceImpl`:
 
-1. Đọc `rawFileUrl` từ `VideoPublishedEvent`, suy ra object key trong bucket (`MediaKeys.objectKey` — hỗ trợ cả `s3://bucket/key` và `https://cdn/.../bucket/key`).
+1. Đọc `rawFileUrl` từ `VideoPublishedEvent`, suy ra object key trong bucket (`common-lib/ObjectKeys.objectKey` — hỗ trợ cả `s3://bucket/key` và `https://cdn/.../bucket/key`; video-service dùng đúng hàm này để kiểm tra quyền sở hữu lúc publish, nên hai bên luôn đọc ra cùng một key).
 2. `statObject` lấy size → vượt `media.video.max-bytes` (500 MB) → `MediaRejectedException` (từ chối vĩnh viễn). Check **trước** khi tải để file quá cỡ chỉ tốn một HEAD.
 3. `downloadObject` về thư mục tạm, `VideoProbe` (JAVE parse output `ffmpeg -i`) đọc duration + codec + kích thước từ file local. Duration vượt `media.video.max-duration-seconds` (600s) → `MediaRejectedException`.
 4. **Chọn một trong hai đường** theo `ProbedVideo.needsNormalizing()` (xem §2.1). Upload kết quả lên `hls/{videoId}/source.mp4`.
@@ -75,6 +75,8 @@ Không có bước Dockerfile nào. `JaveFfmpeg` dùng chính binary mà JAVE2 (
 | faststart remux, still frame, animated preview | 120s | copy stream / decode 1 frame — chặn bởi disk, không theo độ dài video |
 | normalize | 600s | decode + encode từng frame — có tỉ lệ với độ dài video |
 
+**Input bị khoá về file local mp4/mov/webm.** Mọi lệnh chạy qua `JaveFfmpeg.run` đều được thêm input option `-protocol_whitelist file -format_whitelist mov,matroska` (ghi gọn ở các lệnh mục 1–2 cho dễ đọc). ffmpeg chọn demuxer theo **nội dung** file chứ không theo tên: một HLS playlist upload dưới đuôi `.mp4` từng được đọc như playlist, và segment của nó có thể trỏ tới bất kỳ file nào worker đọc được — kể cả upload của người khác — rồi lọt vào video transcode của kẻ upload. Bước probe (`JaveVideoProbe`, `MultimediaObject.getInfo()`) đi đường riêng của JAVE nên **không** nhận whitelist này; nó chỉ đọc metadata.
+
 Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file tạm**, không phải pipe: pipe không ai đọc sẽ đầy buffer và ffmpeg block vĩnh viễn ở lệnh write — không timeout nào trên `waitFor` bắt được.
 
 ### Retry & báo lỗi
@@ -93,7 +95,8 @@ Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file t�
 
 ## 3. Cleanup khi xoá video
 
-`VideoPurgedEvent` → `MediaCleanupServiceImpl.deleteMediaFor(videoId, rawFileUrl)`. **Không phải** `VideoDeletedEvent`: event đó phát ngay khi owner xoá và là tín hiệu cho search/recommendation gỡ video; media thì giữ nguyên trong thùng rác (`video.trash.retention`, mặc định 30 ngày) để admin còn xem lại được, và chỉ `VideoPurgedEvent` — video-service phát khi hết hạn — mới xoá. Consumer bỏ qua `VideoDeletedEvent`; xoá theo nó là đổ thùng rác ngay lập tức.
+`VideoPurgedEvent` → `MediaCleanupServiceImpl.deleteMediaFor(videoId, rawFileUrl)`. **Không phải** `VideoDeletedEvent`: event đó phát ngay khi owner xoá và là tín hiệu cho search/recommendation gỡ video; media thì giữ lại trong thùng rác (`video.trash.retention`, mặc định 30 ngày) để admin còn xem lại được, và chỉ `VideoPurgedEvent` — video-service phát khi hết hạn — mới xoá. Xoá theo `VideoDeletedEvent` là đổ thùng rác ngay lập tức. Việc `VideoDeletedEvent` làm ở đây là **quarantine** media (hold `DELETED`, xem §3.1): trước đây nó vẫn public theo URL suốt cả tháng owner tưởng đã xoá.
+- Xoá cả bản trong `quarantine/` và mọi marker (`quarantine/markers/{id}`, `quarantine/holds/{id}/*`).
 - Xoá `thumbnails/{id}.jpg`.
 - List đệ quy `hls/{id}/` và xoá từng object (HLS thật = 1 playlist + nhiều segment, nên phải list chứ không đoán key).
 - Xoá file raw — chỉ khi `rawFileUrl` nằm trong bucket cấu hình; không thì **bỏ qua + log warn** (đoán key = xoá nhầm object). Khi bỏ qua, lifecycle rule prefix `raw/` (7 ngày, khai ở `minio-init`) là thứ dọn hộ.
@@ -103,11 +106,11 @@ Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file t�
 
 ## 4. Sao ảnh đại diện (avatar mirror)
 
-`SocialAvatarDiscoveredEvent` (auth-service phát mỗi lần đăng nhập social có ảnh) → `AvatarMirrorService.mirror(userId, providerUrl)`:
+`SocialAvatarDiscoveredEvent` (auth-service phát mỗi lần đăng nhập social có ảnh; lần tạo tài khoản thì qua outbox, ngay sau `UserRegisteredEvent`) → `AvatarMirrorService.mirror(userId, providerUrl)`:
 - Chỉ fetch từ host trong `media.avatar.allowed-hosts` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, `graph.facebook.com`, `scontent.xx.fbcdn.net`). Host khác → từ chối.
 - Chỉ nhận ảnh, tối đa `media.avatar.max-bytes` (5 MB).
-- Ghi `avatars/{userId}.jpg` (một key/user, ghi đè — profile trỏ vào URL này).
-- Phát `AvatarMirroredEvent(userId, sourceUrl, mirroredUrl)`. `user-service` chỉ ghi đè `avatarUrl` khi nó đang trống hoặc đúng bằng `sourceUrl` — ảnh user tự đặt không bị đụng.
+- Ghi `avatars/{userId}` — một key/user, profile trỏ vào URL này. Không có đuôi file: định dạng là thứ provider trả về, content type đi theo object. Key đã có thì **bỏ qua**, không tải lại — ảnh user tự upload qua `POST /me/avatar` nằm đúng key này nên không bị ảnh provider đè.
+- Phát `AvatarMirroredEvent(userId, sourceUrl, mirroredUrl)`. `user-service` chỉ ghi đè `avatarUrl` khi nó đang trống hoặc đúng bằng `sourceUrl` — ảnh user tự đặt không bị đụng. Profile chưa tồn tại thì user-service throw để event được retry.
 
 URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) → sau các lần thử của `kafka-lib` thì vào `auth.social-avatar-events.DLT`. Không sao: lần đăng nhập sau phát lại URL mới, profile giữ ảnh cũ trong lúc chờ.
 
@@ -127,6 +130,20 @@ URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) →
 | `media.avatar.max-bytes` | 5242880 (5 MB) | |
 | `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` | localhost:9000 / minioadmin / … / `video-media` | Credential MinIO **chỉ nằm ở service này** — đó là lý do cleanup chạy ở đây chứ không ở video-service |
 
+### 3.1. Quarantine — media rời đường đọc ẩn danh
+
+Bucket cho đọc ẩn danh `hls/`, `thumbnails/`, `previews/` (player đi theo URL không ký). Status bên video-service chỉ ẩn video khỏi listing, không chặn ai đã có — hoặc đoán được, id là Snowflake — URL. `MediaQuarantineService` dời object sang `quarantine/` (ngoài policy) khi có **hold**, mỗi lý do một marker `quarantine/holds/{id}/{HOLD}`:
+
+| Hold | Đặt khi | Gỡ khi |
+|---|---|---|
+| `MODERATION` | verdict không phải `APPROVED` (`REVIEW` lẫn `REJECTED`) — đặt **trước** khi phát verdict | admin duyệt (restore một video không bị takedown) |
+| `TAKEN_DOWN` | `VideoTakenDownEvent` | `VideoRestoredEvent` trên video đang có hold này |
+| `DELETED` | `VideoDeletedEvent` | không bao giờ — chờ purge |
+
+Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown của video đang chờ review thì media vẫn ở quarantine, như video-service trả nó về `PENDING_REVIEW`. Marker cũ `quarantine/markers/{id}` (trước khi có hold) vẫn được tính, và restore gỡ nó. Admin console xem media bị quarantine qua URL ký ngắn hạn (`video-service/QuarantinedMediaUrls`); chủ video cũng nhận URL ký cho video của chính mình đang `PENDING_REVIEW` (trước đây họ vẫn xem được vì media còn public).
+
+**Chưa che:** video `PRIVATE`/`FRIENDS` (media vẫn public theo URL — cần URL ký hoặc CDN signed cookie cho người xem hợp lệ), và khoảng giữa transcode xong và có verdict (`PENDING_MODERATION`, thường vài giây).
+
 ## 6. Bố cục object trong bucket (`MediaKeys`)
 
 | Loại | Key | Ai ghi | Ai xoá |
@@ -136,7 +153,9 @@ URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) →
 | (HLS thật, tương lai) | `hls/{videoId}/master.m3u8` + segment | chưa làm | cleanup (list prefix) |
 | Thumbnail | `thumbnails/{videoId}.jpg` | media-worker transcode | cleanup |
 | Hover preview | `previews/{videoId}.webp` | media-worker transcode | cleanup |
-| Avatar | `avatars/{userId}.jpg` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; ghi đè) |
+| Avatar | `avatars/{userId}` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; upload ghi đè, mirror bỏ qua key đã có) |
+| Bản quarantine | `quarantine/` + key gốc | quarantine (§3.1) | restore khi hết hold (dời về key gốc), hoặc cleanup |
+| Hold marker | `quarantine/holds/{videoId}/{HOLD}` | quarantine (§3.1) | restore, hoặc cleanup |
 
 ## 7. kafka-lib
 

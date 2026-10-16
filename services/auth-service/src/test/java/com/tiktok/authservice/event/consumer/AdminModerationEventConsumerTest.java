@@ -1,7 +1,6 @@
 package com.tiktok.authservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
@@ -9,6 +8,7 @@ import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.authservice.service.SessionRevoker;
 import com.tiktok.authservice.service.UserModerationService;
 import com.tiktok.event.admin.UserBannedEvent;
+import com.tiktok.event.admin.UserSessionsRevokedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,7 +34,7 @@ class AdminModerationEventConsumerTest {
     private static final long USER_ID = 42L;
     private static final long ADMIN_ID = 7L;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private UserRepository userRepository;
     private SessionRevoker sessionRevoker;
@@ -63,6 +63,18 @@ class AdminModerationEventConsumerTest {
 
         assertThat(saved().getStatus()).isEqualTo(UserStatus.BANNED);
         verify(sessionRevoker).revokeAllSessions(USER_ID);
+    }
+
+    /** Not even by another admin: one stolen admin session could otherwise lock every other admin out. */
+    @Test
+    void anAdminAccountIsNotBanned() throws Exception {
+        user.promoteToAdmin();
+
+        consumer.onMessage(json(UserBannedEvent.of(USER_ID, ADMIN_ID, "spam")), header("UserBannedEvent"));
+
+        assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
+        verify(userRepository, never()).save(any());
+        verify(sessionRevoker, never()).revokeAllSessions(anyLong());
     }
 
     /** The field is new and nullable, so an event written without it must still ban permanently. */
@@ -102,6 +114,38 @@ class AdminModerationEventConsumerTest {
         consumer.onMessage(payload, null);
 
         verify(userRepository, never()).save(any());
+        verify(sessionRevoker, never()).revokeAllSessions(anyLong());
+    }
+
+    /** Signed out, not locked out: the owner signs straight back in, whoever stole a session cannot. */
+    @Test
+    void revokingSessionsSignsTheAccountOutWithoutBanningIt() throws Exception {
+        consumer.onMessage(json(UserSessionsRevokedEvent.of(USER_ID, ADMIN_ID, "account taken over")),
+                header("UserSessionsRevokedEvent"));
+
+        verify(sessionRevoker).revokeAllSessions(USER_ID);
+        verify(userRepository, never()).save(any());
+        assertThat(user.getStatus()).isEqualTo(UserStatus.ACTIVE);
+    }
+
+    /** Unlike a ban, this cannot lock the console: an admin who is signed out signs back in. */
+    @Test
+    void anAdminAccountCanBeSignedOut() throws Exception {
+        user.promoteToAdmin();
+
+        consumer.onMessage(json(UserSessionsRevokedEvent.of(USER_ID, ADMIN_ID, "laptop stolen")),
+                header("UserSessionsRevokedEvent"));
+
+        verify(sessionRevoker).revokeAllSessions(USER_ID);
+    }
+
+    @Test
+    void signingOutAnUnknownUserIsANoOp() throws Exception {
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
+
+        consumer.onMessage(json(UserSessionsRevokedEvent.of(USER_ID, ADMIN_ID, "account taken over")),
+                header("UserSessionsRevokedEvent"));
+
         verify(sessionRevoker, never()).revokeAllSessions(anyLong());
     }
 

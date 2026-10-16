@@ -44,11 +44,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String header = request.getHeader(HttpHeaders.AUTHORIZATION);
 
         if (header != null && header.startsWith(BEARER_PREFIX)) {
-            String token = header.substring(BEARER_PREFIX.length());
+            Claims claims = jwtProvider.parseAccessToken(header.substring(BEARER_PREFIX.length()));
 
-            if (jwtProvider.isValidAccessToken(token)) {
-                Claims claims = jwtProvider.extractClaims(token);
-
+            if (claims != null) {
                 if (revokedTokenChecker.isRevoked(claims)) {
                     filterChain.doFilter(request, response);
                     return;

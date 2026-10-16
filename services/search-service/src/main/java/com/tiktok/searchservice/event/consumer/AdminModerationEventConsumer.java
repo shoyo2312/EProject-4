@@ -1,8 +1,11 @@
 package com.tiktok.searchservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import com.tiktok.event.admin.UserBannedEvent;
+import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
+import com.tiktok.searchservice.index.OwnerBans;
 import com.tiktok.searchservice.index.SearchIndexWriter;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -28,8 +31,11 @@ public class AdminModerationEventConsumer {
 
     private static final String VIDEO_TAKEN_DOWN = "VideoTakenDownEvent";
     private static final String VIDEO_RESTORED = "VideoRestoredEvent";
+    private static final String USER_BANNED = "UserBannedEvent";
+    private static final String USER_UNBANNED = "UserUnbannedEvent";
 
     private final SearchIndexWriter searchIndexWriter;
+    private final OwnerBans ownerBans;
     private final IdempotentEventProcessor idempotentEventProcessor;
     private final ObjectMapper objectMapper;
 
@@ -53,14 +59,25 @@ public class AdminModerationEventConsumer {
             case VIDEO_TAKEN_DOWN -> {
                 VideoTakenDownEvent event = objectMapper.readValue(payload, VideoTakenDownEvent.class);
                 idempotentEventProcessor.runOnce(event.eventId(), VIDEO_TAKEN_DOWN, () ->
-                        searchIndexWriter.applyVideoStatus(event.videoId(), "TAKEN_DOWN"));
+                        searchIndexWriter.takeDownVideo(event.videoId()));
             }
             case VIDEO_RESTORED -> {
                 VideoRestoredEvent event = objectMapper.readValue(payload, VideoRestoredEvent.class);
                 idempotentEventProcessor.runOnce(event.eventId(), VIDEO_RESTORED, () ->
-                        searchIndexWriter.restoreVideo(event.videoId()));
+                        searchIndexWriter.restoreVideo(event.videoId(), event.occurredAt()));
             }
-            // UserBanned, ... — other services' events on a shared topic.
+            // No claim on the eventId: recording a ban is one assignment, so a redelivery only
+            // repeats it, and OwnerBans ignores a decision older than the one it holds.
+            case USER_BANNED -> {
+                UserBannedEvent event = objectMapper.readValue(payload, UserBannedEvent.class);
+                ownerBans.record(event.userId(), event.bannedUntil() == null
+                        ? OwnerBans.PERMANENT : event.bannedUntil().toEpochMilli(), event.occurredAt());
+            }
+            case USER_UNBANNED -> {
+                UserUnbannedEvent event = objectMapper.readValue(payload, UserUnbannedEvent.class);
+                ownerBans.record(event.userId(), null, event.occurredAt());
+            }
+            // CommentRemoved, UserWarned, ... — other services' events on a shared topic.
             default -> log.debug("Ignoring moderation eventType={}", eventType);
         }
     }

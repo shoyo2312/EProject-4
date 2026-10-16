@@ -1,5 +1,6 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.common.storage.ObjectKeys;
 import com.tiktok.mediaworker.config.MinioProperties;
 import io.minio.ListObjectsArgs;
 import io.minio.MinioClient;
@@ -43,10 +44,11 @@ public class MediaCleanupServiceImpl implements MediaCleanupService {
         keys.add(MediaQuarantineService.PREFIX + MediaKeys.preview(videoId));
         keys.addAll(listUnder(MediaQuarantineService.PREFIX + MediaKeys.hlsPrefix(videoId)));
         keys.add(MediaKeys.quarantineMarker(videoId));
+        keys.addAll(listUnder(MediaKeys.quarantineHolds(videoId)));
         keys.add(MediaKeys.transcodedMarker(videoId));
         // Skipped rather than guessed when the URL does not name this bucket — see
-        // MediaKeys.objectKey. The abandoned-upload lifecycle rule is what covers it then.
-        MediaKeys.objectKey(rawFileUrl, minioProperties.bucket()).ifPresentOrElse(
+        // ObjectKeys.objectKey. The abandoned-upload lifecycle rule is what covers it then.
+        ObjectKeys.objectKey(rawFileUrl, minioProperties.bucket()).ifPresentOrElse(
                 keys::add,
                 () -> log.warn("Raw upload {} of video {} is not in bucket {}, leaving it in place",
                         rawFileUrl, videoId, minioProperties.bucket()));

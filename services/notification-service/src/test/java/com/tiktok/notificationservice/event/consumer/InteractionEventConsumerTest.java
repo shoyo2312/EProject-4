@@ -1,11 +1,12 @@
 package com.tiktok.notificationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
+import com.tiktok.event.interaction.CommentLikeChangedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
+import com.tiktok.notificationservice.client.BlockClient;
 import com.tiktok.notificationservice.client.VideoOwnerClient;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.repository.ProcessedEventRepository;
@@ -43,7 +44,10 @@ class InteractionEventConsumerTest {
     @Mock
     private NotificationService notificationService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    @Mock
+    private BlockClient blockClient;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private InteractionEventConsumer consumer;
 
@@ -52,11 +56,21 @@ class InteractionEventConsumerTest {
         when(processedEventRepository.tryClaim(anyString(), anyString())).thenReturn(true);
         consumer = new InteractionEventConsumer(
                 new IdempotentEventProcessor(processedEventRepository),
-                videoOwnerClient, notificationService, objectMapper);
+                videoOwnerClient, notificationService, objectMapper, blockClient);
     }
 
     private String json(Object event) throws Exception {
         return objectMapper.writeValueAsString(event);
+    }
+
+    @Test
+    void onLike_acrossABlock_notifiesNobody() throws Exception {
+        when(videoOwnerClient.ownerOf("7")).thenReturn(50L);
+        when(blockClient.isBlockedBetween(50L, 9L)).thenReturn(true);
+
+        consumer.onLike(json(VideoLikeEvent.of(7L, 9L, true)));
+
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -118,6 +132,35 @@ class InteractionEventConsumerTest {
 
         verify(notificationService).create(eq(33L), any(), eq(NotificationType.COMMENT), any(), any(), eq("7"));
         verify(videoOwnerClient, never()).ownerOf(any());
+    }
+
+    @Test
+    void onComment_notifiesTheTopLevelAuthorOfADirectReply() throws Exception {
+        consumer.onComment(json(CommentCreatedEvent.of(2L, 7L, 9L, "agreed", 1L, null, 44L)), CREATED);
+
+        verify(notificationService).create(eq(44L), eq(9L), eq(NotificationType.COMMENT), any(), any(), eq("7"));
+        verify(videoOwnerClient, never()).ownerOf(any());
+    }
+
+    @Test
+    void onCommentLike_notifiesTheCommentAuthor() throws Exception {
+        consumer.onCommentLike(json(CommentLikeChangedEvent.of(1L, 7L, 9L, true, 3, 44L)));
+
+        verify(notificationService).create(eq(44L), eq(9L), eq(NotificationType.COMMENT_LIKE), any(), any(), eq("7"));
+    }
+
+    @Test
+    void onCommentLike_ignoresAnUnlike() throws Exception {
+        consumer.onCommentLike(json(CommentLikeChangedEvent.of(1L, 7L, 9L, false, 2, 44L)));
+
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void onCommentLike_doesNotNotifyTheAuthorAboutTheirOwnLike() throws Exception {
+        consumer.onCommentLike(json(CommentLikeChangedEvent.of(1L, 7L, 44L, true, 1, 44L)));
+
+        verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
     }
 
     /**

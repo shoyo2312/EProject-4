@@ -32,6 +32,15 @@ public record RetentionProperties(
 
         Duration publishedOutboxGrace,
 
-        Duration rememberedDeviceGrace
+        Duration rememberedDeviceGrace,
+
+        /**
+         * How long a security-log entry is kept, measured from when it was written — the one
+         * grace here that is a policy rather than a consequence. Every other row in this record
+         * stops being useful at a knowable moment; a sign-in never stops being true, it only
+         * stops being worth storing. Set it to the longest period an investigation or a data
+         * request might reach back over, not to whatever keeps the table small.
+         */
+        Duration securityEventGrace
 ) {
 }

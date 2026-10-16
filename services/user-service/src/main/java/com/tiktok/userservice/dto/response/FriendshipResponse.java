@@ -1,12 +1,18 @@
 package com.tiktok.userservice.dto.response;
 
 /**
- * Whether the viewer and {@code userId} are mutual followers — the relationship video-service
- * calls "friends" for its FRIENDS visibility. {@code friends} is false for self and for any pair
- * where either follow edge is missing.
+ * The viewer's relationship to {@code userId} — everything a Follow button needs in one answer.
+ * {@code friends} is mutual following, what video-service's FRIENDS visibility means; false for
+ * self and for an anonymous viewer, as are {@code following} and {@code requested}.
  */
 public record FriendshipResponse(
         Long userId,
-        boolean friends
+        boolean friends,
+        /** The viewer follows {@code userId}. */
+        boolean following,
+        /** The viewer has a pending follow request to {@code userId} — the button reads "Requested". */
+        boolean requested,
+        /** {@code userId}'s account is private: the one field an anonymous viewer can see true. */
+        boolean privateAccount
 ) {
 }

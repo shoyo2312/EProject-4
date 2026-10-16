@@ -1,8 +1,10 @@
 package com.tiktok.videoservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.event.video.VideoModerationCompletedEvent;
+import com.tiktok.event.video.VideoTranscodedEvent;
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -12,11 +14,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -31,11 +33,14 @@ class VideoModerationEventConsumerTest {
     @ServiceConnection
     static MongoDBContainer MONGO = new MongoDBContainer("mongo:7");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     @Autowired
     private VideoModerationEventConsumer consumer;
+
+    @Autowired
+    private VideoTranscodedEventConsumer transcodedConsumer;
 
     @Autowired
     private VideoRepository videoRepository;
@@ -110,8 +115,9 @@ class VideoModerationEventConsumerTest {
     @Test
     void onMessage_whenAnAdminGotThereFirst_theTakedownSurvives() throws Exception {
         Video video = givenTranscodedVideo();
+        PipelineState read = PipelineState.of(video);
         video.markTakenDown("policy violation");
-        videoRepository.updateStatus(video, VideoStatus.PENDING_MODERATION);
+        videoRepository.updateStatus(video, read);
 
         consumer.onMessage(objectMapper.writeValueAsString(VideoModerationCompletedEvent.of(
                 video.getId(), ModerationVerdict.APPROVED, "nsfw", 0.01, 0, 10, 900L, "m", "v", null)));
@@ -136,6 +142,41 @@ class VideoModerationEventConsumerTest {
 
         assertThat(videoRepository.findById(video.getId()).orElseThrow().getStatus())
                 .isEqualTo(VideoStatus.PUBLISHED);
+    }
+
+    /**
+     * The verdict read before its transcode result — the two come on separate topics, so a
+     * consumer restarting with both waiting can take them in either order. The verdict used to be
+     * dropped here, and the video waited in PENDING_MODERATION for the sweeper to send it to
+     * review hours later, with the classifier's scores gone.
+     */
+    @Test
+    void onMessage_beforeTheTranscodeResult_isAppliedWhenTheTranscodeLands() throws Exception {
+        Video video = videoRepository.save(Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("t")
+                .rawFileUrl("s3://video-media/raw/1/early.mp4")
+                .visibility(VideoVisibility.PUBLIC)
+                .status(VideoStatus.PROCESSING)
+                .build());
+
+        consumer.onMessage(objectMapper.writeValueAsString(VideoModerationCompletedEvent.of(
+                video.getId(), ModerationVerdict.APPROVED, "nsfw", 0.03, 0, 10, 900L, "m", "nsfw-v1", null)));
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getStatus())
+                .as("no media yet, so nothing to publish")
+                .isEqualTo(VideoStatus.PROCESSING);
+
+        transcodedConsumer.onMessage(objectMapper.writeValueAsString(VideoTranscodedEvent.success(
+                video.getId(), "http://minio/thumb.jpg", "http://minio/preview.webp",
+                "http://minio/master.m3u8", 42)));
+
+        Video after = videoRepository.findById(video.getId()).orElseThrow();
+        assertThat(after.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(after.getPublishedAt()).isNotNull();
+        assertThat(after.getHlsUrl()).isEqualTo("http://minio/master.m3u8");
+        assertThat(after.getModeration().getModelVersion()).isEqualTo("nsfw-v1");
     }
 
     private Video givenTranscodedVideo() {

@@ -16,9 +16,13 @@ public record CommentTarget(Long videoId, Long commentId) {
             throw new IllegalArgumentException(
                     "COMMENT targetId must be \"videoId:commentId\", got: " + targetId);
         }
-        return new CommentTarget(
-                Long.valueOf(targetId.substring(0, separator)),
-                Long.valueOf(targetId.substring(separator + 1)));
+        long videoId = Long.parseLong(targetId.substring(0, separator));
+        long commentId = Long.parseLong(targetId.substring(separator + 1));
+        if (videoId <= 0 || commentId <= 0) {
+            throw new IllegalArgumentException(
+                    "COMMENT targetId must hold two positive ids, got: " + targetId);
+        }
+        return new CommentTarget(videoId, commentId);
     }
 
     public String targetId() {

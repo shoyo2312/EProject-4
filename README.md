@@ -2,12 +2,12 @@
 
 # 🎬 TikTok Backend
 
-### Microservices Monorepo — Java 21 · Spring Boot 3 · Event-Driven Architecture
+### Microservices Monorepo — Java 21 · Spring Boot 4 · Event-Driven Architecture
 
 [![CI - Tier 1 (dev)](https://github.com/shoyo2312/EProject-4/actions/workflows/ci-dev.yml/badge.svg?branch=dev)](https://github.com/shoyo2312/EProject-4/actions/workflows/ci-dev.yml)
 [![CI - Tier 2 (master)](https://github.com/shoyo2312/EProject-4/actions/workflows/ci-master.yml/badge.svg?branch=master)](https://github.com/shoyo2312/EProject-4/actions/workflows/ci-master.yml)
 ![Java](https://img.shields.io/badge/Java-21_LTS-ED8B00?logo=openjdk&logoColor=white)
-![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.3.x-6DB33F?logo=springboot&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring_Boot-4.1.x-6DB33F?logo=springboot&logoColor=white)
 ![Maven](https://img.shields.io/badge/Build-Maven-C71A36?logo=apachemaven&logoColor=white)
 ![Docker](https://img.shields.io/badge/Container-Docker-2496ED?logo=docker&logoColor=white)
 
@@ -35,13 +35,13 @@
 | Layer     | Technology                          |
 |-----------|--------------------------------------|
 | ☕ Language  | Java 21 LTS                         |
-| 🍃 Framework | Spring Boot 3.3.x                   |
+| 🍃 Framework | Spring Boot 4.1.x                   |
 | 📦 Build     | Maven 3.9.x (Maven Wrapper)         |
 | 🚪 Gateway   | Spring Cloud Gateway (WebFlux)      |
 | 🗄️ Database  | PostgreSQL 16, MongoDB 7, Cassandra |
 | ⚡ Cache     | Redis 7                             |
 | 📨 Messaging | Kafka 7.6                           |
-| 🔍 Search    | Elasticsearch 8                     |
+| 🔍 Search    | Elasticsearch 9                     |
 | 🪣 Storage   | MinIO                               |
 | 🐳 Container | Docker + Docker Compose             |
 

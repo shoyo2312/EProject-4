@@ -1,7 +1,6 @@
 package com.tiktok.recommendationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.recommendationservice.service.InboxService;
 import com.tiktok.recommendationservice.service.RecommendationService;
@@ -27,7 +26,7 @@ class VideoTranscodedEventConsumerTest {
     @Mock
     private InboxService inboxService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private VideoTranscodedEventConsumer consumer() {
         return new VideoTranscodedEventConsumer(recommendationService, inboxService, objectMapper);
@@ -55,17 +54,18 @@ class VideoTranscodedEventConsumerTest {
     }
 
     /**
-     * A permanent transcode failure is the end of the video, and nothing else is coming: left
-     * indexed it would keep being handed out until its owner happened to delete it.
+     * Withdrawn, not deleted. video-service keeps FAILED open for a redelivered publication to
+     * rescue, and a deletion's tombstone would turn the rescued video away for eight days.
      */
     @Test
-    void onMessage_failure_dropsTheVideoInsteadOfIndexingIt() throws Exception {
+    void onMessage_failure_withdrawsTheVideoWithoutDeletingIt() throws Exception {
         VideoTranscodedEvent event = VideoTranscodedEvent.failure("vid2", "ffmpeg exit 1");
         givenFirstDelivery(event.eventId());
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
-        verify(recommendationService).recordVideoDeleted("vid2");
+        verify(recommendationService).recordTranscodeFailed("vid2");
+        verify(recommendationService, never()).recordVideoDeleted(anyString());
         verify(recommendationService, never()).recordVideoReady(anyString());
     }
 
@@ -76,6 +76,6 @@ class VideoTranscodedEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
-        verify(recommendationService, never()).recordVideoDeleted(anyString());
+        verify(recommendationService, never()).recordTranscodeFailed(anyString());
     }
 }

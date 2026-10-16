@@ -6,6 +6,7 @@ either service's log to say why.
 """
 
 import app
+import escalation
 
 
 def test_config_reports_the_thresholds_in_force():
@@ -23,7 +24,11 @@ def test_config_names_the_model_that_made_the_decisions():
     assert config["modelVersion"] == app.MODEL_VERSION
 
 
-def test_config_says_whether_a_second_opinion_is_configured():
+def test_config_says_whether_a_second_opinion_is_configured(monkeypatch):
+    # Pinned, not inherited: make loads .env, and a developer with real Azure keys there would
+    # otherwise see this fail on a machine where the code is right.
+    monkeypatch.setattr(escalation, "ENDPOINT", "")
+    monkeypatch.setattr(escalation, "KEY", "")
     config = app.config()
 
     # Off without an Azure endpoint and key, which is the default and what the console must show

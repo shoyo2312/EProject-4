@@ -3,6 +3,7 @@ package com.tiktok.userservice.service;
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
+import com.tiktok.userservice.exception.DisplayNameChangeTooSoonException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.InboxEventRepository;
@@ -13,23 +14,27 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.stream.LongStream;
 
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -49,9 +54,9 @@ class UserProfileServiceImplTest {
 
     @Container
     @ServiceConnection
-    static PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     @Autowired
@@ -154,7 +159,7 @@ class UserProfileServiceImplTest {
     @Transactional
     void applyMirroredAvatar_replacesTheProviderUrlAndFillsGaps_butNeverTheUsersOwn() {
         String source = "https://lh3.googleusercontent.com/a/x";
-        String mirrored = "http://localhost:9000/video-media/avatars/1.jpg";
+        String mirrored = "http://localhost:9000/video-media/avatars/1";
 
         userProfileService.createFromRegisteredEvent(1L, "seeded", source);
         userProfileService.createFromRegisteredEvent(2L, "empty", null);
@@ -168,6 +173,25 @@ class UserProfileServiceImplTest {
         assertThat(userProfileService.getByUserId(1L, 1L).avatarUrl()).isEqualTo(mirrored);
         assertThat(userProfileService.getByUserId(2L, 2L).avatarUrl()).isEqualTo(mirrored);
         assertThat(userProfileService.getByUserId(3L, 3L).avatarUrl()).isEqualTo(OWN_AVATAR);
+    }
+
+    /**
+     * A new account's copy can land before the registration creating its profile. Dropped, that
+     * profile came up on the provider's URL and stayed there; thrown, the redelivery after the
+     * registration puts the copy on it.
+     */
+    @Test
+    void applyMirroredAvatar_beforeTheProfileExists_throwsSoTheRetryCanApplyIt() {
+        String source = "https://lh3.googleusercontent.com/a/x";
+        String mirrored = "http://localhost:9000/video-media/avatars/1";
+
+        assertThatThrownBy(() -> userProfileService.applyMirroredAvatar(1L, source, mirrored))
+                .isInstanceOf(UserProfileNotFoundException.class);
+
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", source);
+        userProfileService.applyMirroredAvatar(1L, source, mirrored);
+
+        assertThat(userProfileService.getByUserId(1L, 1L).avatarUrl()).isEqualTo(mirrored);
     }
 
     @Test
@@ -298,6 +322,20 @@ class UserProfileServiceImplTest {
         assertThat(userProfileService.getByUserId(3L, 2L).displayName()).isEqualTo("bob");
     }
 
+    /** A signed-out reader is a null viewer: a block between two others hides nothing from them. */
+    @Test
+    @Transactional
+    void aGuest_seesProfilesByIdHandleAndBatch() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
+        blockService.block(1L, 2L);
+
+        assertThat(userProfileService.getByUserId(null, 1L).displayName()).isEqualTo("alice");
+        assertThat(userProfileService.getByUsername(null, "bob").userId()).isEqualTo(2L);
+        assertThat(userProfileService.getByUserIds(null, List.of(1L, 2L)))
+                .extracting(UserProfileResponse::userId).containsExactly(1L, 2L);
+    }
+
     @Test
     @Transactional
     void updateOwnProfile_updatesDisplayNameBioAndAvatar() {
@@ -316,7 +354,7 @@ class UserProfileServiceImplTest {
     void updateOwnProfile_withOnlyDisplayName_keepsBioAndAvatar() {
         userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
         userProfileService.updateOwnProfile(
-                1L, new UpdateProfileRequest("John Doe", "Hello world", "https://example.com/avatar.png"));
+                1L, new UpdateProfileRequest(null, "Hello world", "https://example.com/avatar.png"));
 
         UserProfileResponse updated = userProfileService.updateOwnProfile(
                 1L, new UpdateProfileRequest("Johnny", null, null));
@@ -390,6 +428,18 @@ class UserProfileServiceImplTest {
                 .containsExactly(1L);
     }
 
+    /** Unescaped, "_" matched any one character and so listed every profile on the platform. */
+    @Test
+    void search_treatsWildcardsAsLiteralText() {
+        userProfileService.createFromRegisteredEvent(1L, "john_doe", null);
+        userProfileService.createFromRegisteredEvent(2L, "johndoe", null);
+
+        assertThat(userProfileService.search(99L, "_", PageRequest.of(0, 20)).getContent())
+                .extracting(UserProfileResponse::userId)
+                .containsExactly(1L);
+        assertThat(userProfileService.search(99L, "%", PageRequest.of(0, 20))).isEmpty();
+    }
+
     /** "Show me everyone" is not a search, and paging through every profile is what it would cost. */
     @Test
     void search_withABlankQuery_isEmpty() {
@@ -397,5 +447,224 @@ class UserProfileServiceImplTest {
 
         assertThat(userProfileService.search(99L, "   ", PageRequest.of(0, 20))).isEmpty();
         assertThat(userProfileService.search(99L, null, PageRequest.of(0, 20))).isEmpty();
+    }
+
+    /** What search-service asks: a fragment of a handle, most-followed first, capped. */
+    @Test
+    void searchIds_findsAPartialHandleMostFollowedFirst() {
+        userProfileService.createFromRegisteredEvent(1L, "vmh26122004", null);
+        userProfileService.createFromRegisteredEvent(2L, "xvmh", null);
+        userProfileService.createFromRegisteredEvent(3L, "fan", null);
+        followService.follow(3L, 2L);
+
+        assertThat(userProfileService.searchIds("VMH", 50)).containsExactly(2L, 1L);
+        assertThat(userProfileService.searchIds("vmh", 1)).containsExactly(2L);
+        assertThat(userProfileService.searchIds(" ", 50)).isEmpty();
+    }
+
+    /** The trigram indexes cannot serve these, so each one was a scan of every profile. */
+    @Test
+    void searchIds_refusesTermsTheIndexesCannotServe() {
+        userProfileService.createFromRegisteredEvent(1L, "vmh26122004", null);
+
+        assertThat(userProfileService.searchIds("vm", 50)).isEmpty();
+        assertThat(userProfileService.searchIds(" v ", 50)).isEmpty();
+        assertThat(userProfileService.searchIds("v".repeat(101), 50)).isEmpty();
+        assertThat(userProfileService.searchIds("vmh", 50)).containsExactly(1L);
+    }
+
+    @Test
+    @Transactional
+    void privateAccount_startsFalse_andFollowsTheColumn() {
+        userProfileService.createFromRegisteredEvent(70L, "vera", null);
+        assertThat(userProfileService.getByUserId(70L, 70L).privateAccount()).isFalse();
+        long versionBefore = userProfileRepository.findByUserIdAndDeletedAtIsNull(70L).orElseThrow().getVersion();
+
+        assertThat(userProfileRepository.updatePrivateAccount(70L, true)).isEqualTo(1);
+
+        assertThat(userProfileService.getByUserId(70L, 70L).privateAccount()).isTrue();
+        // The version moves with the flag, so an edit of the same profile that read it before the
+        // switch fails on its version instead of answering with the old value.
+        assertThat(userProfileRepository.findByUserIdAndDeletedAtIsNull(70L).orElseThrow().getVersion())
+                .isGreaterThan(versionBefore);
+        // Conditional on the stored value: a repeat changes nothing and says so, which is what
+        // keeps two racing PATCHes down to one announcement.
+        assertThat(userProfileRepository.updatePrivateAccount(70L, true)).isZero();
+        assertThat(userProfileRepository.updatePrivateAccount(999L, true)).isZero();
+    }
+
+    @Test
+    @Transactional
+    void updateOwnProfile_aNewName_saysWhenTheNextMayFollow() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        assertThat(userProfileService.getByUserId(1L, 1L).displayNameChangeableAt()).isNull();
+
+        UserProfileResponse updated = userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest("John Doe", null, null));
+
+        assertThat(updated.displayNameChangeableAt())
+                .isCloseTo(Instant.now().plus(DisplayNameCooldown.PERIOD), within(1, ChronoUnit.MINUTES));
+    }
+
+    /** The whole request fails, bio included: half-applying it would hide that the name was refused. */
+    @Test
+    @Transactional
+    void updateOwnProfile_aSecondNameWithinSevenDays_isRefused() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        userProfileService.updateOwnProfile(1L, new UpdateProfileRequest("John Doe", null, null));
+
+        assertThatThrownBy(() -> userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest("Johnny", "Hello world", null)))
+                .isInstanceOf(DisplayNameChangeTooSoonException.class)
+                .hasFieldOrPropertyWithValue("code", "DISPLAY_NAME_CHANGE_TOO_SOON")
+                .hasFieldOrPropertyWithValue("status", HttpStatus.TOO_MANY_REQUESTS);
+
+        UserProfileResponse current = userProfileService.getByUserId(1L, 1L);
+        assertThat(current.displayName()).isEqualTo("John Doe");
+        assertThat(current.bio()).isNull();
+    }
+
+    @Test
+    @Transactional
+    void updateOwnProfile_theCurrentNameSentBack_isNeitherRefusedNorCounted() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        Instant changeableAt = userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest("John Doe", null, null)).displayNameChangeableAt();
+
+        UserProfileResponse updated = userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest("John Doe", "Hello world", null));
+
+        assertThat(updated.bio()).isEqualTo("Hello world");
+        assertThat(updated.displayNameChangeableAt()).isEqualTo(changeableAt);
+    }
+
+    @Test
+    @Transactional
+    void updateOwnProfile_theBio_isNotLimited() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        userProfileService.updateOwnProfile(1L, new UpdateProfileRequest("John Doe", "one", null));
+
+        UserProfileResponse updated = userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest(null, "two", null));
+
+        assertThat(updated.bio()).isEqualTo("two");
+    }
+
+    @Test
+    @Transactional
+    void updateOwnProfile_sevenDaysAfterTheLastName_anotherIsAllowed() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        userProfileRepository.findByUserIdAndDeletedAtIsNull(1L).orElseThrow()
+                .changeDisplayName("John Doe", Instant.now().minus(DisplayNameCooldown.PERIOD));
+
+        UserProfileResponse updated = userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest("Johnny", null, null));
+
+        assertThat(updated.displayName()).isEqualTo("Johnny");
+    }
+
+    /**
+     * The web form once sent names untrimmed, so "John Doe " can be stored. The same form now sends
+     * it back trimmed, and that must not read as a second name inside the week.
+     */
+    @Test
+    @Transactional
+    void updateOwnProfile_aStoredNameSentBackTrimmed_isNeitherRefusedNorCounted() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        Instant changedAt = Instant.now().minus(1, ChronoUnit.DAYS);
+        userProfileRepository.findByUserIdAndDeletedAtIsNull(1L).orElseThrow()
+                .changeDisplayName("John Doe ", changedAt);
+
+        UserProfileResponse updated = userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest("John Doe", "Hello world", null));
+
+        assertThat(updated.bio()).isEqualTo("Hello world");
+        assertThat(updated.displayNameChangeableAt()).isEqualTo(changedAt.plus(DisplayNameCooldown.PERIOD));
+    }
+
+    @Test
+    @Transactional
+    void updateOwnProfile_aNewName_isStoredStripped() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+
+        UserProfileResponse updated = userProfileService.updateOwnProfile(
+                1L, new UpdateProfileRequest("  John Doe  ", null, null));
+
+        assertThat(updated.displayName()).isEqualTo("John Doe");
+    }
+
+    @Test
+    @Transactional
+    void whenTheNameMayNextChange_isToldToTheOwnerAlone() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        userProfileService.createFromRegisteredEvent(2L, "janedoe", null);
+        userProfileService.updateOwnProfile(1L, new UpdateProfileRequest("John Doe", null, null));
+
+        assertThat(userProfileService.getByUserId(1L, 1L).displayNameChangeableAt()).isNotNull();
+        assertThat(userProfileService.getByUsername(1L, "johndoe").displayNameChangeableAt()).isNotNull();
+
+        assertThat(userProfileService.getByUserId(2L, 1L).displayNameChangeableAt()).isNull();
+        assertThat(userProfileService.getByUsername(2L, "johndoe").displayNameChangeableAt()).isNull();
+        assertThat(userProfileService.getByUserIds(2L, List.of(1L)))
+                .singleElement()
+                .extracting(UserProfileResponse::displayNameChangeableAt)
+                .isNull();
+    }
+
+    @Test
+    @Transactional
+    void applyUsernameChange_movesTheHandle_andLeavesTheNameAlone() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+
+        userProfileService.applyUsernameChange(1L, "john.new");
+
+        UserProfileResponse renamed = userProfileService.getByUsername(2L, "john.new");
+        assertThat(renamed.userId()).isEqualTo(1L);
+        assertThat(renamed.displayName()).isEqualTo("johndoe");
+        assertThatThrownBy(() -> userProfileService.getByUsername(2L, "johndoe"))
+                .isInstanceOf(UserProfileNotFoundException.class);
+    }
+
+    /**
+     * A handle given up in auth-service can be taken before this service hears of the rename that
+     * gave it up. The profile still showing it is the stale one, so it loses the handle rather
+     * than share it — whichever of the two events arrives first.
+     */
+    @Test
+    @Transactional
+    void applyUsernameChange_takesTheHandleOffAProfileStillShowingIt() {
+        userProfileService.createFromRegisteredEvent(1L, "JohnDoe", null);
+        userProfileService.createFromRegisteredEvent(2L, "janedoe", null);
+
+        userProfileService.applyUsernameChange(2L, "johndoe");
+
+        assertThat(userProfileService.getByUsername(3L, "johndoe").userId()).isEqualTo(2L);
+        assertThat(userProfileService.getByUserId(3L, 1L).username()).isNull();
+    }
+
+    @Test
+    @Transactional
+    void createFromRegisteredEvent_takesTheHandleOffAProfileStillShowingIt() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+
+        // 1 has renamed away from "johndoe" and 2 signed up with it, but the registration got here
+        // before the rename did.
+        userProfileService.createFromRegisteredEvent(2L, "johndoe", null);
+        assertThat(userProfileService.getByUsername(3L, "johndoe").userId()).isEqualTo(2L);
+
+        userProfileService.applyUsernameChange(1L, "john.new");
+        assertThat(userProfileService.getByUsername(3L, "john.new").userId()).isEqualTo(1L);
+        assertThat(userProfileService.getByUsername(3L, "johndoe").userId()).isEqualTo(2L);
+    }
+
+    @Test
+    void applyUsernameChange_beforeTheProfileExists_throwsSoTheEventIsRetried() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+
+        assertThatThrownBy(() -> userProfileService.applyUsernameChange(404L, "johndoe"))
+                .isInstanceOf(UserProfileNotFoundException.class);
+
+        // The release is rolled back with the rest, so nothing has moved before the retry.
+        assertThat(userProfileService.getByUsername(2L, "johndoe").userId()).isEqualTo(1L);
     }
 }

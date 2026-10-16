@@ -3,8 +3,10 @@ package com.tiktok.recommendationservice.service;
 import com.tiktok.recommendationservice.dto.response.TrendingVideoResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -29,6 +31,21 @@ public class RecommendationServiceImpl implements RecommendationService {
      * Deliberately below a like: watching is passive and cheap, liking is a decision.
      */
     private static final double WATCH_SCORE = 2.0;
+
+    /**
+     * Raises one viewer's best watched fraction of one video and answers by how much, atomically:
+     * two sessions reported together must not both count the same fraction. Returned as a string
+     * because a Lua number reply is truncated to an integer on its way back.
+     */
+    private static final RedisScript<String> RAISE_BEST_WATCH = RedisScript.of("""
+            local best = tonumber(redis.call('GET', KEYS[1]) or '0')
+            local ratio = tonumber(ARGV[1])
+            if ratio <= best then
+              return '0'
+            end
+            redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+            return tostring(ratio - best)
+            """, String.class);
 
     /**
      * How much of one hour's engagement survives into the next. 0.85 over a 24-hour window
@@ -77,6 +94,12 @@ public class RecommendationServiceImpl implements RecommendationService {
 
     @Override
     public void recordVideoReady(String videoId) {
+        // A verdict for a video its owner deleted while it was still in the pipeline. Everything
+        // below would record it as a fresh publication — its age, a publish score in the current
+        // hour — with nothing left to take it back out.
+        if (isDeleted(videoId)) {
+            return;
+        }
         double publishedAt = Instant.now().getEpochSecond();
         // Recorded for every video, not only tagged ones: the ranking model asks how old a video
         // is whether or not this viewer has any interest in its tags. Hidden ones too, so that
@@ -95,14 +118,16 @@ public class RecommendationServiceImpl implements RecommendationService {
     }
 
     private void indexTags(String videoId, Iterable<String> tags, double publishedAt) {
-        for (String tag : tags) {
-            String index = RecoKeys.tagIndex(tag);
-            redisTemplate.opsForZSet().add(index, videoId, publishedAt);
-            // Trimmed by rank, which for this set is by publish time: a tag index only ever
-            // needs to answer "what is new under this tag", so the old tail is dead weight.
-            redisTemplate.opsForZSet().removeRange(index, 0, -RecoKeys.TRIM_TO - 1);
-            redisTemplate.expire(index, RecoKeys.PROFILE_TTL);
-        }
+        RedisPipeline.run(redisTemplate, ops -> {
+            for (String tag : tags) {
+                String index = RecoKeys.tagIndex(tag);
+                ops.opsForZSet().add(index, videoId, publishedAt);
+                // Trimmed by rank, which for this set is by publish time: a tag index only ever
+                // needs to answer "what is new under this tag", so the old tail is dead weight.
+                ops.opsForZSet().removeRange(index, 0, -RecoKeys.TRIM_TO - 1);
+                ops.expire(index, RecoKeys.PROFILE_TTL);
+            }
+        });
     }
 
     @Override
@@ -122,15 +147,77 @@ public class RecommendationServiceImpl implements RecommendationService {
         withdraw(videoId);
     }
 
+    /**
+     * The takedown is checked first, as in video-service: a video taken down while it waited for
+     * review goes back to waiting, and only the next restore approves it. A restore that finds
+     * neither marker has nothing to undo now — but the verdict it overruled may simply not have
+     * been read yet, so when the admin decided is kept for {@link #recordHeld}.
+     */
     @Override
-    public void recordRestored(String videoId) {
-        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
-        reindexIfVisible(videoId);
+    public void recordRestored(String videoId, Instant restoredAt) {
+        if (removed(redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId))) {
+            reindexIfVisible(videoId);
+        } else if (removed(redisTemplate.opsForSet().remove(RecoKeys.VIDEO_HELD, videoId))) {
+            recordVideoReady(videoId);
+        } else {
+            redisTemplate.opsForValue().set(RecoKeys.videoApprovedAt(videoId),
+                    String.valueOf(restoredAt.toEpochMilli()), RecoKeys.DELETED_TTL);
+        }
     }
 
+    /**
+     * A verdict an admin already overruled is the approval. The restore travels on another topic,
+     * so it can be read first — this consumer lagging, restarting, or waiting out an outage — and
+     * the verdict that landed after it used to hold the video for good: approved and published in
+     * video-service, never in the feed. A verdict produced after the restore is not one the admin
+     * saw, and that restore approved nothing; video-service ignored it too.
+     */
+    @Override
+    public void recordHeld(String videoId, Instant checkedAt) {
+        String approvedAt = redisTemplate.opsForValue().get(RecoKeys.videoApprovedAt(videoId));
+        if (approvedAt != null && Long.parseLong(approvedAt) >= checkedAt.toEpochMilli()) {
+            recordVideoReady(videoId);
+            return;
+        }
+        redisTemplate.opsForSet().add(RecoKeys.VIDEO_HELD, videoId);
+        withdraw(videoId);
+    }
+
+    /**
+     * Withdrawn and nothing more. It used to go through {@link #recordVideoDeleted}, whose
+     * tombstone then turned the rescued video away at {@link #recordVideoReady} for eight days,
+     * and whose cleanup erased the private flag the rescue needs to keep the video off the
+     * public feed.
+     *
+     * <p>ponytail: a failure nothing rescues keeps its owner and private-flag entries until the
+     * video is deleted or purged, whose events clear them — one hash field and at most one set
+     * member per such upload.
+     */
+    @Override
+    public void recordTranscodeFailed(String videoId) {
+        withdraw(videoId);
+    }
+
+    private static boolean removed(Long count) {
+        return count != null && count > 0;
+    }
+
+    /**
+     * All four questions in one round trip. This runs ahead of every engagement a video earns,
+     * and asked one after another — usually all four, since most videos are none of these — it
+     * was four.
+     */
     private boolean isHidden(String videoId) {
-        return Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_PRIVATE, videoId))
-                || Boolean.TRUE.equals(redisTemplate.opsForSet().isMember(RecoKeys.VIDEO_TAKEN_DOWN, videoId));
+        return RedisPipeline.run(redisTemplate, ops -> {
+            ops.opsForSet().isMember(RecoKeys.VIDEO_PRIVATE, videoId);
+            ops.opsForSet().isMember(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
+            ops.opsForSet().isMember(RecoKeys.VIDEO_HELD, videoId);
+            ops.hasKey(RecoKeys.videoDeleted(videoId));
+        }).contains(Boolean.TRUE);
+    }
+
+    private boolean isDeleted(String videoId) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(RecoKeys.videoDeleted(videoId)));
     }
 
     /**
@@ -139,14 +226,17 @@ public class RecommendationServiceImpl implements RecommendationService {
      */
     private void withdraw(String videoId) {
         Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
-        if (tags != null) {
-            for (String tag : tags) {
-                redisTemplate.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+        // One round trip for what used to be one per tag and one per trending hour — thirty-odd.
+        RedisPipeline.run(redisTemplate, ops -> {
+            if (tags != null) {
+                for (String tag : tags) {
+                    ops.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+                }
             }
-        }
-        RecoKeys.trendingWindow(Instant.now())
-                .forEach(bucket -> redisTemplate.opsForZSet().remove(bucket, videoId));
-        redisTemplate.opsForZSet().remove(RecoKeys.TRENDING, videoId);
+            RecoKeys.trendingWindow(Instant.now())
+                    .forEach(bucket -> ops.opsForZSet().remove(bucket, videoId));
+            ops.opsForZSet().remove(RecoKeys.TRENDING, videoId);
+        });
     }
 
     /**
@@ -177,24 +267,31 @@ public class RecommendationServiceImpl implements RecommendationService {
      */
     @Override
     public void recordVideoDeleted(String videoId) {
+        // First, so an event racing this one on another topic already sees the video as gone.
+        redisTemplate.opsForValue().set(RecoKeys.videoDeleted(videoId), "1", RecoKeys.DELETED_TTL);
+
         Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
-        if (tags != null) {
-            for (String tag : tags) {
-                redisTemplate.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+        // The rest in one round trip; sent one by one it was over forty.
+        RedisPipeline.run(redisTemplate, ops -> {
+            if (tags != null) {
+                for (String tag : tags) {
+                    ops.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId);
+                }
             }
-        }
-        redisTemplate.delete(RecoKeys.videoTags(videoId));
+            ops.delete(RecoKeys.videoTags(videoId));
 
-        RecoKeys.trendingWindow(Instant.now())
-                .forEach(bucket -> redisTemplate.opsForZSet().remove(bucket, videoId));
+            RecoKeys.trendingWindow(Instant.now())
+                    .forEach(bucket -> ops.opsForZSet().remove(bucket, videoId));
 
-        redisTemplate.opsForZSet().remove(RecoKeys.TRENDING, videoId);
-        redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_PUBLISHED, videoId);
-        redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_WATCHES, videoId);
-        redisTemplate.opsForZSet().remove(RecoKeys.VIDEO_COMPLETIONS, videoId);
-        redisTemplate.opsForHash().delete(RecoKeys.VIDEO_OWNER, videoId);
-        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_PRIVATE, videoId);
-        redisTemplate.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
+            ops.opsForZSet().remove(RecoKeys.TRENDING, videoId);
+            ops.opsForZSet().remove(RecoKeys.VIDEO_PUBLISHED, videoId);
+            ops.opsForZSet().remove(RecoKeys.VIDEO_WATCHES, videoId);
+            ops.opsForZSet().remove(RecoKeys.VIDEO_COMPLETIONS, videoId);
+            ops.opsForHash().delete(RecoKeys.VIDEO_OWNER, videoId);
+            ops.opsForSet().remove(RecoKeys.VIDEO_PRIVATE, videoId);
+            ops.opsForSet().remove(RecoKeys.VIDEO_TAKEN_DOWN, videoId);
+            ops.opsForSet().remove(RecoKeys.VIDEO_HELD, videoId);
+        });
     }
 
     @Override
@@ -202,9 +299,19 @@ public class RecommendationServiceImpl implements RecommendationService {
         addEngagement(videoId, liked ? LIKE_SCORE : -LIKE_SCORE);
     }
 
+    /**
+     * A share is the heaviest signal here, and the share endpoint allows sixty an hour per viewer
+     * per video — scoring each one let a single account buy a video 300 points an hour, a hundred
+     * viewers' likes. Every share still counts on the video's own counter; only the first one per
+     * viewer counts toward trending, for as long as trending remembers it.
+     */
     @Override
-    public void recordShare(String videoId) {
-        addEngagement(videoId, SHARE_SCORE);
+    public void recordShare(String videoId, Long userId) {
+        Boolean first = redisTemplate.opsForValue()
+                .setIfAbsent(RecoKeys.sharedBy(videoId, userId), "1", RecoKeys.BUCKET_TTL);
+        if (Boolean.TRUE.equals(first)) {
+            addEngagement(videoId, SHARE_SCORE);
+        }
     }
 
     @Override
@@ -216,15 +323,44 @@ public class RecommendationServiceImpl implements RecommendationService {
     public void recordWatch(String videoId, Long userId, long watchedMs, long durationMs, boolean completed) {
         double ratio = durationMs <= 0 ? 0 : Math.min(1.0, (double) watchedMs / durationMs);
 
-        addEngagement(videoId, WATCH_SCORE * ratio);
-
-        redisTemplate.opsForZSet().incrementScore(RecoKeys.VIDEO_WATCHES, videoId, 1);
-        if (completed) {
-            redisTemplate.opsForZSet().incrementScore(RecoKeys.VIDEO_COMPLETIONS, videoId, 1);
+        double raise = raiseBestWatch(videoId, userId, ratio);
+        if (raise > 0) {
+            addEngagement(videoId, WATCH_SCORE * raise);
         }
 
-        markSeen(userId, videoId);
+        RedisPipeline.run(redisTemplate, ops -> {
+            // Every session, as before: these two are features the ranking model is trained on
+            // from every row in watch_events, and counting them per viewer here would serve it a
+            // different number under the same name — see rank-service's features.py.
+            ops.opsForZSet().incrementScore(RecoKeys.VIDEO_WATCHES, videoId, 1);
+            if (completed) {
+                ops.opsForZSet().incrementScore(RecoKeys.VIDEO_COMPLETIONS, videoId, 1);
+            }
+            markSeen(ops, userId, videoId);
+        });
         learnTags(userId, videoId, ratio);
+    }
+
+    /**
+     * How much of a full watch this session adds to what the viewer already gave the video in the
+     * trending window: only the part past their best so far. Scored per session, a single account
+     * could report a completed watch sixty times an hour — as much as the watch endpoint allows —
+     * and buy a video 120 points an hour, forty viewers' likes; that is the loophole recordShare
+     * closed for shares, still open here. Now one viewer is worth at most one full watch per
+     * video, however many times they watch it, and a skip followed by a real watch still counts
+     * the real one.
+     *
+     * <p>The mark lives as long as a trending bucket, from the last time it was raised. No viewer
+     * means no way to bound it, so it is not scored.
+     */
+    private double raiseBestWatch(String videoId, Long userId, double ratio) {
+        if (userId == null || ratio <= 0) {
+            return 0;
+        }
+        String raised = redisTemplate.execute(RAISE_BEST_WATCH,
+                List.of(RecoKeys.watchedBy(videoId, userId)),
+                String.valueOf(ratio), String.valueOf(RecoKeys.BUCKET_TTL.toSeconds()));
+        return raised == null ? 0 : Double.parseDouble(raised);
     }
 
     /**
@@ -282,15 +418,18 @@ public class RecommendationServiceImpl implements RecommendationService {
             return;
         }
         String bucket = RecoKeys.trendBucket(Instant.now());
-        redisTemplate.opsForZSet().incrementScore(bucket, videoId, score);
-        redisTemplate.expire(bucket, RecoKeys.BUCKET_TTL);
+        RedisPipeline.run(redisTemplate, ops -> {
+            ops.opsForZSet().incrementScore(bucket, videoId, score);
+            ops.expire(bucket, RecoKeys.BUCKET_TTL);
+        });
     }
 
-    private void markSeen(Long userId, String videoId) {
+    /** Queued on the caller's pipeline: one more trio of writes needs no round trip of its own. */
+    private void markSeen(RedisOperations<String, String> ops, Long userId, String videoId) {
         String key = RecoKeys.userSeen(userId);
-        redisTemplate.opsForZSet().add(key, videoId, Instant.now().getEpochSecond());
-        redisTemplate.opsForZSet().removeRange(key, 0, -RecoKeys.TRIM_TO - 1);
-        redisTemplate.expire(key, RecoKeys.PROFILE_TTL);
+        ops.opsForZSet().add(key, videoId, Instant.now().getEpochSecond());
+        ops.opsForZSet().removeRange(key, 0, -RecoKeys.TRIM_TO - 1);
+        ops.expire(key, RecoKeys.PROFILE_TTL);
     }
 
     /**
@@ -306,9 +445,11 @@ public class RecommendationServiceImpl implements RecommendationService {
 
         double delta = ratio < SKIP_RATIO ? SKIP_PENALTY : ratio;
         String key = RecoKeys.userTags(userId);
-        for (String tag : tags) {
-            redisTemplate.opsForZSet().incrementScore(key, tag, delta);
-        }
-        redisTemplate.expire(key, RecoKeys.PROFILE_TTL);
+        RedisPipeline.run(redisTemplate, ops -> {
+            for (String tag : tags) {
+                ops.opsForZSet().incrementScore(key, tag, delta);
+            }
+            ops.expire(key, RecoKeys.PROFILE_TTL);
+        });
     }
 }

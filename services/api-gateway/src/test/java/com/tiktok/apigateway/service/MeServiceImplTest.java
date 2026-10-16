@@ -4,7 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -12,8 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.codec.json.Jackson2JsonDecoder;
-import org.springframework.http.codec.json.Jackson2JsonEncoder;
+import org.springframework.http.codec.json.JacksonJsonDecoder;
+import org.springframework.http.codec.json.JacksonJsonEncoder;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.ExchangeFunction;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
@@ -22,6 +22,7 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
+import java.time.Instant;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -110,6 +111,49 @@ class MeServiceImplTest {
 
         assertThat(userStub.callCount()).isEqualTo(1);
         assertThat(logAppender.list).isEmpty();
+    }
+
+    @Test
+    void getMe_carriesWhenTheHandleAndTheNameMayNextChange() {
+        String account = ACCOUNT_JSON.replace(
+                "\"createdAt\": \"2024-01-01T00:00:00Z\"",
+                "\"createdAt\": \"2024-01-01T00:00:00Z\", \"usernameChangeableAt\": \"2024-02-01T00:00:00Z\"");
+        String profile = PROFILE_JSON.replace(
+                "\"followingCount\": 5",
+                "\"followingCount\": 5, \"displayNameChangeableAt\": \"2024-01-08T00:00:00Z\"");
+
+        MeServiceImpl service = new MeServiceImpl(
+                accountStub(HttpStatus.OK, account),
+                SequencedStub.responses(status(HttpStatus.OK, profile)).client());
+
+        StepVerifier.create(service.getMe(AUTH_HEADER))
+                .assertNext(me -> {
+                    assertThat(me.usernameChangeableAt()).isEqualTo(Instant.parse("2024-02-01T00:00:00Z"));
+                    assertThat(me.displayNameChangeableAt()).isEqualTo(Instant.parse("2024-01-08T00:00:00Z"));
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    void getMe_whenProfileNotReady_stillSaysWhenTheHandleMayNextChange() {
+        String account = ACCOUNT_JSON.replace(
+                "\"createdAt\": \"2024-01-01T00:00:00Z\"",
+                "\"createdAt\": \"2024-01-01T00:00:00Z\", \"usernameChangeableAt\": \"2024-02-01T00:00:00Z\"");
+
+        MeServiceImpl service = new MeServiceImpl(
+                accountStub(HttpStatus.OK, account),
+                SequencedStub.responses(
+                        status(HttpStatus.NOT_FOUND, PROFILE_NOT_FOUND_JSON),
+                        status(HttpStatus.NOT_FOUND, PROFILE_NOT_FOUND_JSON),
+                        status(HttpStatus.NOT_FOUND, PROFILE_NOT_FOUND_JSON)).client());
+
+        StepVerifier.create(service.getMe(AUTH_HEADER))
+                .assertNext(me -> {
+                    assertThat(me.profileReady()).isFalse();
+                    assertThat(me.usernameChangeableAt()).isEqualTo(Instant.parse("2024-02-01T00:00:00Z"));
+                    assertThat(me.displayNameChangeableAt()).isNull();
+                })
+                .verifyComplete();
     }
 
     @Test
@@ -260,11 +304,11 @@ class MeServiceImplTest {
         }
 
         WebClient client() {
-            ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+            JsonMapper mapper = new JsonMapper();
             ExchangeStrategies strategies = ExchangeStrategies.builder()
                     .codecs(configurer -> {
-                        configurer.defaultCodecs().jackson2JsonDecoder(new Jackson2JsonDecoder(mapper));
-                        configurer.defaultCodecs().jackson2JsonEncoder(new Jackson2JsonEncoder(mapper));
+                        configurer.defaultCodecs().jacksonJsonDecoder(new JacksonJsonDecoder(mapper));
+                        configurer.defaultCodecs().jacksonJsonEncoder(new JacksonJsonEncoder(mapper));
                     })
                     .build();
 

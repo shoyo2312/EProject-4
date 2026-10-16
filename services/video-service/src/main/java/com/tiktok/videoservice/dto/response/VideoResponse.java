@@ -56,6 +56,30 @@ public record VideoResponse(
          */
         Instant purgeEventPublishedAt,
         /** What the classifier scored. Null on every public read path — admin console only. */
-        ModerationResponse moderation
+        ModerationResponse moderation,
+        /**
+         * The owner's account accepts comments from no one. That closes every video they own — to
+         * everyone, the owner included — whatever {@code commentsDisabled}, the video's own
+         * switch, says; {@code commentCount} is null when either is set. Kept apart from the
+         * switch so the owner's own toggle still shows what it was set to. Applied per request,
+         * after the cache — see {@code VideoServiceImpl.withAccountComments}.
+         */
+        boolean accountCommentsOff,
+        /**
+         * The owner's account is private: a PUBLIC video is then for their followers only.
+         * {@code visibility} still says PUBLIC, because that is what the owner chose for the video.
+         * Clients can show a lock. Entries cached before this existed read as {@code false}.
+         */
+        boolean ownerPrivate,
+        /** What the text rules made of the caption. Null on every public read path — admin console only. */
+        TextModerationResponse textModeration
 ) {
+
+    /** This response for a video whose owner accepts comments from no one. */
+    public VideoResponse withAccountCommentsOff() {
+        return new VideoResponse(id, userId, title, description, thumbnailUrl, previewUrl, hlsUrl,
+                durationSeconds, width, height, status, visibility, viewCount, likeCount, null,
+                commentsDisabled, tags, createdAt, updatedAt, publishedAt, rawFileUrl, failureReason,
+                takedownReason, deletedAt, purgeEventPublishedAt, moderation, true, ownerPrivate, textModeration);
+    }
 }

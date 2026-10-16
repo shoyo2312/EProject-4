@@ -10,7 +10,7 @@ import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
 import io.minio.PostPolicy;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
+import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
 import org.springframework.http.HttpStatus;
 
 import java.time.Duration;
@@ -39,13 +39,22 @@ class VideoServiceImplUploadUrlFailureTest {
         return new VideoServiceImpl(
                 mock(VideoRepository.class),
                 mock(VideoMapper.class),
-                new SpringDataWebProperties(),
+                new DataWebProperties(),
                 minioClient,
                 new MinioProperties("http://localhost:9000", "key", "secret",
                         "video-media", "us-east-1", Duration.ofMinutes(15)),
                 mock(VideoCache.class),
                 mock(com.tiktok.videoservice.client.FriendshipClient.class),
-                new UploadLimitProperties(524_288_000L, 600));
+                new UploadLimitProperties(524_288_000L, 600),
+                new QuarantinedMediaUrls(mock(MinioClient.class), new MinioProperties("http://localhost:9000", "key", "secret",
+                        "video-media", "us-east-1", Duration.ofMinutes(15))),
+                mock(com.tiktok.videoservice.client.BlockClient.class),
+                mock(com.tiktok.videoservice.client.UserSettingsClient.class),
+                mock(com.tiktok.videoservice.client.FollowClient.class),
+                mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class),
+                mock(com.tiktok.videoservice.repository.OwnerBanRepository.class),
+                mock(CaptionModeration.class),
+                mock(UploadRateLimiter.class));
     }
 
     @Test

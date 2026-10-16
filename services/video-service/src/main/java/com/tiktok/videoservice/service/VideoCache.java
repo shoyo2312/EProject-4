@@ -1,6 +1,6 @@
 package com.tiktok.videoservice.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.videoservice.config.VideoCacheProperties;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -176,6 +177,23 @@ public class VideoCache {
             redisTemplate.delete(key(videoId));
         } catch (Exception e) {
             log.debug("video cache evict failed for videoId={}, entry left to expire", videoId, e);
+        }
+    }
+
+    /**
+     * {@link #evict} for many ids in one DEL — an owner switching their account touches every video
+     * they have. Same ceiling as evict: a reader already on its way back from Mongo can re-cache the
+     * old entry for one TTL.
+     */
+    public void evictAll(Collection<String> videoIds) {
+        if (!properties.enabled() || videoIds.isEmpty()) {
+            return;
+        }
+
+        try {
+            redisTemplate.delete(videoIds.stream().map(VideoCache::key).toList());
+        } catch (Exception e) {
+            log.debug("video cache evict failed for {} videos, entries left to expire", videoIds.size(), e);
         }
     }
 

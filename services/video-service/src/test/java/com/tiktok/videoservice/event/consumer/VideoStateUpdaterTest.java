@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.event.consumer;
 
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -8,11 +9,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -35,7 +36,7 @@ class VideoStateUpdaterTest {
     @ServiceConnection
     static MongoDBContainer MONGO = new MongoDBContainer("mongo:7");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     @Autowired
@@ -61,13 +62,14 @@ class VideoStateUpdaterTest {
         Video video = videoRepository.save(processingVideo());
         AtomicBoolean moderatorHasActed = new AtomicBoolean(false);
 
-        BiPredicate<Video, VideoStatus> writeWithATakedownInTheGap = (candidate, expectedStatus) -> {
+        BiPredicate<Video, PipelineState> writeWithATakedownInTheGap = (candidate, expected) -> {
             if (moderatorHasActed.compareAndSet(false, true)) {
                 Video moderatorsCopy = videoRepository.findByIdAndDeletedAtIsNull(video.getId()).orElseThrow();
+                PipelineState read = PipelineState.of(moderatorsCopy);
                 moderatorsCopy.markTakenDown("policy violation");
-                videoRepository.updateStatus(moderatorsCopy, VideoStatus.PROCESSING);
+                videoRepository.updateStatus(moderatorsCopy, read);
             }
-            return videoRepository.updateTranscodeResult(candidate, expectedStatus);
+            return videoRepository.updateTranscodeResult(candidate, expected);
         };
 
         videoStateUpdater.apply(video.getId(),

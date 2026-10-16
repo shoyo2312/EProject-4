@@ -9,6 +9,8 @@ import com.tiktok.mediaworker.config.MinioProperties;
 import com.tiktok.mediaworker.config.ModerationProperties;
 import io.minio.DownloadObjectArgs;
 import io.minio.MinioClient;
+import io.minio.errors.ErrorResponseException;
+import io.minio.messages.ErrorResponse;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -22,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -137,6 +140,36 @@ class ModerationServiceImplTest {
                 .thenReturn(new ModerationResponse("APPROVED", "nsfw", 0.01, 0, 1, 90L, "m", "v"));
 
         assertThat(service(ENABLED).moderate("vid123", null).verdict()).isEqualTo(ModerationVerdict.APPROVED);
+    }
+
+    /**
+     * A takedown or deletion during the transcode has already moved the output under quarantine/.
+     * Reading only the public key failed all three attempts and sent the video for review unscored.
+     */
+    @Test
+    void moderate_readsAPlaybackFileThatIsAlreadyQuarantined() throws Exception {
+        ErrorResponseException missing = mock(ErrorResponseException.class);
+        when(missing.errorResponse()).thenReturn(
+                new ErrorResponse("NoSuchKey", "gone", "video-media", "hls/vid123/source.mp4", null, null, null));
+        List<String> asked = new java.util.ArrayList<>();
+        doAnswer(invocation -> {
+            DownloadObjectArgs args = invocation.getArgument(0);
+            asked.add(args.object());
+            if (!args.object().startsWith("quarantine/")) {
+                throw missing;
+            }
+            Files.writeString(Path.of(args.filename()), "not really an mp4");
+            return null;
+        }).when(minioClient).downloadObject(any(DownloadObjectArgs.class));
+        givenFramesAreSampled(3);
+        when(moderationClient.moderate(any())).thenReturn(new ModerationResponse(
+                "APPROVED", "normal", 0.02, 0, 3, 400L, "Falconsai/nsfw_image_detection", "nsfw-v1"));
+
+        VideoModerationCompletedEvent event = service(ENABLED).moderate("vid123", 60);
+
+        assertThat(event.verdict()).isEqualTo(ModerationVerdict.APPROVED);
+        assertThat(event.totalFrames()).isEqualTo(3);
+        assertThat(asked).containsExactly("hls/vid123/source.mp4", "quarantine/hls/vid123/source.mp4");
     }
 
     private ModerationServiceImpl service(ModerationProperties properties) {

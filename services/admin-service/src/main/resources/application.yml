@@ -28,6 +28,14 @@ spring:
         default-page-size: 20
         max-page-size: 50
 
+  task:
+    scheduling:
+      # One thread per @Scheduled method: the outbox poll, the stale-report sweep and the retention cleanup.
+      # On the default pool of one they take turns, and an outbox poll waiting out its ack
+      # timeout on a dead broker holds up every other job behind it.
+      pool:
+        size: 3
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
@@ -38,6 +46,8 @@ downstream:
   # moderation-service: internal network only, no auth, not routed at the gateway. Read for the
   # console's settings screen — the thresholds live in that service's environment, not here.
   moderation-service-uri: ${MODERATION_SERVICE_URL:http://localhost:8099}
+  # auth-service: asked whether a ban's target is an admin account, which it would refuse.
+  auth-service-uri: ${AUTH_SERVICE_URL:http://localhost:8081}
   timeout-millis: ${DOWNSTREAM_TIMEOUT_MS:2000}
 
 admin:
@@ -61,6 +71,20 @@ admin:
     max-reports-per-target: 2
     batch-size: 500
     max-batches-per-run: 20
+
+  outbox:
+    # The admin console refreshes when these reach it, so this is most of a new report's delay.
+    # Cheap: the unpublished rows are a partial index (idx_outbox_events_unpublished).
+    poll-millis: 500
+
+moderation:
+  text:
+    # The console's preview asks the same classifier the services do. Unreachable: the preview says
+    # so (classifierAnswered=false) and shows the rules' verdict alone.
+    classifier:
+      base-url: ${MODERATION_SERVICE_URL:http://localhost:8099}
+    # No admin-terms base-url here: this service is where the terms live, and the preview reads them
+    # straight from its own database.
 
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}

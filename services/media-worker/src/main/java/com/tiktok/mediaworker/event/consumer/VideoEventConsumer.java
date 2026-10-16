@@ -1,6 +1,7 @@
 package com.tiktok.mediaworker.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoPurgedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
@@ -24,10 +25,11 @@ import java.nio.charset.StandardCharsets;
  * eventType header video-service sets — see its VideoEventPublisher.
  *
  * <p>Media is erased on VideoPurgedEvent, not VideoDeletedEvent. The deletion goes out the moment
- * the owner deletes and is for the index consumers; the purge follows once the trash window
- * (video-service's {@code video.trash.retention}) has run out, so a moderator can still play the
- * video from the console in between. Acting on the deletion here would empty the trash on the
- * spot.
+ * the owner deletes; the purge follows once the trash window (video-service's
+ * {@code video.trash.retention}) has run out, so a moderator can still play the video from the
+ * console in between. Erasing on the deletion would empty the trash on the spot. What the
+ * deletion does here is quarantine the media: it used to stay public by URL for the whole
+ * window, a month in which the owner believed it gone.
  *
  * <p>No inbox/idempotency table here: media-worker keeps no state of its own. Re-processing
  * the same VideoPublishedEvent just overwrites the same MinIO keys with the same content
@@ -40,6 +42,7 @@ import java.nio.charset.StandardCharsets;
 public class VideoEventConsumer {
 
     private static final String VIDEO_PUBLISHED = "VideoPublishedEvent";
+    private static final String VIDEO_DELETED = "VideoDeletedEvent";
     private static final String VIDEO_PURGED = "VideoPurgedEvent";
 
     private final TranscodeService transcodeService;
@@ -78,11 +81,13 @@ public class VideoEventConsumer {
 
         if (VIDEO_PUBLISHED.equals(eventType)) {
             handlePublished(objectMapper.readValue(payload, VideoPublishedEvent.class));
+        } else if (VIDEO_DELETED.equals(eventType)) {
+            quarantine.hold(objectMapper.readValue(payload, VideoDeletedEvent.class).videoId(),
+                    MediaQuarantineService.Hold.DELETED);
         } else if (VIDEO_PURGED.equals(eventType)) {
             VideoPurgedEvent event = objectMapper.readValue(payload, VideoPurgedEvent.class);
             mediaCleanupService.deleteMediaFor(event.videoId(), event.rawFileUrl());
         } else {
-            // VideoDeletedEvent lands here too, on purpose — see the class comment.
             log.debug("Ignoring video eventType={}", eventType);
         }
     }
@@ -101,10 +106,10 @@ public class VideoEventConsumer {
             return;
         }
         VideoTranscodedEvent result = transcodeWithRetries(event);
-        // A takedown that landed while this was encoding had nothing to move yet, and the output
+        // A hold that landed while this was encoding had nothing to move yet, and the output
         // was just written to the public prefixes. Its marker is still there, so finish its job.
-        if (result.success() && quarantine.isQuarantined(event.videoId())) {
-            quarantine.quarantine(event.videoId());
+        if (result.success()) {
+            quarantine.enforce(event.videoId());
         }
         eventProducer.publish(result);
         transcodeService.recordTranscoded(event.videoId());
@@ -123,9 +128,12 @@ public class VideoEventConsumer {
         for (int attempt = 1; attempt <= transcodeAttempts; attempt++) {
             try {
                 TranscodeResult result = transcodeService.transcode(event.videoId(), event.rawFileUrl());
+                // The moderation step reads this event, not the publication, so the caption's
+                // verdict rides along to be folded into the frames' (see CaptionVerdict).
                 return VideoTranscodedEvent.success(
                         event.videoId(), result.thumbnailUrl(), result.previewUrl(),
-                        result.hlsUrl(), result.durationSeconds(), result.width(), result.height());
+                        result.hlsUrl(), result.durationSeconds(), result.width(), result.height())
+                        .withTextVerdict(event.textVerdict());
             } catch (MediaRejectedException e) {
                 // Permanently unacceptable — retrying re-probes the same file to the same answer.
                 log.warn("Rejecting video {}: {}", event.videoId(), e.getMessage());

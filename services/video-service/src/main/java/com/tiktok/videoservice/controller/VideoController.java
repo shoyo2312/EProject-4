@@ -66,14 +66,17 @@ public class VideoController {
      * so it is matched ahead of {@code /{videoId}} below.
      *
      * <p>Naming an account the caller does not follow is not a way in: the filter below it is the
-     * public one, so this returns exactly what {@code /videos/users/{id}} would already hand out.
+     * public one, and a private account among the ids is dropped unless the caller follows it —
+     * which is why the caller is passed along, and why a signed-in client sends its token.
      */
     @GetMapping("/feed/following")
     public ApiResponse<CursorPage<VideoResponse>> getFollowingFeed(
+            @AuthenticationPrincipal Long currentUserId,
             @RequestParam(required = false) List<Long> followedUserIds,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) Integer size) {
-        return ApiResponse.success(videoService.getFollowingFeed(followedUserIds, cursor, size));
+        return ApiResponse.success(
+                videoService.getFollowingFeed(currentUserId, followedUserIds, cursor, size));
     }
 
     @GetMapping("/{videoId}")

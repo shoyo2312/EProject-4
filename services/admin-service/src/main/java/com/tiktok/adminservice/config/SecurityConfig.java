@@ -1,5 +1,7 @@
 package com.tiktok.adminservice.config;
 
+import com.tiktok.common.http.InternalApiToken;
+import com.tiktok.security.internal.InternalCallerAuthorization;
 import com.tiktok.security.jwt.JwtAuthenticationFilter;
 
 import lombok.RequiredArgsConstructor;
@@ -14,7 +16,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 
 /**
  * Only report submission is open to any authenticated user — everything else here is a
- * moderation action and requires ROLE_ADMIN (issued by auth-service in the JWT).
+ * moderation action and requires ROLE_ADMIN (issued by auth-service in the JWT). The one exception
+ * is the internal prefix, which the services that screen text poll with the internal token.
  */
 @Configuration
 @EnableWebSecurity
@@ -22,6 +25,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final InternalApiToken internalApiToken;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -30,6 +34,11 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        // Service-to-service: api-gateway denies this prefix, and the token keeps out
+                        // whatever reaches this port without going through the gateway. Before the
+                        // ROLE_ADMIN rule, which no service's call could ever satisfy.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/admin/internal/**")
+                        .access(new InternalCallerAuthorization(internalApiToken))
                         .requestMatchers(HttpMethod.POST, "/api/v1/admin/reports").authenticated()
                         .anyRequest().hasRole("ADMIN")
                 )

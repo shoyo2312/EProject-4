@@ -5,9 +5,11 @@ spring:
   application:
     name: video-service
 
+  mongodb:
+    uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:password}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/video_db?authSource=admin
+
   data:
     mongodb:
-      uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:password}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/video_db?authSource=admin
       # Off by default since Spring Data Mongo 3.x, which silently left every @Indexed and
       # @CompoundIndex in this service uncreated: feed_idx was absent (feed queries were
       # collection scans) and ProcessedEvent.eventId had no unique index, so the idempotency
@@ -21,6 +23,14 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+
+  task:
+    scheduling:
+      # One thread per @Scheduled method: the five event polls in VideoEventPublisher and the
+      # stuck-video sweep. On the default pool of one they take turns, and an outbox poll waiting
+      # out its ack timeout on a dead broker holds up every other job behind it.
+      pool:
+        size: 6
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
@@ -40,6 +50,13 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      # One consumer thread per partition (topics are created with 3) instead of one thread
+      # draining all of them, so a burst of views or likes no longer queues behind itself. Each
+      # partition still has a single thread, so the per-key order the producers rely on holds, and
+      # every listener here is safe to run side by side: it claims its eventId first and writes
+      # with atomic field-scoped updates. Extra threads beyond the partition count sit idle.
+      concurrency: 3
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -55,11 +72,26 @@ app:
       enabled: ${VIDEO_CACHE_ENABLED:true}
       ttl: ${VIDEO_CACHE_TTL:60s}
 
+    user-settings:
+      # A video owner's comment audience, read from user-service for GET /videos/{id}/policy and
+      # for accountCommentsOff on every VideoResponse. The TTL is how long a changed setting takes
+      # to show — nothing invalidates it, see UserSettingsCacheProperties.
+      enabled: ${USER_SETTINGS_CACHE_ENABLED:true}
+      ttl: ${USER_SETTINGS_CACHE_TTL:3s}
+
   upload:
     # max-bytes is signed into the upload POST policy; media-worker enforces both as a backstop.
     # Same env vars there — keep in step.
     max-bytes: ${VIDEO_MAX_BYTES:524288000}          # 500 MB
     max-duration-seconds: ${VIDEO_MAX_DURATION_SECONDS:600}  # 10 minutes
+    # Per account; 0 switches a tier off. See UploadRateLimitProperties.
+    rate-limit:
+      upload-url:
+        per-hour: ${UPLOAD_URL_PER_HOUR:30}
+        per-day: ${UPLOAD_URL_PER_DAY:100}
+      publish:
+        per-hour: ${VIDEO_PUBLISH_PER_HOUR:10}
+        per-day: ${VIDEO_PUBLISH_PER_DAY:30}
 
   media:
     # Where CreateVideoRequest.rawFileUrl is allowed to point. Buckets must match media-worker's
@@ -67,6 +99,23 @@ app:
     # reject everything, so set them per environment.
     allowed-hosts: ${MEDIA_ALLOWED_HOSTS:cdn.tiktok-clone.local}
     allowed-buckets: ${MEDIA_ALLOWED_BUCKETS:video-media}
+
+moderation:
+  text:
+    # Screens titles, descriptions and tags at publish (moderation-lib). false keeps computing,
+    # logging and counting every verdict but refuses and holds nothing — for measuring false
+    # positives on real traffic before enforcing. See docs/moderation.md.
+    enforce: ${TEXT_MODERATION_ENFORCE:true}
+    # moderation-service's text classifier, behind the rules: it can send a video to review, never
+    # refuse a caption. Unreachable, the rules decide alone. enforce=false records its holds as notes
+    # on the video and acts on none — for measuring it first. See docs/moderation.md.
+    classifier:
+      base-url: ${MODERATION_SERVICE_URL:http://localhost:8099}
+      enforce: ${TEXT_CLASSIFIER_ENFORCE:true}
+    # admin-service's terms, polled every minute on top of the shipped list. Unreachable, the last
+    # list stays — before the first answer, the shipped list alone.
+    admin-terms:
+      base-url: ${ADMIN_SERVICE_URL:http://localhost:8096}
 
 minio:
   # Must match media-worker's MinIO settings — it transcodes out of the same bucket these
@@ -82,9 +131,15 @@ minio:
   url-expiry: ${MINIO_URL_EXPIRY:15m}
 
 downstream:
-  # user-service, for the FRIENDS visibility check (mutual-follow lookup). The viewer's own JWT
-  # is forwarded on the call, so no service credential here.
+  # user-service, for the FRIENDS visibility check (mutual-follow lookup) and for the video
+  # owner's comment audience. The friendship call forwards the viewer's own JWT; the settings call
+  # goes to the internal prefix, which takes no token — so no service credential either way.
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
+  # The comment-audience lookup inside GET /videos/{id}/policy. Must stay well under the timeout
+  # the callers of /policy hold it to (interaction- and notification-service, 1s by default): at
+  # the same value a slow user-service times the whole answer out at the caller, which then fails
+  # open on the comments switch, owner deletes and notifications too. See DownstreamRestClientConfig.
+  settings-timeout-millis: ${USER_SETTINGS_TIMEOUT_MILLIS:250}
 
 springdoc:
   api-docs:

@@ -1,11 +1,11 @@
 package com.tiktok.notificationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.UserWarnedEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
+import com.tiktok.notificationservice.client.CommentAuthorClient;
 import com.tiktok.notificationservice.client.VideoOwnerClient;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.repository.ProcessedEventRepository;
@@ -46,13 +46,16 @@ class AdminModerationEventConsumerTest {
     @Mock
     private VideoOwnerClient videoOwnerClient;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    @Mock
+    private CommentAuthorClient commentAuthorClient;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private AdminModerationEventConsumer consumer() {
         lenient().when(processedEventRepository.tryClaim(anyString(), anyString())).thenReturn(true);
         return new AdminModerationEventConsumer(
                 new IdempotentEventProcessor(processedEventRepository),
-                notificationService, videoOwnerClient, objectMapper);
+                notificationService, videoOwnerClient, commentAuthorClient, objectMapper);
     }
 
     private byte[] header(String eventType) {
@@ -115,10 +118,27 @@ class AdminModerationEventConsumerTest {
                 eq(USER_ID), eq(null), eq(NotificationType.SYSTEM), any(), eq("keep it clean"), eq("v1"));
     }
 
-    /** No client can name a comment's author, so the warning stays in the audit log. */
+    /**
+     * The commonest thing to warn over, and it used to reach nobody: the event names the comment,
+     * not its author. The notice opens the video the comment is on.
+     */
     @Test
-    void aWarningOverACommentReportTellsNobody() throws Exception {
-        consumer().onMessage(json(UserWarnedEvent.of("COMMENT", "v1:9", ADMIN_ID, "be civil")),
+    void aWarningOverACommentReportGoesToTheCommentsAuthor() throws Exception {
+        when(commentAuthorClient.authorOf("123:9")).thenReturn(USER_ID);
+
+        consumer().onMessage(json(UserWarnedEvent.of("COMMENT", "123:9", ADMIN_ID, "be civil")),
+                header("UserWarnedEvent"));
+
+        verify(notificationService).create(
+                eq(USER_ID), eq(null), eq(NotificationType.SYSTEM), any(), eq("be civil"), eq("123"));
+    }
+
+    /** A comment interaction-service has never stored has nobody to tell, and nothing is claimed. */
+    @Test
+    void aWarningOverACommentNobodyCanFindTellsNobody() throws Exception {
+        when(commentAuthorClient.authorOf("123:9")).thenReturn(null);
+
+        consumer().onMessage(json(UserWarnedEvent.of("COMMENT", "123:9", ADMIN_ID, "be civil")),
                 header("UserWarnedEvent"));
 
         verify(notificationService, never()).create(any(), any(), any(), any(), any(), any());
@@ -150,7 +170,7 @@ class AdminModerationEventConsumerTest {
                 .thenReturn(true).thenReturn(false);
         AdminModerationEventConsumer consumer = new AdminModerationEventConsumer(
                 new IdempotentEventProcessor(processedEventRepository),
-                notificationService, videoOwnerClient, objectMapper);
+                notificationService, videoOwnerClient, commentAuthorClient, objectMapper);
 
         consumer.onMessage(json(event), header("UserBannedEvent"));
         consumer.onMessage(json(event), header("UserBannedEvent"));

@@ -1,9 +1,8 @@
 package com.tiktok.videoservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.VideoViewedEvent;
 import com.tiktok.videoservice.entity.Video;
-import com.tiktok.videoservice.entity.VideoStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -49,12 +48,11 @@ public class VideoViewedEventConsumer {
         // only as fresh as the last event it saw, so views keep arriving for a video its owner
         // already removed, and counting them moves a number nothing will display again.
         //
-        // TAKEN_DOWN for that same reason. A moderated video is off every read path, so the views
-        // still trickling in are stale clients, and the count they build is invisible right up
-        // until a restore puts the video back showing a number nobody can account for.
+        // Not a takedown, for the reason VideoLikeEventConsumer gives: a restore lifts it, and a
+        // view counted by interaction-service just before the takedown that lands just after it
+        // belongs in the number the restored video shows.
         Criteria target = where("_id").is(String.valueOf(event.videoId()))
-                .and("deletedAt").is(null)
-                .and("status").ne(VideoStatus.TAKEN_DOWN);
+                .and("deletedAt").is(null);
 
         var result = mongoTemplate.updateFirst(
                 Query.query(target), new Update().inc("viewCount", 1), Video.class);

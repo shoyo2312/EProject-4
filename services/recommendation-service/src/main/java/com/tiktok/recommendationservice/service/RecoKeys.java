@@ -52,6 +52,22 @@ public final class RecoKeys {
                 .mapToObj(hoursAgo -> trendBucket(now.minus(Duration.ofHours(hoursAgo))));
     }
 
+    /**
+     * Present while one viewer's share of one video is already scored in the trending window;
+     * see {@code RecommendationServiceImpl.recordShare}. Lives {@link #BUCKET_TTL}, as the buckets do.
+     */
+    public static String sharedBy(String videoId, Long userId) {
+        return "reco:shared:" + videoId + ":" + userId;
+    }
+
+    /**
+     * One viewer's best watched fraction of one video already scored in the trending window; see
+     * {@code RecommendationServiceImpl.recordWatch}. Lives {@link #BUCKET_TTL}, as the buckets do.
+     */
+    public static String watchedBy(String videoId, Long userId) {
+        return "reco:watched:" + videoId + ":" + userId;
+    }
+
     /** Decayed union of the window. Rebuilt on a schedule; read by both /trending and /feed. */
     public static final String TRENDING = "reco:trending";
 
@@ -121,8 +137,42 @@ public final class RecoKeys {
     /**
      * Videos that exist but must not be recommended, one set per reason, because the reasons lift
      * independently: restoring a takedown must not undo the owner making the video private, and
-     * making it public again must not undo a takedown. Visible means in neither.
+     * making it public again must not undo a takedown. Visible means in none of them.
      */
     public static final String VIDEO_PRIVATE = "reco:video:private";
     public static final String VIDEO_TAKEN_DOWN = "reco:video:taken-down";
+
+    /**
+     * Videos automatic moderation did not approve (REVIEW or REJECTED), waiting on an admin. An
+     * approval arrives as a VideoRestoredEvent, and this set is how a restore tells an approval
+     * apart from the end of a takedown.
+     */
+    public static final String VIDEO_HELD = "reco:video:held";
+
+    /**
+     * Epoch millis of an admin restore that found neither marker — which can mean the verdict it
+     * overruled has not been read yet. recordHeld treats a verdict produced before this time as
+     * already approved. Lives {@link #DELETED_TTL}, past which no verdict can still arrive.
+     */
+    public static String videoApprovedAt(String videoId) {
+        return "reco:video:approved-at:" + videoId;
+    }
+
+    /**
+     * Present for a while after a video is deleted. recordVideoDeleted clears every other marker
+     * the video had, so without this nothing says it is gone — and events already on their way
+     * put it straight back: a like consumed late lands in the current hour's bucket and the next
+     * rebuild returns it to trending, and a moderation verdict for a video deleted mid-pipeline
+     * scores and indexes it as newly published. Those events arrive on other topics than the
+     * deletion, so nothing orders them after it.
+     */
+    public static String videoDeleted(String videoId) {
+        return "reco:video:deleted:" + videoId;
+    }
+
+    /**
+     * Past the broker's retention (KAFKA_LOG_RETENTION_HOURS, seven days): no event about the
+     * video can still be delivered once this has expired.
+     */
+    public static final Duration DELETED_TTL = Duration.ofDays(8);
 }

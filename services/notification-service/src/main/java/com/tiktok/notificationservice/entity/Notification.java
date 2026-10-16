@@ -19,7 +19,14 @@ import java.time.Instant;
 @AllArgsConstructor
 @Document(collection = "notifications")
 @CompoundIndexes({
-        @CompoundIndex(name = "recipient_feed_idx", def = "{'recipientId': 1, 'createdAt': -1}"),
+        // The inbox page, in exactly the order NotificationRepositoryImpl.findPage sorts. The id is
+        // in the key so a tie on createdAt is ordered by the index too; without it Mongo sorts the
+        // recipient's whole inbox in memory for every page. Replaces recipient_feed_idx, which
+        // lacked the id — under a new name, because auto-index-creation fails at startup on an
+        // existing name with a different key. A database that has the old one keeps it, unused.
+        @CompoundIndex(name = "recipient_page_idx", def = "{'recipientId': 1, 'createdAt': -1, '_id': -1}"),
+        // The unread badge and mark-all-read, both of which only want the unread entries.
+        @CompoundIndex(name = "recipient_unread_idx", def = "{'recipientId': 1, 'read': 1}"),
         // Serves the duplicate lookup NotificationServiceImpl runs before every collapsible
         // create — without it that check scans the recipient's whole inbox on every like.
         @CompoundIndex(name = "collapse_idx",

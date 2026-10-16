@@ -4,14 +4,19 @@ import com.tiktok.authservice.dto.response.AdminUserResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.entity.AuthProvider;
 import com.tiktok.authservice.entity.User;
+import com.tiktok.authservice.service.UsernameCooldown;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 
+import java.time.Instant;
 import java.util.List;
 
-@Mapper(componentModel = "spring")
+@Mapper(componentModel = "spring", imports = {UsernameCooldown.class, Instant.class})
 public interface UserMapper {
 
+    @Mapping(target = "usernameChangeableAt",
+            expression = "java(UsernameCooldown.changeableAt(user.getUsernameChangedAt(), Instant.now()))")
+    @Mapping(target = "hasPassword", expression = "java(user.getPasswordHash() != null)")
     UserResponse toResponse(User user);
 
     /**

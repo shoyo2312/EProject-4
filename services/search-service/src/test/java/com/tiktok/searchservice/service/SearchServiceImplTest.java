@@ -1,7 +1,9 @@
 package com.tiktok.searchservice.service;
 
+import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
+import com.tiktok.searchservice.client.UserDirectoryClient;
 import com.tiktok.searchservice.document.VideoDocument;
 import com.tiktok.searchservice.mapper.SearchMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,7 +12,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import com.tiktok.common.exception.BadRequestException;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHit;
@@ -20,10 +24,13 @@ import java.util.List;
 import java.util.Objects;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -35,27 +42,105 @@ class SearchServiceImplTest {
     @Mock
     private SearchMapper searchMapper;
 
+    @Mock
+    private UserDirectoryClient userDirectoryClient;
+
     private SearchServiceImpl searchService;
 
     @BeforeEach
     void setUp() {
-        searchService = new SearchServiceImpl(elasticsearchOperations, searchMapper);
+        searchService = new SearchServiceImpl(elasticsearchOperations, searchMapper, userDirectoryClient,
+                mock(com.tiktok.searchservice.index.OwnerBans.class));
         VideoDocument document = VideoDocument.builder().id("v1").status("PUBLISHED").build();
         SearchHits<VideoDocument> hits = mockSearchHits(document);
-        when(elasticsearchOperations.search(any(NativeQuery.class), eq(VideoDocument.class))).thenReturn(hits);
+        // Lenient: the rejection tests never get as far as searching.
+        lenient().when(elasticsearchOperations.search(any(NativeQuery.class), eq(VideoDocument.class))).thenReturn(hits);
+    }
+
+    /** title is a text field: Elasticsearch refuses to sort on it, and that refusal was a 500. */
+    @Test
+    void searchVideos_refusesASortOnAFieldElasticsearchCannotSort() {
+        assertThatThrownBy(() -> searchService.searchVideos("x", null, PageRequest.of(0, 10, Sort.by("title"))))
+                .isInstanceOf(BadRequestException.class);
     }
 
     @Test
-    void searchVideos_normalizesHashtagBeforeFilteringOnTags() {
+    void searchVideos_refusesAPagePastTheResultWindow() {
+        assertThatThrownBy(() -> searchService.searchVideos("x", null, PageRequest.of(100, 100)))
+                .isInstanceOf(BadRequestException.class);
+    }
+
+    @Test
+    void searchVideos_hashtagMatchesTheExactTagPrefixesAndNearMisses() {
         searchService.searchVideos(null, "#Dance ", PageRequest.of(0, 10));
 
-        // The tag is stored lowercased and without the hash, on a keyword field: an un-normalized
-        // term would match nothing at all rather than match loosely.
-        List<String> tagFilters = capturedBool().filter().stream()
-                .filter(q -> q.isTerm() && q.term().field().equals("tags"))
-                .map(q -> q.term().value().stringValue())
+        BoolQuery hashtag = capturedBool().must().get(0).bool();
+        assertThat(hashtag.minimumShouldMatch()).isEqualTo("1");
+        // The exact arm is a term on a keyword field: an un-normalized "#Dance " would match
+        // nothing at all there.
+        assertThat(hashtag.should().stream().filter(Query::isTerm)
+                .map(q -> q.term().value().stringValue())).containsExactly("dance");
+        // The loose arms are what let "#cat" reach #capcut and #car, and captions with them.
+        assertThat(hashtag.should().stream().filter(Query::isMultiMatch)
+                .map(q -> q.multiMatch().fields()))
+                .containsOnly(List.of("tags.prefix^3", "description.prefix"))
+                .hasSize(2);
+        assertThat(hashtag.should().stream().filter(Query::isMultiMatch)
+                .map(q -> q.multiMatch().fuzziness()).filter(Objects::nonNull)).containsExactly("AUTO");
+    }
+
+    @Test
+    void searchVideos_freeTextAlsoFindsTheVideosOfAuthorsItNames() {
+        when(userDirectoryClient.findUserIds("vmh")).thenReturn(List.of(7L, 8L));
+
+        searchService.searchVideos(" vmh ", null, PageRequest.of(0, 10));
+
+        List<Long> authorIds = capturedBool().should().stream()
+                .filter(Query::isTerms)
+                .filter(q -> q.terms().field().equals("userId"))
+                .flatMap(q -> q.terms().terms().value().stream())
+                .map(FieldValue::longValue)
                 .toList();
-        assertThat(tagFilters).containsExactly("dance");
+        assertThat(authorIds).containsExactly(7L, 8L);
+    }
+
+    /** Nobody by that name, or user-service down: the search runs on the text alone. */
+    @Test
+    void searchVideos_withNoMatchingAuthor_addsNoAuthorArm() {
+        searchService.searchVideos("dance", null, PageRequest.of(0, 10));
+
+        assertThat(capturedBool().should()).noneMatch(Query::isTerms);
+    }
+
+    /**
+     * Below three letters the trigram indexes cannot serve user-service's match, so every such
+     * search scanned the profile table — and "a" pulled in the videos of every big account with
+     * an "a" in its name.
+     */
+    @Test
+    void searchVideos_tooShortForAnAuthorLookup_asksNobody() {
+        searchService.searchVideos(" ab ", null, PageRequest.of(0, 10));
+
+        verifyNoInteractions(userDirectoryClient);
+        assertThat(capturedBool().should()).noneMatch(Query::isTerms);
+    }
+
+    @Test
+    void searchVideos_longerThanAnyNameAsksNobodyForAuthors() {
+        searchService.searchVideos("x".repeat(SearchServiceImpl.MAX_AUTHOR_QUERY_LENGTH + 1), null,
+                PageRequest.of(0, 10));
+
+        verifyNoInteractions(userDirectoryClient);
+    }
+
+    @Test
+    void searchVideos_refusesAnOverlongQuery() {
+        String tooLong = "x".repeat(SearchServiceImpl.MAX_QUERY_LENGTH + 1);
+
+        assertThatThrownBy(() -> searchService.searchVideos(tooLong, null, PageRequest.of(0, 10)))
+                .isInstanceOf(BadRequestException.class);
+        assertThatThrownBy(() -> searchService.searchVideos(null, tooLong, PageRequest.of(0, 10)))
+                .isInstanceOf(BadRequestException.class);
     }
 
     @Test
@@ -73,8 +158,8 @@ class SearchServiceImplTest {
                 .toList();
         assertThat(multiMatchFields).containsExactlyInAnyOrder(
                 List.of("title^3.0", "description"),
-                List.of("title.prefix^3.0", "description.prefix"),
-                List.of("title.prefix^3.0", "description.prefix"));
+                List.of("title.prefix^3.0", "description.prefix", "tags.prefix"),
+                List.of("title.prefix^3.0", "description.prefix", "tags.prefix"));
 
         List<String> fuzziness = bool.should().stream()
                 .filter(Query::isMultiMatch)
@@ -104,9 +189,9 @@ class SearchServiceImplTest {
     private <T> SearchHits<T> mockSearchHits(T content) {
         SearchHits<T> hits = mock(SearchHits.class);
         SearchHit<T> searchHit = mock(SearchHit.class);
-        when(searchHit.getContent()).thenReturn(content);
-        when(hits.getSearchHits()).thenReturn(List.of(searchHit));
-        when(hits.getTotalHits()).thenReturn(1L);
+        lenient().when(searchHit.getContent()).thenReturn(content);
+        lenient().when(hits.getSearchHits()).thenReturn(List.of(searchHit));
+        lenient().when(hits.getTotalHits()).thenReturn(1L);
         return hits;
     }
 }

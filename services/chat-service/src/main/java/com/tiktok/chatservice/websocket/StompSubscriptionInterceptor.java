@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
@@ -12,11 +13,19 @@ import org.springframework.stereotype.Component;
 
 import java.security.Principal;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Authorizes STOMP SUBSCRIBE frames.
+ * Authorizes the STOMP frames a client sends: SUBSCRIBE by destination, SEND by prefix.
+ *
+ * <p>SEND first. A client frame whose destination starts with a broker prefix goes straight to the
+ * simple broker, which relays it to every subscriber as if the server had sent it — a client could
+ * put a message with any {@code senderId} into {@code /topic/conversations/{id}}, or a fake
+ * notification into {@code /user/{id}/queue/notifications}. Clients only ever send to the
+ * {@code /app} handlers, which is where the participant check and the persistence live, so
+ * anything else is refused.
  *
  * <p>The simple broker delivers to whoever asks: a client that knows a conversation id can
  * subscribe to its topic and read the thread live, and conversation ids are Snowflakes, which
@@ -30,11 +39,25 @@ import java.util.regex.Pattern;
  *
  * <p>{@code /topic/videos.*} and {@code /topic/users.*} carry counters and public comments — the
  * same numbers the unauthenticated REST endpoints hand out — so they only have to be well-formed.
+ * "Public comments" is kept true on the sending side, not here: VideoStatsFanout sends a comment
+ * frame only for a video anyone may see, which also covers a video made private after somebody
+ * subscribed.
+ *
+ * <p>{@code /topic/admin} is the one role-gated destination: the handshake keeps the token's role,
+ * and only {@code ADMIN} may subscribe.
+ *
+ * <p>A guest — a socket opened without a token — has no Principal and no role, so it gets the
+ * public destinations above and nothing else: no conversation, no admin topic, no SEND. Its
+ * {@code /user/queue/**} subscriptions resolve to its own session, where nothing is ever sent.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class StompSubscriptionInterceptor implements ChannelInterceptor {
+
+    private static final String APPLICATION_PREFIX = "/app/";
+
+    private static final String ADMIN_TOPIC = "/topic/admin";
 
     private static final Pattern CONVERSATION = Pattern.compile("^/topic/conversations/([0-9A-Za-z_-]+)$");
 
@@ -55,6 +78,19 @@ public class StompSubscriptionInterceptor implements ChannelInterceptor {
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
         StompHeaderAccessor accessor = StompHeaderAccessor.wrap(message);
+        // By message type, not StompCommand.SEND: a client-sent MESSAGE frame is routed the same way.
+        if (SimpMessageType.MESSAGE == accessor.getMessageType()) {
+            String destination = accessor.getDestination();
+            if (destination == null || !destination.startsWith(APPLICATION_PREFIX)) {
+                log.warn("Refused send to {}", destination);
+                throw new IllegalArgumentException("Sending to " + destination + " is not allowed");
+            }
+            // A guest's socket only listens; the handlers read the sender off the Principal.
+            if (accessor.getUser() == null) {
+                throw new IllegalArgumentException("Not authenticated");
+            }
+            return message;
+        }
         if (StompCommand.SUBSCRIBE != accessor.getCommand()) {
             return message;
         }
@@ -64,6 +100,14 @@ public class StompSubscriptionInterceptor implements ChannelInterceptor {
             throw new IllegalArgumentException("Subscription without a destination");
         }
         if (PUBLIC_DESTINATIONS.stream().anyMatch(allowed -> allowed.matcher(destination).matches())) {
+            return message;
+        }
+        if (ADMIN_TOPIC.equals(destination)) {
+            Map<String, Object> session = accessor.getSessionAttributes();
+            if (session == null || !"ADMIN".equals(session.get(JwtHandshakeInterceptor.ROLE_ATTRIBUTE))) {
+                log.warn("Refused non-admin subscription to {}", destination);
+                throw new IllegalArgumentException("Subscription to " + destination + " is not allowed");
+            }
             return message;
         }
 

@@ -25,14 +25,19 @@ import java.util.List;
  *
  * <p>The bucket grants anonymous read on {@code hls/}, {@code thumbnails/} and {@code previews/}
  * because players follow those URLs without credentials (see BucketInitializer). A status in
- * video-service hides a rejected or taken-down video from every listing, but not from someone who
- * already has — or guesses — the URL. Moving the objects under {@code quarantine/}, which the policy
- * does not cover, is what actually stops them being served. They are moved, not deleted, because an
- * admin can overturn either decision.
+ * video-service hides a video from every listing, but not from someone who already has — or
+ * guesses — the URL. Moving the objects under {@code quarantine/}, which the policy does not cover,
+ * is what actually stops them being served. They are moved, not deleted, because an admin can
+ * overturn the decision, and the admin console plays them from there through signed URLs.
  *
- * <p>A marker object records the state, so a transcode that finishes after a takedown can tell it
- * has to quarantine what it just wrote. Every operation is idempotent: events are redelivered, and a
- * takedown can arrive before there is any media to move.
+ * <p>Several decisions can each hold a video's media, and each is lifted on its own terms (see
+ * {@link Hold}). The media goes back on the public path only once nothing holds it. A single
+ * marker used to stand for every reason, so the restore that lifted a takedown also published the
+ * media of a video still waiting for review, or of one its owner had deleted since.
+ *
+ * <p>One marker object per hold records them, so a transcode that finishes after a hold can tell
+ * it has to quarantine what it just wrote. Every operation is idempotent: events are redelivered,
+ * and a hold can arrive before there is any media to move.
  */
 @Slf4j
 @Service
@@ -41,38 +46,83 @@ public class MediaQuarantineService {
 
     static final String PREFIX = "quarantine/";
 
+    /** Why a video's media is off the public path. */
+    public enum Hold {
+        /** An admin took the video down. Lifted by a restore. */
+        TAKEN_DOWN,
+        /** Automatic moderation did not approve it (REVIEW or REJECTED). Lifted by an admin's approval. */
+        MODERATION,
+        /** Its owner deleted it. Never lifted: the media waits out the trash window for the purge. */
+        DELETED
+    }
+
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
 
     /** Marker first, then the move, so a transcode racing this sees the marker and re-runs it. */
     @SneakyThrows
-    public void quarantine(String videoId) {
+    public void hold(String videoId, Hold hold) {
         minioClient.putObject(PutObjectArgs.builder()
                 .bucket(minioProperties.bucket())
-                .object(MediaKeys.quarantineMarker(videoId))
+                .object(MediaKeys.quarantineHold(videoId, hold.name()))
                 .stream(new ByteArrayInputStream(new byte[0]), 0, -1)
                 .build());
-        for (String key : publicKeys(videoId)) {
-            move(key, PREFIX + key);
-        }
-        log.info("Quarantined the media of video {}", videoId);
+        moveIn(videoId);
+        log.info("Quarantined the media of video {} ({})", videoId, hold);
     }
 
+    /**
+     * An admin restore, read the way video-service's {@code Video.markRestored} reads it: on a
+     * taken-down video it lifts the takedown, on any other it is the admin approving what
+     * moderation held back. A deletion is not something a restore can undo.
+     */
     @SneakyThrows
-    public void release(String videoId) {
-        for (String key : publicKeys(videoId)) {
-            move(PREFIX + key, key);
+    public void restore(String videoId) {
+        boolean liftedTakedown = remove(MediaKeys.quarantineHold(videoId, Hold.TAKEN_DOWN.name()));
+        // Written before holds were recorded, for a takedown or a REJECTED verdict; either way
+        // the restore is what lifted it then.
+        boolean liftedLegacy = remove(MediaKeys.quarantineMarker(videoId));
+        if (!liftedTakedown && !liftedLegacy) {
+            remove(MediaKeys.quarantineHold(videoId, Hold.MODERATION.name()));
         }
-        minioClient.removeObject(RemoveObjectArgs.builder()
-                .bucket(minioProperties.bucket())
-                .object(MediaKeys.quarantineMarker(videoId))
-                .build());
+
+        if (isQuarantined(videoId)) {
+            log.info("Video {} is restored but its media is still held", videoId);
+            return;
+        }
+        moveOut(videoId);
+        // A hold that landed while this was moving the media back moved what it found then, not
+        // what this put back after it looked.
+        if (isQuarantined(videoId)) {
+            moveIn(videoId);
+            return;
+        }
         log.info("Released the media of video {}", videoId);
+    }
+
+    /** For a transcode that has just written its output: put it under quarantine if anything holds it. */
+    @SneakyThrows
+    public void enforce(String videoId) {
+        if (isQuarantined(videoId)) {
+            moveIn(videoId);
+        }
     }
 
     @SneakyThrows
     public boolean isQuarantined(String videoId) {
-        return exists(MediaKeys.quarantineMarker(videoId));
+        return exists(MediaKeys.quarantineMarker(videoId)) || !list(MediaKeys.quarantineHolds(videoId)).isEmpty();
+    }
+
+    private void moveIn(String videoId) throws Exception {
+        for (String key : publicKeys(videoId)) {
+            move(key, PREFIX + key);
+        }
+    }
+
+    private void moveOut(String videoId) throws Exception {
+        for (String key : publicKeys(videoId)) {
+            move(PREFIX + key, key);
+        }
     }
 
     /**
@@ -113,6 +163,15 @@ public class MediaQuarantineService {
                 .source(CopySource.builder().bucket(bucket).object(from).build())
                 .build());
         minioClient.removeObject(RemoveObjectArgs.builder().bucket(bucket).object(from).build());
+    }
+
+    /** @return whether there was anything to remove */
+    private boolean remove(String key) throws Exception {
+        if (!exists(key)) {
+            return false;
+        }
+        minioClient.removeObject(RemoveObjectArgs.builder().bucket(minioProperties.bucket()).object(key).build());
+        return true;
     }
 
     private boolean exists(String key) throws Exception {

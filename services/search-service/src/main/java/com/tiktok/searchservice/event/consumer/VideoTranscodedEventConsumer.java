@@ -1,6 +1,6 @@
 package com.tiktok.searchservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.searchservice.index.SearchIndexWriter;
 import lombok.RequiredArgsConstructor;
@@ -32,10 +32,7 @@ public class VideoTranscodedEventConsumer {
         VideoTranscodedEvent event = objectMapper.readValue(payload, VideoTranscodedEvent.class);
 
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
-                searchIndexWriter.applyOutcome(
-                        event.videoId(),
-                        event.success() ? "PENDING_MODERATION" : "FAILED",
-                        event.thumbnailUrl(),
-                        event.durationSeconds()));
+                searchIndexWriter.applyTranscode(
+                        event.videoId(), event.success(), event.thumbnailUrl(), event.durationSeconds()));
     }
 }

@@ -1,6 +1,6 @@
 package com.tiktok.videoservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.videoservice.entity.Video;
@@ -12,11 +12,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -36,7 +36,7 @@ class CommentEventConsumerTest {
     @ServiceConnection
     static MongoDBContainer MONGO = new MongoDBContainer("mongo:7");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     @Autowired
@@ -105,6 +105,26 @@ class CommentEventConsumerTest {
                 CommentCreatedEvent.of(1L, Long.valueOf(video.getId()), 1L, "nice video")), CREATED_HEADER);
 
         assertThat(videoRepository.findById(video.getId()).orElseThrow().getCommentCount()).isEqualTo(0);
+    }
+
+    /**
+     * interaction-service takes a comment deletion on a taken-down video — deleteComment needs no
+     * visibility — and moves its own count. Skipping it here left the restored video showing a
+     * comment that no longer exists.
+     */
+    @Test
+    void onMessage_deleted_onATakenDownVideo_stillDecrements() throws Exception {
+        Video video = videoRepository.save(publishedVideo());
+        consumer.onMessage(objectMapper.writeValueAsString(
+                CommentCreatedEvent.of(1L, Long.valueOf(video.getId()), 1L, "nice video")), CREATED_HEADER);
+        Video down = videoRepository.findById(video.getId()).orElseThrow();
+        down.markTakenDown("policy violation");
+        videoRepository.save(down);
+
+        consumer.onMessage(objectMapper.writeValueAsString(
+                CommentDeletedEvent.of(1L, Long.valueOf(video.getId()), 1L)), DELETED_HEADER);
+
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getCommentCount()).isZero();
     }
 
     @Test

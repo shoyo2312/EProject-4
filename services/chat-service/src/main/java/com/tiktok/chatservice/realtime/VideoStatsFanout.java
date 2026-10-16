@@ -1,7 +1,7 @@
 package com.tiktok.chatservice.realtime;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -16,7 +16,10 @@ import org.springframework.stereotype.Component;
  * change here.
  *
  * <p>The comment topic is the exception — it also forwards the comment itself, because a comment
- * is content and there is no counter to read it back from.
+ * is content and there is no counter to read it back from. Being content, it only goes out for a
+ * video anyone may see, with comments on (VideoAudienceClient): the topic is open to any socket,
+ * and it used to carry comments on PRIVATE and FRIENDS videos that REST hides from all but their
+ * audience.
  */
 @Slf4j
 @Component
@@ -26,6 +29,7 @@ public class VideoStatsFanout {
     private final DirtyVideoRegistry registry;
     private final SimpMessagingTemplate messaging;
     private final ObjectMapper objectMapper;
+    private final VideoAudienceClient audience;
 
     @KafkaListener(topics = {
             "interaction.like-events",
@@ -68,7 +72,7 @@ public class VideoStatsFanout {
             log.debug("Comment event with eventType={} not forwarded", eventType);
             return;
         }
-        messaging.convertAndSend(VideoTopics.comments(videoId), frame);
+        sendComment(videoId, frame);
     }
 
     /**
@@ -88,8 +92,16 @@ public class VideoStatsFanout {
         if (videoId == null || commentId == null || likeCount == null || !likeCount.isNumber()) {
             return;
         }
-        messaging.convertAndSend(VideoTopics.comments(videoId),
-                CommentFrame.liked(videoId, commentId, likeCount.asInt()));
+        sendComment(videoId, CommentFrame.liked(videoId, commentId, likeCount.asInt()));
+    }
+
+    /** Likes and deletions too, not only new comments: each names a comment the viewer cannot see. */
+    private void sendComment(String videoId, CommentFrame frame) {
+        if (!audience.commentsArePublic(videoId)) {
+            log.debug("Comment frame for video {} held back: not public, or comments are off", videoId);
+            return;
+        }
+        messaging.convertAndSend(VideoTopics.comments(videoId), frame);
     }
 
     /**

@@ -5,6 +5,7 @@ import com.tiktok.chatservice.service.ConversationService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -17,6 +18,8 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.MessageBuilder;
 
 import java.security.Principal;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,6 +41,83 @@ class StompSubscriptionInterceptorTest {
         accessor.setUser((Principal) () -> "42");
         accessor.setLeaveMutable(true);
         return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+    }
+
+    private Message<byte[]> subscribeAs(String destination, String role) {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        accessor.setDestination(destination);
+        accessor.setUser((Principal) () -> "42");
+        Map<String, Object> session = new HashMap<>();
+        if (role != null) {
+            session.put(JwtHandshakeInterceptor.ROLE_ATTRIBUTE, role);
+        }
+        accessor.setSessionAttributes(session);
+        accessor.setLeaveMutable(true);
+        return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+    }
+
+    private Message<byte[]> frame(StompCommand command, String destination) {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(command);
+        if (destination != null) {
+            accessor.setDestination(destination);
+        }
+        accessor.setUser((Principal) () -> "42");
+        accessor.setLeaveMutable(true);
+        return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+    }
+
+    @Test
+    void sendToAnApplicationHandlerIsAllowed() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        Message<byte[]> message = frame(StompCommand.SEND, "/app/chat.send/c1");
+
+        assertThat(interceptor.preSend(message, null)).isSameAs(message);
+        // The participant check for a send lives in the handler, not here.
+        verifyNoInteractions(conversationService);
+    }
+
+    /**
+     * Every broker-prefixed destination a client could SEND to, which the broker would otherwise
+     * relay to subscribers verbatim: a forged chat message, a fake notification in someone else's
+     * queue, fake counters and feed entries.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "/topic/conversations/c1",
+            "/topic/feed",
+            "/topic/admin",
+            "/topic/videos.v1",
+            "/topic/videos.v1.comments",
+            "/topic/users.42",
+            "/user/7/queue/notifications",
+            "/user/queue/notifications",
+            "/queue/errors",
+            "/app",
+            "/application/chat.send/c1"
+    })
+    void rejectsSendOutsideApplicationPrefix(String destination) {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(frame(StompCommand.SEND, destination), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsSendWithoutADestination() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(frame(StompCommand.SEND, null), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** MESSAGE is a server frame, but a client can still write one, and it is routed like a SEND. */
+    @Test
+    void rejectsClientMessageFrameToABrokerDestination() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(frame(StompCommand.MESSAGE, "/topic/conversations/c1"), null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -120,5 +200,70 @@ class StompSubscriptionInterceptorTest {
 
         assertThat(registry.findSubscriptions(MessageBuilder.createMessage(new byte[0], send.getMessageHeaders())))
                 .containsKey("attacker");
+    }
+
+    @Test
+    void adminTopicIsOpenToAdmins() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        Message<byte[]> message = subscribeAs("/topic/admin", "ADMIN");
+
+        assertThat(interceptor.preSend(message, null)).isSameAs(message);
+        verifyNoInteractions(conversationService);
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"USER", "admin", ""})
+    void adminTopicIsRefusedToEveryoneElse(String role) {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(subscribeAs("/topic/admin", role), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** A session with no attributes at all — the shape every existing test here builds. */
+    @Test
+    void adminTopicIsRefusedWithoutSessionAttributes() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(subscribeTo("/topic/admin"), null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /** A socket opened without a token: no Principal, no session attributes. */
+    private Message<byte[]> asGuest(StompCommand command, String destination) {
+        StompHeaderAccessor accessor = StompHeaderAccessor.create(command);
+        accessor.setDestination(destination);
+        accessor.setLeaveMutable(true);
+        return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/topic/videos.v1", "/topic/videos.v1.comments", "/topic/users.42", "/topic/feed"})
+    void aGuestListensToThePublicTopics(String destination) {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        Message<byte[]> message = asGuest(StompCommand.SUBSCRIBE, destination);
+
+        assertThat(interceptor.preSend(message, null)).isSameAs(message);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/topic/conversations/c1", "/topic/admin"})
+    void aGuestIsRefusedTheGatedTopics(String destination) {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(asGuest(StompCommand.SUBSCRIBE, destination), null))
+                .isInstanceOf(IllegalArgumentException.class);
+        verifyNoInteractions(conversationService);
+    }
+
+    @Test
+    void aGuestCannotSend() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(asGuest(StompCommand.SEND, "/app/chat.send/c1"), null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

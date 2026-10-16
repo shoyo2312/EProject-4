@@ -11,6 +11,8 @@ import com.tiktok.analyticsservice.repository.WatchEventRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Service
@@ -42,7 +44,8 @@ public class AnalyticsServiceImpl implements AnalyticsService {
     }
 
     @Override
-    public List<TopVideoResponse> getTopVideos(int days, int limit) {
-        return watchEventRepository.findTopVideos(days, limit);
+    public List<TopVideoResponse> getTopVideos(int days, int limit, Instant until) {
+        Instant end = until != null ? until : Instant.now();
+        return watchEventRepository.findTopVideos(end.minus(days, ChronoUnit.DAYS), end, limit);
     }
 }

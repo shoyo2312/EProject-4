@@ -1,5 +1,7 @@
 package com.tiktok.videoservice.config;
 
+import com.tiktok.common.http.InternalApiToken;
+import com.tiktok.security.internal.InternalCallerAuthorization;
 import com.tiktok.security.jwt.JwtAuthenticationFilter;
 
 import lombok.RequiredArgsConstructor;
@@ -18,6 +20,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final InternalApiToken internalApiToken;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -31,6 +34,11 @@ public class SecurityConfig {
                         // taken-down ones — readable without a token.
                         .requestMatchers("/api/v1/videos/admin", "/api/v1/videos/admin/**")
                         .hasRole("ADMIN")
+                        // Also before the blanket GET rule: /policy answers for every video whatever
+                        // its visibility, for interaction- and notification-service. api-gateway
+                        // denies it; the token keeps out whatever reaches this port without the gateway.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/videos/*/policy")
+                        .access(new InternalCallerAuthorization(internalApiToken))
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .anyRequest().authenticated()
                 )

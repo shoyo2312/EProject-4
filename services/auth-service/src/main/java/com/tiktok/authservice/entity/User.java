@@ -22,6 +22,14 @@ public class User extends BaseEntity {
     private String username;
 
     /**
+     * When the owner last chose a new handle; null until they first do. The handle picked at
+     * signup, or invented for a social one, is not a change, so it does not start the 30 days —
+     * see {@code UsernameCooldown}.
+     */
+    @Column(name = "username_changed_at")
+    private Instant usernameChangedAt;
+
+    /**
      * Null for an account created by a social login whose provider gave no address — Facebook's
      * {@code email} permission is optional, and an account registered with a phone number has none
      * to give. Such an account cannot reset a password or receive mail until it supplies one, so
@@ -51,7 +59,8 @@ public class User extends BaseEntity {
 
     /**
      * Last time a token pair was issued for this account — a fresh sign-in or a refresh. Advanced
-     * from {@code TokenIssuer}, the one funnel every sign-in path ends in. Not a precise login
+     * from {@code TokenIssuer}, the one funnel every sign-in path ends in, by a bulk update that
+     * leaves {@code version} alone ({@code UserRepository.stampLastLogin}). Not a precise login
      * clock (a background refresh moves it too); enough to tell a dormant account from a live one.
      */
     @Column(name = "last_login_at")
@@ -88,8 +97,21 @@ public class User extends BaseEntity {
         this.emailVerifiedAt = null;
     }
 
+    public void changeUsername(String newUsername, Instant at) {
+        this.username = newUsername;
+        this.usernameChangedAt = at;
+    }
+
     public void changePasswordHash(String newHash) {
         this.passwordHash = newHash;
+    }
+
+    /**
+     * Leaves the account with no password, as a social signup starts out: signing in by password
+     * is impossible until the owner sets one through the reset flow.
+     */
+    public void clearPassword() {
+        this.passwordHash = null;
     }
 
     public void lock() {
@@ -117,14 +139,8 @@ public class User extends BaseEntity {
         }
     }
 
-    /** Advances {@link #lastLoginAt}; see its field doc for why a refresh counts. */
-    public void recordLogin() {
-        this.lastLoginAt = Instant.now();
-    }
-
     public void promoteToAdmin() {
         this.role = UserRole.ADMIN;
-        this.emailVerified = true;
     }
 
     public void markEmailVerified() {

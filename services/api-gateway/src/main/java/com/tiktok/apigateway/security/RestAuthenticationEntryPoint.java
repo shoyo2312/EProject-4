@@ -1,6 +1,6 @@
 package com.tiktok.apigateway.security;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.common.response.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;

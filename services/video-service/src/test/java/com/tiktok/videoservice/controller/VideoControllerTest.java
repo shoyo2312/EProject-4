@@ -1,6 +1,8 @@
 package com.tiktok.videoservice.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import com.tiktok.common.config.InternalApiAutoConfiguration;
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.common.validation.MediaUrlProperties;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
@@ -10,6 +12,7 @@ import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import com.tiktok.videoservice.exception.CaptionRejectedException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.service.VideoService;
@@ -18,8 +21,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
@@ -55,10 +58,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * UserProfileControllerTest.
  */
 @WebMvcTest(controllers = VideoController.class)
-@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class})
+@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, InternalApiAutoConfiguration.class})
 @EnableConfigurationProperties(MediaUrlProperties.class)
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-at-least-32-bytes-long-0123456789",
+        "INTERNAL_API_TOKEN=internal-token-for-tests-0123456789abcdef",
         "app.media.allowed-hosts=cdn.example.com",
         "app.media.allowed-buckets=video-media"
 })
@@ -72,8 +76,11 @@ class VideoControllerTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    @MockBean
+    @MockitoBean
     private VideoService videoService;
+
+    @Autowired
+    private InternalApiToken internalApiToken;
 
     /**
      * Not used by any test here, and not optional either: video-service now has Redis on its
@@ -82,7 +89,7 @@ class VideoControllerTest {
      * autoconfigure Redis, so without this the context fails to start before a single request is
      * made.
      */
-    @MockBean
+    @MockitoBean
     private StringRedisTemplate revocationRedisTemplate;
 
     private JwtProvider jwtProvider;
@@ -95,6 +102,20 @@ class VideoControllerTest {
     private String tokenFor(long userId) {
         return jwtProvider.generateToken(String.valueOf(userId),
                 Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS), 60_000L);
+    }
+
+    /**
+     * /policy answers for any video whatever its visibility, so only other services may ask it.
+     * The blanket GET rule must not reach it, and neither no token nor a user's JWT gets in.
+     */
+    @Test
+    void policy_answersOnlyCallersWithTheInternalToken() throws Exception {
+        mockMvc.perform(get("/api/v1/videos/v1/policy"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/videos/v1/policy").header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/videos/v1/policy").header(InternalApiToken.HEADER, internalApiToken.value()))
+                .andExpect(status().isOk());
     }
 
     @Test
@@ -113,7 +134,7 @@ class VideoControllerTest {
     void publish_withValidToken_createsVideo() throws Exception {
         CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, List.of());
         VideoResponse response = new VideoResponse("v1", 42L, "title", "desc", null, null, null, null, null, null,
-                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null);
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
         when(videoService.publish(eq(42L), any())).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/videos")
@@ -141,6 +162,58 @@ class VideoControllerTest {
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 
         verify(videoService, never()).publish(any(), any());
+    }
+
+    /** Fillers and zero-width characters render as nothing; sanitized away, the title is blank. */
+    @Test
+    void publish_titleOfOnlyInvisibleCharacters_returnsValidationError() throws Exception {
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title": "\u3164\u200B\u3164", "rawFileUrl": "s3://video-media/raw/1.mp4", "visibility": "PUBLIC"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verify(videoService, never()).publish(any(), any());
+    }
+
+    /** 150 emoji are 300 UTF-16 units: @Size refused them, a reader counts 150. */
+    @Test
+    void publish_titleLimit_countsWhatAReaderCounts() throws Exception {
+        VideoResponse response = new VideoResponse("v1", 1L, "t", null, null, null, null, null, null, null,
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoService.publish(eq(1L), any())).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateVideoRequest(
+                                "🔥".repeat(150), null, "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, null))))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateVideoRequest(
+                                "🔥".repeat(151), null, "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, null))))
+                .andExpect(status().isBadRequest());
+    }
+
+    /** One code per field: the client puts the message under the box that holds the problem. */
+    @Test
+    void publish_aRefusedCaption_answers422NamingTheField() throws Exception {
+        when(videoService.publish(eq(1L), any()))
+                .thenThrow(new CaptionRejectedException(CaptionRejectedException.Field.DESCRIPTION));
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new CreateVideoRequest(
+                                "title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, null))))
+                .andExpect(status().isUnprocessableContent())
+                .andExpect(jsonPath("$.code").value("VIDEO_DESCRIPTION_REJECTED"));
     }
 
     /**
@@ -173,7 +246,7 @@ class VideoControllerTest {
     void publish_rawFileUrlOnOurStorage_isAccepted(String rawFileUrl) throws Exception {
         CreateVideoRequest request = new CreateVideoRequest("title", "desc", rawFileUrl, VideoVisibility.PUBLIC, List.of());
         VideoResponse response = new VideoResponse("v1", 1L, "title", "desc", null, null, null, null, null, null,
-                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null);
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
         when(videoService.publish(eq(1L), any())).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/videos")
@@ -290,5 +363,23 @@ class VideoControllerTest {
                         .header("Authorization", "Bearer " + tokenFor(1L)))
                 .andExpect(status().isMethodNotAllowed())
                 .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"));
+    }
+
+    /**
+     * The caller decides which private owners stay on the page. A controller that stopped
+     * forwarding it would serve everyone the anonymous feed, private followed accounts missing.
+     */
+    @Test
+    void getFollowingFeed_passesTheCaller() throws Exception {
+        when(videoService.getFollowingFeed(any(), any(), any(), any())).thenReturn(new CursorPage<>(List.of(), null));
+
+        mockMvc.perform(get("/api/v1/videos/feed/following").param("followedUserIds", "1,2")
+                        .header("Authorization", "Bearer " + tokenFor(5L)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/videos/feed/following").param("followedUserIds", "1,2"))
+                .andExpect(status().isOk());
+
+        verify(videoService).getFollowingFeed(eq(5L), eq(List.of(1L, 2L)), isNull(), isNull());
+        verify(videoService).getFollowingFeed(isNull(), eq(List.of(1L, 2L)), isNull(), isNull());
     }
 }

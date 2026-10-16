@@ -1,0 +1,14 @@
+-- A provider link that has to be confirmed again before it signs anyone in.
+--
+-- Set on every link that was attached to an account before its address was proven, at the moment
+-- the owner of that mailbox takes the account over — by signing in with a provider that vouches for
+-- the address, by spending a link code, or by resetting the password. Until then nothing says the
+-- person holding the provider account and the person holding the mailbox are the same: anyone can
+-- sign up through Facebook with victim@example.com on their Facebook account, or add that address
+-- to a social-only account, and the link stays attached when the real owner claims the address.
+-- Kept, it was a second way into the account the owner now uses.
+--
+-- A flag rather than a delete, so the owner's own Facebook still works after a code mailed to the
+-- now-proven address — deleting it would turn their next Facebook sign-in without an email into a
+-- brand-new, empty account.
+ALTER TABLE user_identities ADD COLUMN needs_reconfirmation BOOLEAN NOT NULL DEFAULT FALSE;

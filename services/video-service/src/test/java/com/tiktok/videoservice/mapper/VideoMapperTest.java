@@ -56,4 +56,17 @@ class VideoMapperTest {
         // binary-search their way to just under it.
         assertThat(mapper.toResponse(rejectedVideo()).moderation()).isNull();
     }
+
+    @Test
+    void toResponse_carriesTheOwnersPrivacy() {
+        Video video = Video.builder()
+                .id("2")
+                .userId(7L)
+                .visibility(VideoVisibility.PUBLIC)
+                .status(VideoStatus.PUBLISHED)
+                .ownerPrivate(true)
+                .build();
+
+        assertThat(mapper.toResponse(video).ownerPrivate()).isTrue();
+    }
 }

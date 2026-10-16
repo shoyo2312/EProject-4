@@ -58,6 +58,16 @@ class JwtProviderTest {
     }
 
     @Test
+    void parseAccessToken_answersTheClaimsOfAnAccessTokenAndNullForAnythingElse() {
+        String access = provider.generateToken("7", Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS), 60_000);
+        String refresh = provider.generateToken("7", Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_REFRESH), 60_000);
+
+        assertThat(provider.parseAccessToken(access).getSubject()).isEqualTo("7");
+        assertThat(provider.parseAccessToken(refresh)).isNull();
+        assertThat(provider.parseAccessToken("not.a.jwt")).isNull();
+    }
+
+    @Test
     void garbage_isRefusedRatherThanThrown() {
         assertThat(provider.isValidAccessToken("not.a.jwt")).isFalse();
         assertThat(provider.isValidAccessToken("")).isFalse();

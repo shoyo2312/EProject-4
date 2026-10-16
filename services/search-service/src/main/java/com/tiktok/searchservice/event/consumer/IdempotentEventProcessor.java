@@ -79,7 +79,7 @@ public class IdempotentEventProcessor {
             if (ElasticsearchStatus.is(ex, CONFLICT)) {
                 return false;
             }
-            throw ex;
+            throw ElasticsearchStatus.classify(ex);
         }
     }
 }

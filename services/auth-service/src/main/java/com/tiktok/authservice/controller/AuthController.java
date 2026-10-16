@@ -2,16 +2,26 @@ package com.tiktok.authservice.controller;
 
 import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
+import com.tiktok.authservice.dto.request.ChangeUsernameRequest;
+import com.tiktok.authservice.dto.request.CompletePasswordResetRequest;
+import com.tiktok.authservice.dto.request.CompleteSignupRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
 import com.tiktok.authservice.dto.request.ResendVerificationRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
+import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifyPasswordResetRequest;
+import com.tiktok.authservice.dto.request.VerifySignupRequest;
+import com.tiktok.authservice.dto.response.OtpSentResponse;
+import com.tiktok.authservice.dto.response.PasswordResetTicketResponse;
+import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
 import com.tiktok.authservice.service.AuthService;
+import com.tiktok.authservice.service.UsernameChangeService;
 import com.tiktok.common.response.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -31,6 +41,7 @@ public class AuthController {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final AuthService authService;
+    private final UsernameChangeService usernameChangeService;
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
@@ -39,6 +50,40 @@ public class AuthController {
                     + "409 USERNAME_ALREADY_EXISTS / EMAIL_ALREADY_EXISTS on a taken identity.")
     public ApiResponse<UserResponse> register(@Valid @RequestBody RegisterRequest request) {
         return ApiResponse.success(authService.register(request));
+    }
+
+    /**
+     * The email-first signup the web app uses: prove the mailbox, then choose a password and a
+     * username, and only then does an account exist. {@code /register} above stays for clients
+     * that create the account first and verify it afterwards.
+     */
+    @PostMapping("/register/start")
+    @Operation(summary = "Email-first signup: mail a code to a new address",
+            description = "Nothing is created yet. Call again to resend, with the resendTicket "
+                    + "this answered in place of a Turnstile token; the previous code stops "
+                    + "working. 409 EMAIL_ALREADY_EXISTS for an address that has an account, "
+                    + "429 TOO_MANY_OTP_REQUESTS past the send budget.")
+    public ApiResponse<OtpSentResponse> startSignup(@Valid @RequestBody StartSignupRequest request) {
+        return ApiResponse.success(authService.startSignup(request));
+    }
+
+    @PostMapping("/register/verify")
+    @Operation(summary = "Email-first signup: spend the code",
+            description = "Answers the signupToken that /register/complete redeems, good for 30 "
+                    + "minutes. 400 INVALID_OTP on a wrong or expired code, 429 "
+                    + "TOO_MANY_OTP_REQUESTS after repeated guesses.")
+    public ApiResponse<SignupTicketResponse> verifySignup(@Valid @RequestBody VerifySignupRequest request) {
+        return ApiResponse.success(authService.verifySignup(request));
+    }
+
+    @PostMapping("/register/complete")
+    @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "Email-first signup: create the account and sign in",
+            description = "The account is created already verified and a session is issued. "
+                    + "409 USERNAME_ALREADY_EXISTS keeps the signupToken usable; 400 "
+                    + "SIGNUP_SESSION_EXPIRED means start again from the email.")
+    public ApiResponse<TokenResponse> completeSignup(@Valid @RequestBody CompleteSignupRequest request) {
+        return ApiResponse.success(authService.completeSignup(request));
     }
 
     @PostMapping("/login")
@@ -99,17 +144,32 @@ public class AuthController {
     }
 
     /**
+     * Its own path rather than a PATCH of {@code /me}: nothing else about the account changes by a
+     * plain write — the email and the password each go through a flow that proves something first.
+     */
+    @PutMapping("/me/username")
+    @Operation(summary = "Choose a new handle",
+            description = "At most once every 30 days; usernameChangeableAt in the answer (and in "
+                    + "GET /me) says when the next change opens. Sending the current handle is a "
+                    + "no-op that spends nothing. 400 VALIDATION_ERROR, 409 USERNAME_ALREADY_EXISTS, "
+                    + "429 USERNAME_CHANGE_TOO_SOON.")
+    public ApiResponse<UserResponse> changeUsername(@AuthenticationPrincipal Long userId,
+                                                    @Valid @RequestBody ChangeUsernameRequest request) {
+        return ApiResponse.success(usernameChangeService.changeUsername(userId, request.username()));
+    }
+
+    /**
      * Authenticated, unlike the rest of the email flow: the account being given an address is the
      * one holding the token, and there is no address yet to name it by.
      */
     @PostMapping("/email")
     @Operation(summary = "Give a social-only account an email address",
             description = "Authenticated. 409 EMAIL_ALREADY_LINKED once an address is verified — "
-                    + "replacing a confirmed address is how an account gets stolen.")
-    public ApiResponse<Void> addEmail(@AuthenticationPrincipal Long userId,
-                                      @Valid @RequestBody AddEmailRequest request) {
-        authService.addEmail(userId, request);
-        return ApiResponse.success(null);
+                    + "replacing a confirmed address is how an account gets stolen. The "
+                    + "resendTicket in the answer is for /resend-verification.")
+    public ApiResponse<OtpSentResponse> addEmail(@AuthenticationPrincipal Long userId,
+                                                 @Valid @RequestBody AddEmailRequest request) {
+        return ApiResponse.success(authService.addEmail(userId, request));
     }
 
     @PostMapping("/verify-email")
@@ -122,20 +182,20 @@ public class AuthController {
 
     @PostMapping("/resend-verification")
     @Operation(summary = "Mail the verification code again",
-            description = "Silent about whether the address exists or is already verified. "
+            description = "Takes the resendTicket of the previous send in place of a Turnstile "
+                    + "token. Silent about whether the address exists or is already verified. "
                     + "429 TOO_MANY_OTP_REQUESTS past the send budget.")
-    public ApiResponse<Void> resendVerification(@Valid @RequestBody ResendVerificationRequest request) {
-        authService.resendVerification(request);
-        return ApiResponse.success(null);
+    public ApiResponse<OtpSentResponse> resendVerification(@Valid @RequestBody ResendVerificationRequest request) {
+        return ApiResponse.success(authService.resendVerification(request));
     }
 
     @PostMapping("/forgot-password")
     @Operation(summary = "Mail a password-reset code",
-            description = "Silent about whether the address exists. 429 TOO_MANY_OTP_REQUESTS "
+            description = "Takes the resendTicket of the previous send in place of a Turnstile "
+                    + "token. Silent about whether the address exists. 429 TOO_MANY_OTP_REQUESTS "
                     + "past the send budget.")
-    public ApiResponse<Void> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
-        authService.forgotPassword(request);
-        return ApiResponse.success(null);
+    public ApiResponse<OtpSentResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return ApiResponse.success(authService.forgotPassword(request));
     }
 
     @PostMapping("/reset-password")
@@ -144,6 +204,26 @@ public class AuthController {
                     + "usually done because the account is suspected stolen.")
     public ApiResponse<Void> resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
         authService.resetPassword(request);
+        return ApiResponse.success(null);
+    }
+
+    @PostMapping("/reset-password/verify")
+    @Operation(summary = "Two-step reset: spend the code",
+            description = "Answers the resetToken that /reset-password/complete redeems, good for "
+                    + "15 minutes, so a wrong code is reported before a new password is asked for. "
+                    + "400 INVALID_OTP on a wrong or expired code, 429 TOO_MANY_OTP_REQUESTS after "
+                    + "repeated guesses — the same budget /reset-password spends.")
+    public ApiResponse<PasswordResetTicketResponse> verifyPasswordReset(
+            @Valid @RequestBody VerifyPasswordResetRequest request) {
+        return ApiResponse.success(authService.verifyPasswordReset(request));
+    }
+
+    @PostMapping("/reset-password/complete")
+    @Operation(summary = "Two-step reset: set the new password",
+            description = "Everything /reset-password does on success, every session revoked "
+                    + "included. 400 RESET_SESSION_EXPIRED means ask for a new code.")
+    public ApiResponse<Void> completePasswordReset(@Valid @RequestBody CompletePasswordResetRequest request) {
+        authService.completePasswordReset(request);
         return ApiResponse.success(null);
     }
 }

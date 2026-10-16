@@ -1,5 +1,6 @@
 package com.tiktok.common.exception;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 
 /**
@@ -23,5 +24,14 @@ public abstract class DomainException extends RuntimeException {
 
     public HttpStatus getStatus() {
         return status;
+    }
+
+    /**
+     * Headers the error response carries besides the body — {@code Retry-After} on a rate limit,
+     * which a client can act on without parsing the message. Empty for almost every exception,
+     * which is why it is a method to override rather than one more constructor argument.
+     */
+    public HttpHeaders getHeaders() {
+        return new HttpHeaders();
     }
 }

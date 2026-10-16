@@ -1,10 +1,11 @@
 package com.tiktok.mediaworker.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.mediaworker.event.producer.VideoModerationEventProducer;
+import com.tiktok.mediaworker.service.CaptionVerdict;
 import com.tiktok.mediaworker.service.MediaQuarantineService;
 import com.tiktok.mediaworker.service.ModerationService;
 import lombok.RequiredArgsConstructor;
@@ -50,13 +51,16 @@ public class VideoModerationConsumer {
 
         // moderate() never throws: an unreachable classifier comes back as a REVIEW verdict, not
         // as an exception, because a video with no verdict at all would sit at PENDING_MODERATION
-        // with nothing left to move it.
-        VideoModerationCompletedEvent verdict = moderationService.moderate(event.videoId(), event.durationSeconds());
+        // with nothing left to move it. The caption's verdict is folded in before anything reads
+        // it, so the quarantine below and every consumer of the event treat a held caption alike.
+        VideoModerationCompletedEvent verdict = CaptionVerdict.combine(
+                moderationService.moderate(event.videoId(), event.durationSeconds()), event.textVerdict());
         // Before the verdict goes out, so a failed move is redelivered and retried rather than
-        // leaving a rejected video's media public behind a published REJECTED. REVIEW stays
-        // readable on purpose: the admin deciding it has to be able to watch it.
-        if (verdict.verdict() == ModerationVerdict.REJECTED) {
-            quarantine.quarantine(event.videoId());
+        // leaving a held video's media public behind a published verdict. REVIEW is held too: it
+        // is a video nobody has cleared, and it used to stay public by URL while it waited. The
+        // admin deciding it watches it through the console's signed URLs.
+        if (verdict.verdict() != ModerationVerdict.APPROVED) {
+            quarantine.hold(event.videoId(), MediaQuarantineService.Hold.MODERATION);
         }
         eventProducer.publish(verdict);
     }

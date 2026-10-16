@@ -18,8 +18,8 @@ import java.util.function.Supplier;
  * <ul>
  *   <li><b>send</b> ({@link #checkAllowed}) — caps how many OTPs get mailed, so an account
  *       can't be used to spam the mail provider.</li>
- *   <li><b>guess</b> ({@link #checkGuessAllowed}) — caps wrong submissions at verify-email and
- *       reset-password. A 6-digit OTP is only 1e6 values and lives 15 minutes; without this a
+ *   <li><b>guess</b> ({@link #acquireGuess}) — caps submissions at verify-email, reset-password
+ *       and the other OTP checks. A 6-digit OTP is only 1e6 values and lives 15 minutes; without this a
  *       distributed attacker simply enumerates it, since the gateway's per-IP limit doesn't
  *       bind when attempts arrive from many IPs.</li>
  * </ul>
@@ -43,18 +43,20 @@ public class OtpRateLimiter {
      * down is not.
      */
     public void checkAllowed(String purpose, String email) {
-        String key = sendKey(purpose, email);
-        Long count = failOpen(() -> redisTemplate.opsForValue().increment(key), "count OTP sends");
-        if (count != null && count == 1L) {
-            failOpen(() -> redisTemplate.expire(key, WINDOW), "set OTP send window");
-        }
+        Long count = failOpen(() -> WindowCounter.increment(redisTemplate, sendKey(purpose, email), WINDOW),
+                "count OTP sends");
         if (count != null && count > MAX_REQUESTS) {
             throw new TooManyOtpRequestsException();
         }
     }
 
     /**
-     * Fails <em>closed</em> — the one place in this class that does. This counter is all that
+     * Spends one guess, before the code is checked, and throws if that was one over the budget.
+     * A correct code clears the count again through {@link #recordGuessSuccess}. Taken up front
+     * rather than recorded after a failure: see {@link WindowCounter} for the parallel burst that
+     * turned a budget of five into as many guesses as an attacker could send at once.
+     *
+     * <p>Fails <em>closed</em> — the one place in this class that does. This counter is all that
      * stands between a distributed attacker and a 1e6-value secret; treating an unreachable Redis
      * as "no failures recorded" would hand out unlimited guesses for the length of the outage, and
      * an OTP guessed that way is a stolen account. Denying instead costs users the ability to
@@ -64,24 +66,16 @@ public class OtpRateLimiter {
      * counters costs mail volume and brute-force protection that a password still backs, while
      * losing this one costs the whole secret.
      */
-    public void checkGuessAllowed(String purpose, String email) {
-        String value;
+    public void acquireGuess(String purpose, String email) {
+        Long guesses;
         try {
-            value = redisTemplate.opsForValue().get(guessKey(purpose, email));
+            guesses = WindowCounter.increment(redisTemplate, guessKey(purpose, email), WINDOW);
         } catch (RuntimeException e) {
             log.warn("Redis unavailable for OTP guess limit, failing closed", e);
             throw new TooManyOtpRequestsException();
         }
-        if (value != null && Integer.parseInt(value) >= MAX_GUESSES) {
+        if (guesses == null || guesses > MAX_GUESSES) {
             throw new TooManyOtpRequestsException();
-        }
-    }
-
-    public void recordGuessFailure(String purpose, String email) {
-        String key = guessKey(purpose, email);
-        Long count = failOpen(() -> redisTemplate.opsForValue().increment(key), "record OTP guess failure");
-        if (count != null && count == 1L) {
-            failOpen(() -> redisTemplate.expire(key, WINDOW), "set OTP guess window");
         }
     }
 

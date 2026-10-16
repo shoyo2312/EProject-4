@@ -6,38 +6,62 @@ import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.videoservice.entity.OwnerBan;
+import com.tiktok.videoservice.entity.OwnerPrivacy;
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoModeration;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.AlreadyPublishedException;
+import com.tiktok.videoservice.exception.CaptionRejectedException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.InvalidFeedCursorException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.PrivateAccountException;
 import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
+import com.tiktok.videoservice.repository.OwnerBanRepository;
+import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
 import com.tiktok.videoservice.repository.VideoRepository;
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyCollection;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.springframework.data.mongodb.core.query.Criteria.where;
 
 @SpringBootTest
 @Testcontainers
@@ -48,23 +72,46 @@ class VideoServiceImplTest {
     @ServiceConnection
     static MongoDBContainer MONGO = new MongoDBContainer("mongo:7");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     // Default answer is false, so every stranger view falls to the PUBLIC-only branch exactly as
     // before FRIENDS existed. The dedicated FRIENDS assertions live in VideoServiceImplCacheTest.
-    @MockBean
+    @MockitoBean
     private com.tiktok.videoservice.client.FriendshipClient friendshipClient;
+
+    @MockitoBean
+    private com.tiktok.videoservice.client.BlockClient blockClient;
+
+    // Default answer is an empty set: a private owner's videos stay hidden unless a test says who follows.
+    @MockitoBean
+    private com.tiktok.videoservice.client.FollowClient followClient;
+
+    // Spied so a test can make owner_privacy answer differently from one read to the next.
+    @MockitoSpyBean
+    private OwnerPrivacyRepository ownerPrivacyRepository;
 
     @Autowired
     private VideoService videoService;
 
-    @Autowired
+    // Spied so a test can count publish's corrective writes.
+    @MockitoSpyBean
     private VideoRepository videoRepository;
+
+    @Autowired
+    private MongoTemplate mongoTemplate;
+
+    @Autowired
+    private OwnerBanRepository ownerBanRepository;
+
+    @Autowired
+    private AdminVideoDirectory adminVideoDirectory;
 
     @BeforeEach
     void cleanUp() {
         videoRepository.deleteAll();
+        ownerPrivacyRepository.deleteAll();
+        ownerBanRepository.deleteAll();
     }
 
     /**
@@ -153,6 +200,60 @@ class VideoServiceImplTest {
                 "Traversal", null, "s3://video-media/raw/1/../2/stolen.mp4",
                 VideoVisibility.PUBLIC, List.of())))
                 .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /**
+     * media-worker reads the key from the bucket-named segment on, so to the transcode this is
+     * {@code raw/2/stolen.mp4} whatever comes before it. The check used to read the segment after
+     * the first {@code raw} instead, saw user 1, and let it through.
+     */
+    @Test
+    void publish_aUrlWhoseKeyStartsBehindTheCallersPrefix_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Nested", null, "https://cdn.tiktok-clone.local/raw/1/video-media/raw/2/stolen.mp4",
+                VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /** The same shape aimed at a taken-down video's quarantined media, which would go live again. */
+    @Test
+    void publish_aUrlPointingIntoQuarantine_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Quarantined", null,
+                "https://cdn.tiktok-clone.local/raw/1/video-media/quarantine/hls/555/source.mp4",
+                VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /**
+     * normalize() works on the encoded path, where {@code x%2F..%2F..%2F2%2Fstolen.mp4} is one
+     * segment; the dot segments only appear once getPath() decodes it. The key starts with the
+     * caller's prefix, so only the exact-shape check stops it.
+     */
+    @Test
+    void publish_aKeyHidingDotSegmentsBehindEncodedSlashes_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Encoded", null,
+                "https://cdn.tiktok-clone.local/video-media/raw/1/x%2F..%2F..%2F2%2Fstolen.mp4",
+                VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(ForeignUploadException.class);
+    }
+
+    /**
+     * One upload is one video whichever of its URLs comes back. raw_file_idx compares strings, so
+     * the stored URL is rebuilt from the key rather than kept as the client spelled it.
+     */
+    @Test
+    void publish_theSameUploadUnderItsCdnUrl_isRejectedAsAlreadyPublished() {
+        VideoResponse first = videoService.publish(1L, new CreateVideoRequest(
+                "Over https", null, "https://cdn.tiktok-clone.local/video-media/raw/1/twice.mp4",
+                VideoVisibility.PUBLIC, List.of()));
+
+        assertThat(videoRepository.findById(first.id()).orElseThrow().getRawFileUrl())
+                .isEqualTo("s3://video-media/raw/1/twice.mp4");
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Over s3", null, "s3://video-media/raw/1/twice.mp4", VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(AlreadyPublishedException.class);
     }
 
     /**
@@ -254,6 +355,84 @@ class VideoServiceImplTest {
                 "Untagged", null, "s3://video-media/raw/1/untagged.mp4", VideoVisibility.PUBLIC, null));
 
         assertThat(response.tags()).isEmpty();
+    }
+
+    @Test
+    void publish_storesTheSanitizedCaption() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
+                "  Vi\u0065\u0302\u0323t\u200B Nam\n ", "dòng 1\n\n\n\ndòng 2",
+                "s3://video-media/raw/1/clean.mp4", VideoVisibility.PUBLIC, null));
+
+        assertThat(response.title()).isEqualTo("Việt Nam");
+        assertThat(response.description()).isEqualTo("dòng 1\n\ndòng 2");
+    }
+
+    /**
+     * The worst terms refuse the request before anything exists — no document, no event, no
+     * transcode — so the same upload publishes once the caption is fixed.
+     */
+    @Test
+    void publish_aRefusedTitle_storesNothing_andTheUploadCanBePublishedAgain() {
+        String upload = "s3://video-media/raw/1/refused.mp4";
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "địt mẹ mày", null, upload, VideoVisibility.PUBLIC, null)))
+                .isInstanceOf(CaptionRejectedException.class)
+                .extracting("code").isEqualTo("VIDEO_TITLE_REJECTED");
+        assertThat(videoRepository.count()).isZero();
+
+        assertThat(videoService.publish(1L, new CreateVideoRequest(
+                "Video mới", null, upload, VideoVisibility.PUBLIC, null)).status())
+                .isEqualTo(VideoStatus.PROCESSING);
+    }
+
+    @Test
+    void publish_aRefusedDescription_namesTheDescription() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Bình thường", "đồ con đĩ", "s3://video-media/raw/1/desc.mp4", VideoVisibility.PUBLIC, null)))
+                .extracting("code").isEqualTo("VIDEO_DESCRIPTION_REJECTED");
+    }
+
+    /** Tags are read as one text, so a phrase spelled across them is still the phrase. */
+    @Test
+    void publish_aRefusedPhraseSpreadAcrossTags_namesTheTags() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Bình thường", null, "s3://video-media/raw/1/tags.mp4", VideoVisibility.PUBLIC,
+                List.of("địt", "mẹ", "mày"))))
+                .extracting("code").isEqualTo("VIDEO_TAGS_REJECTED");
+    }
+
+    /**
+     * Held, not refused: the video is created and goes down the pipeline like any other. The
+     * verdict sits on the document for the console and rides on the publication for media-worker.
+     */
+    @Test
+    void publish_aFlaggedCaption_isRecordedForReview_andNeverShownPublicly() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
+                "Săn sale", "mua tại abc.xyz hoặc gọi 0912345678", "s3://video-media/raw/1/sale.mp4",
+                VideoVisibility.PUBLIC, null));
+
+        VideoTextModeration recorded = videoRepository.findById(response.id()).orElseThrow().getTextModeration();
+        assertThat(recorded.getVerdict()).isEqualTo(ModerationVerdict.REVIEW);
+        assertThat(recorded.getFlags())
+                .containsExactly("DESCRIPTION:SPAM:link:abc.xyz", "DESCRIPTION:PERSONAL_INFO:phone");
+        assertThat(recorded.isEnforced()).isTrue();
+        assertThat(recorded.getVersion()).startsWith("rules-");
+        assertThat(response.status()).isEqualTo(VideoStatus.PROCESSING);
+        assertThat(response.textModeration()).isNull();
+        assertThat(adminVideoDirectory.getById(response.id()).textModeration().verdict())
+                .isEqualTo(ModerationVerdict.REVIEW);
+    }
+
+    /** Creators link their other profiles; those domains need no review in a caption. */
+    @Test
+    void publish_aCaptionLinkingTheCreatorsOwnProfile_isApproved() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest(
+                "Nấu phở", "Công thức đầy đủ trên youtube.com/@bepnha #phở", "s3://video-media/raw/1/pho.mp4",
+                VideoVisibility.PUBLIC, null));
+
+        assertThat(videoRepository.findById(response.id()).orElseThrow().getTextModeration().getVerdict())
+                .isEqualTo(ModerationVerdict.APPROVED);
     }
 
     @Test
@@ -395,7 +574,7 @@ class VideoServiceImplTest {
         VideoResponse stranger = publishAs(3L, "Stranger", VideoVisibility.PUBLIC);
         markPublished(stranger.id());
 
-        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(List.of(1L, 2L), null, 10);
+        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(null, List.of(1L, 2L), null, 10);
 
         // Newest first, so the seeding order reversed.
         assertThat(feed.items()).extracting(VideoResponse::id)
@@ -418,7 +597,7 @@ class VideoServiceImplTest {
         markPublished(takenDown.id());
         markTakenDown(takenDown.id());
 
-        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(List.of(1L), null, 10);
+        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(null, List.of(1L), null, 10);
 
         assertThat(feed.items()).extracting(VideoResponse::id).containsExactly(published.id());
         assertThat(feed.items()).extracting(VideoResponse::id)
@@ -431,8 +610,8 @@ class VideoServiceImplTest {
         VideoResponse stranger = publishAs(3L, "Stranger", VideoVisibility.PUBLIC);
         markPublished(stranger.id());
 
-        assertThat(videoService.getFollowingFeed(List.of(), null, 10).items()).isEmpty();
-        assertThat(videoService.getFollowingFeed(null, null, 10).items()).isEmpty();
+        assertThat(videoService.getFollowingFeed(null, List.of(), null, 10).items()).isEmpty();
+        assertThat(videoService.getFollowingFeed(null, null, null, 10).items()).isEmpty();
     }
 
     /** Same keyset property {@link #getFeed_pagingByCursor_visitsEveryVideoExactlyOnce} asserts. */
@@ -451,7 +630,7 @@ class VideoServiceImplTest {
         List<String> walked = new ArrayList<>();
         String cursor = null;
         do {
-            CursorPage<VideoResponse> page = videoService.getFollowingFeed(List.of(1L, 2L), cursor, 7);
+            CursorPage<VideoResponse> page = videoService.getFollowingFeed(null, List.of(1L, 2L), cursor, 7);
             walked.addAll(page.items().stream().map(VideoResponse::id).toList());
             cursor = page.nextCursor();
         } while (cursor != null);
@@ -464,7 +643,7 @@ class VideoServiceImplTest {
     void getFollowingFeed_tooManyAuthors_isRefusedRatherThanTruncated() {
         List<Long> tooMany = LongStream.rangeClosed(1, 501).boxed().toList();
 
-        assertThatThrownBy(() -> videoService.getFollowingFeed(tooMany, null, 10))
+        assertThatThrownBy(() -> videoService.getFollowingFeed(null, tooMany, null, 10))
                 .isInstanceOf(TooManyFollowedUsersException.class);
     }
 
@@ -570,7 +749,205 @@ class VideoServiceImplTest {
 
     private void markTakenDown(String videoId) {
         Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId).orElseThrow();
+        PipelineState read = PipelineState.of(video);
         video.markTakenDown("policy violation");
-        videoRepository.updateStatus(video, VideoStatus.PUBLISHED);
+        videoRepository.updateStatus(video, read);
+    }
+
+    /** What UserPrivacyEventConsumer records; publish reads it to stamp the video. */
+    private void makePrivate(long userId) {
+        ownerPrivacyRepository.save(new OwnerPrivacy(userId, true, java.time.Instant.now()));
+    }
+
+    /** The public feed is for videos anyone may see, so a private owner's never appear on it. */
+    @Test
+    void getFeed_leavesOutPrivateOwners() {
+        makePrivate(1L);
+        VideoResponse privateOwners = publishAs(1L, "Private owner", VideoVisibility.PUBLIC);
+        markPublished(privateOwners.id());
+        VideoResponse publicOwners = publishAs(2L, "Public owner", VideoVisibility.PUBLIC);
+        markPublished(publicOwners.id());
+
+        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+                .containsExactly(publicOwners.id());
+    }
+
+    /**
+     * The author ids come from the client, so naming a private account must not be a way into its
+     * videos. Dropped before the query, so the page and its cursor stay whole.
+     */
+    @Test
+    void getFollowingFeed_dropsPrivateOwnersTheCallerDoesNotFollow() {
+        makePrivate(1L);
+        makePrivate(2L);
+        VideoResponse followed = publishAs(1L, "Followed", VideoVisibility.PUBLIC);
+        markPublished(followed.id());
+        VideoResponse notFollowed = publishAs(2L, "Not followed", VideoVisibility.PUBLIC);
+        markPublished(notFollowed.id());
+        VideoResponse publicOwners = publishAs(3L, "Public", VideoVisibility.PUBLIC);
+        markPublished(publicOwners.id());
+        when(followClient.followedAmong(eq(9L), anyCollection())).thenReturn(Set.of(1L));
+
+        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(9L, List.of(1L, 2L, 3L), null, 10);
+
+        assertThat(feed.items()).extracting(VideoResponse::id)
+                .containsExactly(publicOwners.id(), followed.id());
+        verify(followClient).followedAmong(9L, Set.of(1L, 2L));
+    }
+
+    @Test
+    void getFollowingFeed_anonymous_losesEveryPrivateOwner() {
+        makePrivate(1L);
+        VideoResponse privateOwners = publishAs(1L, "Private", VideoVisibility.PUBLIC);
+        markPublished(privateOwners.id());
+        VideoResponse publicOwners = publishAs(2L, "Public", VideoVisibility.PUBLIC);
+        markPublished(publicOwners.id());
+
+        assertThat(videoService.getFollowingFeed(null, List.of(1L, 2L), null, 10).items())
+                .extracting(VideoResponse::id)
+                .containsExactly(publicOwners.id());
+    }
+
+    /** Nobody follows themselves: a private owner naming their own id still sees their own videos. */
+    @Test
+    void getFollowingFeed_aPrivateOwnerStillSeesTheirOwn() {
+        makePrivate(1L);
+        VideoResponse own = publishAs(1L, "Own", VideoVisibility.PUBLIC);
+        markPublished(own.id());
+
+        assertThat(videoService.getFollowingFeed(1L, List.of(1L), null, 10).items())
+                .extracting(VideoResponse::id)
+                .containsExactly(own.id());
+        verifyNoInteractions(followClient);
+    }
+
+    /** A 403 rather than an empty grid, so the client can say the account is private. */
+    @Test
+    void listByUser_privateOwner_refusesAStrangerAndServesAFollower() {
+        makePrivate(1L);
+        VideoResponse published = publishAs(1L, "Published", VideoVisibility.PUBLIC);
+        markPublished(published.id());
+        when(followClient.followedAmong(2L, List.of(1L))).thenReturn(Set.of(1L));
+
+        assertThat(videoService.listByUser(2L, 1L, PageRequest.of(0, 10)).getContent())
+                .extracting(VideoResponse::id)
+                .containsExactly(published.id());
+        assertThatThrownBy(() -> videoService.listByUser(3L, 1L, PageRequest.of(0, 10)))
+                .isInstanceOf(PrivateAccountException.class);
+        assertThatThrownBy(() -> videoService.listByUser(null, 1L, PageRequest.of(0, 10)))
+                .isInstanceOf(PrivateAccountException.class);
+        assertThat(videoService.listByUser(1L, 1L, PageRequest.of(0, 10)).getContent()).hasSize(1);
+    }
+
+    /** Counters stay public, as on TikTok: a private account still shows how many videos it has. */
+    @Test
+    void getUserStats_ofAPrivateOwner_staysPublic() {
+        makePrivate(1L);
+        VideoResponse published = publishAs(1L, "Published", VideoVisibility.PUBLIC);
+        markPublished(published.id());
+
+        assertThat(videoService.getUserStats(null, 1L).videoCount()).isEqualTo(1);
+    }
+
+    @Test
+    void publish_stampsTheOwnersPrivacy() {
+        makePrivate(1L);
+
+        VideoResponse published = publishAs(1L, "Stamped", VideoVisibility.PUBLIC);
+
+        Video stored = videoRepository.findById(published.id()).orElseThrow();
+        assertThat(published.ownerPrivate()).isTrue();
+        assertThat(stored.isOwnerPrivate()).isTrue();
+        // Both reads agreed, so there is nothing extra to announce.
+        assertThat(stored.getVisibilityEventPendingAt()).isNull();
+    }
+
+    /**
+     * The owner goes private between the first read and the insert, and the consumer's fan-out ran
+     * before the insert — so it missed this video. Only the second read can catch it.
+     */
+    @Test
+    void publish_whenTheOwnerGoesPrivateMidway_catchesItOnTheSecondRead() {
+        doReturn(false).doReturn(true).when(ownerPrivacyRepository).existsByUserIdAndPrivateAccountTrue(1L);
+
+        VideoResponse published = publishAs(1L, "Midway", VideoVisibility.PUBLIC);
+
+        Video stored = videoRepository.findById(published.id()).orElseThrow();
+        assertThat(published.ownerPrivate()).isTrue();
+        assertThat(stored.isOwnerPrivate()).isTrue();
+        assertThat(stored.getVisibilityEventPendingAt()).isNotNull();
+    }
+
+    /**
+     * The owner goes private and straight back while the video is being published, so the
+     * corrective write carries a value that is already stale when it lands. Only a read after it
+     * can tell.
+     */
+    @Test
+    void publish_whenTheOwnerSwitchesBackMidway_readsAgainAfterEachCorrection() {
+        doReturn(false).doReturn(true).doReturn(false)
+                .when(ownerPrivacyRepository).existsByUserIdAndPrivateAccountTrue(1L);
+
+        VideoResponse published = publishAs(1L, "Switched back", VideoVisibility.PUBLIC);
+
+        assertThat(published.ownerPrivate()).isFalse();
+        assertThat(videoRepository.findById(published.id()).orElseThrow().isOwnerPrivate()).isFalse();
+        verify(videoRepository, times(2)).updateOwnerPrivacy(any(Video.class));
+    }
+
+    /** What the ban consumer records; every viewer-facing read checks it. */
+    private void ban(long userId, Instant until) {
+        ownerBanRepository.save(new OwnerBan(userId, until, Instant.now()));
+    }
+
+    /**
+     * A ban ended the account's sessions and nothing else: its videos went on playing on the feed,
+     * on its profile and through every link anyone had kept. They leave every path a viewer reads.
+     */
+    @Test
+    void aBannedOwnersVideos_leaveEveryViewerFacingPath() {
+        VideoResponse banned = publishAs(1L, "Banned", VideoVisibility.PUBLIC);
+        markPublished(banned.id());
+        VideoResponse other = publishAs(2L, "Other", VideoVisibility.PUBLIC);
+        markPublished(other.id());
+        ban(1L, OwnerBan.PERMANENT);
+
+        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+                .containsExactly(other.id());
+        assertThat(videoService.getFollowingFeed(9L, List.of(1L, 2L), null, 10).items())
+                .extracting(VideoResponse::id)
+                .containsExactly(other.id());
+        assertThat(videoService.getByIds(9L, List.of(banned.id(), other.id()))).extracting(VideoResponse::id)
+                .containsExactly(other.id());
+        assertThatThrownBy(() -> videoService.getById(9L, banned.id())).isInstanceOf(VideoNotFoundException.class);
+        assertThat(videoService.listByUser(9L, 1L, PageRequest.of(0, 10)).getContent()).isEmpty();
+        assertThat(videoService.getUserStats(9L, 1L).videoCount()).isZero();
+    }
+
+    /** Nothing announces the end of a temporary ban — auth-service lifts it quietly — so it ends here by itself. */
+    @Test
+    void aBanThatHasRunOut_hidesNothing() {
+        VideoResponse video = publishAs(1L, "Served again", VideoVisibility.PUBLIC);
+        markPublished(video.id());
+        ban(1L, Instant.now().minusSeconds(60));
+
+        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+                .containsExactly(video.id());
+        assertThat(videoService.getById(9L, video.id()).id()).isEqualTo(video.id());
+        assertThat(videoService.listByUser(9L, 1L, PageRequest.of(0, 10)).getContent()).hasSize(1);
+    }
+
+    /** Videos stored before ownerPrivate existed have no such field, and their owners are public. */
+    @Test
+    void getFeed_keepsAVideoStoredWithoutOwnerPrivate() {
+        VideoResponse published = publishAs(1L, "Stored before", VideoVisibility.PUBLIC);
+        markPublished(published.id());
+        mongoTemplate.updateFirst(Query.query(where("_id").is(published.id())),
+                new Update().unset("ownerPrivate"), Video.class);
+        assertThat(mongoTemplate.findById(published.id(), Document.class, "videos"))
+                .doesNotContainKey("ownerPrivate");
+
+        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+                .containsExactly(published.id());
     }
 }

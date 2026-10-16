@@ -1,6 +1,13 @@
 server:
   port: 8080
 
+# The gateway is the one public port, so its actuator does not live on it: health, info and the
+# Prometheus scrape answer on this port instead, which nothing publishes. Setting it to 8080
+# would put the scrape on the internet — SecurityConfig opens /actuator to whoever reaches it.
+management:
+  server:
+    port: ${MANAGEMENT_PORT:8180}
+
 spring:
   application:
     name: api-gateway
@@ -12,65 +19,76 @@ spring:
 
   cloud:
     gateway:
-      routes:
-        - id: auth-service
-          uri: ${AUTH_SERVICE_URI:http://localhost:8081}
-          predicates:
-            - Path=/api/v1/auth/**
-        - id: user-service
-          uri: ${USER_SERVICE_URI:http://localhost:8082}
-          predicates:
-            - Path=/api/v1/users/**
-        - id: video-service
-          uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
-          predicates:
-            - Path=/api/v1/videos/**
-        - id: interaction-service
-          uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
-          predicates:
-            - Path=/api/v1/interactions/**
-        - id: recommendation-service
-          uri: ${RECOMMENDATION_SERVICE_URI:http://localhost:8087}
-          predicates:
-            - Path=/api/v1/recommendations/**
-        # Admin console traffic. Both services enforce ROLE_ADMIN themselves —
-        # the gateway only checks that a valid access token is present.
-        - id: admin-service
-          uri: ${ADMIN_SERVICE_URI:http://localhost:8096}
-          predicates:
-            - Path=/api/v1/admin/**
-        # Every endpoint here is the caller's own inbox — the service reads the
-        # recipient from the token, so there is nothing public to expose.
-        - id: notification-service
-          uri: ${NOTIFICATION_SERVICE_URI:http://localhost:8089}
-          predicates:
-            - Path=/api/v1/notifications/**
-        - id: chat-service
-          uri: ${CHAT_SERVICE_URI:http://localhost:8088}
-          predicates:
-            - Path=/api/v1/conversations/**
-        # The STOMP endpoint, and the SockJS URLs under it. Left as http:// on
-        # purpose: the gateway's websocket filter switches the scheme itself
-        # when a request carries an Upgrade header, and SockJS's /ws/info probe
-        # is a plain GET that must not be spoken to as a socket.
-        - id: chat-websocket
-          uri: ${CHAT_SERVICE_URI:http://localhost:8088}
-          predicates:
-            - Path=/ws/**
-        - id: search-service
-          uri: ${SEARCH_SERVICE_URI:http://localhost:8095}
-          predicates:
-            - Path=/api/v1/search/**
-        - id: analytics-service
-          uri: ${ANALYTICS_SERVICE_URI:http://localhost:8097}
-          predicates:
-            - Path=/api/v1/analytics/**
-      default-filters:
-        - name: RequestRateLimiter
-          args:
-            redis-rate-limiter.replenishRate: 20
-            redis-rate-limiter.burstCapacity: 40
-            key-resolver: "#{@ipKeyResolver}"
+      # Gateway 5 reads its routes here; the old spring.cloud.gateway.routes is no longer bound.
+      server:
+        webflux:
+          routes:
+            - id: auth-service
+              uri: ${AUTH_SERVICE_URI:http://localhost:8081}
+              predicates:
+                - Path=/api/v1/auth/**
+            - id: user-service
+              uri: ${USER_SERVICE_URI:http://localhost:8082}
+              predicates:
+                - Path=/api/v1/users/**
+            - id: video-service
+              uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+              predicates:
+                - Path=/api/v1/videos/**
+            - id: interaction-service
+              uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
+              predicates:
+                - Path=/api/v1/interactions/**
+            - id: recommendation-service
+              uri: ${RECOMMENDATION_SERVICE_URI:http://localhost:8087}
+              predicates:
+                - Path=/api/v1/recommendations/**
+            # Admin console traffic. Both services enforce ROLE_ADMIN themselves —
+            # the gateway only checks that a valid access token is present.
+            - id: admin-service
+              uri: ${ADMIN_SERVICE_URI:http://localhost:8096}
+              predicates:
+                - Path=/api/v1/admin/**
+            # Every endpoint here is the caller's own inbox — the service reads the
+            # recipient from the token, so there is nothing public to expose.
+            - id: notification-service
+              uri: ${NOTIFICATION_SERVICE_URI:http://localhost:8089}
+              predicates:
+                - Path=/api/v1/notifications/**
+            - id: chat-service
+              uri: ${CHAT_SERVICE_URI:http://localhost:8088}
+              predicates:
+                - Path=/api/v1/conversations/**
+            # The STOMP endpoint, and the SockJS URLs under it. Left as http:// on
+            # purpose: the gateway's websocket filter switches the scheme itself
+            # when a request carries an Upgrade header, and SockJS's /ws/info probe
+            # is a plain GET that must not be spoken to as a socket.
+            - id: chat-websocket
+              uri: ${CHAT_SERVICE_URI:http://localhost:8088}
+              predicates:
+                - Path=/ws/**
+            - id: search-service
+              uri: ${SEARCH_SERVICE_URI:http://localhost:8095}
+              predicates:
+                - Path=/api/v1/search/**
+            - id: analytics-service
+              uri: ${ANALYTICS_SERVICE_URI:http://localhost:8097}
+              predicates:
+                - Path=/api/v1/analytics/**
+          default-filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                key-resolver: "#{@clientKeyResolver}"
+
+gateway:
+  rate-limit:
+    # The proxies whose X-Forwarded-For the rate limiter believes (see RateLimiterConfig). The
+    # default is loopback plus the private ranges the web server sits on inside Docker or a
+    # cluster, so a caller reaching the gateway from a public address is keyed on that address
+    # whatever header it sends. Narrow this to the proxies' actual addresses once they are known.
+    trusted-proxies: ${RATE_LIMIT_TRUSTED_PROXIES:127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7}
 
 downstream:
   auth-service-uri: ${AUTH_SERVICE_URI:http://localhost:8081}

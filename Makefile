@@ -12,7 +12,7 @@ ifneq (,$(wildcard ./.env))
 endif
 
 .PHONY: help \
-	build build-libs build-auth build-user build-video build-interaction \
+	build image build-libs build-auth build-user build-video build-interaction \
 	build-story build-recommendation build-chat build-gateway \
 	build-admin \
 	clean \
@@ -23,7 +23,8 @@ endif
 	run-admin run-analytics run-search \
 	migrate-auth migrate-user \
 	migrate-admin migrate-all \
-	moderation-up moderation-test
+	moderation-up moderation-test moderation-score-texts \
+	dlt-list dlt-replay
 
 # Hiển thị help
 help:
@@ -43,6 +44,7 @@ help:
 	@echo "    make build-admin        Build admin-service"
 	@echo "    make build-gateway      Build api-gateway"
 	@echo "    make clean              Clean tất cả target/"
+	@echo "    make image SERVICE=x    Build Docker image cho 1 service Java (Dockerfile ở root)"
 	@echo ""
 	@echo "  Test:"
 	@echo "    make test               Chạy toàn bộ tests"
@@ -57,7 +59,7 @@ help:
 	@echo "    make infra-logs         Xem logs tất cả containers"
 	@echo "    make infra-status       Xem trạng thái containers"
 	@echo ""
-	@echo "  Run services (local):"
+	@echo "  Run services (local; trừ gateway, chỉ nghe 127.0.0.1 — BIND=0.0.0.0 để mở):"
 	@echo "    make run-gateway        Run api-gateway :8080"
 	@echo "    make run-auth           Run auth-service :8081"
 	@echo "    make run-user           Run user-service :8082"
@@ -76,12 +78,18 @@ help:
 	@echo "    make rank-test          Run rank-service tests"
 	@echo "    make moderation-up      Start moderation-service :8099 (NSFW screening)"
 	@echo "    make moderation-test    Run moderation-service tests"
+	@echo "    make moderation-score-texts FILE=x  Precision of the text classifier on judged comments"
 	@echo ""
 	@echo "  Database:"
 	@echo "    make migrate-auth       Chạy Flyway migration cho auth-service"
 	@echo "    make migrate-user       Chạy Flyway migration cho user-service"
 	@echo "    make migrate-admin      Chạy Flyway migration cho admin-service"
 	@echo "    make migrate-all        Chạy Flyway migration tất cả PostgreSQL services"
+	@echo ""
+	@echo "  Dead letters (đọc javadoc kafka-lib DltReplay trước khi replay):"
+	@echo "    make dlt-list TOPIC=x.DLT               Liệt kê record trong DLT"
+	@echo "    make dlt-replay TOPIC=x.DLT OFFSET=p:o  Replay một record (FORCE=1 khi đã kiểm tra thứ tự)"
+	@echo "    make dlt-replay TOPIC=x.DLT ALL=1       Replay mọi record nhóm dlt-replay chưa đi qua"
 	@echo ""
 
 # ──────────────────────────────────────────────
@@ -90,6 +98,11 @@ help:
 
 build:
 	./mvnw clean install -DskipTests
+
+# One Java service's image from the shared root Dockerfile: make image SERVICE=auth-service
+image:
+	@test -n "$(SERVICE)" || { echo "usage: make image SERVICE=<directory under services/>"; exit 1; }
+	docker build --build-arg SERVICE=$(SERVICE) -t tiktok/$(SERVICE):latest .
 
 build-libs:
 	./mvnw clean install -DskipTests -pl libs/common-lib,libs/event-schema,libs/crypto-lib
@@ -170,47 +183,72 @@ infra-status:
 # Run services locally
 # ──────────────────────────────────────────────
 
+# Every service but the gateway listens on loopback only, the way a deployment publishes only the
+# gateway's port: otherwise anyone on the same Wi-Fi reaches each service directly, past the
+# gateway's rate limits and path rules. Not server.address in the services' own config, because
+# the gateway has to stay reachable, and on Node 18 the frontends' proxy resolves "localhost" to
+# ::1, which a 127.0.0.1-only gateway refuses. `make run-user BIND=0.0.0.0` to open one up.
+BIND ?= 127.0.0.1
+RUN_INTERNAL = ./mvnw spring-boot:run -Dspring-boot.run.profiles=local -Dspring-boot.run.arguments=--server.address=$(BIND)
+
 run-gateway:
 	./mvnw spring-boot:run -pl services/api-gateway -Dspring-boot.run.profiles=local
 
 run-auth:
-	./mvnw spring-boot:run -pl services/auth-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/auth-service
 
 run-user:
-	./mvnw spring-boot:run -pl services/user-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/user-service
 
 run-video:
-	./mvnw spring-boot:run -pl services/video-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/video-service
 
 # Transcodes uploaded videos into HLS. Without it an upload stays PENDING forever:
 # video-service only flips a video to PUBLISHED on the event this worker emits.
 run-media:
-	./mvnw spring-boot:run -pl services/media-worker -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/media-worker
 
 run-interaction:
-	./mvnw spring-boot:run -pl services/interaction-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/interaction-service
 
 run-story:
-	./mvnw spring-boot:run -pl services/story-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/story-service
 
 run-recommendation:
-	./mvnw spring-boot:run -pl services/recommendation-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/recommendation-service
 
 run-chat:
-	./mvnw spring-boot:run -pl services/chat-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/chat-service
 
 run-notification:
-	./mvnw spring-boot:run -pl services/notification-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/notification-service
 
 # Cả hai service này phục vụ admin console (../tiktok-admin) và đều yêu cầu ROLE_ADMIN.
 run-search:
-	./mvnw spring-boot:run -pl services/search-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/search-service
 
 run-admin:
-	./mvnw spring-boot:run -pl services/admin-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/admin-service
 
 run-analytics:
-	./mvnw spring-boot:run -pl services/analytics-service -Dspring-boot.run.profiles=local
+	$(RUN_INTERNAL) -pl services/analytics-service
+
+# ─────────────────────────────────────────────────────────────────
+# Dead letters — kafka-lib's DltReplay; its class comment says when replaying is safe.
+# KAFKA_BOOTSTRAP_SERVERS picks the cluster, the compose broker by default.
+# ─────────────────────────────────────────────────────────────────
+
+DLT_TOOL = ./mvnw -q -pl libs/kafka-lib compile exec:java -Dexec.classpathScope=compile \
+	-Dexec.mainClass=com.tiktok.kafka.dlt.DltReplay
+
+dlt-list:
+	@test -n "$(TOPIC)" || { echo "TOPIC=<topic>.DLT is required"; exit 2; }
+	$(DLT_TOOL) -Dexec.args="list $(TOPIC)"
+
+dlt-replay:
+	@test -n "$(TOPIC)" || { echo "TOPIC=<topic>.DLT is required"; exit 2; }
+	@test -n "$(OFFSET)$(ALL)" || { echo "OFFSET=<partition:offset> or ALL=1 is required"; exit 2; }
+	$(DLT_TOOL) -Dexec.args="replay $(TOPIC) $(if $(ALL),all,$(OFFSET))$(if $(FORCE), --force,)"
 
 # ─────────────────────────────────────────────────────────────────
 # moderation-service (Python)
@@ -227,6 +265,12 @@ moderation-test:
 	docker compose run --rm --no-deps --entrypoint sh \
 		-v "$$(pwd)/services/moderation-service:/app" moderation-service -c \
 		"pip install -q -r requirements-dev.txt && python -m pytest -q"
+
+# The text classifier against a file of comments you have judged ("+ " should hold, "- " should
+# not), on the running service: precision on this platform's text, before and after any change to
+# the threshold or the weights. FILE=path/to/comments.txt
+moderation-score-texts:
+	python3 services/moderation-service/score_texts.py $(FILE)
 
 # ─────────────────────────────────────────────────────────────────
 # rank-service (Python)

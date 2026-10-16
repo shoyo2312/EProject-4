@@ -48,15 +48,18 @@ public interface VideoService {
      * feed takes. That keeps this service free of a synchronous hop into another one on the busiest
      * read path it has, and the visibility rule is unchanged either way: only PUBLISHED and PUBLIC
      * videos come back, so naming an author the caller does not actually follow reveals nothing
-     * that {@code /videos/users/{id}} would not.
+     * that {@code /videos/users/{id}} would not. The exception is a private account, which is
+     * dropped from the ids unless the requester is it or follows it.
      *
+     * @param requesterId     the caller, or null when anonymous — who loses every private account
      * @param followedUserIds the authors to draw from; empty or null is an empty page, not the
      *                        whole public feed — a viewer following nobody has an empty Following
      *                        tab, and quietly widening it to everyone would be the wrong feed
      * @throws com.tiktok.videoservice.exception.TooManyFollowedUsersException above the cap, rather
      *                        than truncating the list and returning a feed missing whole creators
      */
-    CursorPage<VideoResponse> getFollowingFeed(List<Long> followedUserIds, String cursor, Integer size);
+    CursorPage<VideoResponse> getFollowingFeed(
+            Long requesterId, List<Long> followedUserIds, String cursor, Integer size);
 
     Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable);
 

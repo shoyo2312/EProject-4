@@ -20,9 +20,17 @@ public class NotificationController {
 
     private final NotificationService notificationService;
 
+    /**
+     * Still a bare list, so clients written against the unpaged inbox keep working and get its
+     * newest page. For the next one, pass the id of the last entry as {@code before}; a page
+     * shorter than {@code size} is the last.
+     */
     @GetMapping
-    public ApiResponse<List<NotificationResponse>> listMine(@AuthenticationPrincipal Long currentUserId) {
-        return ApiResponse.success(notificationService.listByUser(currentUserId));
+    public ApiResponse<List<NotificationResponse>> listMine(
+            @AuthenticationPrincipal Long currentUserId,
+            @RequestParam(required = false) String before,
+            @RequestParam(defaultValue = "" + NotificationService.MAX_PAGE_SIZE) int size) {
+        return ApiResponse.success(notificationService.listByUser(currentUserId, before, size));
     }
 
     @GetMapping("/unread-count")

@@ -36,7 +36,7 @@ public class MessageController {
             @AuthenticationPrincipal Long currentUserId,
             @PathVariable String conversationId,
             @RequestParam(required = false) String cursor,
-            // Bounded: the value goes straight into a PageRequest, so an unbounded one is a
+            // Bounded: the value goes straight into the query's limit, so an unbounded one is a
             // request to load a whole conversation into memory.
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return ApiResponse.success(messageService.listMessages(conversationId, currentUserId, cursor, size));

@@ -4,6 +4,7 @@ import com.tiktok.notificationservice.dto.response.NotificationResponse;
 import com.tiktok.notificationservice.entity.Notification;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.event.producer.NotificationEventPublisher;
+import com.tiktok.notificationservice.exception.InvalidNotificationCursorException;
 import com.tiktok.notificationservice.exception.NotNotificationOwnerException;
 import com.tiktok.notificationservice.exception.NotificationNotFoundException;
 import com.tiktok.notificationservice.mapper.NotificationMapper;
@@ -23,6 +24,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -151,13 +153,49 @@ class NotificationServiceImplTest {
         Notification n2 = unreadNotification("n2", 1L);
         NotificationResponse r1 = new NotificationResponse("n1", null, NotificationType.SYSTEM, "t", "b", null, false, n1.getCreatedAt());
         NotificationResponse r2 = new NotificationResponse("n2", null, NotificationType.SYSTEM, "t", "b", null, false, n2.getCreatedAt());
-        when(notificationRepository.findByRecipientIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(n1, n2));
+        when(notificationRepository.findPage(1L, null, 20)).thenReturn(List.of(n1, n2));
         when(notificationMapper.toResponse(n1)).thenReturn(r1);
         when(notificationMapper.toResponse(n2)).thenReturn(r2);
 
-        List<NotificationResponse> responses = notificationService.listByUser(1L);
+        List<NotificationResponse> responses = notificationService.listByUser(1L, null, 20);
 
         assertThat(responses).containsExactly(r1, r2);
+    }
+
+    @Test
+    void listByUser_continuesAfterTheEntryTheCursorNames() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
+        Notification cursor = unreadNotification("n5", 1L);
+        when(notificationRepository.findById("n5")).thenReturn(Optional.of(cursor));
+        when(notificationRepository.findPage(1L, cursor, 20)).thenReturn(List.of());
+
+        assertThat(notificationService.listByUser(1L, "n5", 20)).isEmpty();
+        verify(notificationRepository).findPage(1L, cursor, 20);
+    }
+
+    /** Somebody else's entry as the cursor is refused like a made-up one, so it cannot probe. */
+    @Test
+    void listByUser_refusesACursorFromAnotherInbox() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
+        when(notificationRepository.findById("theirs")).thenReturn(Optional.of(unreadNotification("theirs", 2L)));
+        when(notificationRepository.findById("missing")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> notificationService.listByUser(1L, "theirs", 20))
+                .isInstanceOf(InvalidNotificationCursorException.class);
+        assertThatThrownBy(() -> notificationService.listByUser(1L, "missing", 20))
+                .isInstanceOf(InvalidNotificationCursorException.class);
+        verify(notificationRepository, never()).findPage(any(), any(), anyInt());
+    }
+
+    @Test
+    void listByUser_keepsThePageSizeWithinBounds() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
+
+        notificationService.listByUser(1L, null, 10_000);
+        notificationService.listByUser(1L, null, 0);
+
+        verify(notificationRepository).findPage(1L, null, NotificationService.MAX_PAGE_SIZE);
+        verify(notificationRepository).findPage(1L, null, 1);
     }
 
     @Test
@@ -201,28 +239,15 @@ class NotificationServiceImplTest {
                 .isInstanceOf(NotificationNotFoundException.class);
     }
 
+    /** One update in the database; NotificationRepositoryImplTest covers what it changes. */
     @Test
-    void markAllAsRead_marksEveryUnreadNotificationForRecipient() {
+    void markAllAsRead_isOneUpdateRatherThanALoadAndSave() {
         notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
-        Notification n1 = unreadNotification("n1", 1L);
-        Notification n2 = unreadNotification("n2", 1L);
-        when(notificationRepository.findByRecipientIdAndReadFalse(1L)).thenReturn(List.of(n1, n2));
 
         notificationService.markAllAsRead(1L);
 
-        assertThat(n1.isRead()).isTrue();
-        assertThat(n2.isRead()).isTrue();
-        verify(notificationRepository).saveAll(List.of(n1, n2));
-    }
-
-    @Test
-    void markAllAsRead_noUnreadNotifications_savesEmptyListWithoutError() {
-        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
-        when(notificationRepository.findByRecipientIdAndReadFalse(1L)).thenReturn(List.of());
-
-        notificationService.markAllAsRead(1L);
-
-        verify(notificationRepository).saveAll(List.of());
+        verify(notificationRepository).markAllRead(1L);
+        verify(notificationRepository, never()).saveAll(any());
     }
 
     @Test

@@ -12,6 +12,8 @@ public record AuthMeResponse(
         String email,
         String role,
         String status,
-        Instant createdAt
+        Instant createdAt,
+        Instant usernameChangeableAt,
+        boolean hasPassword
 ) {
 }

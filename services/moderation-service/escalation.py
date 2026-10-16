@@ -16,6 +16,7 @@ model missed, not to become a new way for a video to slip through.
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -35,6 +36,17 @@ ENDPOINT = os.getenv("AZURE_CONTENT_SAFETY_ENDPOINT", "").rstrip("/")
 KEY = os.getenv("AZURE_CONTENT_SAFETY_KEY", "")
 API_VERSION = os.getenv("AZURE_CONTENT_SAFETY_API_VERSION", "2024-09-01")
 TIMEOUT_SECONDS = float(os.getenv("MODERATION_ESCALATE_TIMEOUT", "10"))
+
+# The whole second opinion, not one request of it. media-worker gives /moderate 30s end to end
+# (MODERATION_TIMEOUT_MILLIS), and the local model has spent some of that before this starts. With
+# only the per-request timeout, three slow answers in a row ran past it: media-worker gave up,
+# retried from the start — local model, Azure, the same frames billed again — and after three of
+# those sent the video to REVIEW anyway. Keep this at most a third of media-worker's timeout: the
+# last request may still take up to twice what is left when it starts (connect, then read).
+BUDGET_SECONDS = float(os.getenv("MODERATION_ESCALATE_BUDGET", "10"))
+
+# Indirection so tests can move the clock without touching time.monotonic for everything else.
+_now = time.monotonic
 
 # Which categories to ask about. Sexual is the one the local model has an opinion on, so it is the
 # one being second-guessed; the others come back in the same response at no extra quota, and a
@@ -123,10 +135,18 @@ def second_opinion(frames: list[str]) -> SecondOpinion:
     url = f"{ENDPOINT}/contentsafety/image:analyze?api-version={API_VERSION}"
     headers = {"Ocp-Apim-Subscription-Key": KEY, "Content-Type": "application/json"}
     worst = -1
+    deadline = _now() + BUDGET_SECONDS
 
     try:
         with httpx.Client(timeout=TIMEOUT_SECONDS) as client:
             for frame in frames[:ESCALATE_FRAMES]:
+                # Checked before every frame rather than trusted to the per-request timeout: the
+                # answer is worth nothing once media-worker has stopped waiting for it. Out of time
+                # is the same outcome as any other failure — no verdict, REVIEW stands.
+                remaining = deadline - _now()
+                if remaining <= 0:
+                    log.warning("Azure content safety did not finish within %.0fs", BUDGET_SECONDS)
+                    return SecondOpinion(None, "azure-slow")
                 response = client.post(
                     url,
                     headers=headers,
@@ -135,6 +155,7 @@ def second_opinion(frames: list[str]) -> SecondOpinion:
                         "categories": list(CATEGORIES),
                         "outputType": "FourSeverityLevels",
                     },
+                    timeout=min(TIMEOUT_SECONDS, remaining),
                 )
                 # 429 is the free tier's monthly cap, and it is not a fault to fix — it is the
                 # expected end of the quota. Same outcome as any other failure, but said plainly

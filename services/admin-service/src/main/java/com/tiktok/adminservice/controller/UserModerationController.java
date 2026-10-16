@@ -16,8 +16,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Banning straight from the user directory, without a report to resolve first. The audit trail
- * and the Kafka event are identical either way — {@code reportId} is simply null.
+ * Acting on an account straight from the console, without a report to resolve first. The audit
+ * trail and the Kafka event are identical either way — {@code reportId} is simply null.
  */
 @RestController
 @RequestMapping("/api/v1/admin/users")
@@ -42,5 +42,25 @@ public class UserModerationController {
             @Valid @RequestBody ModerationRequest request) {
         return ApiResponse.success(adminService.moderate(currentAdminId, ReportTargetType.USER,
                 String.valueOf(userId), ModerationActionType.UNBAN_USER, request.reason()));
+    }
+
+    /** The warning a report resolution can already send, for an account nobody reported. */
+    @PostMapping("/{userId}/warn")
+    public ApiResponse<ModerationActionResponse> warn(
+            @AuthenticationPrincipal Long currentAdminId,
+            @PathVariable Long userId,
+            @Valid @RequestBody ModerationRequest request) {
+        return ApiResponse.success(adminService.moderate(currentAdminId, ReportTargetType.USER,
+                String.valueOf(userId), ModerationActionType.WARN_USER, request.reason()));
+    }
+
+    /** Signs the account out everywhere and leaves it ACTIVE — see {@link ModerationActionType#REVOKE_SESSIONS}. */
+    @PostMapping("/{userId}/revoke-sessions")
+    public ApiResponse<ModerationActionResponse> revokeSessions(
+            @AuthenticationPrincipal Long currentAdminId,
+            @PathVariable Long userId,
+            @Valid @RequestBody ModerationRequest request) {
+        return ApiResponse.success(adminService.moderate(currentAdminId, ReportTargetType.USER,
+                String.valueOf(userId), ModerationActionType.REVOKE_SESSIONS, request.reason()));
     }
 }

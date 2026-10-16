@@ -1,1 +1,2 @@
 com.tiktok.security.jwt.JwtSecurityAutoConfiguration
+com.tiktok.security.actuator.ActuatorSecurityAutoConfiguration

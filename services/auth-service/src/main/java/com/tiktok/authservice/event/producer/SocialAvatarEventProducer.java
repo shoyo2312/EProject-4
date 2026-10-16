@@ -1,6 +1,6 @@
 package com.tiktok.authservice.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.user.SocialAvatarDiscoveredEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -22,13 +22,18 @@ import org.springframework.stereotype.Component;
  * being down must not fail a login over a cosmetic picture, so the send is fire-and-forget and a
  * failure is only logged: the next sign-in publishes the same thing again, which leaves the avatar
  * one login behind instead of lost.
+ *
+ * <p>Only for an account that already exists. The sign-in that creates one does write something,
+ * and its announcement rides the outbox behind the registration — see
+ * {@code SocialAccountRegistrar.register} for why it may not be sent from here.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class SocialAvatarEventProducer {
 
-    private static final String TOPIC = "auth.social-avatar-events";
+    /** Shared with {@link OutboxPublisher}, which carries a new account's announcement here. */
+    static final String TOPIC = "auth.social-avatar-events";
 
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;

@@ -13,8 +13,10 @@ import com.tiktok.authservice.event.producer.SocialAvatarEventProducer;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.SocialLinkVerificationRequiredException;
+import com.tiktok.authservice.exception.SocialSignInNotAllowedException;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
+import com.tiktok.authservice.service.SocialAccountRegistrar.Registration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -35,6 +37,7 @@ import static org.mockito.Mockito.when;
 class OAuthServiceImplTest {
 
     private static final String UID = "107841234567890123456";
+    private static final String PICTURE = "https://lh3.googleusercontent.com/a/x";
     private static final SocialLoginRequest REQUEST = new SocialLoginRequest("provider-token");
 
     private final SocialTokenVerifier verifier = mock(SocialTokenVerifier.class);
@@ -52,7 +55,7 @@ class OAuthServiceImplTest {
         when(verifier.provider()).thenReturn(AuthProvider.GOOGLE);
         when(verifier.verify(REQUEST.token()))
                 .thenReturn(new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true));
-        when(tokenIssuer.issue(any())).thenReturn(new TokenResponse("access", "refresh", 900_000L));
+        when(tokenIssuer.issue(any(), any())).thenReturn(new TokenResponse("access", "refresh", 900_000L));
 
         service = new OAuthServiceImpl(List.of(verifier), identityRepository, userRepository,
                 registrar, linkChallenge, tokenIssuer, avatarEventProducer);
@@ -74,7 +77,7 @@ class OAuthServiceImplTest {
     void firstLoginRegisters() {
         when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
                 .thenReturn(Optional.empty());
-        when(registrar.register(any())).thenReturn(activeUser("a@example.com"));
+        when(registrar.register(any())).thenReturn(new Registration(activeUser("a@example.com"), false));
 
         service.login(AuthProvider.GOOGLE, REQUEST);
 
@@ -106,6 +109,53 @@ class OAuthServiceImplTest {
         verify(avatarEventProducer, never()).publish(any(), any());
     }
 
+    /**
+     * The registration queues a new account's picture behind itself. Announced from here as well,
+     * the copy reached user-service before the profile it belongs to, and every new account stayed
+     * on the provider's URL.
+     */
+    @Test
+    void firstSignInLeavesTheAvatarToTheRegistration() {
+        withProviderPicture();
+        when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
+                .thenReturn(Optional.empty());
+        when(registrar.register(any())).thenReturn(new Registration(activeUser("a@example.com"), true));
+
+        service.login(AuthProvider.GOOGLE, REQUEST);
+
+        verify(avatarEventProducer, never()).publish(any(), any());
+    }
+
+    /** An existing account the provider's verified address claimed already has a profile to land on. */
+    @Test
+    void firstSignInIntoAnExistingAccountAnnouncesTheAvatar() {
+        withProviderPicture();
+        User owner = activeUser("a@example.com");
+        when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
+                .thenReturn(Optional.empty());
+        when(registrar.register(any())).thenReturn(new Registration(owner, false));
+
+        service.login(AuthProvider.GOOGLE, REQUEST);
+
+        verify(avatarEventProducer).publish(owner.getId(), PICTURE);
+    }
+
+    /** The double tap's other request announces it — possibly queued behind the registration. */
+    @Test
+    void loserOfTheRegistrationRaceLeavesTheAvatarToTheWinner() {
+        withProviderPicture();
+        User winner = activeUser("a@example.com");
+        when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(identityFor(winner)));
+        when(userRepository.findById(any())).thenReturn(Optional.of(winner));
+        when(registrar.register(any())).thenThrow(new DataIntegrityViolationException("uq_identity"));
+
+        service.login(AuthProvider.GOOGLE, REQUEST);
+
+        verify(avatarEventProducer, never()).publish(any(), any());
+    }
+
     /** An account with no address is a normal outcome for Facebook; the client is told to ask. */
     @Test
     void accountWithoutEmailAsksTheClientForOne() {
@@ -122,7 +172,7 @@ class OAuthServiceImplTest {
 
         assertThatThrownBy(() -> service.login(AuthProvider.GOOGLE, REQUEST))
                 .isInstanceOf(InvalidCredentialsException.class);
-        verify(tokenIssuer, never()).issue(any());
+        verify(tokenIssuer, never()).issue(any(), any());
     }
 
     /**
@@ -153,7 +203,7 @@ class OAuthServiceImplTest {
                 .thenReturn(Optional.empty());
         when(registrar.register(any()))
                 .thenThrow(new DataIntegrityViolationException("uq_users_username"))
-                .thenReturn(activeUser("a@example.com"));
+                .thenReturn(new Registration(activeUser("a@example.com"), false));
 
         assertThat(service.login(AuthProvider.GOOGLE, REQUEST).tokens().accessToken()).isEqualTo("access");
         verify(registrar, times(2)).register(any());
@@ -187,7 +237,7 @@ class OAuthServiceImplTest {
                 .isInstanceOf(SocialLinkVerificationRequiredException.class);
 
         verify(linkChallenge).start(eq(owner), any());
-        verify(tokenIssuer, never()).issue(any());
+        verify(tokenIssuer, never()).issue(any(), any());
     }
 
     /** The code proves the mailbox, the token proves the provider account — then, one session. */
@@ -215,6 +265,111 @@ class OAuthServiceImplTest {
                 new SocialLinkRequest(REQUEST.token(), "123456")))
                 .isInstanceOf(InvalidOtpException.class);
         verify(linkChallenge, never()).confirm(any(), any());
+    }
+
+    /**
+     * A link the address owner's takeover flagged signs nobody in on the provider token alone —
+     * a squatter's Facebook is exactly this — and gets the same code-to-the-mailbox answer as a
+     * new link to an address that is spoken for.
+     */
+    @Test
+    void linkAwaitingReconfirmationMailsACodeInsteadOfSigningIn() {
+        User owner = activeUser("a@example.com");
+        flaggedLinkTo(owner);
+
+        assertThatThrownBy(() -> service.login(AuthProvider.GOOGLE, REQUEST))
+                .isInstanceOf(SocialLinkVerificationRequiredException.class);
+
+        verify(linkChallenge).start(eq(owner), any());
+        verify(tokenIssuer, never()).issue(any(), any());
+    }
+
+    @Test
+    void linkAwaitingReconfirmationSignsInOnceTheCodeIsSpent() {
+        User owner = activeUser("a@example.com");
+        UserIdentity flagged = flaggedLinkTo(owner);
+        when(linkChallenge.reconfirm(owner, flagged, "123456")).thenReturn(owner);
+
+        SocialLoginResponse response =
+                service.confirmLink(AuthProvider.GOOGLE, new SocialLinkRequest(REQUEST.token(), "123456"));
+
+        assertThat(response.tokens().accessToken()).isEqualTo("access");
+        verify(linkChallenge).reconfirm(owner, flagged, "123456");
+        verify(linkChallenge, never()).confirm(any(), any());
+    }
+
+    /**
+     * The provider account may carry no address at all — that is how a Facebook signup without an
+     * email looks — and the code was mailed to the account's own address, so that is no reason to
+     * refuse it here.
+     */
+    @Test
+    void reconfirmingALinkWithoutAProviderAddressStillWorks() {
+        when(verifier.verify(REQUEST.token()))
+                .thenReturn(new SocialProfile(AuthProvider.GOOGLE, UID, null, false));
+        User owner = activeUser("a@example.com");
+        UserIdentity flagged = flaggedLinkTo(owner);
+        when(linkChallenge.reconfirm(owner, flagged, "123456")).thenReturn(owner);
+
+        assertThat(service.confirmLink(AuthProvider.GOOGLE, new SocialLinkRequest(REQUEST.token(), "123456"))
+                .tokens().accessToken()).isEqualTo("access");
+    }
+
+    /**
+     * An admin session costs a password, Turnstile and an emailed code; a provider link to the
+     * admin's account would cost only the mailbox. Refused however the account was reached.
+     */
+    @Test
+    void adminAccountIsNotSignedInThroughAProvider() {
+        User admin = activeUser("admin@example.com");
+        admin.promoteToAdmin();
+        linkedTo(admin);
+
+        assertThatThrownBy(() -> service.login(AuthProvider.GOOGLE, REQUEST))
+                .isInstanceOf(SocialSignInNotAllowedException.class);
+        verify(tokenIssuer, never()).issue(any(), any());
+    }
+
+    @Test
+    void adminAccountIsNotSignedInThroughALinkConfirmationEither() {
+        User admin = activeUser("admin@example.com");
+        admin.promoteToAdmin();
+        linkedTo(admin);
+
+        assertThatThrownBy(() -> service.confirmLink(AuthProvider.GOOGLE,
+                new SocialLinkRequest(REQUEST.token(), "123456")))
+                .isInstanceOf(SocialSignInNotAllowedException.class);
+        verify(tokenIssuer, never()).issue(any(), any());
+    }
+
+    /** A flagged link to an admin must not even cost the admin a mailed code. */
+    @Test
+    void flaggedLinkToAnAdminMailsNothing() {
+        User admin = activeUser("admin@example.com");
+        admin.promoteToAdmin();
+        flaggedLinkTo(admin);
+
+        assertThatThrownBy(() -> service.login(AuthProvider.GOOGLE, REQUEST))
+                .isInstanceOf(SocialSignInNotAllowedException.class);
+        verify(linkChallenge, never()).start(any(), any());
+    }
+
+    private UserIdentity flaggedLinkTo(User user) {
+        UserIdentity flagged = UserIdentity.builder()
+                .userId(1L)
+                .provider(AuthProvider.GOOGLE)
+                .providerUid(UID)
+                .needsReconfirmation(true)
+                .build();
+        when(identityRepository.findByProviderAndProviderUid(AuthProvider.GOOGLE, UID))
+                .thenReturn(Optional.of(flagged));
+        when(userRepository.findById(any())).thenReturn(Optional.of(user));
+        return flagged;
+    }
+
+    private void withProviderPicture() {
+        when(verifier.verify(REQUEST.token()))
+                .thenReturn(new SocialProfile(AuthProvider.GOOGLE, UID, "a@example.com", true, PICTURE));
     }
 
     private void linkedTo(User user) {

@@ -1,7 +1,6 @@
 package com.tiktok.chatservice.realtime;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.notification.NotificationCreatedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,7 +24,7 @@ class NotificationFanoutTest {
     @Mock
     private SimpMessagingTemplate messaging;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private NotificationFanout fanout() {
         return new NotificationFanout(messaging, objectMapper);
