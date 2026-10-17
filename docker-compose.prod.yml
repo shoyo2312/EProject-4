@@ -21,11 +21,14 @@ x-java: &java
   # The image runs with -XX:MaxRAMPercentage=75, so this is what sizes the heap.
   mem_limit: 1g
 
-# Both must be identical in every Java service: a mismatched INTERNAL_API_TOKEN turns every
-# service-to-service call into a 403.
-x-secrets: &secrets
+# Shared by every Java service. JWT_SECRET and INTERNAL_API_TOKEN must be identical everywhere:
+# a mismatched INTERNAL_API_TOKEN turns every service-to-service call into a 403.
+# springdoc is on by default, and the gateway would publish the whole API map to the internet.
+x-java-env: &java-env
   JWT_SECRET: ${JWT_SECRET:?}
   INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?}
+  SPRINGDOC_API_DOCS_ENABLED: "false"
+  SPRINGDOC_SWAGGER_UI_ENABLED: "false"
 
 services:
 
@@ -224,7 +227,7 @@ services:
         condition: service_healthy
     environment:
       SNOWFLAKE_NODE_ID: 1
-      <<: *secrets
+      <<: *java-env
       REDIS_HOST: redis
       AUTH_SERVICE_URI: http://auth-service:8081
       USER_SERVICE_URI: http://user-service:8082
@@ -242,7 +245,7 @@ services:
       kafka: { condition: service_healthy }
     environment:
       SNOWFLAKE_NODE_ID: 2
-      <<: *secrets
+      <<: *java-env
       DB_HOST: postgres-auth
       DB_PORT: 5432
       DB_USERNAME: ${DB_USERNAME:?}
@@ -278,7 +281,7 @@ services:
       kafka: { condition: service_healthy }
     environment:
       SNOWFLAKE_NODE_ID: 3
-      <<: *secrets
+      <<: *java-env
       DB_HOST: postgres-user
       DB_PORT: 5432
       DB_USERNAME: ${DB_USERNAME:?}
@@ -301,7 +304,7 @@ services:
       kafka: { condition: service_healthy }
     environment:
       SNOWFLAKE_NODE_ID: 4
-      <<: *secrets
+      <<: *java-env
       MONGO_HOST: mongodb
       MONGO_USERNAME: ${MONGO_USERNAME:?}
       MONGO_PASSWORD: ${MONGO_PASSWORD:?}
@@ -327,7 +330,7 @@ services:
       kafka: { condition: service_healthy }
       minio: { condition: service_healthy }
     environment:
-      <<: *secrets
+      <<: *java-env
       SNOWFLAKE_NODE_ID: 5
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MODERATION_SERVICE_URL: http://moderation-service:8099
@@ -348,7 +351,7 @@ services:
       kafka: { condition: service_healthy }
     environment:
       SNOWFLAKE_NODE_ID: 6
-      <<: *secrets
+      <<: *java-env
       CASSANDRA_CONTACT_POINTS: cassandra
       REDIS_HOST: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
