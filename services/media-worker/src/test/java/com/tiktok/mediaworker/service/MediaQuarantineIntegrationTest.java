@@ -47,7 +47,7 @@ class MediaQuarantineIntegrationTest {
     @BeforeEach
     void setUp() throws Exception {
         MinioProperties properties = new MinioProperties(
-                MINIO.getS3URL(), MINIO.getUserName(), MINIO.getPassword(), BUCKET);
+                MINIO.getS3URL(), MINIO.getS3URL(), MINIO.getUserName(), MINIO.getPassword(), BUCKET);
         minioClient = MinioClient.builder()
                 .endpoint(properties.endpoint())
                 .credentials(properties.accessKey(), properties.secretKey())
@@ -208,7 +208,7 @@ class MediaQuarantineIntegrationTest {
     @Test
     void transcodeMarker_isAbsentUntilRecordedAndNeverPublic() throws Exception {
         TranscodeServiceImpl transcoder = new TranscodeServiceImpl(minioClient,
-                new MinioProperties(MINIO.getS3URL(), MINIO.getUserName(), MINIO.getPassword(), BUCKET),
+                new MinioProperties(MINIO.getS3URL(), MINIO.getS3URL(), MINIO.getUserName(), MINIO.getPassword(), BUCKET),
                 null, null, null);
 
         assertThat(transcoder.alreadyTranscoded("v5")).isFalse();

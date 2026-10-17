@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
 class MediaCleanupServiceImplTest {
 
     private static final MinioProperties PROPERTIES =
-            new MinioProperties("http://localhost:9000", "key", "secret", "video-media");
+            new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret", "video-media");
 
     @Mock
     private MinioClient minioClient;

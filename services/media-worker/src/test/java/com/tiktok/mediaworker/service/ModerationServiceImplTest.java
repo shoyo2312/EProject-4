@@ -39,7 +39,7 @@ import static org.mockito.Mockito.when;
 class ModerationServiceImplTest {
 
     private static final MinioProperties MINIO =
-            new MinioProperties("http://localhost:9000", "key", "secret", "video-media");
+            new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret", "video-media");
     private static final ModerationProperties ENABLED =
             new ModerationProperties(true, "http://moderation:8099", 10, 30_000L, 3, 0L);
 

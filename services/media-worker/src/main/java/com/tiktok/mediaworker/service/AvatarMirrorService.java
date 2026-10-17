@@ -82,7 +82,7 @@ public class AvatarMirrorService {
 
         String bucket = minioProperties.bucket();
         String key = MediaKeys.avatar(userId);
-        String storedUrl = "%s/%s/%s".formatted(minioProperties.endpoint(), bucket, key);
+        String storedUrl = "%s/%s/%s".formatted(minioProperties.publicUrl(), bucket, key);
 
         // Already copied. Every sign-in announces the same picture, and re-downloading it each time
         // would hang a provider round trip off a path that already has one.
