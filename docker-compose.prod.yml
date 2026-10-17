@@ -1,9 +1,8 @@
 # =====================================================================
 # Production stack for Coolify (Docker Compose build pack).
 #
-# Phase 1: the services behind the user app's core loop — sign-in, profiles, upload, feed
-# reactions. Not here yet: story, recommendation, chat, notification, search, admin, analytics,
-# rank (and Elasticsearch / ClickHouse with them). Add each the same way as the ones below.
+# Every service the two frontends reach through the gateway. Not here: story-service — the gateway
+# has no route to it and its Mongo URI is a hard-coded localhost one.
 #
 # Nothing publishes a port. Coolify's proxy is the only way in, and only two services get a
 # domain in its UI:
@@ -60,6 +59,21 @@ services:
       - postgres-user-data:/var/lib/postgresql/data
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d user_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-admin:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: admin_db
+      POSTGRES_USER: ${DB_USERNAME:?}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?}
+    volumes:
+      - postgres-admin-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d admin_db" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -195,6 +209,57 @@ services:
           | mc ilm import "tt/$$MINIO_BUCKET"
     restart: "no"
 
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.5
+    restart: unless-stopped
+    mem_limit: 1g
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # analytics-service creates its tables from schema.sql on startup; this only has to make the db.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    mem_limit: 2g
+    environment:
+      CLICKHOUSE_DB: analytics_db
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      # 127.0.0.1: localhost is ::1 only in this image. See docker-compose.yml.
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Feed ranker. A named volume instead of the dev bind mount, so it starts with no model: it
+  # answers with no scores and recommendation-service keeps its own ordering until one is trained.
+  # ponytail: no model in prod yet; copy one into the rank-model volume and POST /reload to use it.
+  rank-service:
+    build: ./services/rank-service
+    restart: unless-stopped
+    environment:
+      MODEL_PATH: /app/model/model.txt
+    volumes:
+      - rank-model:/app/model
+    healthcheck:
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8098/health')\"" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # NSFW frame + caption/comment classifier. First build downloads a few hundred MB of model.
   moderation-service:
     build: ./services/moderation-service
@@ -233,6 +298,12 @@ services:
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
       INTERACTION_SERVICE_URI: http://interaction-service:8085
+      RECOMMENDATION_SERVICE_URI: http://recommendation-service:8087
+      CHAT_SERVICE_URI: http://chat-service:8088
+      NOTIFICATION_SERVICE_URI: http://notification-service:8089
+      SEARCH_SERVICE_URI: http://search-service:8095
+      ADMIN_SERVICE_URI: http://admin-service:8096
+      ANALYTICS_SERVICE_URI: http://analytics-service:8097
 
   auth-service:
     <<: *java
@@ -312,6 +383,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       MODERATION_SERVICE_URL: http://moderation-service:8099
+      ADMIN_SERVICE_URL: http://admin-service:8096
       MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
@@ -358,10 +430,124 @@ services:
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
       MODERATION_SERVICE_URL: http://moderation-service:8099
+      ADMIN_SERVICE_URL: http://admin-service:8096
+
+  recommendation-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: recommendation-service }
+    depends_on:
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      rank-service: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 7
+      <<: *java-env
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      USER_SERVICE_URI: http://user-service:8082
+      RANK_SERVICE_URL: http://rank-service:8098
+
+  chat-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: chat-service }
+    depends_on:
+      mongodb: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 8
+      <<: *java-env
+      MONGO_HOST: mongodb
+      MONGO_USERNAME: ${MONGO_USERNAME:?}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?}
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      USER_SERVICE_URI: http://user-service:8082
+      VIDEO_SERVICE_URI: http://video-service:8083
+      INTERACTION_SERVICE_URI: http://interaction-service:8085
+      # The web app's origin: the socket handshake from anywhere else is refused.
+      WEBSOCKET_ALLOWED_ORIGINS: ${SITE_URL:?}
+
+  notification-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: notification-service }
+    depends_on:
+      mongodb: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 9
+      <<: *java-env
+      MONGO_HOST: mongodb
+      MONGO_USERNAME: ${MONGO_USERNAME:?}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      USER_SERVICE_URI: http://user-service:8082
+      VIDEO_SERVICE_URI: http://video-service:8083
+      INTERACTION_SERVICE_URI: http://interaction-service:8085
+
+  search-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: search-service }
+    depends_on:
+      elasticsearch: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 10
+      <<: *java-env
+      ELASTICSEARCH_URIS: http://elasticsearch:9200
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      USER_SERVICE_URI: http://user-service:8082
+
+  admin-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: admin-service }
+    depends_on:
+      postgres-admin: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 11
+      <<: *java-env
+      DB_HOST: postgres-admin
+      DB_PORT: 5432
+      DB_USERNAME: ${DB_USERNAME:?}
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      AUTH_SERVICE_URL: http://auth-service:8081
+      MODERATION_SERVICE_URL: http://moderation-service:8099
+
+  analytics-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: analytics-service }
+    depends_on:
+      clickhouse: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 12
+      <<: *java-env
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
 
 volumes:
   postgres-auth-data:
   postgres-user-data:
+  postgres-admin-data:
+  elasticsearch-data:
+  clickhouse-data:
+  rank-model:
   mongodb-data:
   redis-data:
   cassandra-data:
