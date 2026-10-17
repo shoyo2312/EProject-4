@@ -123,6 +123,8 @@ Lỗi: `VALIDATION_ERROR` (400), `INVALID_CREDENTIALS` (401), `EMAIL_NOT_VERIFIE
 
 Lưu ý về counter rate-limit: nhập đúng mật khẩu nhưng chưa verify email **không** bị tính là 1 lần login sai, nên user không bị khoá 429 vì lặp lại thao tác này.
 
+**Tài khoản do chủ tự đóng** (mục 3.19): mật khẩu đúng → `ACCOUNT_DEACTIVATED` (403), hoặc `ACCOUNT_DELETION_PENDING` (403) nếu đã yêu cầu xoá. Mật khẩu sai vẫn là `INVALID_CREDENTIALS`, nên mã này không lộ gì với người không mở được tài khoản. Client hỏi "Kích hoạt lại?" rồi gửi **lại đúng request đó** kèm `"reactivate": true` → tài khoản mở lại (huỷ lịch xoá nếu có) và trả `TokenResponse` như thường. `/oauth/{provider}` cũng nhận `reactivate` với cùng ý nghĩa.
+
 **Tài khoản ADMIN (admin console) có thêm factor thứ hai.** Request nhận thêm hai field tuỳ chọn: `turnstileToken` (bắt buộc với admin — thiếu/sai → `TURNSTILE_VERIFICATION_FAILED` 403) và `deviceToken` (lấy từ lần `/login/otp` trước có tick "ghi nhớ thiết bị"). Mật khẩu đúng mà thiết bị chưa được ghi nhớ → server gửi OTP qua email và trả `MFA_REQUIRED` (401), **chưa** cấp token; hoàn tất ở mục 3.17. Tài khoản USER không bị ảnh hưởng — hai field này bị bỏ qua.
 
 ### 3.3 `POST /refresh`
@@ -402,8 +404,21 @@ Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `INVALID
 ### 3.18 Endpoint cho admin console — `/admin/**`
 **Bắt buộc token có role ADMIN**; app mobile không dùng.
 
-- `GET /admin/users`, `GET /admin/users/{userId}` — danh bạ tài khoản (`status`, `role`), xem `CLAUDE.md` §Ban.
+- `GET /admin/users`, `GET /admin/users/{userId}` — danh bạ tài khoản (`status`, `role`), xem `CLAUDE.md` §Ban. Mỗi phần tử còn có `deactivatedAt` và `deletionScheduledAt` (mục 3.19): giữ nguyên khi bị ban, nên một tài khoản `BANNED` vẫn có thể đang chờ xoá. Lọc `?status=DEACTIVATED` được.
 - `GET /admin/users/{userId}/security-events?page=0&size=25` — nhật ký bảo mật của một tài khoản, **mới nhất trước**: đăng nhập thành công/thất bại, reset mật khẩu, đổi email, OTP admin. Không ghi lại refresh token và lệnh ban (ban nằm ở audit log của admin-service). Mỗi phần tử: `id, eventType, ipAddress, userAgent, deviceLabel, deviceModel, detail, createdAt`.
+
+### 3.19 Đóng tài khoản — `/account/**`
+**Bắt buộc token.** Thiết kế: `docs/superpowers/specs/2026-10-17-account-deactivation-design.md`.
+
+| Endpoint | Body | Trả |
+|---|---|---|
+| `POST /account/closure-code` | — | `200`, gửi mã 6 số tới email đã verify (cho tài khoản không có mật khẩu). `403 EMAIL_NOT_VERIFIED` nếu không có email đã verify, `429 TOO_MANY_OTP_REQUESTS` |
+| `POST /account/deactivate` | xác minh lại (dưới) | `200`. Ẩn tài khoản tới khi chủ đăng nhập lại |
+| `POST /account/delete` | xác minh lại | `200 { deletionScheduledAt }`. Như deactivate, và xoá sau 30 ngày (`auth.account.deletion-grace`) nếu không đăng nhập lại |
+
+Xác minh lại: **đúng một** trong `{ "password": "…" }`, `{ "otp": "123456" }` (sau `closure-code`), `{ "provider": "GOOGLE", "token": "…" }` (đăng nhập lại provider đã liên kết). Sai cấu trúc → `400 VALIDATION_ERROR`. Sai mật khẩu → `403 INVALID_CREDENTIALS`, token provider sai hoặc không liên kết → `403 INVALID_SOCIAL_TOKEN` — **403 chứ không 401**, vì phiên vẫn hợp lệ, client gặp 401 sẽ refresh rồi gửi lại và tiêu thêm một lượt đoán. Sai mã → `400 INVALID_OTP`. Mật khẩu dùng chung counter `TOO_MANY_LOGIN_ATTEMPTS` với `/login`. ADMIN → `403 ACCOUNT_CLOSURE_NOT_ALLOWED`. `/me` có `emailVerified` và `providers` để client chọn cách xác minh.
+
+Thành công: mọi phiên của tài khoản bị huỷ (như ban), kể cả phiên hiện tại — client xoá token local. Phát `AccountStateChangedEvent` (mục 9). Mở lại: mục 3.2. `AccountDeletionSweep` (mỗi giờ) chạy các lệnh xoá đến hạn, kể cả khi tài khoản đang bị ban: email, mật khẩu và liên kết provider bị gỡ, row được soft-delete, nên email/username/tài khoản Google-Facebook đăng ký lại được như tài khoản mới. Unban một tài khoản đã tự đóng đưa nó về `DEACTIVATED`, không phải `ACTIVE`.
 
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
@@ -423,7 +438,7 @@ Khuyến nghị dùng interceptor (Dio) để tự động gắn header và refr
 USER, ADMIN
 
 // UserStatus
-ACTIVE, LOCKED
+ACTIVE, LOCKED, BANNED, DEACTIVATED   // DEACTIVATED: chủ tự đóng, mục 3.19
 ```
 
 > Model Dart nên dùng enum + fallback "unknown" khi deserialize, để backend thêm giá trị mới không crash app cũ đang chạy production.
@@ -438,6 +453,9 @@ ACTIVE, LOCKED
 | `EMAIL_NOT_VERIFIED` | 403 | Mật khẩu đúng nhưng email chưa xác thực → điều hướng sang màn hình nhập OTP, KHÔNG gộp với `INVALID_CREDENTIALS` |
 | `MFA_REQUIRED` | 401 | Tài khoản ADMIN, mật khẩu đúng, thiết bị chưa được ghi nhớ — OTP đã gửi qua email, tiếp tục ở `/login/otp` (mục 3.17) |
 | `SOCIAL_SIGN_IN_NOT_ALLOWED` | 403 | Đăng nhập Google/Facebook vào tài khoản ADMIN (mục 3.10) |
+| `ACCOUNT_DEACTIVATED` | 403 | Credential đúng, tài khoản do chủ tự đóng. Gửi lại kèm `reactivate: true` để mở (mục 3.2) |
+| `ACCOUNT_DELETION_PENDING` | 403 | Như trên, tài khoản đang chờ xoá. Mở lại thì huỷ lịch xoá |
+| `ACCOUNT_CLOSURE_NOT_ALLOWED` | 403 | Tài khoản ADMIN gọi `/account/deactivate` hoặc `/account/delete` (mục 3.19) |
 | `TOO_MANY_LOGIN_ATTEMPTS` | 429 | Quá 5 lần login sai trong 15 phút (theo tài khoản) |
 | `USERNAME_ALREADY_EXISTS` | 409 | Đăng ký hoặc đổi username (mục 3.16) trùng username của tài khoản khác, không phân biệt hoa thường |
 | `USERNAME_CHANGE_TOO_SOON` | 429 | Đổi username khi chưa đủ 30 ngày từ lần đổi trước (mục 3.16). Retry vô ích cho tới `usernameChangeableAt` |
@@ -490,6 +508,7 @@ Phần này cho người tích hợp backend, không phải client mobile. `auth
 |---|---|---|---|---|
 | `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` (`avatarUrl` null với đăng ký bằng mật khẩu) | **Outbox** (`outbox_events`, ghi cùng transaction tạo `User`). `OutboxPublisher` poll → `OutboxDispatcher` của `kafka-lib` chỉ `markPublished` **sau** khi broker ack | user-service (tạo profile) |
 | `auth.social-avatar-events` | `SocialAvatarDiscoveredEvent` | `eventId, occurredAt, userId, avatarUrl` | **Gửi thẳng broker, fire-and-forget** (chỉ log khi lỗi). Không qua outbox: đăng nhập social gặp tài khoản sẵn có thì không ghi DB nào để "atomic" cùng, và Kafka chết không được làm hỏng login vì một tấm ảnh. **Ngoại lệ — lần đăng nhập tạo tài khoản**: ghi vào **outbox** (aggregate `SOCIAL_AVATAR`) ngay sau `UserRegisteredEvent`, cùng transaction. Gửi thẳng thì nó tới media-worker trước registration tới một chu kỳ poll (5s), bản sao tới user-service khi profile chưa tồn tại và mọi tài khoản mới kẹt ở URL của provider | media-worker (sao ảnh về MinIO) |
+| `auth.account-events` | `AccountStateChangedEvent` | `eventId, occurredAt, userId, state (DEACTIVATED / ACTIVE / DELETED), deletionScheduledAt` | **Outbox**, aggregate `ACCOUNT`, key `userId`, cùng transaction với việc đóng / mở lại / xoá (mục 3.19). Consumer áp `DEACTIVATED`/`ACTIVE` như một phép gán có guard `occurredAt`; `DELETED` là fan-out | user-service (ẩn profile; DELETED gỡ mọi follow và chỉnh counter), video-service, search-service, interaction-service (ẩn video / kết quả tìm kiếm / comment; video-service đưa video vào thùng rác khi DELETED) |
 | `auth.username-events` | `UsernameChangedEvent` | `eventId, occurredAt, userId, username, previousUsername` | **Outbox** (cùng transaction với việc đổi username, mục 3.16), key `userId`. `OutboxPublisher` chọn topic theo `aggregate_type` (`USER` / `USERNAME` / `SOCIAL_AVATAR`) — deploy bản có bảng route này phải dừng hết instance cũ trước, vì instance cũ đẩy mọi row lên `auth.user-events` | user-service (cập nhật bản sao username trong profile) |
 
 Phát `SocialAvatarDiscoveredEvent` **mỗi lần** đăng nhập social có mang ảnh, không chỉ lần đầu — URL của provider (nhất là Facebook) hết hạn sau vài ngày, nên phát lại là cách media-worker luôn có URL còn sống để sao, và cũng là cách backfill tài khoản social cũ chưa có ảnh.

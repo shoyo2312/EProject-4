@@ -17,7 +17,12 @@ public interface UserMapper {
     @Mapping(target = "usernameChangeableAt",
             expression = "java(UsernameCooldown.changeableAt(user.getUsernameChangedAt(), Instant.now()))")
     @Mapping(target = "hasPassword", expression = "java(user.getPasswordHash() != null)")
-    UserResponse toResponse(User user);
+    @Mapping(target = "providers", source = "providers")
+    UserResponse toResponse(User user, List<AuthProvider> providers);
+
+    default UserResponse toResponse(User user) {
+        return toResponse(user, List.of());
+    }
 
     /**
      * Admin console row. {@code linkedProviders} is a separate argument because it comes from

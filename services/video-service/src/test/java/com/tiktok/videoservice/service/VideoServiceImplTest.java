@@ -924,6 +924,27 @@ class VideoServiceImplTest {
         assertThat(videoService.getUserStats(9L, 1L).videoCount()).isZero();
     }
 
+    /** An owner who closed their account is hidden on the same paths as a banned one. */
+    @Test
+    void aClosedAccountsVideos_leaveEveryViewerFacingPath() {
+        VideoResponse closed = publishAs(1L, "Closed", VideoVisibility.PUBLIC);
+        markPublished(closed.id());
+        VideoResponse other = publishAs(2L, "Other", VideoVisibility.PUBLIC);
+        markPublished(other.id());
+        ownerBanRepository.save(new OwnerBan(1L, null, null, Instant.now(), Instant.now()));
+
+        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+                .containsExactly(other.id());
+        assertThat(videoService.getFollowingFeed(9L, List.of(1L, 2L), null, 10).items())
+                .extracting(VideoResponse::id)
+                .containsExactly(other.id());
+        assertThat(videoService.getByIds(9L, List.of(closed.id(), other.id()))).extracting(VideoResponse::id)
+                .containsExactly(other.id());
+        assertThatThrownBy(() -> videoService.getById(9L, closed.id())).isInstanceOf(VideoNotFoundException.class);
+        assertThat(videoService.listByUser(9L, 1L, PageRequest.of(0, 10)).getContent()).isEmpty();
+        assertThat(videoService.getUserStats(9L, 1L).videoCount()).isZero();
+    }
+
     /** Nothing announces the end of a temporary ban — auth-service lifts it quietly — so it ends here by itself. */
     @Test
     void aBanThatHasRunOut_hidesNothing() {

@@ -320,6 +320,21 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
+    public List<String> softDeleteAllOf(Long userId, Instant at) {
+        Query live = Query.query(where("userId").is(userId).and("deletedAt").is(null));
+        live.fields().include("_id");
+        List<String> ids = mongoTemplate.find(live, Video.class).stream().map(Video::getId).toList();
+        if (ids.isEmpty()) {
+            return ids;
+        }
+        mongoTemplate.updateMulti(
+                Query.query(where("_id").in(ids).and("deletedAt").is(null)),
+                new Update().set("deletedAt", at).set("updatedAt", Instant.now()),
+                Video.class);
+        return ids;
+    }
+
+    @Override
     public void updateVisibility(Video video) {
         // Both fields in one write: Mongo is atomic per document, so the change and the
         // announcement it owes cannot end up on opposite sides of a crash.

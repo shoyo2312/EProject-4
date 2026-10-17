@@ -80,6 +80,9 @@ class UserProfileServiceImplTest {
     @Autowired
     private InboxEventRepository inboxEventRepository;
 
+    @Autowired
+    private AccountStateService accountStateService;
+
     @BeforeEach
     void cleanUp() {
         userFollowRepository.deleteAll();
@@ -275,6 +278,22 @@ class UserProfileServiceImplTest {
 
         assertThatThrownBy(() -> userProfileService.getStatsByUserIds(tooMany))
                 .isInstanceOf(TooManyProfileIdsException.class);
+    }
+
+    /** The console still has to name a closed account — and a moderator's own blocks hide nothing. */
+    @Test
+    @Transactional
+    void getByUserIdsForAdmin_namesClosedAndBlockedAccounts_butNotUnknownOnes() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "bob", null);
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        accountStateService.applyDeactivated(2L, true, Instant.now());
+        blockService.block(3L, 1L);
+
+        assertThat(userProfileService.getByUserIds(1L, List.of(3L, 2L, 1L)))
+                .extracting(UserProfileResponse::userId).containsExactly(1L);
+        assertThat(userProfileService.getByUserIdsForAdmin(List.of(3L, 2L, 999L, 1L, 3L)))
+                .extracting(UserProfileResponse::userId).containsExactly(3L, 2L, 1L);
     }
 
     @Test

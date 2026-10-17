@@ -21,9 +21,11 @@ import com.tiktok.authservice.dto.response.PasswordResetTicketResponse;
 import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
+import com.tiktok.authservice.entity.AuthProvider;
 import com.tiktok.authservice.entity.RefreshToken;
 import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
+import com.tiktok.authservice.entity.UserIdentity;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.entity.VerificationTokenType;
@@ -43,6 +45,7 @@ import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.mapper.UserMapper;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
+import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
@@ -58,6 +61,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 
 @Slf4j
@@ -93,6 +97,8 @@ public class AuthServiceImpl implements AuthService {
     private final PasswordResetChallenge passwordResetChallenge;
     private final OtpGenerator otpGenerator;
     private final ApplicationEventPublisher eventPublisher;
+    private final AccountClosureService accountClosureService;
+    private final UserIdentityRepository userIdentityRepository;
 
     @Override
     @Transactional
@@ -210,8 +216,10 @@ public class AuthServiceImpl implements AuthService {
 
         // Checked after the limit, so a locked-out account costs one indexed read rather than a
         // bcrypt verification per attempt — the work an attacker would otherwise get for free.
+        // A closed account checks its password like an open one: what happened to it is told only
+        // to someone who proved they may open it, further down.
         boolean valid = user != null
-                && user.getStatus() == UserStatus.ACTIVE
+                && (user.getStatus() == UserStatus.ACTIVE || user.getStatus() == UserStatus.DEACTIVATED)
                 // An account created by a social login has no password to match. Stated rather
                 // than left to bcrypt — which does answer false for a null hash, after logging a
                 // warning about it on every attempt — because "there is no password" is a fact
@@ -235,6 +243,8 @@ public class AuthServiceImpl implements AuthService {
         if (!user.isEmailVerified()) {
             throw new EmailNotVerifiedException();
         }
+
+        user = accountClosureService.admit(user, request.wantsReactivation());
 
         // Admin-console sessions get a second factor: Cloudflare Turnstile, then an emailed OTP
         // unless this browser was remembered. Everyone else signs in on the password alone.
@@ -449,7 +459,13 @@ public class AuthServiceImpl implements AuthService {
                 .filter(u -> !u.isDeleted())
                 .orElseThrow(() -> new UserNotFoundException(String.valueOf(userId)));
 
-        return userMapper.toResponse(user);
+        // Only here: the client reads them to offer a social-only account the right way to
+        // reconfirm before closing it.
+        List<AuthProvider> providers = userIdentityRepository.findByUserIdOrderByCreatedAtAsc(userId).stream()
+                .map(UserIdentity::getProvider)
+                .distinct()
+                .toList();
+        return userMapper.toResponse(user, providers);
     }
 
     @Override

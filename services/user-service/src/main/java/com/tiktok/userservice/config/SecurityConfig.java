@@ -33,6 +33,8 @@ public class SecurityConfig {
                         // Counts only, no PII — same trust level as interaction-service's
                         // counts/batch endpoint that chat-service's realtime fan-out already calls.
                         .requestMatchers(HttpMethod.GET, "/api/v1/users/stats/batch").permitAll()
+                        // Names closed accounts the public batch hides.
+                        .requestMatchers("/api/v1/users/admin", "/api/v1/users/admin/**").hasRole("ADMIN")
                         // A profile is public like the videos on it — the response carries no PII.
                         // A guest is a null viewer, which no block can hide anything from. A
                         // numeric id only, so /me and /search keep the token.

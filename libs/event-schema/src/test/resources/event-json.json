@@ -1,4 +1,11 @@
 {
+  "AccountStateChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "state" : "DEACTIVATED",
+    "deletionScheduledAt" : "2026-10-08T09:30:20.123456789Z"
+  },
   "AvatarMirroredEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",

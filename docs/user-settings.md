@@ -449,7 +449,8 @@ user-facing wording lives — the contracts are explicit that the server's own `
 The gateway's 20 req/s is keyed on **IP**, and the web client reaches it through a Next.js rewrite,
 so every browser viewer shares the Next server's address — `next.config.ts` already warns about
 this. A settings PATCH is cheap enough not to care. Nothing here needs a per-account limit; the
-endpoints that will are `data-export`, `deactivate`/`delete` and `business-verification`, none of
+endpoints that will are `data-export` and `business-verification` (deactivate/delete shipped in
+auth-service — see `superpowers/specs/2026-10-17-account-deactivation-design.md`), none of
 which are in this tier.
 
 ## 8. Test checklist

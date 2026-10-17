@@ -39,6 +39,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
@@ -94,6 +95,30 @@ class UserProfileControllerTest {
         // is rejected exactly like a refresh token would be.
         return jwtProvider.generateToken(String.valueOf(userId),
                 Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS), 60_000L);
+    }
+
+    private String adminTokenFor(long userId) {
+        return jwtProvider.generateToken(String.valueOf(userId),
+                Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS, "role", "ADMIN"), 60_000L);
+    }
+
+    /** The admin batch names closed accounts, so it is the console's alone. */
+    @Test
+    void adminBatch_answersAnAdmin_andRefusesEveryoneElse() throws Exception {
+        when(userProfileService.getByUserIdsForAdmin(List.of(2L)))
+                .thenReturn(List.of(new UserProfileResponse(2L, "bob", "Bob", null, null, 0, 0, false, null)));
+
+        mockMvc.perform(get("/api/v1/users/admin").param("ids", "2")
+                        .header("Authorization", "Bearer " + adminTokenFor(1L)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].userId").value(2));
+        mockMvc.perform(get("/api/v1/users/admin").param("ids", "2")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/users/admin").param("ids", "2"))
+                .andExpect(status().isForbidden());
+
+        verify(userProfileService, times(1)).getByUserIdsForAdmin(any());
     }
 
     /**

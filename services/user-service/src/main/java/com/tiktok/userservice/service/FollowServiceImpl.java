@@ -54,6 +54,7 @@ public class FollowServiceImpl implements FollowService {
         // that silently match zero rows — without this an edge to a non-existent user is
         // accepted with a 200 and leaves followingCount permanently overstated.
         UserProfile target = userProfileRepository.findByUserIdAndDeletedAtIsNull(followingId)
+                .filter(found -> !found.isDeactivated())
                 .orElseThrow(() -> new UserProfileNotFoundException(followingId));
 
         // The follower is checked for the same reason as the target, on the other side of the
@@ -261,6 +262,9 @@ public class FollowServiceImpl implements FollowService {
      */
     private void requireListVisible(Long viewerId, Long userId) {
         profileVisibilityGuard.requireVisible(viewerId, userId);
+        if (userProfileRepository.existsByUserIdAndDeactivatedAtIsNotNull(userId)) {
+            throw new UserProfileNotFoundException(userId);
+        }
         if (!viewerId.equals(userId)
                 && userProfileRepository.existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(userId)
                 && !hasEdge(viewerId, userId)) {

@@ -16,6 +16,9 @@ import java.util.List;
  * @param provider        the first linked provider, or null for an email/password account —
  *                        a shorthand for the common "is this a social account" question
  * @param linkedProviders every provider the account can sign in through; empty for password-only
+ * @param deactivatedAt   when the owner closed it, or null; kept through a ban, so a BANNED
+ *                        account can be closed as well
+ * @param deletionScheduledAt when the owner's deletion runs — even while BANNED — or null
  */
 public record AdminUserResponse(
         Long id,
@@ -31,6 +34,8 @@ public record AdminUserResponse(
         Instant bannedAt,
         Instant bannedUntil,
         String banReason,
+        Instant deactivatedAt,
+        Instant deletionScheduledAt,
         AuthProvider provider,
         List<AuthProvider> linkedProviders
 ) {

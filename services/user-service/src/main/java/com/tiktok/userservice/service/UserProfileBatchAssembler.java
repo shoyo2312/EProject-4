@@ -39,7 +39,10 @@ public class UserProfileBatchAssembler {
             return Page.empty(userIdsPage.getPageable());
         }
 
-        Map<Long, UserProfile> profilesByUserId = userProfileRepository.findByUserIdInAndDeletedAtIsNull(userIds).stream()
+        // Closed accounts are dropped like missing ones. Followers and following already leave them
+        // out in the query, so only the requests, blocked and muted lists can come back short.
+        Map<Long, UserProfile> profilesByUserId = userProfileRepository
+                .findByUserIdInAndDeletedAtIsNullAndDeactivatedAtIsNull(userIds).stream()
                 .collect(Collectors.toMap(UserProfile::getUserId, Function.identity()));
 
         // An id with no profile is dropped, not fatal. The relationship rows outlive the profile

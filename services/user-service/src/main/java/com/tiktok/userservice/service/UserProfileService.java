@@ -41,6 +41,14 @@ public interface UserProfileService {
     List<UserProfileResponse> getByUserIds(Long viewerId, List<Long> userIds);
 
     /**
+     * The same batch for the admin console, which has to name an account its owner closed: the
+     * report against it, its uploads and its own page all still need a handle. No viewer, so no
+     * blocks; a deleted profile is still absent, as auth-service's directory 404s that account.
+     * Same cap and order as {@link #getByUserIds}.
+     */
+    List<UserProfileResponse> getByUserIdsForAdmin(List<Long> userIds);
+
+    /**
      * Follower and following counts for a page of ids, for chat-service's realtime fan-out.
      *
      * <p>No viewer: a count is neither PII nor a profile, so there is nothing a block would hide

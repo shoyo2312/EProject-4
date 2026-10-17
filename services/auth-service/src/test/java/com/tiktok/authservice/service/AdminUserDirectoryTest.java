@@ -22,6 +22,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.time.Instant;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -135,6 +137,32 @@ class AdminUserDirectoryTest {
 
         assertThat(found.username()).isEqualTo("janedoe");
         assertThat(found.status()).isEqualTo(UserStatus.BANNED);
+    }
+
+    /**
+     * A deletion the owner asked for still runs under a ban, so the console has to see it on a
+     * BANNED row too — and the ban must not have wiped it.
+     */
+    @Test
+    void aClosedAccountCarriesItsDeletionDate_throughABan() {
+        User john = userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull("johndoe").orElseThrow();
+        Instant closedAt = Instant.parse("2026-10-17T08:00:00Z");
+        Instant deletionAt = Instant.parse("2026-11-16T08:00:00Z");
+        john.deactivate(closedAt, deletionAt);
+        userRepository.save(john);
+
+        assertThat(directory.search(null, UserStatus.DEACTIVATED, FIRST_PAGE))
+                .extracting(AdminUserResponse::username)
+                .containsExactly("johndoe");
+
+        john = userRepository.findById(john.getId()).orElseThrow();
+        john.ban("spam", null);
+        userRepository.save(john);
+
+        AdminUserResponse found = directory.get(john.getId());
+        assertThat(found.status()).isEqualTo(UserStatus.BANNED);
+        assertThat(found.deactivatedAt()).isEqualTo(closedAt);
+        assertThat(found.deletionScheduledAt()).isEqualTo(deletionAt);
     }
 
     @Test

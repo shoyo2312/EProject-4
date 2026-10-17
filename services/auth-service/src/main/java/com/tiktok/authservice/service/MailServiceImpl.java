@@ -69,6 +69,15 @@ public class MailServiceImpl implements MailService {
                 "If this wasn't you, ignore this email — nothing changes until the code is entered.", true);
     }
 
+    @Override
+    public void sendAccountClosureOtp(String toEmail, String otp) {
+        send(toEmail, "Confirm closing your account", "Confirm closing your account",
+                "Enter this code to deactivate or delete your account.",
+                otp, otpProperties.passwordResetExpiryMillis(),
+                "If this wasn't you, someone is signed in to your account — sign out of every device "
+                        + "by resetting your password.", true);
+    }
+
     /**
      * Taken from the property the OTP's own expiry is computed from, rather than written into the
      * body as "15 minutes". The two were free to drift, and a mail that states a lifetime the code

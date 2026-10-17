@@ -123,6 +123,9 @@ URL trả về có đuôi `?v={epochSeconds}`, ví dụ `http://localhost:9000/v
 
 Luồng đúng ở client: chọn ảnh → chỉ preview local (object URL / file path), **chưa gọi API** → khi user bấm Save mới `POST /me/avatar`; upload lỗi thì huỷ luôn cả lần save đó, đừng để đổi được tên mà ảnh thì không.
 
+### 3.2c Tài khoản do chủ tự đóng
+Chủ tài khoản deactivate hoặc yêu cầu xoá (auth-service, `auth-service-api.md` mục 3.19) thì profile **không tồn tại với người khác**: `GET /{userId}`, `/by-username/{u}` trả `404 USER_PROFILE_NOT_FOUND` (giống block, không lộ gì), batch `?ids=` bỏ qua, `/search` và `/internal/search-ids` loại ra, danh sách followers/following bỏ người đó ra (tổng cũng khớp), danh sách của chính tài khoản đó trả `404`, `POST /{userId}/follow` trả `404`. Follow edge và **counter giữ nguyên** — mở lại là mọi thứ như cũ. `/friendship` và check follow nội bộ không đổi. Cột `deactivated_at` + guard `account_state_changed_at` (V16), ghi bởi `AccountStateEventConsumer` (mục 8). Khi xoá thật chạy: mọi follow hai chiều bị gỡ và counter phía bên kia giảm, mỗi edge phát một `UserFollowChangedEvent(followed=false)`; follow request, block, mute, settings và profile bị soft-delete.
+
 ### 3.3 `GET /{userId}`
 Xem profile người khác. Trả `200 OK`.
 
@@ -336,6 +339,9 @@ Quan hệ giữa người gọi và `userId` — đủ cho nút Follow trong **m
 ### 3.19 `GET /stats/batch?ids=1,2,3` — số follower/following của nhiều người
 Qua gateway thì **bắt buộc token**. Trả `data` → `[{ "userId": 1, "followerCount": 10, "followingCount": 3 }]`. Chỉ có số đếm, không có thông tin cá nhân. Id không có profile không xuất hiện trong kết quả; id trùng được gộp. Tối đa **100** id → quá thì `TOO_MANY_PROFILE_IDS` (400).
 
+### 3.20 `GET /admin?ids=1,2,3` — batch cho admin console
+**Chỉ token có role ADMIN** (khác thì `403`); app mobile không dùng. Giống mục 3.3b nhưng không áp quy tắc người xem: không lọc block, và tài khoản do chủ tự đóng (mục 3.2c) **vẫn có mặt**, để report, video và trang tài khoản trên console còn hiện `@handle`. Profile đã xoá thật thì vắng mặt. Cùng giới hạn 100 id và cùng thứ tự như 3.3b.
+
 ## 4. Enums
 
 | Enum | Giá trị | Dùng ở đâu |
@@ -416,6 +422,8 @@ Consumer: `user.follow-events` → notification-service (`NEW_FOLLOWER` / `FOLLO
 | `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` | `UserRegisteredEventConsumer` → tạo `UserProfile` (`displayName = username`, `avatarUrl` = ảnh provider nếu có). **Claim `eventId` vào bảng `inbox_events` TRƯỚC khi tạo** (`tryClaim` = `INSERT ... ON CONFLICT DO NOTHING`) — hai redelivery đua nhau chỉ một cái INSERT thắng, không tạo profile đôi. Đây là độ trễ khiến `GET /me` trả `404` ngay sau register (mục 3.1). Profile khác còn giữ đúng handle này thì bị gỡ handle, như ở `auth.username-events` |
 | `media.avatar-events` | `AvatarMirroredEvent` | `eventId, occurredAt, userId, sourceUrl, avatarUrl` | `AvatarMirroredEventConsumer` → `applyMirroredAvatar`: đổi `avatarUrl` sang bản MinIO **chỉ khi** field đang trống hoặc đúng bằng `sourceUrl`. Ảnh user tự đặt qua `PATCH /me` / `POST /me/avatar` không bao giờ bị đè. Không cần inbox claim — công việc là một UPDATE có điều kiện về giá trị cố định, redelivery là no-op. Profile chưa tồn tại (bản sao đến trước `UserRegisteredEvent`) → **throw** để `kafka-lib` retry 3 lần cách nhau 1 giây rồi vào `media.avatar-events.DLT`, như `auth.username-events` — bỏ qua thì profile tạo sau giữ URL của provider cho tới lần đăng nhập kế tiếp |
 | `auth.username-events` | `UsernameChangedEvent` | `eventId, occurredAt, userId, username, previousUsername` | `UsernameChangedEventConsumer` → `applyUsernameChange`: đổi bản sao `username` của profile (không đụng `displayName`). Claim `eventId` vào `inbox_events` trong cùng transaction. Profile chưa tồn tại (rename đến trước `UserRegisteredEvent` vì hai topic khác nhau) → **throw** để `kafka-lib` retry, thay vì bỏ qua — bỏ qua thì event đăng ký đến sau sẽ ghi username cũ và không gì sửa lại được. Retry chỉ thêm 3 lần, cách nhau 1 giây (đủ cho độ trễ thường gặp), sau đó event nằm ở `auth.username-events.DLT` và profile giữ handle cũ cho tới khi event được replay. Cột `username` không unique ở đây (auth-service giữ uniqueness): khi gán handle cho một profile, profile khác còn giữ đúng handle đó (không phân biệt hoa thường) bị gỡ handle (`username = null`) cho tới khi rename của chính nó tới — auth-service chỉ cho một tài khoản giữ một handle tại một thời điểm, nên bản sao kia chắc chắn đã cũ. Nhờ vậy `GET /by-username/{username}` trả về người đang giữ handle chứ không phải bản sao cũ |
+
+| `auth.account-events` | `AccountStateChangedEvent` | `eventId, occurredAt, userId, state, deletionScheduledAt` | `AccountStateEventConsumer`. `DEACTIVATED`/`ACTIVE` → ghi/xoá `deactivated_at` bằng một UPDATE có guard `account_state_changed_at < occurredAt` (không claim — redelivery ghi lại cùng giá trị, event cũ đến muộn không khớp row nào). `DELETED` → claim `eventId` vào `inbox_events` cùng transaction rồi gỡ toàn bộ tài khoản (mục 3.2c) |
 
 `auth.user-events` chỉ mang đúng một loại event nên hai consumer parse thẳng payload vào `UserRegisteredEvent`, không đọc header. Đó là lý do `auth-service` phát `SocialAvatarDiscoveredEvent` và `UsernameChangedEvent` trên topic **riêng** (`auth.social-avatar-events`, `auth.username-events`) chứ không dùng chung topic này.
 

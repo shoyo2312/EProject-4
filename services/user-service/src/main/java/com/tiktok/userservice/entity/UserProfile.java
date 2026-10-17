@@ -74,6 +74,21 @@ public class UserProfile extends BaseEntity {
     @Column(name = "private_account", nullable = false)
     private boolean privateAccount = false;
 
+    /**
+     * When the owner closed the account; null while it is open. Copied from auth-service's
+     * {@code AccountStateChangedEvent} by {@code UserProfileRepository.applyAccountState}, the only
+     * writer, which compares {@link #accountStateChangedAt} so a late event cannot undo a newer one.
+     */
+    @Column(name = "deactivated_at")
+    private Instant deactivatedAt;
+
+    @Column(name = "account_state_changed_at")
+    private Instant accountStateChangedAt;
+
+    public boolean isDeactivated() {
+        return deactivatedAt != null;
+    }
+
     public void changeDisplayName(String newDisplayName, Instant at) {
         this.displayName = newDisplayName;
         this.displayNameChangedAt = at;

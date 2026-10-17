@@ -51,6 +51,7 @@ public class UserProfileServiceImpl implements UserProfileService {
         profileVisibilityGuard.requireVisible(viewerId, userId);
 
         UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .filter(found -> !found.isDeactivated())
                 .orElseThrow(() -> new UserProfileNotFoundException(userId));
         return toResponseFor(viewerId, profile);
     }
@@ -64,6 +65,9 @@ public class UserProfileServiceImpl implements UserProfileService {
 
         UserProfile profile = userProfileRepository
                 .findFirstByUsernameIgnoreCaseAndDeletedAtIsNull(username.strip())
+                // A closed account answers like a missing one, as a block does: a distinct answer
+                // would confirm it exists. Its owner cannot be signed in, so nobody is exempt.
+                .filter(found -> !found.isDeactivated())
                 .orElseThrow(() -> new UserProfileNotFoundException(username));
 
         // After the lookup, not before: the guard needs the id the handle resolved to.
@@ -96,13 +100,35 @@ public class UserProfileServiceImpl implements UserProfileService {
         Set<Long> hidden = viewerId == null
                 ? Set.of()
                 : Set.copyOf(userBlockRepository.findBlockedIdsAmong(viewerId, wanted));
-        Map<Long, UserProfile> byUserId = userProfileRepository.findByUserIdInAndDeletedAtIsNull(wanted).stream()
+        Map<Long, UserProfile> byUserId = userProfileRepository
+                .findByUserIdInAndDeletedAtIsNullAndDeactivatedAtIsNull(wanted).stream()
                 .collect(Collectors.toMap(UserProfile::getUserId, Function.identity()));
 
         // Answered in the order asked, so a caller rendering positionally rather than by map
         // lookup is not silently reordered by whatever order Postgres returned the rows in.
         return wanted.stream()
                 .filter(id -> !hidden.contains(id))
+                .map(byUserId::get)
+                .filter(Objects::nonNull)
+                .map(userProfileMapper::toResponse)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UserProfileResponse> getByUserIdsForAdmin(List<Long> userIds) {
+        if (userIds.size() > MAX_BATCH_IDS) {
+            throw new TooManyProfileIdsException(MAX_BATCH_IDS);
+        }
+
+        List<Long> wanted = userIds.stream().distinct().toList();
+        if (wanted.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, UserProfile> byUserId = userProfileRepository.findByUserIdInAndDeletedAtIsNull(wanted).stream()
+                .collect(Collectors.toMap(UserProfile::getUserId, Function.identity()));
+        return wanted.stream()
                 .map(byUserId::get)
                 .filter(Objects::nonNull)
                 .map(userProfileMapper::toResponse)

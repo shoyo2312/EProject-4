@@ -19,6 +19,13 @@ public interface UserIdentityRepository extends JpaRepository<UserIdentity, Long
     /** Admin console: hydrate the provider links for a page of users in one query. */
     List<UserIdentity> findByUserIdInOrderByCreatedAtAsc(Collection<Long> userIds);
 
+    List<UserIdentity> findByUserIdOrderByCreatedAtAsc(Long userId);
+
+    /** An account's deletion ran: its provider accounts may sign up again as new accounts. */
+    @Modifying(flushAutomatically = true)
+    @Query("delete from UserIdentity i where i.userId = :userId")
+    int deleteAllByUserId(@Param("userId") Long userId);
+
     /**
      * Flags every link on an account whose address was never proven — which is every link it has.
      * Returns how many were flagged. See {@code IdentityReconfirmation}.

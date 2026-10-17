@@ -484,7 +484,7 @@ public class CommentServiceImpl implements CommentService {
         if (rows.isEmpty()) {
             return rows;
         }
-        Set<Long> banned = userBanRegistry.bannedAmong(
+        Set<Long> banned = userBanRegistry.hiddenAmong(
                 rows.values().stream().map(CommentByVideo::getUserId).collect(Collectors.toSet()));
         if (banned.isEmpty()) {
             return rows;

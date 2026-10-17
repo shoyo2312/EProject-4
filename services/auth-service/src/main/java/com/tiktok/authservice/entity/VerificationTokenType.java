@@ -17,5 +17,11 @@ public enum VerificationTokenType {
      * the same reason as SOCIAL_LINK — mailed to an already-verified address to authorise a
      * different action, and never interchangeable with an email-verification code.
      */
-    ADMIN_LOGIN
+    ADMIN_LOGIN,
+
+    /**
+     * Proves the signed-in owner of an account with no password still holds its mailbox, before
+     * the account is deactivated or deleted. Its own type for the same reason as SOCIAL_LINK.
+     */
+    ACCOUNT_CLOSURE
 }

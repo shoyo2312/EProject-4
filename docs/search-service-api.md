@@ -70,7 +70,7 @@ Query param (tất cả optional, nhưng nên có **ít nhất một** trong `q`
 - `hashtag` xếp hạng theo độ khớp: `#cat` → tag `cat` trước, rồi tag bắt đầu bằng `cat` (`catdance`), rồi tag lệch một ký tự hoặc chung tiền tố (`capcut`, `car`), cuối cùng video chỉ nhắc nó trong `description`.
 - Tên tác giả do `user-service` trả về lúc tìm (50 tài khoản nhiều follower nhất khớp tên). `user-service` lỗi/chậm quá 500ms thì vẫn trả kết quả, chỉ thiếu phần khớp tác giả.
 
-Chỉ trả về video ở trạng thái **`PUBLISHED`**. Video đang `PROCESSING`, `FAILED`, `TAKEN_DOWN`, `PRIVATE` hoặc đã xoá **không** xuất hiện, kể cả với chủ video (service này không biết ai đang gọi). Video của tài khoản **đang bị ban** cũng bị loại (index `owner_bans`, lọc lúc đọc theo `bannedUntil > now`), nên ban tạm hết hạn là video tự hiện lại, không cần event nào.
+Chỉ trả về video ở trạng thái **`PUBLISHED`**. Video đang `PROCESSING`, `FAILED`, `TAKEN_DOWN`, `PRIVATE` hoặc đã xoá **không** xuất hiện, kể cả với chủ video (service này không biết ai đang gọi). Video của tài khoản **đang bị ban** cũng bị loại (index `owner_bans`, lọc lúc đọc theo `bannedUntil > now`), nên ban tạm hết hạn là video tự hiện lại, không cần event nào. Tài khoản **do chủ tự đóng** cũng vậy (`deactivatedAt` trên cùng document, ghi từ `auth.account-events`, guard `accountStateChangedAt` riêng): ẩn = `bannedUntil > now` **hoặc** có `deactivatedAt`, và unban không mở lại tài khoản đã đóng, mở lại cũng không gỡ ban.
 
 Response `data.content[]` → `VideoSearchResponse`:
 ```json

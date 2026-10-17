@@ -7,6 +7,8 @@ import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
+import com.tiktok.event.user.AccountState;
+import com.tiktok.event.user.AccountStateChangedEvent;
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoModerationCompletedEvent;
@@ -65,6 +67,9 @@ class VideoIndexingConsumerTest {
 
     @Autowired
     private AdminModerationEventConsumer adminModerationEventConsumer;
+
+    @Autowired
+    private AccountStateEventConsumer accountStateEventConsumer;
 
     @Autowired
     private ElasticsearchOperations elasticsearchOperations;
@@ -594,6 +599,54 @@ class VideoIndexingConsumerTest {
         unban(7L, now.minusSeconds(60));
 
         assertThat(searched("still")).isEmpty();
+    }
+
+    @Test
+    void searchVideos_leavesOutAClosedAccountsVideos_untilItReopens() throws Exception {
+        publishApprovedBy(7L, "c1", "closed dance");
+        publishApprovedBy(8L, "c2", "other dance");
+        Instant now = Instant.now();
+
+        closure(7L, AccountState.DEACTIVATED, now);
+        assertThat(searched("dance")).containsExactly("c2");
+
+        closure(7L, AccountState.ACTIVE, now.plusSeconds(1));
+        assertThat(searched("dance")).containsExactlyInAnyOrder("c1", "c2");
+    }
+
+    /** Two decisions on one document, neither of which lifts the other. */
+    @Test
+    void anUnbanLeavesAClosedAccountHidden_andAReopeningLeavesABan() throws Exception {
+        publishApprovedBy(7L, "c3", "independent");
+        Instant now = Instant.now();
+
+        closure(7L, AccountState.DEACTIVATED, now);
+        ban(7L, null, now.plusSeconds(1));
+        unban(7L, now.plusSeconds(2));
+        assertThat(searched("independent")).isEmpty();
+
+        ban(7L, null, now.plusSeconds(3));
+        closure(7L, AccountState.ACTIVE, now.plusSeconds(4));
+        assertThat(searched("independent")).isEmpty();
+
+        unban(7L, now.plusSeconds(5));
+        assertThat(searched("independent")).containsExactly("c3");
+    }
+
+    @Test
+    void anOlderReopeningArrivingLate_keepsTheAccountClosed() throws Exception {
+        publishApprovedBy(7L, "c4", "late reopen");
+        Instant now = Instant.now();
+
+        closure(7L, AccountState.DEACTIVATED, now);
+        closure(7L, AccountState.ACTIVE, now.minusSeconds(60));
+
+        assertThat(searched("late")).isEmpty();
+    }
+
+    private void closure(long userId, AccountState state, Instant at) throws Exception {
+        AccountStateChangedEvent event = new AccountStateChangedEvent(UUID.randomUUID().toString(), at, userId, state, null);
+        accountStateEventConsumer.onMessage(objectMapper.writeValueAsString(event));
     }
 
     private void publishApprovedBy(long ownerId, String videoId, String title) throws Exception {

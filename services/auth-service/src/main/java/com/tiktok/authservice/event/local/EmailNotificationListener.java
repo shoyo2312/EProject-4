@@ -82,4 +82,15 @@ public class EmailNotificationListener {
             log.error("Failed to send password reset email to {}", event.email(), e);
         }
     }
+
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onAccountClosureCodeRequested(AccountClosureCodeRequestedEvent event) {
+        try {
+            logOtp("account closure OTP", event.email(), event.otp());
+            mailService.sendAccountClosureOtp(event.email(), event.otp());
+        } catch (Exception e) {
+            log.error("Failed to send account closure email to {}", event.email(), e);
+        }
+    }
 }

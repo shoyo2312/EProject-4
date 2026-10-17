@@ -28,6 +28,11 @@ public interface UserRepository extends JpaRepository<User, Long> {
     /** Bans that have run out, for the sweep that lifts them. */
     List<User> findByStatusAndBannedUntilBefore(UserStatus status, Instant cutoff);
 
+    /** Deletions that have come due, oldest first, for AccountDeletionSweep. V17 indexes exactly this. */
+    @Query("select u.id from User u where u.deletedAt is null and u.deletionScheduledAt is not null "
+            + "and u.deletionScheduledAt < :now order by u.deletionScheduledAt")
+    List<Long> findIdsDueForDeletion(@Param("now") Instant now, Pageable pageable);
+
     @Query("select u from User u where lower(u.username) = lower(:username) and u.deletedAt is null")
     Optional<User> findByUsernameIgnoreCaseAndDeletedAtIsNull(@Param("username") String username);
 

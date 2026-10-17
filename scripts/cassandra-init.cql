@@ -96,6 +96,12 @@ CREATE TABLE IF NOT EXISTS user_bans (
     banned_until timestamp,
     changed_at   timestamp
 );
+-- The owner closing their own account (AccountStateChangedEvent on auth.account-events), beside the
+-- ban and independent of it: an unban must not reopen a closed account, nor a reopening lift a ban.
+-- account_state_changed_at is that decision's own LWT guard. Run before deploying the
+-- interaction-service that writes them, for the reason given above comments_by_video.
+ALTER TABLE user_bans ADD IF NOT EXISTS deactivated_at timestamp;
+ALTER TABLE user_bans ADD IF NOT EXISTS account_state_changed_at timestamp;
 
 -- Index that makes both comment listings a single-partition read.
 --
