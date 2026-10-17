@@ -14,6 +14,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -42,7 +43,7 @@ class GoogleTokenVerifierTest {
                  "email":"victim@example.com","email_verified":"true"}
                 """);
 
-        assertThatThrownBy(() -> verifier.verify("token-from-another-app"))
+        assertThatThrownBy(() -> verifier.verify("header.from-another-app.sig"))
                 .isInstanceOf(InvalidSocialTokenException.class);
     }
 
@@ -53,7 +54,7 @@ class GoogleTokenVerifierTest {
                  "email":"A@Example.com","email_verified":"true"}
                 """.formatted(OUR_CLIENT_ID));
 
-        SocialProfile profile = verifier.verify("good-token");
+        SocialProfile profile = verifier.verify("header.payload.sig");
 
         assertThat(profile.provider()).isEqualTo(AuthProvider.GOOGLE);
         assertThat(profile.uid()).isEqualTo("107841234567890123456");
@@ -68,8 +69,28 @@ class GoogleTokenVerifierTest {
         server.expect(requestTo(containsString("/tokeninfo")))
                 .andRespond(withStatus(HttpStatus.BAD_REQUEST));
 
-        assertThatThrownBy(() -> verifier.verify("expired-token"))
+        assertThatThrownBy(() -> verifier.verify("header.expired.sig"))
                 .isInstanceOf(InvalidSocialTokenException.class);
+    }
+
+    /** The web's token client hands us an access token; its picture comes from userinfo. */
+    @Test
+    void checksAnAccessTokenTheSameWayAndTakesThePictureFromUserinfo() {
+        server.expect(requestTo(containsString("/tokeninfo?access_token=ya29.access")))
+                .andRespond(withSuccess("""
+                        {"aud":"%s","sub":"107841234567890123456",
+                         "email":"a@example.com","email_verified":"true"}
+                        """.formatted(OUR_CLIENT_ID), MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("/userinfo")))
+                .andExpect(header("Authorization", "Bearer ya29.access"))
+                .andRespond(withSuccess("{\"picture\":\"https://lh3.example/p.jpg\"}",
+                        MediaType.APPLICATION_JSON));
+
+        SocialProfile profile = verifier.verify("ya29.access");
+
+        assertThat(profile.uid()).isEqualTo("107841234567890123456");
+        assertThat(profile.avatarUrl()).isEqualTo("https://lh3.example/p.jpg");
+        server.verify();
     }
 
     private void respondWith(String json) {
