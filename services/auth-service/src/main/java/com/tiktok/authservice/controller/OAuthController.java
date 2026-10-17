@@ -18,8 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Token exchange: the client's SDK has already signed the user in at the provider, and posts the
  * token it got here to trade it for a session of ours. Web and mobile use the same endpoints —
- * Google Identity Services and {@code google_sign_in} both yield an ID token, the Facebook JS SDK
- * and {@code flutter_facebook_auth} both yield an access token — so nothing here is per-platform.
+ * Google's verifier takes the web's access token and Flutter's ID token alike, and the Facebook JS
+ * SDK and {@code flutter_facebook_auth} both yield an access token — so nothing here is per-platform.
  *
  * <p>One endpoint per provider rather than a {@code {provider}} path variable: the set is two long
  * and fixed, and this way an unknown provider is a 404 from the router instead of a conversion
@@ -33,7 +33,7 @@ public class OAuthController {
 
     private final OAuthService oauthService;
 
-    @Operation(summary = "Sign in with a Google ID token",
+    @Operation(summary = "Sign in with a Google ID or access token",
             description = "Creates the account on first use. 401 INVALID_SOCIAL_TOKEN, or "
                     + "401 SOCIAL_LINK_VERIFICATION_REQUIRED when the provider's email already "
                     + "belongs to an account here — a code has been mailed, continue at /google/link.")
