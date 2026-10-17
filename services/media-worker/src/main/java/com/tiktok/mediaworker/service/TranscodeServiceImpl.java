@@ -234,7 +234,7 @@ public class TranscodeServiceImpl implements TranscodeService {
     }
 
     private String url(String bucket, String key) {
-        return "%s/%s/%s".formatted(minioProperties.endpoint(), bucket, key);
+        return "%s/%s/%s".formatted(minioProperties.publicUrl(), bucket, key);
     }
 
     /**

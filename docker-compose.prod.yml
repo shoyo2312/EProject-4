@@ -338,10 +338,11 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
 
   # MINIO_ENDPOINT, here and below, is the PUBLIC address: the services build the media URLs they
-  # store and hand to browsers from it. Server-side MinIO calls therefore go out through Cloudflare
-  # and back in.
-  # ponytail: hairpin through the tunnel; split the endpoint into internal/public in MinioConfig if
-  # media-worker's transfers get slow.
+  # store and hand to browsers from it, and presigned uploads are signed for that host. Server-side
+  # MinIO calls therefore go out through Cloudflare and back in. media-worker is the exception: it
+  # moves whole videos, so it calls MinIO in-cluster and takes the public base from MEDIA_PUBLIC_URL.
+  # ponytail: user/video-service still hairpin their small server-side calls; give them a second,
+  # in-cluster MinioClient if those start failing.
   user-service:
     <<: *java
     build:
@@ -406,7 +407,8 @@ services:
       SNOWFLAKE_NODE_ID: 5
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MODERATION_SERVICE_URL: http://moderation-service:8099
-      MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
+      MINIO_ENDPOINT: http://minio:9000
+      MEDIA_PUBLIC_URL: ${MEDIA_PUBLIC_URL:?}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
