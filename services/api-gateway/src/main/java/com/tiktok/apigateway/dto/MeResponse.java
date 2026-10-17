@@ -1,6 +1,7 @@
 package com.tiktok.apigateway.dto;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -11,7 +12,9 @@ import java.util.Optional;
  *
  * <p>The two *ChangeableAt fields say when the handle (auth-service, once every 30 days) and the
  * display name (user-service, once every 7) may next change; null means now. hasPassword is
- * false for a social account that has never set one.
+ * false for a social account that has never set one. emailVerified and providers tell the client
+ * which proof to ask for before the account is closed: the password, a code to the address, or a
+ * sign-in with a linked provider.
  */
 public record MeResponse(
         Long id,
@@ -28,10 +31,13 @@ public record MeResponse(
         boolean profileReady,
         Instant usernameChangeableAt,
         Instant displayNameChangeableAt,
-        boolean hasPassword
+        boolean hasPassword,
+        boolean emailVerified,
+        List<String> providers
 ) {
 
     public static MeResponse from(AuthMeResponse account, Optional<ProfileMeResponse> profile) {
+        List<String> providers = account.providers() == null ? List.of() : account.providers();
         return profile
                 .map(p -> new MeResponse(
                         account.id(), account.username(), account.email(), account.role(),
@@ -39,11 +45,12 @@ public record MeResponse(
                         p.displayName(), p.bio(), p.avatarUrl(),
                         p.followerCount(), p.followingCount(), true,
                         account.usernameChangeableAt(), p.displayNameChangeableAt(),
-                        account.hasPassword()))
+                        account.hasPassword(), account.emailVerified(), providers))
                 .orElseGet(() -> new MeResponse(
                         account.id(), account.username(), account.email(), account.role(),
                         account.status(), account.createdAt(),
                         null, null, null, null, null, false,
-                        account.usernameChangeableAt(), null, account.hasPassword()));
+                        account.usernameChangeableAt(), null, account.hasPassword(),
+                        account.emailVerified(), providers));
     }
 }

@@ -4,9 +4,11 @@ import com.tiktok.userservice.entity.UserBlock;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -32,4 +34,9 @@ public interface UserBlockRepository extends JpaRepository<UserBlock, Long> {
             "((b.blockerId = :viewerId and b.blockedId in :userIds) " +
             "or (b.blockedId = :viewerId and b.blockerId in :userIds))")
     List<Long> findBlockedIdsAmong(@Param("viewerId") Long viewerId, @Param("userIds") Collection<Long> userIds);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update UserBlock b set b.deletedAt = :at "
+            + "where (b.blockerId = :userId or b.blockedId = :userId) and b.deletedAt is null")
+    int softDeleteAllOf(@Param("userId") Long userId, @Param("at") Instant at);
 }

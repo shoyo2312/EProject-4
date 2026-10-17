@@ -41,5 +41,11 @@ public enum SecurityEventType {
     DEVICE_REMEMBERED,
 
     /** Every session for the account was ended at once — a reset, or a detected token replay. */
-    SESSIONS_REVOKED
+    SESSIONS_REVOKED,
+
+    /** The owner closed the account. The detail says whether a deletion was scheduled with it. */
+    ACCOUNT_DEACTIVATED,
+
+    /** The owner signed in to a closed account and reopened it, cancelling any deletion. */
+    ACCOUNT_REACTIVATED
 }

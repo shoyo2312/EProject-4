@@ -31,4 +31,14 @@ public class OwnerBanDocument {
     /** Epoch millis of the decision, so an older one arriving later changes nothing. */
     @Field(type = FieldType.Long)
     private Long changedAt;
+
+    /**
+     * Epoch millis the owner closed the account; absent while it is open. Its own field and its own
+     * guard beside the ban's, so neither an unban nor a reopening undoes the other decision.
+     */
+    @Field(type = FieldType.Long)
+    private Long deactivatedAt;
+
+    @Field(type = FieldType.Long)
+    private Long accountStateChangedAt;
 }

@@ -34,6 +34,7 @@ public class OAuthServiceImpl implements OAuthService {
     private final SocialLinkChallenge linkChallenge;
     private final TokenIssuer tokenIssuer;
     private final SocialAvatarEventProducer avatarEventProducer;
+    private final AccountClosureService accountClosureService;
 
     public OAuthServiceImpl(List<SocialTokenVerifier> verifiers,
                             UserIdentityRepository userIdentityRepository,
@@ -41,7 +42,8 @@ public class OAuthServiceImpl implements OAuthService {
                             SocialAccountRegistrar registrar,
                             SocialLinkChallenge linkChallenge,
                             TokenIssuer tokenIssuer,
-                            SocialAvatarEventProducer avatarEventProducer) {
+                            SocialAvatarEventProducer avatarEventProducer,
+                            AccountClosureService accountClosureService) {
         verifiers.forEach(verifier -> this.verifiers.put(verifier.provider(), verifier));
         this.userIdentityRepository = userIdentityRepository;
         this.userRepository = userRepository;
@@ -49,6 +51,7 @@ public class OAuthServiceImpl implements OAuthService {
         this.linkChallenge = linkChallenge;
         this.tokenIssuer = tokenIssuer;
         this.avatarEventProducer = avatarEventProducer;
+        this.accountClosureService = accountClosureService;
     }
 
     /**
@@ -83,7 +86,7 @@ public class OAuthServiceImpl implements OAuthService {
 
         // A locked account must not be handed a session by the side door. Same answer the password
         // login gives, for the same reason: why the sign-in failed is not the client's business.
-        requireStillActive(user);
+        user = requireOpen(user, request.wantsReactivation());
         SocialSignInPolicy.requireAllowed(user);
 
         if (!avatarAnnounced) {
@@ -131,7 +134,9 @@ public class OAuthServiceImpl implements OAuthService {
             user = confirmOrJoinWinner(profile, request.otp());
         }
 
-        requireStillActive(user);
+        // Never reopens: the link step carries no choice to. A closed account is told so, and the
+        // client reopens it with a sign-in, which finds this link confirmed.
+        user = requireOpen(user, false);
         SocialSignInPolicy.requireAllowed(user);
 
         announceAvatar(user, profile);
@@ -233,6 +238,18 @@ public class OAuthServiceImpl implements OAuthService {
                 // The link outlives the account it points at, so a deleted account would otherwise
                 // send us down the create path and straight into uq_identity.
                 .orElseThrow(InvalidCredentialsException::new);
+    }
+
+    /**
+     * The provider vouched for an account linked to it, so a closed one is told what happened, as
+     * the password login does after a right password — see {@link AccountClosureService#admit}.
+     */
+    private User requireOpen(User user, boolean reactivate) {
+        if (user.getStatus() == UserStatus.DEACTIVATED) {
+            return accountClosureService.admit(user, reactivate);
+        }
+        requireStillActive(user);
+        return user;
     }
 
     /** Not banned or locked. Checked before a reconfirmation code is mailed as well as before a session. */

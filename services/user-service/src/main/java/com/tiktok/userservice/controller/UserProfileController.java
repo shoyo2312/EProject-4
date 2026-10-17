@@ -109,6 +109,14 @@ public class UserProfileController {
         return ApiResponse.success(userProfileService.getByUserIds(currentUserId, ids));
     }
 
+    @Operation(summary = "Admin: hydrate up to 100 user ids, closed accounts included",
+            description = "ROLE_ADMIN only. Like GET /users?ids= but without the viewer rules: no "
+                    + "blocks, and an account its owner closed is still named. Deleted ones are absent.")
+    @GetMapping("/admin")
+    public ApiResponse<List<UserProfileResponse>> getProfilesForAdmin(@RequestParam List<Long> ids) {
+        return ApiResponse.success(userProfileService.getByUserIdsForAdmin(ids));
+    }
+
     /**
      * Two segments, so it never competes with {@code /{userId}} below — and it has to exist
      * separately, because a handle is not a Long and would not bind there.

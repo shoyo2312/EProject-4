@@ -10,6 +10,7 @@ import com.tiktok.authservice.entity.UserIdentity;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.event.producer.SocialAvatarEventProducer;
+import com.tiktok.authservice.exception.AccountDeactivatedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.SocialLinkVerificationRequiredException;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -47,6 +49,7 @@ class OAuthServiceImplTest {
     private final SocialLinkChallenge linkChallenge = mock(SocialLinkChallenge.class);
     private final TokenIssuer tokenIssuer = mock(TokenIssuer.class);
     private final SocialAvatarEventProducer avatarEventProducer = mock(SocialAvatarEventProducer.class);
+    private final AccountClosureService accountClosureService = mock(AccountClosureService.class);
 
     private OAuthServiceImpl service;
 
@@ -58,7 +61,35 @@ class OAuthServiceImplTest {
         when(tokenIssuer.issue(any(), any())).thenReturn(new TokenResponse("access", "refresh", 900_000L));
 
         service = new OAuthServiceImpl(List.of(verifier), identityRepository, userRepository,
-                registrar, linkChallenge, tokenIssuer, avatarEventProducer);
+                registrar, linkChallenge, tokenIssuer, avatarEventProducer, accountClosureService);
+    }
+
+    /** A provider vouching for a closed account is a valid credential: the account decides what follows. */
+    @Test
+    void aClosedAccount_isHandedToTheClosureService_withTheCallersChoice() {
+        User closed = activeUser("a@example.com");
+        closed.deactivate(Instant.now(), null);
+        linkedTo(closed);
+        User reopened = activeUser("a@example.com");
+        when(accountClosureService.admit(closed, true)).thenReturn(reopened);
+
+        service.login(AuthProvider.GOOGLE, new SocialLoginRequest(REQUEST.token(), true));
+
+        verify(accountClosureService).admit(closed, true);
+        verify(tokenIssuer).issue(eq(reopened), any());
+    }
+
+    @Test
+    void aClosedAccount_refusedByTheClosureService_getsNoSession() {
+        User closed = activeUser("a@example.com");
+        closed.deactivate(Instant.now(), null);
+        linkedTo(closed);
+        when(accountClosureService.admit(closed, false))
+                .thenThrow(new AccountDeactivatedException());
+
+        assertThatThrownBy(() -> service.login(AuthProvider.GOOGLE, REQUEST))
+                .isInstanceOf(AccountDeactivatedException.class);
+        verify(tokenIssuer, never()).issue(any(), any());
     }
 
     /** A returning user is resolved by provider uid alone — no second account, no email involved. */

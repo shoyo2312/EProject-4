@@ -134,10 +134,10 @@ public class SearchServiceImpl implements SearchService {
         // score, so ranking is left entirely to how well the text matched.
         bool.filter(f -> f.term(t -> t.field("status").value("PUBLISHED")));
         bool.filter(f -> f.term(t -> t.field("visibility").value("PUBLIC")));
-        // A banned account's videos, read now rather than stamped on them — see OwnerBans.
-        List<FieldValue> banned = ownerBans.active().stream().map(FieldValue::of).toList();
-        if (!banned.isEmpty()) {
-            bool.mustNot(m -> m.terms(t -> t.field("userId").terms(v -> v.value(banned))));
+        // A banned or closed account's videos, read now rather than stamped on them — see OwnerBans.
+        List<FieldValue> hidden = ownerBans.hidden().stream().map(FieldValue::of).toList();
+        if (!hidden.isEmpty()) {
+            bool.mustNot(m -> m.terms(t -> t.field("userId").terms(v -> v.value(hidden))));
         }
 
         if (StringUtils.hasText(query)) {

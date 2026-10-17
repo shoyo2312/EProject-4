@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS user_bans (
     banned_until timestamp,
     changed_at   timestamp
 );
+ALTER TABLE user_bans ADD IF NOT EXISTS deactivated_at timestamp;
+ALTER TABLE user_bans ADD IF NOT EXISTS account_state_changed_at timestamp;
 
 -- Index that makes both comment listings a single-partition read.
 --

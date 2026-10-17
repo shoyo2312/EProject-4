@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -53,6 +54,36 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
 
     List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<Long> userIds);
 
+    /** The profiles among {@code userIds} that other people may see: neither deleted nor closed. */
+    List<UserProfile> findByUserIdInAndDeletedAtIsNullAndDeactivatedAtIsNull(List<Long> userIds);
+
+    boolean existsByUserIdAndDeactivatedAtIsNotNull(Long userId);
+
+    /**
+     * Records the owner closing or reopening the account, unless a newer change is already
+     * recorded. The WHERE clause is the guard: a redelivery writes the same values again, and an
+     * older event arriving late matches no row. Deleted profiles included, so the order holds even
+     * there.
+     *
+     * <p>The version moves for the reason {@link #updatePrivateAccount} gives.
+     *
+     * @param deactivatedAt null to reopen
+     * @return 1 when recorded, 0 when there is no profile or a newer change is already there
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update UserProfile p set p.deactivatedAt = :deactivatedAt, p.accountStateChangedAt = :changedAt, "
+            + "p.version = p.version + 1 "
+            + "where p.userId = :userId "
+            + "and (p.accountStateChangedAt is null or p.accountStateChangedAt < :changedAt)")
+    int applyAccountState(@Param("userId") Long userId,
+                          @Param("deactivatedAt") Instant deactivatedAt,
+                          @Param("changedAt") Instant changedAt);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update UserProfile p set p.deletedAt = :at, p.version = p.version + 1 "
+            + "where p.userId = :userId and p.deletedAt is null")
+    int softDeleteByUserId(@Param("userId") Long userId, @Param("at") Instant at);
+
     /**
      * Profile search, over the handle and the display name at once.
      *
@@ -72,7 +103,7 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
      * a page filtered afterwards is short and its total still counts rows the caller can never
      * reach — a client paging towards that total never arrives. Here the two agree.
      */
-    @Query("select p from UserProfile p where p.deletedAt is null "
+    @Query("select p from UserProfile p where p.deletedAt is null and p.deactivatedAt is null "
             + "and (lower(p.displayName) like lower(concat('%', :query, '%')) escape '\\' "
             + "or lower(p.username) like lower(concat('%', :query, '%')) escape '\\') "
             + "and not exists (select 1 from UserBlock b where b.deletedAt is null "
@@ -89,7 +120,7 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
      * idea who is searching, so there are no blocks to apply. No count query either — the caller
      * wants the best few, not a page.
      */
-    @Query("select p.userId from UserProfile p where p.deletedAt is null "
+    @Query("select p.userId from UserProfile p where p.deletedAt is null and p.deactivatedAt is null "
             + "and (lower(p.displayName) like lower(concat('%', :query, '%')) escape '\\' "
             + "or lower(p.username) like lower(concat('%', :query, '%')) escape '\\') "
             + "order by p.followerCount desc, p.userId asc")

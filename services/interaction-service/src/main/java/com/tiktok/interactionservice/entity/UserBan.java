@@ -42,7 +42,23 @@ public class UserBan {
     @Column("changed_at")
     private Instant changedAt;
 
+    /**
+     * When the author closed their own account; null while it is open. Independent of the ban, with
+     * its own guard, so an unban never reopens a closed account and a reopening never lifts a ban.
+     * Written only by AccountStateEventConsumer.
+     */
+    @Column("deactivated_at")
+    private Instant deactivatedAt;
+
+    @Column("account_state_changed_at")
+    private Instant accountStateChangedAt;
+
     public boolean isInForce(Instant now) {
         return bannedUntil != null && bannedUntil.isAfter(now);
+    }
+
+    /** Banned, or closed by its owner: either way the author's comments leave every listing. */
+    public boolean hides(Instant now) {
+        return isInForce(now) || deactivatedAt != null;
     }
 }

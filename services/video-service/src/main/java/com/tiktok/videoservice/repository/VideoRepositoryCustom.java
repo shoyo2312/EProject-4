@@ -241,6 +241,15 @@ public interface VideoRepositoryCustom {
     void updateSoftDeleted(Video video);
 
     /**
+     * Every live video of an account whose deletion ran goes to the trash, as if its owner had
+     * deleted each one: the deletion outbox announces them, and the trash retention purges them.
+     * Safe to repeat — a video already in the trash is not matched again.
+     *
+     * @return the ids moved, for the caller to evict
+     */
+    List<String> softDeleteAllOf(Long userId, Instant at);
+
+    /**
      * The owner toggling PUBLIC/PRIVATE from the detail page. Unconditional like
      * {@link #updateSoftDeleted}: visibility is owner-driven and not contended by the Kafka
      * consumers the {@code compareAndSet} writes guard against.

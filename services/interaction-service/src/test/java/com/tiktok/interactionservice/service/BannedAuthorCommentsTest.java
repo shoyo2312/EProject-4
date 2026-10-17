@@ -152,6 +152,63 @@ class BannedAuthorCommentsTest extends AbstractInteractionServiceIT {
         userBanRegistry.record(BANNED, UserBan.PERMANENT, decided);
         userBanRegistry.record(BANNED, UserBan.PERMANENT, decided);
 
-        assertThat(userBanRegistry.bannedAmong(List.of(BANNED, OTHER))).containsExactly(BANNED);
+        assertThat(userBanRegistry.hiddenAmong(List.of(BANNED, OTHER))).containsExactly(BANNED);
+    }
+
+    @Test
+    void aClosedAccountsComments_leaveTheThread_andComeBackWhenItReopens() {
+        CommentResponse closed = commentService.addComment(100L, BANNED, "video hay");
+        CommentResponse other = commentService.addComment(100L, OTHER, "đồng ý");
+        Instant at = Instant.now();
+
+        userBanRegistry.recordClosure(BANNED, at, at);
+        assertThat(threadIds(100L)).containsExactly(other.commentId());
+
+        userBanRegistry.recordClosure(BANNED, null, at.plusSeconds(1));
+        assertThat(threadIds(100L)).containsExactlyInAnyOrder(closed.commentId(), other.commentId());
+    }
+
+    /**
+     * The ban and the closure share a row and never undo each other — and each finds the row the
+     * other created, where its own guard is still null.
+     */
+    @Test
+    void anUnbanLeavesAClosedAccountHidden_andAReopeningLeavesABan() {
+        Instant at = Instant.now();
+
+        userBanRegistry.recordClosure(BANNED, at, at);
+        userBanRegistry.record(BANNED, UserBan.PERMANENT, at.plusSeconds(1));
+        userBanRegistry.record(BANNED, null, at.plusSeconds(2));
+        assertThat(userBanRegistry.hiddenAmong(List.of(BANNED))).containsExactly(BANNED);
+
+        userBanRegistry.record(BANNED, UserBan.PERMANENT, at.plusSeconds(3));
+        userBanRegistry.recordClosure(BANNED, null, at.plusSeconds(4));
+        assertThat(userBanRegistry.hiddenAmong(List.of(BANNED))).containsExactly(BANNED);
+
+        userBanRegistry.record(BANNED, null, at.plusSeconds(5));
+        assertThat(userBanRegistry.hiddenAmong(List.of(BANNED))).isEmpty();
+    }
+
+    @Test
+    void aBanFirst_thenAClosure_bothLand() {
+        Instant at = Instant.now();
+
+        userBanRegistry.record(BANNED, UserBan.PERMANENT, at);
+        userBanRegistry.recordClosure(BANNED, at.plusSeconds(1), at.plusSeconds(1));
+
+        assertThat(userBanRepository.findById(BANNED)).get().satisfies(row -> {
+            assertThat(row.getBannedUntil()).isEqualTo(UserBan.PERMANENT);
+            assertThat(row.getDeactivatedAt()).isNotNull();
+        });
+    }
+
+    @Test
+    void aLateOlderReopening_leavesTheAccountClosed() {
+        Instant at = Instant.now();
+
+        userBanRegistry.recordClosure(BANNED, at, at);
+        userBanRegistry.recordClosure(BANNED, null, at.minus(Duration.ofHours(1)));
+
+        assertThat(userBanRegistry.hiddenAmong(List.of(BANNED))).containsExactly(BANNED);
     }
 }

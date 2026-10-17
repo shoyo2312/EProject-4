@@ -4,6 +4,7 @@ import tools.jackson.databind.ObjectMapper;
 import com.tiktok.authservice.entity.OutboxEvent;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.event.DomainEvent;
+import com.tiktok.event.user.AccountStateChangedEvent;
 import com.tiktok.event.user.SocialAvatarDiscoveredEvent;
 import com.tiktok.event.user.UserRegisteredEvent;
 import com.tiktok.event.user.UsernameChangedEvent;
@@ -19,6 +20,7 @@ public class UserEventProducer {
     static final String USER_AGGREGATE = "USER";
     static final String USERNAME_AGGREGATE = "USERNAME";
     static final String SOCIAL_AVATAR_AGGREGATE = "SOCIAL_AVATAR";
+    static final String ACCOUNT_AGGREGATE = "ACCOUNT";
 
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -37,6 +39,11 @@ public class UserEventProducer {
      */
     public void publishSocialAvatarDiscovered(SocialAvatarDiscoveredEvent event) {
         save(SOCIAL_AVATAR_AGGREGATE, event.userId(), event);
+    }
+
+    /** Keyed by the account, so a close and the reopening after it arrive in order. */
+    public void publishAccountStateChanged(AccountStateChangedEvent event) {
+        save(ACCOUNT_AGGREGATE, event.userId(), event);
     }
 
     @SneakyThrows

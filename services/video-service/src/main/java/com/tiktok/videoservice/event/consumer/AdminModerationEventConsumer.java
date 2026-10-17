@@ -115,7 +115,10 @@ public class AdminModerationEventConsumer {
     private boolean tryRecordBan(Long userId, Instant bannedUntil, Instant decidedAt) {
         try {
             mongoTemplate.upsert(
-                    Query.query(where("_id").is(userId).and("changedAt").lte(decidedAt)),
+                    // A document the owner's closure created has no changedAt and must still match:
+                    // lte alone misses a missing field, and the upsert would collide on _id for good.
+                    Query.query(where("_id").is(userId).orOperator(
+                            where("changedAt").is(null), where("changedAt").lte(decidedAt))),
                     new Update().set("bannedUntil", bannedUntil).set("changedAt", decidedAt),
                     OwnerBan.class);
             return true;
