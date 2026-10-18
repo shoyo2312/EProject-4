@@ -94,7 +94,7 @@ services:
 
   # noeviction: Redis holds token revocations and rate-limit counters, not only cache.
   # See docker-compose.yml for the full reasoning.
-  redis:
+  app-redis:
     image: redis:7-alpine
     restart: unless-stopped
     command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
@@ -288,12 +288,12 @@ services:
       context: .
       args: { SERVICE: api-gateway }
     depends_on:
-      redis:
+      app-redis:
         condition: service_healthy
     environment:
       SNOWFLAKE_NODE_ID: 1
       <<: *java-env
-      REDIS_HOST: redis
+      REDIS_HOST: app-redis
       AUTH_SERVICE_URI: http://auth-service:8081
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
@@ -312,7 +312,7 @@ services:
       args: { SERVICE: auth-service }
     depends_on:
       postgres-auth: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      app-redis: { condition: service_healthy }
       kafka: { condition: service_healthy }
     environment:
       SNOWFLAKE_NODE_ID: 2
@@ -321,7 +321,7 @@ services:
       DB_PORT: 5432
       DB_USERNAME: ${DB_USERNAME:?}
       DB_PASSWORD: ${DB_PASSWORD:?}
-      REDIS_HOST: redis
+      REDIS_HOST: app-redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MAIL_HOST: smtp.resend.com
       MAIL_USERNAME: resend
@@ -372,7 +372,7 @@ services:
       args: { SERVICE: video-service }
     depends_on:
       mongodb: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      app-redis: { condition: service_healthy }
       kafka: { condition: service_healthy }
     environment:
       SNOWFLAKE_NODE_ID: 4
@@ -380,7 +380,7 @@ services:
       MONGO_HOST: mongodb
       MONGO_USERNAME: ${MONGO_USERNAME:?}
       MONGO_PASSWORD: ${MONGO_PASSWORD:?}
-      REDIS_HOST: redis
+      REDIS_HOST: app-redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       MODERATION_SERVICE_URL: http://moderation-service:8099
@@ -425,13 +425,13 @@ services:
       args: { SERVICE: interaction-service }
     depends_on:
       cassandra-init: { condition: service_completed_successfully }
-      redis: { condition: service_healthy }
+      app-redis: { condition: service_healthy }
       kafka: { condition: service_healthy }
     environment:
       SNOWFLAKE_NODE_ID: 6
       <<: *java-env
       CASSANDRA_CONTACT_POINTS: cassandra
-      REDIS_HOST: redis
+      REDIS_HOST: app-redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
@@ -444,13 +444,13 @@ services:
       context: .
       args: { SERVICE: recommendation-service }
     depends_on:
-      redis: { condition: service_healthy }
+      app-redis: { condition: service_healthy }
       kafka: { condition: service_healthy }
       rank-service: { condition: service_healthy }
     environment:
       SNOWFLAKE_NODE_ID: 7
       <<: *java-env
-      REDIS_HOST: redis
+      REDIS_HOST: app-redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       RANK_SERVICE_URL: http://rank-service:8098
@@ -462,7 +462,7 @@ services:
       args: { SERVICE: chat-service }
     depends_on:
       mongodb: { condition: service_healthy }
-      redis: { condition: service_healthy }
+      app-redis: { condition: service_healthy }
       kafka: { condition: service_healthy }
     environment:
       SNOWFLAKE_NODE_ID: 8
@@ -470,7 +470,7 @@ services:
       MONGO_HOST: mongodb
       MONGO_USERNAME: ${MONGO_USERNAME:?}
       MONGO_PASSWORD: ${MONGO_PASSWORD:?}
-      REDIS_HOST: redis
+      REDIS_HOST: app-redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
