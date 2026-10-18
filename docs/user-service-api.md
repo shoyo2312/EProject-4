@@ -342,14 +342,57 @@ Qua gateway thì **bắt buộc token**. Trả `data` → `[{ "userId": 1, "foll
 ### 3.20 `GET /admin?ids=1,2,3` — batch cho admin console
 **Chỉ token có role ADMIN** (khác thì `403`); app mobile không dùng. Giống mục 3.3b nhưng không áp quy tắc người xem: không lọc block, và tài khoản do chủ tự đóng (mục 3.2c) **vẫn có mặt**, để report, video và trang tài khoản trên console còn hiện `@handle`. Profile đã xoá thật thì vắng mặt. Cùng giới hạn 100 id và cùng thứ tự như 3.3b.
 
+### 3.21 "Download your data" — `/me/data-exports`
+File làm **bất đồng bộ**, như TikTok: gửi yêu cầu → `PROCESSING` → `DataExportWorker` (poll 5s) đọc dữ liệu, nén ZIP, ghi lên MinIO (`exports/{userId}/{id}-{uuid}.zip`) → `READY`, tải được trong **4 ngày** → `EXPIRED`. Gửi yêu cầu mới thì file đang `READY` hết hạn ngay. Mỗi tài khoản chỉ một yêu cầu `PROCESSING` cùng lúc.
+
+| Method & path | Body / trả về | Lỗi |
+|---|---|---|
+| `GET /me/data-exports` | 20 yêu cầu mới nhất, mới trước. Poll lại khi còn `PROCESSING` | — |
+| `POST /me/data-exports` → `201` | `{ "format": "TXT" \| "JSON", "categories": ["POSTS", ...] }` (≥ 1) | `VALIDATION_ERROR` 400, `DATA_EXPORT_IN_PROGRESS` 409 |
+| `POST /me/data-exports/{id}/cancel` | Chỉ khi còn `PROCESSING` | `DATA_EXPORT_NOT_FOUND` 404, `DATA_EXPORT_NOT_CANCELABLE` 409 |
+| `GET /me/data-exports/{id}/download-url` | `{ url, expiresAt }` — link MinIO ký sẵn, sống **5 phút**; tạo mới mỗi lần bấm | `DATA_EXPORT_NOT_FOUND` 404, `DATA_EXPORT_UNAVAILABLE` 409 (chưa xong / hết hạn) |
+
+Phần tử: `{ id, format, categories, status, requestedAt, readyAt, expiresAt, sizeBytes }`. `status` ∈ `PROCESSING`, `READY`, `CANCELED`, `FAILED`, `EXPIRED`; file `READY` đã quá `expiresAt` được trả về là `EXPIRED` kể cả khi job dọn chưa chạy.
+
+`categories` (`DataExportCategory`) và nguồn dữ liệu — job chạy nền nên không có token user, đọc qua prefix internal của từng service:
+
+| Category | Nội dung | Nguồn |
+|---|---|---|
+| `PROFILE_AND_SETTINGS` | Profile, cài đặt | user-service |
+| `POSTS` | Mọi video chưa xoá, mọi status/visibility | video-service `GET /api/v1/videos/internal/users/{id}/videos` |
+| `LIKES_AND_FAVORITES` | Like, video đã lưu (kèm thời điểm) | interaction-service `GET /api/v1/interactions/internal/users/{id}/likes\|saves` |
+| `DIRECT_MESSAGES` | Mọi hội thoại và tin nhắn | chat-service `GET /api/v1/conversations/internal/users/{id}`, `.../internal/{conversationId}/messages` |
+| `YOUR_ACTIVITY` | Following, followers, repost, block, mute | user-service + interaction-service `.../reposts` |
+
+**Không có comment**: comment lưu theo video (`comments_by_video`), không có bảng nào liệt kê theo tác giả. Thêm thì phải có bảng `comments_by_author` ở interaction-service trước.
+
+Build lỗi (service nào đó chết) → giữ lease, thử lại sau `lease` (10 phút), quá 3 lần → `FAILED`. Bị huỷ giữa chừng → file vừa ghi bị xoá, không thành `READY`. `DataExportCleanup` (15 phút/lần) chuyển `READY` quá hạn sang `EXPIRED` và xoá file của mọi row không còn tải được; MinIO có thêm rule ILM xoá `exports/` sau 7 ngày làm lưới an toàn. Tài khoản bị xoá thật (mục 3.2c) → mọi yêu cầu bị xoá mềm, file bị dọn.
+
+### 3.22 `GET /admin/data-exports/summary` — theo dõi job "Download your data"
+**Chỉ token có role ADMIN** (khác thì `403`). Trang System → Queues của admin console đọc endpoint này. Không tính yêu cầu của tài khoản đã xoá thật.
+
+```json
+{ "processing": 2, "oldestProcessingSince": "2026-10-18T13:50:39Z", "stalled": 0, "readyFiles": 14,
+  "failedSince": "2026-10-11T13:55:00Z", "failed": 1,
+  "recentFailures": [{ "id": 1, "userId": 7, "format": "TXT", "categories": ["POSTS"], "attempts": 3,
+                       "requestedAt": "…", "failedAt": "…" }] }
+```
+
+- `stalled`: số yêu cầu `PROCESSING` cũ hơn `lease × max-attempts` (30 phút) — worker không xử lý nổi, ví dụ scheduler chết hoặc hàng đợi dồn.
+- `readyFiles`: file `READY` chưa quá hạn, tức đang chiếm chỗ trên MinIO.
+- `failed`: số yêu cầu thành `FAILED` trong 7 ngày gần nhất; `recentFailures` là 20 cái mới nhất. `failedAt` lấy từ `updated_at` — sau khi `FAILED` không còn gì cập nhật row nữa.
+
 ## 4. Enums
 
 | Enum | Giá trị | Dùng ở đâu |
 |---|---|---|
+| `DataExportFormat` | `TXT`, `JSON` | mục 3.21 |
+| `DataExportCategory` | `DIRECT_MESSAGES`, `LIKES_AND_FAVORITES`, `POSTS`, `PROFILE_AND_SETTINGS`, `YOUR_ACTIVITY` | mục 3.21 |
+| `DataExportStatus` | `PROCESSING`, `READY`, `CANCELED`, `FAILED`, `EXPIRED` | mục 3.21 |
 | `SettingsAudience` | `EVERYONE`, `FRIENDS`, `NO_ONE` | `commentAudience` và `dmAudience` ở mục 3.14 / 3.15. `FRIENDS` nghĩa là **follow lẫn nhau** (mutual), không phải "người tôi follow" |
 | `FollowResponse.status` | `FOLLOWING`, `REQUESTED` | `status` ở mục 3.4 và 3.16 |
 
-Ngoài ra không có enum nào khác ở user-service — follow/block/mute và lời mời follow đều là quan hệ có/không, xoá mềm qua `deletedAt`. Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
+Ngoài các enum trên, follow/block/mute và lời mời follow đều là quan hệ có/không, xoá mềm qua `deletedAt`. Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
 
 ## 5. Bảng mã lỗi (`code`) đầy đủ
 
@@ -374,6 +417,10 @@ Ngoài ra không có enum nào khác ở user-service — follow/block/mute và 
 | `FOLLOW_REQUEST_NOT_FOUND` | 404 | Duyệt/từ chối khi không có lời mời nào đang chờ từ người đó (mục 3.16) |
 | `NOT_BLOCKED` | 404 | Unblock người chưa block |
 | `NOT_MUTED` | 404 | Unmute người chưa mute |
+| `DATA_EXPORT_NOT_FOUND` | 404 | Yêu cầu tải dữ liệu không tồn tại hoặc không phải của người gọi (mục 3.21) |
+| `DATA_EXPORT_IN_PROGRESS` | 409 | Đã có một yêu cầu tải dữ liệu đang `PROCESSING` (mục 3.21) |
+| `DATA_EXPORT_NOT_CANCELABLE` | 409 | Huỷ yêu cầu đã xong / đã huỷ / đã hết hạn (mục 3.21) |
+| `DATA_EXPORT_UNAVAILABLE` | 409 | Xin link tải khi file chưa xong hoặc đã hết hạn (mục 3.21) |
 | `CONCURRENT_MODIFICATION` | 409 | Hai request sửa cùng 1 bản ghi đúng lúc (2 lần bấm unfollow/unblock/unmute sát nhau, hoặc 2 thiết bị cùng thao tác). **Mã 409 duy nhất nên retry** — đọc lại trạng thái rồi thử lại 1 lần; các mã `ALREADY_*` là lỗi nghiệp vụ, retry vô ích |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 

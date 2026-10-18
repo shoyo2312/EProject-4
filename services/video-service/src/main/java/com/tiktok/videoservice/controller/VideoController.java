@@ -111,6 +111,19 @@ public class VideoController {
         return ApiResponse.success(videoService.getPolicy(videoId));
     }
 
+    /**
+     * Service-to-service: user-service builds a "Download your data" archive with no signed-in
+     * user behind the request, so the owner listing above — which needs the owner's token to
+     * include hidden videos — cannot serve it. Pass {@code nextCursor} back as {@code page}.
+     */
+    @GetMapping("/internal/users/{userId}/videos")
+    public ApiResponse<CursorPage<VideoResponse>> listForExport(
+            @PathVariable Long userId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size) {
+        return ApiResponse.success(videoService.listForExport(userId, Math.max(page, 0), Math.clamp(size, 1, 100)));
+    }
+
     @GetMapping("/users/{userId}")
     public ApiResponse<Page<VideoResponse>> listByUser(
             @AuthenticationPrincipal Long currentUserId,
