@@ -37,7 +37,7 @@ public class SecurityConfig {
                         // Also before the blanket GET rule: /policy answers for every video whatever
                         // its visibility, for interaction- and notification-service. api-gateway
                         // denies it; the token keeps out whatever reaches this port without the gateway.
-                        .requestMatchers(HttpMethod.GET, "/api/v1/videos/*/policy")
+                        .requestMatchers(HttpMethod.GET, "/api/v1/videos/*/policy", "/api/v1/videos/internal/**")
                         .access(new InternalCallerAuthorization(internalApiToken))
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .anyRequest().authenticated()
