@@ -393,7 +393,7 @@ services:
         set -e
         mc alias set tt http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
         mc mb --ignore-existing "tt/$$MINIO_BUCKET"
-        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}}]}' \
+        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}},{"ID":"expire-data-exports","Status":"Enabled","Filter":{"Prefix":"exports/"},"Expiration":{"Days":7}}]}' \
           | mc ilm import "tt/$$MINIO_BUCKET"
         echo "minio-init: bucket $$MINIO_BUCKET ready"
     networks:

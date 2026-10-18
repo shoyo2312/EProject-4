@@ -38,11 +38,11 @@ spring:
 
   task:
     scheduling:
-      # One thread per @Scheduled method: the outbox poll and the two retention cleanups.
-      # On the default pool of one they take turns, and an outbox poll waiting out its ack
-      # timeout on a dead broker holds up every other job behind it.
+      # One thread per @Scheduled method: the outbox poll, the two retention cleanups, and the
+      # data export worker and its cleanup. On the default pool of one they take turns, and an
+      # outbox poll waiting out its ack timeout on a dead broker holds up every other job behind it.
       pool:
-        size: 3
+        size: 5
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
@@ -72,6 +72,25 @@ user:
     # enough to still have the row when someone asks why a follower count moved last week, short
     # enough that the table stops growing.
     published-outbox-grace: 7d
+
+  data-export:
+    poll-millis: ${DATA_EXPORT_POLL_MILLIS:5000}
+    cleanup-millis: ${DATA_EXPORT_CLEANUP_MILLIS:900000}
+    # A build reads three services and uploads one file; ten minutes is far past a healthy one.
+    lease: 10m
+    max-attempts: 3
+    # As live: "When your file is ready for download, it'll be available for 4 days."
+    available-for: 4d
+    link-ttl: 5m
+    cleanup-batch-size: 100
+
+# What a data export reads, through each service's internal prefix (see DataExportSources).
+downstream:
+  video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+  interaction-service-uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
+  chat-service-uri: ${CHAT_SERVICE_URI:http://localhost:8088}
+  # Generous: these are background reads of up to a hundred rows, nobody is waiting on a page.
+  timeout-millis: 10000
 
 app:
   media:

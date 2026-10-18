@@ -1,6 +1,7 @@
 package com.tiktok.userservice;
 
 import com.tiktok.common.validation.MediaUrlProperties;
+import com.tiktok.userservice.config.DataExportProperties;
 import com.tiktok.userservice.config.RetentionProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -13,7 +14,7 @@ import static org.springframework.data.web.config.EnableSpringDataWebSupport.Pag
 @SpringBootApplication
 @EnableScheduling
 @EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)
-@EnableConfigurationProperties({MediaUrlProperties.class, RetentionProperties.class})
+@EnableConfigurationProperties({MediaUrlProperties.class, RetentionProperties.class, DataExportProperties.class})
 public class UserServiceApplication {
     public static void main(String[] args) {
         SpringApplication.run(UserServiceApplication.class, args);
