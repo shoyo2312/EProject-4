@@ -122,6 +122,7 @@ minio:
   # presigned uploads land in. endpoint is what the browser PUTs to, so in any deployment where
   # the client is not on the service network this is the public address, not the internal one.
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  upload-url: ${MEDIA_UPLOAD_URL:${minio.endpoint}}
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin123}
   bucket: ${MINIO_BUCKET:video-media}

@@ -390,6 +390,10 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
       MEDIA_ALLOWED_HOSTS: ${MEDIA_HOST:?}
+      # Where browsers POST raw uploads. Unset, the same public address as everything else. Set
+      # to a host that skips Cloudflare (DNS only, straight to this box) when uploads through the
+      # tunnel crawl: Cloudflare Free serves this zone from European colos for Vietnamese users.
+      MEDIA_UPLOAD_URL: ${MEDIA_UPLOAD_URL:-${MEDIA_PUBLIC_URL:?}}
       # Cloudflare Free rejects request bodies over 100 MB, and the browser's upload is one POST.
       VIDEO_MAX_BYTES: ${VIDEO_MAX_BYTES:-94371840}
 

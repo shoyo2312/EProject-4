@@ -167,7 +167,7 @@ public class VideoServiceImpl implements VideoService {
         formFields.put("key", objectKey);
         formFields.put("Content-Type", contentType);
 
-        String uploadUrl = "%s/%s".formatted(minioProperties.endpoint(), minioProperties.bucket());
+        String uploadUrl = "%s/%s".formatted(minioProperties.uploadUrl(), minioProperties.bucket());
         return new UploadUrlResponse(uploadUrl, formFields, storedUrl(objectKey), expirySeconds);
     }
 

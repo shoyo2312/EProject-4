@@ -41,7 +41,7 @@ class AdminVideoDirectoryTest {
 
     private final VideoRepository videoRepository = mock(VideoRepository.class);
     private static final MinioProperties MINIO = new MinioProperties(
-            "http://localhost:9000", "key", "secret", "video-media", "us-east-1", Duration.ofMinutes(15));
+            "http://localhost:9000", "http://localhost:9000", "key", "secret", "video-media", "us-east-1", Duration.ofMinutes(15));
 
     // Real client, so the URLs are really signed: presigning is local arithmetic. Spied only for
     // the one call that would leave the test, the check that the quarantined copy is there.

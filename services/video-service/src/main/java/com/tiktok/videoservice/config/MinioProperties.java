@@ -10,6 +10,10 @@ import java.time.Duration;
  *
  * @param endpoint  the MinIO/S3 endpoint the browser will PUT to, so it has to be an address the
  *                  browser can reach, not the in-cluster one
+ * @param uploadUrl where the browser POSTs the presigned upload form. Defaults to {@code endpoint};
+ *                  set apart when uploads must skip a proxy in front of it. The POST policy is
+ *                  signed over its fields, not the host, so any address reaching the same MinIO
+ *                  accepts it.
  * @param region    set explicitly so presigning stays a local signature computation: with no
  *                  region the client asks the server for the bucket's location the first time,
  *                  which turns handing out a URL into a network round trip that fails when the
@@ -19,6 +23,7 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "minio")
 public record MinioProperties(
         String endpoint,
+        String uploadUrl,
         String accessKey,
         String secretKey,
         String bucket,
