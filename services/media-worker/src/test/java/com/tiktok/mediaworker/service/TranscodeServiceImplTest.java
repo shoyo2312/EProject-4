@@ -36,7 +36,7 @@ import static org.mockito.Mockito.when;
 class TranscodeServiceImplTest {
 
     private static final MinioProperties MINIO =
-            new MinioProperties("http://localhost:9000", "key", "secret", "video-media");
+            new MinioProperties("http://localhost:9000", "https://media.example", "key", "secret", "video-media");
     private static final MediaVideoProperties LIMITS =
             new MediaVideoProperties(524_288_000L, 600);
     private static final String RAW_URL = "s3://video-media/raw/7/vid123.mp4";
@@ -181,9 +181,9 @@ class TranscodeServiceImplTest {
 
         TranscodeResult result = service().transcode("vid123", RAW_URL);
 
-        assertThat(result.hlsUrl()).isEqualTo("http://localhost:9000/video-media/hls/vid123/source.mp4");
-        assertThat(result.thumbnailUrl()).isEqualTo("http://localhost:9000/video-media/thumbnails/vid123.jpg");
-        assertThat(result.previewUrl()).isEqualTo("http://localhost:9000/video-media/previews/vid123.webp");
+        assertThat(result.hlsUrl()).isEqualTo("https://media.example/video-media/hls/vid123/source.mp4");
+        assertThat(result.thumbnailUrl()).isEqualTo("https://media.example/video-media/thumbnails/vid123.jpg");
+        assertThat(result.previewUrl()).isEqualTo("https://media.example/video-media/previews/vid123.webp");
         assertThat(result.durationSeconds()).isEqualTo(42);
 
         assertThat(uploads()).extracting(UploadObjectArgs::object)
@@ -206,7 +206,7 @@ class TranscodeServiceImplTest {
         TranscodeResult result = service().transcode("vid123", RAW_URL);
 
         // Still playable at the same key — the fallback changes which file is uploaded, not where.
-        assertThat(result.hlsUrl()).isEqualTo("http://localhost:9000/video-media/hls/vid123/source.mp4");
+        assertThat(result.hlsUrl()).isEqualTo("https://media.example/video-media/hls/vid123/source.mp4");
         UploadObjectArgs playback = uploads().get(0);
         assertThat(playback.object()).isEqualTo("hls/vid123/source.mp4");
         assertThat(playback.filename()).endsWith("/source");
@@ -302,7 +302,7 @@ class TranscodeServiceImplTest {
 
         TranscodeResult result = service().transcode("vid123", RAW_URL);
 
-        assertThat(result.hlsUrl()).isEqualTo("http://localhost:9000/video-media/hls/vid123/source.mp4");
+        assertThat(result.hlsUrl()).isEqualTo("https://media.example/video-media/hls/vid123/source.mp4");
         verify(ffmpeg, never()).faststart(any(), any());
         assertThat(uploads().get(0).filename()).endsWith("/playback.mp4");
     }

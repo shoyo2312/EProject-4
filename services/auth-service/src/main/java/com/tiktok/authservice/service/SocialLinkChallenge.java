@@ -2,11 +2,13 @@ package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.config.OtpProperties;
 import com.tiktok.authservice.entity.User;
+import com.tiktok.authservice.entity.UserIdentity;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.entity.VerificationTokenType;
 import com.tiktok.authservice.event.local.SocialLinkRequestedEvent;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.TooManyOtpRequestsException;
+import com.tiktok.authservice.repository.UserIdentityRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,16 +34,23 @@ public class SocialLinkChallenge {
     private final OtpRateLimiter otpRateLimiter;
     private final OtpProperties otpProperties;
     private final SocialAccountRegistrar registrar;
+    private final UserIdentityRepository userIdentityRepository;
 
     /**
      * Mails the code. Returns normally — the caller throws — because the OTP row must survive this
      * transaction, and throwing from inside it would roll the row back and mail a code that could
      * never be spent.
+     *
+     * <p>To the owner's address, not the provider's. For a new link they are the same address —
+     * the owner was found by it — but a link waiting to be confirmed again (see
+     * {@link #reconfirm}) may come from a provider account with no address, or one that has moved
+     * on, and the proof that matters is of the mailbox this account is known by.
      */
     @Transactional
     public void start(User owner, SocialProfile profile) {
+        String email = owner.getEmail();
         try {
-            otpRateLimiter.checkAllowed(PURPOSE, profile.email());
+            otpRateLimiter.checkAllowed(PURPOSE, email);
         } catch (TooManyOtpRequestsException e) {
             // Send budget spent, so no new mail goes out — but the caller still answers 409, not
             // 429. The budget runs out precisely because the user kept pressing "sign in with
@@ -54,7 +63,7 @@ public class SocialLinkChallenge {
 
         otpService.issue(owner, VerificationTokenType.SOCIAL_LINK,
                 otpProperties.emailVerificationExpiryMillis(),
-                otp -> new SocialLinkRequestedEvent(profile.email(), otp, profile.provider()));
+                otp -> new SocialLinkRequestedEvent(email, otp, profile.provider()));
     }
 
     /**
@@ -82,8 +91,36 @@ public class SocialLinkChallenge {
         if (owner.getStatus() != UserStatus.ACTIVE) {
             throw new InvalidOtpException();
         }
+        // No challenge is ever started for an admin, but the code proves the same mailbox either
+        // way, and the link it would write is what SocialSignInPolicy exists to keep off.
+        SocialSignInPolicy.requireAllowed(owner);
 
-        registrar.link(owner, profile);
+        registrar.claim(owner, profile);
         return owner;
+    }
+
+    /**
+     * Spends the code for a link that {@link IdentityReconfirmation} flagged, and lets it sign in
+     * again. Looked up by the owner's address rather than the provider's, because that is where
+     * {@link #start} sent it.
+     *
+     * <p>The account the code resolves to must be the one the link points at. It always is — the
+     * address is unique and the code was mailed there for this account — but a code is spent here
+     * to open a specific account, and nothing else should be able to open it.
+     */
+    @Transactional
+    public User reconfirm(User owner, UserIdentity identity, String otp) {
+        if (owner.getEmail() == null) {
+            throw new InvalidOtpException();
+        }
+        User proven = otpService.consume(PURPOSE, VerificationTokenType.SOCIAL_LINK, owner.getEmail(), otp);
+        if (!proven.getId().equals(identity.getUserId()) || proven.getStatus() != UserStatus.ACTIVE) {
+            throw new InvalidOtpException();
+        }
+        SocialSignInPolicy.requireAllowed(proven);
+
+        identity.reconfirm();
+        userIdentityRepository.save(identity);
+        return proven;
     }
 }

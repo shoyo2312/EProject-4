@@ -1,5 +1,6 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.common.storage.ObjectKeys;
 import com.tiktok.mediaworker.config.MediaVideoProperties;
 import com.tiktok.mediaworker.config.MinioProperties;
 import io.minio.DownloadObjectArgs;
@@ -95,7 +96,7 @@ public class TranscodeServiceImpl implements TranscodeService {
     @SneakyThrows
     public TranscodeResult transcode(String videoId, String rawFileUrl) {
         String bucket = minioProperties.bucket();
-        String sourceKey = MediaKeys.objectKey(rawFileUrl, bucket).orElseThrow(() -> new IllegalArgumentException(
+        String sourceKey = ObjectKeys.objectKey(rawFileUrl, bucket).orElseThrow(() -> new IllegalArgumentException(
                 "Raw upload %s of video %s is not in bucket %s".formatted(rawFileUrl, videoId, bucket)));
 
         // Checked before the download so an oversized upload costs one HEAD, not its own size in
@@ -233,7 +234,7 @@ public class TranscodeServiceImpl implements TranscodeService {
     }
 
     private String url(String bucket, String key) {
-        return "%s/%s/%s".formatted(minioProperties.endpoint(), bucket, key);
+        return "%s/%s/%s".formatted(minioProperties.publicUrl(), bucket, key);
     }
 
     /**

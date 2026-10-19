@@ -14,6 +14,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -48,5 +49,13 @@ public class AdminUserController {
             @RequestParam(required = false) UserStatus status,
             @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         return ApiResponse.success(adminUserDirectory.search(q, status, pageable));
+    }
+
+    @GetMapping("/{userId}")
+    @Operation(summary = "One account by id",
+            description = "What a report against a user resolves to. 404 USER_NOT_FOUND for an id "
+                    + "with no account, or one whose account was deleted.")
+    public ApiResponse<AdminUserResponse> get(@PathVariable Long userId) {
+        return ApiResponse.success(adminUserDirectory.get(userId));
     }
 }

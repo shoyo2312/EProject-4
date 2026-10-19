@@ -23,6 +23,17 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      # One consumer thread per partition (topics are created with 3) rather than one for all of
+      # them, so view and like counters keep up under load. Per-partition order holds, and the
+      # listeners are safe side by side: claims are op_type=create and counter writes are scripted
+      # partial updates with retry_on_conflict (see SearchIndexWriter).
+      concurrency: 3
+
+downstream:
+  user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
+  # Nằm trên đường search của user: user-service treo thì mỗi lần tìm chờ đúng chừng này.
+  timeout-millis: ${DOWNSTREAM_TIMEOUT_MILLIS:500}
 
 springdoc:
   api-docs:

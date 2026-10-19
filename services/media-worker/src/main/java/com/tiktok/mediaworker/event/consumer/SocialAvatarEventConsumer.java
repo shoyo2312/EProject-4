@@ -1,6 +1,6 @@
 package com.tiktok.mediaworker.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.user.AvatarMirroredEvent;
 import com.tiktok.event.user.SocialAvatarDiscoveredEvent;
 import com.tiktok.mediaworker.event.producer.AvatarMirroredEventProducer;

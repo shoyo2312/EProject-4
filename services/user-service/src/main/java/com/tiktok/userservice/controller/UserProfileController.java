@@ -79,6 +79,20 @@ public class UserProfileController {
     }
 
     /**
+     * Service-to-service: search-service matches a video query against authors with this, since
+     * the video index holds only the author's id. No token — the gateway denies the internal
+     * prefix, so only the internal network reaches it.
+     *
+     * <p>ponytail: fixed cap of 50 most-followed matches; an author outside it is not found by
+     * name. Raise it, or index usernames into search-service, if short queries need more.
+     */
+    @Operation(summary = "Internal: ids of the profiles a handle or display-name search finds first")
+    @GetMapping("/internal/search-ids")
+    public ApiResponse<List<Long>> searchIds(@RequestParam(required = false) String q) {
+        return ApiResponse.success(userProfileService.searchIds(q, 50));
+    }
+
+    /**
      * Batch lookup for callers holding a list of user ids and nothing else — the video feed, a
      * comment thread. Written below {@code /search} but above {@code /{userId}} for readability
      * only; the three never compete, since a literal segment, a bare collection path and a path
@@ -93,6 +107,14 @@ public class UserProfileController {
             @AuthenticationPrincipal Long currentUserId,
             @RequestParam List<Long> ids) {
         return ApiResponse.success(userProfileService.getByUserIds(currentUserId, ids));
+    }
+
+    @Operation(summary = "Admin: hydrate up to 100 user ids, closed accounts included",
+            description = "ROLE_ADMIN only. Like GET /users?ids= but without the viewer rules: no "
+                    + "blocks, and an account its owner closed is still named. Deleted ones are absent.")
+    @GetMapping("/admin")
+    public ApiResponse<List<UserProfileResponse>> getProfilesForAdmin(@RequestParam List<Long> ids) {
+        return ApiResponse.success(userProfileService.getByUserIdsForAdmin(ids));
     }
 
     /**

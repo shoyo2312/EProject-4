@@ -23,14 +23,20 @@ public record VideoTranscodedEvent(
          */
         Integer width,
         Integer height,
-        String failureReason
+        String failureReason,
+        /**
+         * VideoPublishedEvent's verdict on the caption, carried through so the moderation step —
+         * which reads this event, not the publication — can fold it into its own. Null on the
+         * failure path, from producers older than the field, and when nothing screened the caption.
+         */
+        ModerationVerdict textVerdict
 ) implements DomainEvent {
 
     public static VideoTranscodedEvent success(String videoId, String thumbnailUrl, String previewUrl,
                                                String hlsUrl, Integer durationSeconds,
                                                Integer width, Integer height) {
         return new VideoTranscodedEvent(UUID.randomUUID().toString(), Instant.now(), videoId, true,
-                thumbnailUrl, previewUrl, hlsUrl, durationSeconds, width, height, null);
+                thumbnailUrl, previewUrl, hlsUrl, durationSeconds, width, height, null, null);
     }
 
     /**
@@ -45,6 +51,12 @@ public record VideoTranscodedEvent(
 
     public static VideoTranscodedEvent failure(String videoId, String reason) {
         return new VideoTranscodedEvent(UUID.randomUUID().toString(), Instant.now(), videoId, false,
-                null, null, null, null, null, null, reason);
+                null, null, null, null, null, null, reason, null);
+    }
+
+    /** The same result, carrying the caption's verdict from the publication it answers. */
+    public VideoTranscodedEvent withTextVerdict(ModerationVerdict verdict) {
+        return new VideoTranscodedEvent(eventId, occurredAt, videoId, success, thumbnailUrl, previewUrl,
+                hlsUrl, durationSeconds, width, height, failureReason, verdict);
     }
 }

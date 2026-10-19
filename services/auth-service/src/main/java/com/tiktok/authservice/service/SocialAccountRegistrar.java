@@ -7,6 +7,7 @@ import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
+import com.tiktok.event.user.SocialAvatarDiscoveredEvent;
 import com.tiktok.event.user.UserRegisteredEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -32,9 +33,20 @@ public class SocialAccountRegistrar {
     private final UserIdentityRepository userIdentityRepository;
     private final UsernameGenerator usernameGenerator;
     private final UserEventProducer userEventProducer;
+    private final IdentityReconfirmation identityReconfirmation;
+
+    /**
+     * The account a provider sign-in resolved to.
+     *
+     * @param avatarAnnounced whether the provider picture is already on its way to media-worker —
+     *                        queued behind the registration of the account this call created. The
+     *                        caller announces it otherwise, as for any account that already existed.
+     */
+    public record Registration(User user, boolean avatarAnnounced) {
+    }
 
     @Transactional
-    public User register(SocialProfile profile) {
+    public Registration register(SocialProfile profile) {
         // Verification decides two separate things, and conflating them costs the user a screen for
         // nothing. It decides whether we may hand over an account we already hold — there it is
         // absolute, since anyone can register victim@example.com at a provider. It does not have to
@@ -47,9 +59,12 @@ public class SocialAccountRegistrar {
                 : userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(email).orElse(null);
 
         if (existing != null) {
+            // Before claiming or mailing a link code: neither may happen for an account a provider
+            // sign-in is never allowed to open. See SocialSignInPolicy.
+            SocialSignInPolicy.requireAllowed(existing);
             if (profile.emailVerified()) {
-                link(existing, profile);
-                return existing;
+                claim(existing, profile);
+                return new Registration(existing, false);
             }
             // Address already has an owner and the provider vouches for nothing. Both ways out of
             // here are wrong on their own: claiming the account hands it over on an unverified
@@ -87,7 +102,50 @@ public class SocialAccountRegistrar {
         userEventProducer.publishUserRegistered(UserRegisteredEvent.of(
                 user.getId(), user.getUsername(), user.getEmail(), profile.avatarUrl()));
 
-        return user;
+        // Queued behind the registration rather than left to the caller's direct send. That send
+        // went out the moment this returned, up to one outbox poll — five seconds — ahead of the
+        // registration, so the copy reached user-service before the profile it belongs to and was
+        // dropped: every new account stayed on the provider's URL. Leaving in the same poll, the two
+        // arrive together, and user-service retries a copy that still lands first.
+        boolean avatarAnnounced = profile.avatarUrl() != null;
+        if (avatarAnnounced) {
+            userEventProducer.publishSocialAvatarDiscovered(
+                    SocialAvatarDiscoveredEvent.of(user.getId(), profile.avatarUrl()));
+        }
+
+        return new Registration(user, avatarAnnounced);
+    }
+
+    /**
+     * Attaches a provider account to an existing account whose address the person signing in has
+     * just proven they own: the provider vouched for it, or they spent the code
+     * {@link SocialLinkChallenge} mailed there.
+     *
+     * <p>If the account had never proven that address itself, its password is dropped and the
+     * address marked verified. Anyone can register someone else's address with a password of their
+     * choosing, and it stays unverified only because they cannot read the mail. Linking that
+     * account as it stood let the real owner move in with the squatter's password still on it,
+     * and once anything verified the address, that password was a working login. Without it the
+     * owner signs in through the provider, or sets a password through the reset flow.
+     *
+     * <p>The provider links it already carries are a squatter's other way in and go the same way,
+     * through {@link IdentityReconfirmation} — before the address is marked verified, since that
+     * is what dates the ones made before it was proven. The link being made here is written after,
+     * so it is not among them.
+     *
+     * <p>Public for {@link SocialLinkChallenge}. No {@code @Transactional} of its own, and one here
+     * would be a lie: both callers are already inside a transaction — {@link #register} above by
+     * self-invocation, which the Spring proxy never sees, and {@code SocialLinkChallenge.confirm}
+     * through its own annotation. The changes have to live or die with the caller's work.
+     */
+    public void claim(User owner, SocialProfile profile) {
+        identityReconfirmation.onMailboxOwnerTakesOver(owner);
+        if (!owner.isEmailVerified()) {
+            owner.clearPassword();
+            owner.markEmailVerified();
+            userRepository.save(owner);
+        }
+        link(owner, profile);
     }
 
     /**
@@ -95,16 +153,10 @@ public class SocialAccountRegistrar {
      * INSERT to commit and the uq_identity violation would surface after this method returned,
      * outside the caller's catch. Same reasoning as {@code AuthServiceImpl.saveUnique}.
      *
-     * <p>Public for {@link SocialLinkChallenge}, which links an account the OTP has just proven
-     * ownership of. One insert, one place: uq_identity is what makes a link unique, and a second
-     * copy of this would be a second thing to keep in step with it.
-     *
-     * <p>No {@code @Transactional} of its own, and one here would be a lie: both callers are
-     * already inside a transaction — {@link #register} above by self-invocation, which the Spring
-     * proxy never sees, and {@code SocialLinkChallenge.confirm} through its own annotation. The row
-     * has to live or die with the caller's work either way.
+     * <p>One insert, one place: uq_identity is what makes a link unique, and a second copy of this
+     * would be a second thing to keep in step with it.
      */
-    public void link(User user, SocialProfile profile) {
+    private void link(User user, SocialProfile profile) {
         userIdentityRepository.saveAndFlush(UserIdentity.builder()
                 .userId(user.getId())
                 .provider(profile.provider())

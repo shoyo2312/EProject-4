@@ -7,14 +7,15 @@ import com.tiktok.apigateway.security.RestAuthenticationEntryPoint;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webflux.test.autoconfigure.WebFluxTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Mono;
 
@@ -36,7 +37,7 @@ class GatewaySecurityRulesTest {
     @Autowired
     private WebTestClient client;
 
-    @MockBean
+    @MockitoBean
     private JwtReactiveAuthenticationManager authenticationManager;
 
     @BeforeEach
@@ -52,6 +53,59 @@ class GatewaySecurityRulesTest {
                 .header(HttpHeaders.AUTHORIZATION, "Bearer token")
                 .exchange()
                 .expectStatus().isForbidden();
+    }
+
+    /**
+     * The settings endpoints ride on the same prefix rule, which is the whole reason they were put
+     * there: a settings endpoint at its own path would need its own deny rule, and forgetting it
+     * publishes every account's comment and DM audience. Answering 401 without a token and 403
+     * with one, it never reaches user-service either way.
+     */
+    @Test
+    void internalSettingsEndpoints_areRefusedWithAndWithoutAToken() {
+        for (String uri : List.of("/api/v1/users/internal/settings?ids=1",
+                "/api/v1/users/internal/friendship?userA=1&userB=2")) {
+            client.get().uri(uri)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                    .exchange()
+                    .expectStatus().isForbidden();
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isUnauthorized();
+        }
+    }
+
+    /**
+     * interaction-service's internal prefix answers without a token — notification-service asks it
+     * off a Kafka event — and names the author of any comment, removed ones included.
+     */
+    @Test
+    void internalInteractionEndpoints_areRefusedWithAndWithoutAToken() {
+        String uri = "/api/v1/interactions/internal/videos/1/comments/2/author";
+        client.get().uri(uri)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                .exchange()
+                .expectStatus().isForbidden();
+        client.get().uri(uri)
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    /**
+     * admin-service's internal prefix hands out the moderation word list — every admin term,
+     * including what is exempted. Only the services that screen text may read it, and an admin's
+     * own token does not make a caller one of them.
+     */
+    @Test
+    void internalAdminEndpoints_areRefusedWithAndWithoutAToken() {
+        String uri = "/api/v1/admin/internal/blocklist";
+        client.get().uri(uri)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                .exchange()
+                .expectStatus().isForbidden();
+        client.get().uri(uri)
+                .exchange()
+                .expectStatus().isUnauthorized();
     }
 
     @Test
@@ -85,13 +139,67 @@ class GatewaySecurityRulesTest {
                 .expectStatus().isOk();
     }
 
+    /**
+     * The reads interaction-service leaves public itself, so a signed-out viewer sees a video's
+     * counts and comments. The catch-all here answered them 401 first, whatever the service said.
+     */
+    @Test
+    void publicInteractionReads_passWithoutAToken_butWritesDoNot() {
+        for (String uri : List.of("/api/v1/interactions/videos/123/comments",
+                "/api/v1/interactions/videos/123/comments/456/replies",
+                "/api/v1/interactions/videos/123/counts",
+                "/api/v1/interactions/videos/counts/batch?videoIds=1,2",
+                "/api/v1/interactions/videos/123/like-status")) {
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isOk();
+        }
+        client.post().uri("/api/v1/interactions/videos/123/comments")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    /**
+     * A profile opens for a signed-out viewer by id, by handle and as a batch of comment authors.
+     * The id rule is numeric on purpose: /me, /search and the follower lists share the prefix and
+     * one segment, and must keep answering 401 without a token.
+     */
+    @Test
+    void profileReads_passWithoutAToken_butTheRestOfUsersDoesNot() {
+        for (String uri : List.of("/api/v1/users/42", "/api/v1/users/by-username/alice",
+                "/api/v1/users?ids=1,2")) {
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isOk();
+        }
+        for (String uri : List.of("/api/v1/users/me", "/api/v1/users/search?q=alice",
+                "/api/v1/users/42/followers")) {
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isUnauthorized();
+        }
+    }
+
     @RestController
     static class Stub {
 
-        @GetMapping({"/api/v1/users/internal/blocks", "/api/v1/users/42",
-                "/api/v1/videos/123/policy", "/api/v1/videos/123"})
+        @GetMapping({"/api/v1/users/internal/blocks", "/api/v1/users/internal/settings",
+                "/api/v1/users/internal/friendship", "/api/v1/users/42",
+                "/api/v1/users/by-username/alice", "/api/v1/users",
+                "/api/v1/videos/123/policy", "/api/v1/videos/123",
+                "/api/v1/interactions/internal/videos/1/comments/2/author",
+                "/api/v1/admin/internal/blocklist",
+                "/api/v1/interactions/videos/123/comments",
+                "/api/v1/interactions/videos/123/comments/456/replies",
+                "/api/v1/interactions/videos/123/counts",
+                "/api/v1/interactions/videos/counts/batch", "/api/v1/interactions/videos/123/like-status"})
         Mono<String> ok() {
             return Mono.just("ok");
+        }
+
+        @PostMapping("/api/v1/interactions/videos/123/comments")
+        Mono<String> write() {
+            return Mono.just("written");
         }
     }
 }

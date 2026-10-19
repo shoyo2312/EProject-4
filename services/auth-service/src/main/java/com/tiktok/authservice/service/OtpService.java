@@ -69,26 +69,22 @@ public class OtpService {
      * and saying would tell an attacker when to keep guessing.
      */
     public User consume(String purpose, VerificationTokenType type, String email, String otp) {
-        otpRateLimiter.checkGuessAllowed(purpose, email);
+        // Spent before anything is checked, so a wrong code needs no bookkeeping afterwards.
+        otpRateLimiter.acquireGuess(purpose, email);
 
-        try {
-            User user = userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(email)
-                    .orElseThrow(InvalidOtpException::new);
+        User user = userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(email)
+                .orElseThrow(InvalidOtpException::new);
 
-            // The claim is the check: a single UPDATE decides whether this code was still
-            // spendable and spends it, so two submissions of the same code cannot both win.
-            // See VerificationTokenRepository.claimForUse.
-            if (verificationTokenRepository.claimForUse(
-                    hash(user.getId(), type, otp), type, Instant.now()) == 0) {
-                throw new InvalidOtpException();
-            }
-
-            otpRateLimiter.recordGuessSuccess(purpose, email);
-            return user;
-        } catch (InvalidOtpException e) {
-            otpRateLimiter.recordGuessFailure(purpose, email);
-            throw e;
+        // The claim is the check: a single UPDATE decides whether this code was still
+        // spendable and spends it, so two submissions of the same code cannot both win.
+        // See VerificationTokenRepository.claimForUse.
+        if (verificationTokenRepository.claimForUse(
+                hash(user.getId(), type, otp), type, Instant.now()) == 0) {
+            throw new InvalidOtpException();
         }
+
+        otpRateLimiter.recordGuessSuccess(purpose, email);
+        return user;
     }
 
     /**

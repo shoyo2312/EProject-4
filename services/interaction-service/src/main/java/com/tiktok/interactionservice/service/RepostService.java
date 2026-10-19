@@ -14,5 +14,9 @@ public interface RepostService {
 
     List<RepostContextResponse> getContexts(List<Long> videoIds, Long currentUserId);
 
-    VideoIdPageResponse listReposts(Long currentUserId, String cursor, int size);
+    /**
+     * The reposts on {@code userId}'s profile. A private account's are for its owner and followers:
+     * anyone else — a null {@code viewerId}, the anonymous caller, included — gets PRIVATE_ACCOUNT.
+     */
+    VideoIdPageResponse listReposts(Long viewerId, Long userId, String cursor, int size);
 }

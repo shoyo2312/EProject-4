@@ -1,7 +1,7 @@
 package com.tiktok.videoservice.event.consumer;
 
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
-import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.repository.VideoRepository;
 import com.tiktok.videoservice.service.VideoCache;
 import lombok.RequiredArgsConstructor;
@@ -22,8 +22,9 @@ import java.util.function.Consumer;
  * takedown landing in either gap is lost — {@code Video.applyOutcome} makes the right
  * decision from a status that is no longer true.
  *
- * <p>The write is therefore conditional on the status that was read, and losing means re-reading
- * rather than writing again. Re-reading is what makes the outcome correct rather than merely
+ * <p>The write is therefore conditional on the state that was read ({@link PipelineState}: the
+ * status, what a takedown is holding, and whether a verdict is on file), and losing means
+ * re-reading rather than writing again. Re-reading is what makes the outcome correct rather than merely
  * safe: the second pass sees TAKEN_DOWN and records the transcode result as the state to restore
  * to, which is what the first pass would have done had it read the same document.
  *
@@ -53,7 +54,7 @@ public class VideoStateUpdater {
      */
     public void apply(String videoId,
                       Consumer<Video> change,
-                      BiPredicate<Video, VideoStatus> write,
+                      BiPredicate<Video, PipelineState> write,
                       String what) {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             Optional<Video> found = videoRepository.findByIdAndDeletedAtIsNull(videoId);
@@ -63,10 +64,10 @@ public class VideoStateUpdater {
             }
 
             Video video = found.get();
-            VideoStatus statusWhenRead = video.getStatus();
+            PipelineState read = PipelineState.of(video);
             change.accept(video);
 
-            if (write.test(video, statusWhenRead)) {
+            if (write.test(video, read)) {
                 // Every path through here changes status, and status is what decides whether a
                 // video is on a read path at all — a finished transcode puts one on the feed with
                 // an hlsUrl it did not have, a takedown takes one off. Letting a cached entry
@@ -78,7 +79,7 @@ public class VideoStateUpdater {
             }
 
             log.info("{} lost a status race on videoId={} (read {}), attempt {}/{}",
-                    what, videoId, statusWhenRead, attempt, MAX_ATTEMPTS);
+                    what, videoId, read, attempt, MAX_ATTEMPTS);
         }
 
         throw new IllegalStateException(

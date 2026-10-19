@@ -2,6 +2,8 @@ package com.tiktok.videoservice.entity;
 
 import com.tiktok.event.video.ModerationVerdict;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -76,6 +78,113 @@ class VideoPipelineReplayTest {
 
         assertThat(video.getStatus()).isEqualTo(VideoStatus.TAKEN_DOWN);
         assertThat(video.getStatusBeforeTakedown()).isEqualTo(VideoStatus.PENDING_MODERATION);
+    }
+
+    /** A verdict read before its transcode result waits for it rather than being dropped. */
+    @Test
+    void aVerdictBeforeTheTranscode_isAppliedByTheTranscode() {
+        Video video = video(VideoStatus.PROCESSING);
+
+        video.applyModeration(verdict(ModerationVerdict.APPROVED));
+        assertThat(video.getStatus()).isEqualTo(VideoStatus.PROCESSING);
+
+        video.markTranscoded("t", "p", "h", 10, 1080, 1920);
+        assertThat(video.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(video.getPublishedAt()).isNotNull();
+
+        Video held = video(VideoStatus.PROCESSING);
+        held.applyModeration(verdict(ModerationVerdict.REVIEW));
+        held.markTranscoded("t", "p", "h", 10, 1080, 1920);
+        assertThat(held.getStatus()).isEqualTo(VideoStatus.PENDING_REVIEW);
+        assertThat(held.getPublishedAt()).isNull();
+    }
+
+    @Test
+    void aSecondEarlyVerdict_doesNotReplaceTheFirst() {
+        Video video = video(VideoStatus.PROCESSING);
+        video.applyModeration(verdict(ModerationVerdict.REJECTED));
+
+        video.applyModeration(verdict(ModerationVerdict.APPROVED));
+        video.markTranscoded("t", "p", "h", 10, 1080, 1920);
+
+        assertThat(video.getStatus()).isEqualTo(VideoStatus.REJECTED);
+    }
+
+    /** A failed attempt still rescued by a later success keeps the verdict that came with it. */
+    @Test
+    void aVerdictKeptThroughAFailure_isAppliedByTheRescue() {
+        Video video = video(VideoStatus.PROCESSING);
+        video.applyModeration(verdict(ModerationVerdict.APPROVED));
+        video.markFailed("first attempt");
+
+        video.markTranscoded("t", "p", "h", 10, 1080, 1920);
+
+        assertThat(video.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
+    }
+
+    @Test
+    void aVerdictBeforeTheTranscode_duringATakedown_isWhatTheRestoreReturnsTo() {
+        Video video = video(VideoStatus.PROCESSING);
+        video.markTakenDown("spam");
+        video.applyModeration(verdict(ModerationVerdict.APPROVED));
+
+        video.markTranscoded("t", "p", "h", 10, 1080, 1920);
+        assertThat(video.getStatus()).isEqualTo(VideoStatus.TAKEN_DOWN);
+        assertThat(video.getStatusBeforeTakedown()).isEqualTo(VideoStatus.PUBLISHED);
+
+        video.markRestored();
+        assertThat(video.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
+    }
+
+    /** Kept for the transcode, a verdict it cannot read must not fail the transcode result. */
+    @Test
+    void aVerdictWithNoVerdict_isHeldForReview() {
+        Video video = video(VideoStatus.PROCESSING);
+        video.applyModeration(VideoModeration.builder().build());
+
+        video.markTranscoded("t", "p", "h", 10, 1080, 1920);
+
+        assertThat(video.getStatus()).isEqualTo(VideoStatus.PENDING_REVIEW);
+    }
+
+    /**
+     * A restore sent for a video nobody took down — the API allows it, only the console does not
+     * offer it. It used to publish whatever it found: a video still transcoding or failed went on
+     * the feed with no media, and a live one was re-stamped as published.
+     */
+    @ParameterizedTest
+    @EnumSource(value = VideoStatus.class, names = {"PROCESSING", "FAILED", "PENDING_MODERATION", "PUBLISHED"})
+    void aRestoreWithoutATakedown_changesNothing(VideoStatus status) {
+        Video video = video(status);
+
+        video.markRestored();
+
+        assertThat(video.getStatus()).isEqualTo(status);
+        assertThat(video.getPublishedAt()).isNull();
+    }
+
+    /** The other half of the action: an admin approving what automatic moderation held back. */
+    @ParameterizedTest
+    @EnumSource(value = VideoStatus.class, names = {"PENDING_REVIEW", "REJECTED"})
+    void aRestoreOfAHeldVideo_publishesIt(VideoStatus status) {
+        Video video = video(status);
+
+        video.markRestored();
+
+        assertThat(video.getStatus()).isEqualTo(VideoStatus.PUBLISHED);
+        assertThat(video.getPublishedAt()).isNotNull();
+    }
+
+    /** Left in PROCESSING, the video still takes its transcode result, which used to be dropped. */
+    @Test
+    void aStrayRestoreDuringTheTranscode_letsTheResultLand() {
+        Video video = video(VideoStatus.PROCESSING);
+
+        video.markRestored();
+        video.markTranscoded("t", "p", "h", 10, 1080, 1920);
+
+        assertThat(video.getStatus()).isEqualTo(VideoStatus.PENDING_MODERATION);
+        assertThat(video.getHlsUrl()).isEqualTo("h");
     }
 
     private static Video video(VideoStatus status) {

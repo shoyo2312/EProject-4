@@ -10,6 +10,7 @@ import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.document.Document;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
+import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.elasticsearch.ElasticsearchContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -29,12 +30,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest
 @Testcontainers
+@ActiveProfiles("test")
 class IndexBootstrapMigrationTest {
 
     @Container
     @ServiceConnection
     static ElasticsearchContainer ELASTICSEARCH = new ElasticsearchContainer(
-            DockerImageName.parse("docker.elastic.co/elasticsearch/elasticsearch:8.14.0"))
+            DockerImageName.parse("docker.elastic.co/elasticsearch/elasticsearch:9.4.5"))
             .withEnv("xpack.security.enabled", "false");
 
     private static final IndexCoordinates LIVE = IndexCoordinates.of("videos");

@@ -2,6 +2,7 @@ package com.tiktok.crypto.jwt;
 
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 
@@ -31,8 +32,12 @@ public class JwtProvider {
 
     private final SecretKey key;
 
+    /** Immutable and thread-safe once built, so one serves every verification. */
+    private final JwtParser parser;
+
     public JwtProvider(String secret) {
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+        this.parser = Jwts.parser().verifyWith(key).build();
     }
 
     public String generateToken(String subject, Map<String, Object> claims, long expiryMillis) {
@@ -62,11 +67,7 @@ public class JwtProvider {
     }
 
     public Claims extractClaims(String token) {
-        return Jwts.parser()
-                .verifyWith(key)
-                .build()
-                .parseSignedClaims(token)
-                .getPayload();
+        return parser.parseSignedClaims(token).getPayload();
     }
 
     public String extractSubject(String token) {
@@ -93,10 +94,20 @@ public class JwtProvider {
      * rejected by default instead of silently becoming a bearer credential.
      */
     public boolean isValidAccessToken(String token) {
+        return parseAccessToken(token) != null;
+    }
+
+    /**
+     * {@link #isValidAccessToken} and {@link #extractClaims} in one signature check: the claims of
+     * a valid access token, or null for anything else. Callers that need the claims afterwards
+     * use this — the check-then-extract pair verified and parsed every bearer token twice.
+     */
+    public Claims parseAccessToken(String token) {
         try {
-            return TOKEN_TYPE_ACCESS.equals(extractClaims(token).get(CLAIM_TOKEN_TYPE, String.class));
+            Claims claims = extractClaims(token);
+            return TOKEN_TYPE_ACCESS.equals(claims.get(CLAIM_TOKEN_TYPE, String.class)) ? claims : null;
         } catch (JwtException | IllegalArgumentException e) {
-            return false;
+            return null;
         }
     }
 }

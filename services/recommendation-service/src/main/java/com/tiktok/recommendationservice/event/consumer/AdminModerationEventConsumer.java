@@ -1,6 +1,6 @@
 package com.tiktok.recommendationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import com.tiktok.recommendationservice.service.InboxService;
@@ -49,7 +49,8 @@ public class AdminModerationEventConsumer {
             }
             case VIDEO_RESTORED -> {
                 VideoRestoredEvent event = objectMapper.readValue(payload, VideoRestoredEvent.class);
-                inboxService.runOnce(event.eventId(), () -> recommendationService.recordRestored(event.videoId()));
+                inboxService.runOnce(event.eventId(),
+                        () -> recommendationService.recordRestored(event.videoId(), event.occurredAt()));
             }
             default -> log.debug("Ignoring moderation eventType={}", eventType);
         }

@@ -1,7 +1,6 @@
 package com.tiktok.recommendationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.VideoWatchEvent;
 import com.tiktok.recommendationservice.service.InboxService;
 import com.tiktok.recommendationservice.service.RecommendationService;
@@ -28,7 +27,7 @@ class VideoWatchEventConsumerTest {
     @Mock
     private InboxService inboxService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
     void onMessage_newEvent_foldsTheSessionIn() throws Exception {

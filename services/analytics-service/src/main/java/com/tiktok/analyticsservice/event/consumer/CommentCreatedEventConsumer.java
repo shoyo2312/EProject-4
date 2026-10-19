@@ -1,16 +1,18 @@
 package com.tiktok.analyticsservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import com.tiktok.analyticsservice.config.KafkaBatchConfig;
 import com.tiktok.analyticsservice.repository.EngagementEventRepository;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import lombok.RequiredArgsConstructor;
-import lombok.SneakyThrows;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Header;
 import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * interaction.comment-events carries CommentCreatedEvent and CommentDeletedEvent, and their JSON
@@ -27,16 +29,22 @@ public class CommentCreatedEventConsumer {
     private final EngagementEventRepository engagementEventRepository;
     private final ObjectMapper objectMapper;
 
-    @KafkaListener(topics = "interaction.comment-events", groupId = "analytics-service")
-    @SneakyThrows
-    public void onMessage(String payload,
-                          @Header(name = "eventType", required = false) byte[] eventTypeHeader) {
-        if (eventTypeHeader != null && COMMENT_DELETED.equals(new String(eventTypeHeader, StandardCharsets.UTF_8))) {
-            CommentDeletedEvent event = objectMapper.readValue(payload, CommentDeletedEvent.class);
-            engagementEventRepository.insert(event.eventId(), "UNCOMMENTED", String.valueOf(event.videoId()), event.userId(), event.occurredAt());
-            return;
+    /** A whole poll at a time, written as one INSERT — see KafkaBatchConfig. */
+    @KafkaListener(topics = "interaction.comment-events", groupId = "analytics-service",
+            containerFactory = KafkaBatchConfig.BATCH_FACTORY)
+    public void onMessages(List<ConsumerRecord<String, String>> records) {
+        BatchWriter.write(records, this::toRow, engagementEventRepository::insertAll);
+    }
+
+    private EngagementEventRepository.Row toRow(ConsumerRecord<String, String> record) throws Exception {
+        Header eventTypeHeader = record.headers().lastHeader("eventType");
+        if (eventTypeHeader != null && COMMENT_DELETED.equals(new String(eventTypeHeader.value(), StandardCharsets.UTF_8))) {
+            CommentDeletedEvent event = objectMapper.readValue(record.value(), CommentDeletedEvent.class);
+            return new EngagementEventRepository.Row(event.eventId(), "UNCOMMENTED", String.valueOf(event.videoId()),
+                    event.userId(), event.occurredAt());
         }
-        CommentCreatedEvent event = objectMapper.readValue(payload, CommentCreatedEvent.class);
-        engagementEventRepository.insert(event.eventId(), "COMMENTED", String.valueOf(event.videoId()), event.userId(), event.occurredAt());
+        CommentCreatedEvent event = objectMapper.readValue(record.value(), CommentCreatedEvent.class);
+        return new EngagementEventRepository.Row(event.eventId(), "COMMENTED", String.valueOf(event.videoId()),
+                event.userId(), event.occurredAt());
     }
 }

@@ -21,12 +21,14 @@ public record CommentLikeChangedEvent(
         Long videoId,
         Long userId,
         boolean liked,
-        int likeCount
+        int likeCount,
+        Long commentAuthorId
 ) implements DomainEvent {
 
+    /** commentAuthorId is who notification-service tells; the rest of the event is about the liker. */
     public static CommentLikeChangedEvent of(Long commentId, Long videoId, Long userId,
-                                             boolean liked, int likeCount) {
+                                             boolean liked, int likeCount, Long commentAuthorId) {
         return new CommentLikeChangedEvent(UUID.randomUUID().toString(), Instant.now(),
-                commentId, videoId, userId, liked, likeCount);
+                commentId, videoId, userId, liked, likeCount, commentAuthorId);
     }
 }

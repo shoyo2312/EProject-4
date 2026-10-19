@@ -28,6 +28,10 @@ public class SecurityConfig {
     public SecurityWebFilterChain filterChain(ServerHttpSecurity http) {
         AuthenticationWebFilter authenticationWebFilter = new AuthenticationWebFilter(jwtReactiveAuthenticationManager);
         authenticationWebFilter.setServerAuthenticationConverter(jwtServerAuthenticationConverter);
+        // A token that fails — expired, revoked, forged — is a 401 on a public path too, not a
+        // quiet downgrade to guest. The clients refresh once on a 401 and retry; a guest answer
+        // to a signed-in viewer is wrong data with nothing to say so: every heart unliked, their
+        // own private videos gone. No token at all is the guest, and passes as one.
         authenticationWebFilter.setAuthenticationFailureHandler((webFilterExchange, exception) ->
                 restAuthenticationEntryPoint.commence(webFilterExchange.getExchange(), exception));
 
@@ -41,7 +45,9 @@ public class SecurityConfig {
                 .authorizeExchange(exchanges -> exchanges
                         // Service-to-service endpoints the owning service leaves open because only
                         // other services should reach them. First, so no later rule can open them.
-                        .pathMatchers("/api/v1/users/internal/**").denyAll()
+                        .pathMatchers("/api/v1/users/internal/**", "/api/v1/interactions/internal/**",
+                                "/api/v1/admin/internal/**", "/api/v1/videos/internal/**",
+                                "/api/v1/conversations/internal/**").denyAll()
                         // Unfiltered by visibility on purpose (interaction-service needs the owner
                         // of PRIVATE videos too), so from outside it would name the owner of any
                         // private video id.
@@ -64,12 +70,33 @@ public class SecurityConfig {
                         // A repost is public, like the videos on a profile — the Reposts tab
                         // has to load for a signed-out viewer too.
                         .pathMatchers(HttpMethod.GET, "/api/v1/interactions/users/*/reposts").permitAll()
+                        // A profile is public like the videos on it: a signed-out viewer opens
+                        // /@handle and sees who wrote a comment. A numeric id only, so /me,
+                        // /search and every other one-segment read beside it keep the token.
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/users",
+                                "/api/v1/users/{userId:\\d+}",
+                                "/api/v1/users/by-username/*").permitAll()
+                        // The reads interaction-service leaves public itself, so a signed-out
+                        // viewer sees a video's counts, comments and their replies; like-status
+                        // answers a guest liked=false rather than refusing one. Missing here, the
+                        // catch-all below answered them 401 whatever the service said.
+                        .pathMatchers(HttpMethod.GET,
+                                "/api/v1/interactions/videos/*/comments",
+                                "/api/v1/interactions/videos/*/comments/*/replies",
+                                "/api/v1/interactions/videos/*/counts",
+                                "/api/v1/interactions/videos/counts/batch",
+                                "/api/v1/interactions/videos/*/like-status").permitAll()
                         // The chat handshake carries its token as a query parameter, not a
                         // header: a browser cannot set one on a WebSocket/SockJS handshake.
                         // chat-service validates it itself in JwtHandshakeInterceptor and
                         // refuses the upgrade with a 401 — this filter would reject every
                         // handshake before it ever got there.
                         .pathMatchers("/ws/**").permitAll()
+                        // Served on the management port only (application.yml), which nothing
+                        // publishes; on 8080 there is no /actuator to reach. A probe and a scraper
+                        // carry no token.
+                        .pathMatchers("/actuator/**").permitAll()
                         .anyExchange().authenticated())
                 .addFilterAt(authenticationWebFilter, SecurityWebFiltersOrder.AUTHENTICATION)
                 .build();

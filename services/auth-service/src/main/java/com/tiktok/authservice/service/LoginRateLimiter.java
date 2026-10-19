@@ -30,18 +30,17 @@ public class LoginRateLimiter {
 
     private final StringRedisTemplate redisTemplate;
 
-    public void checkAllowed(String key) {
-        String value = failOpen(() -> redisTemplate.opsForValue().get(redisKey(key)), "read login attempts");
-        if (value != null && Integer.parseInt(value) >= MAX_ATTEMPTS) {
+    /**
+     * Spends one attempt, before the password is checked, and throws if that was one over the
+     * budget. A correct password clears the count again through {@link #recordSuccess}. Taken up
+     * front rather than recorded after a failure: see {@link WindowCounter} for the parallel burst
+     * that got past a read-then-record limit.
+     */
+    public void acquireAttempt(String key) {
+        Long attempts = failOpen(() -> WindowCounter.increment(redisTemplate, redisKey(key), WINDOW),
+                "count login attempt");
+        if (attempts != null && attempts > MAX_ATTEMPTS) {
             throw new TooManyLoginAttemptsException();
-        }
-    }
-
-    public void recordFailure(String key) {
-        String redisKey = redisKey(key);
-        Long count = failOpen(() -> redisTemplate.opsForValue().increment(redisKey), "record login failure");
-        if (count != null && count == 1L) {
-            failOpen(() -> redisTemplate.expire(redisKey, WINDOW), "set login counter window");
         }
     }
 

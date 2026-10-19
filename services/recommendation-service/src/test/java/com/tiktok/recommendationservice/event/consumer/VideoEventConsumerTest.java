@@ -1,7 +1,6 @@
 package com.tiktok.recommendationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
@@ -32,7 +31,7 @@ class VideoEventConsumerTest {
     @Mock
     private InboxService inboxService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private VideoEventConsumer consumer() {
         return new VideoEventConsumer(recommendationService, inboxService, objectMapper);

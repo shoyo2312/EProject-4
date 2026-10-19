@@ -14,6 +14,10 @@ import org.springframework.web.util.HtmlUtils;
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 
 @Service
 @RequiredArgsConstructor
@@ -23,12 +27,21 @@ public class MailServiceImpl implements MailService {
     private final MailProperties mailProperties;
     private final OtpProperties otpProperties;
 
+    /**
+     * Fixed zone, labelled in the mail: the server does not know the reader's, and an unlabelled
+     * time is worse than none. Only the security mails carry it — the reader's client already shows
+     * the receive time, but "was this me?" needs the time the request was made.
+     */
+    private static final ZoneId MAIL_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+    private static final DateTimeFormatter REQUESTED_AT =
+            DateTimeFormatter.ofPattern("d MMM yyyy, HH:mm '(GMT+7)'", Locale.ENGLISH);
+
     @Override
     public void sendVerificationOtp(String toEmail, String otp) {
         send(toEmail, "Verify your email", "Verify your email",
                 "Enter this code to finish setting up your account.",
                 otp, otpProperties.emailVerificationExpiryMillis(),
-                "If you didn't create an account, you can ignore this email.");
+                "If you didn't create an account, you can ignore this email.", false);
     }
 
     @Override
@@ -36,7 +49,7 @@ public class MailServiceImpl implements MailService {
         send(toEmail, "Reset your password", "Reset your password",
                 "Enter this code to choose a new password.",
                 otp, otpProperties.passwordResetExpiryMillis(),
-                "If you didn't ask for a password reset, ignore this email — your password stays as it is.");
+                "If you didn't ask for a password reset, ignore this email — your password stays as it is.", false);
     }
 
     @Override
@@ -44,7 +57,7 @@ public class MailServiceImpl implements MailService {
         send(toEmail, "Your admin sign-in code", "Admin console sign-in",
                 "Enter this code to finish signing in to the admin console.",
                 otp, otpProperties.adminLoginExpiryMillis(),
-                "If this wasn't you, someone has your password — change it now.");
+                "If this wasn't you, someone has your password — change it now.", true);
     }
 
     @Override
@@ -53,7 +66,16 @@ public class MailServiceImpl implements MailService {
                 "Someone signed in with a " + provider + " account using this email address and wants "
                         + "to attach it to your account.",
                 otp, otpProperties.emailVerificationExpiryMillis(),
-                "If this wasn't you, ignore this email — nothing changes until the code is entered.");
+                "If this wasn't you, ignore this email — nothing changes until the code is entered.", true);
+    }
+
+    @Override
+    public void sendAccountClosureOtp(String toEmail, String otp) {
+        send(toEmail, "Confirm closing your account", "Confirm closing your account",
+                "Enter this code to deactivate or delete your account.",
+                otp, otpProperties.passwordResetExpiryMillis(),
+                "If this wasn't you, someone is signed in to your account — sign out of every device "
+                        + "by resetting your password.", true);
     }
 
     /**
@@ -67,11 +89,13 @@ public class MailServiceImpl implements MailService {
     }
 
     private void send(String toEmail, String subject, String heading, String intro,
-                      String otp, long expiryMillis, String footnote) {
+                      String otp, long expiryMillis, String footnote, boolean stamped) {
         String expiry = expiry(expiryMillis);
+        String requestedAt = stamped ? ZonedDateTime.now(MAIL_ZONE).format(REQUESTED_AT) : null;
         String brand = mailProperties.brandName();
         String text = brand + "\n\n" + intro + "\n\nYour code is " + otp + ". It expires in " + expiry
-                + ".\n\n" + footnote + "\n\nThis email was sent to " + toEmail + " by " + brand
+                + ".\n\n" + (requestedAt == null ? "" : "Requested at " + requestedAt + ".\n\n")
+                + footnote + "\n\nThis email was sent to " + toEmail + " by " + brand
                 + " (" + mailProperties.siteUrl() + ").";
         try {
             MimeMessage message = mailSender.createMimeMessage();
@@ -81,7 +105,7 @@ public class MailServiceImpl implements MailService {
             helper.setFrom(mailProperties.from(), brand);
             helper.setTo(toEmail);
             helper.setSubject(brand + " · " + subject);
-            helper.setText(text, html(heading, intro, otp, expiry, footnote, toEmail));
+            helper.setText(text, html(heading, intro, otp, expiry, requestedAt, footnote, toEmail));
             mailSender.send(message);
         } catch (MessagingException | UnsupportedEncodingException e) {
             throw new MailPreparationException(e);
@@ -106,8 +130,8 @@ public class MailServiceImpl implements MailService {
      * Table layout + inline styles on purpose: Gmail strips &lt;style&gt; blocks and most clients
      * ignore flex/grid. Escaped because the provider name reaches the heading from the OAuth response.
      */
-    private String html(String heading, String intro, String otp, String expiry, String footnote,
-                        String toEmail) {
+    private String html(String heading, String intro, String otp, String expiry, String requestedAt,
+                        String footnote, String toEmail) {
         String siteUrl = HtmlUtils.htmlEscape(mailProperties.siteUrl());
         return """
                 <table role="presentation" width="100%%" cellpadding="0" cellspacing="0" \
@@ -121,7 +145,7 @@ public class MailServiceImpl implements MailService {
                       <tr><td style="font-size:15px;line-height:22px;color:#52525b;padding-bottom:24px">%s</td></tr>
                       <tr><td align="center" style="padding:18px 0;background:#fafafa;border-radius:10px;\
                 font-size:32px;font-weight:700;letter-spacing:8px;color:#18181b;font-family:monospace">%s</td></tr>
-                      <tr><td style="font-size:14px;color:#71717a;padding-top:16px">This code expires in %s.</td></tr>
+                      <tr><td style="font-size:14px;color:#71717a;padding-top:16px">This code expires in %s.</td></tr>%s
                       <tr><td style="font-size:13px;line-height:20px;color:#a1a1aa;padding-top:24px;\
                 border-top:1px solid #e4e4e7">%s</td></tr>
                       <tr><td style="font-size:12px;line-height:18px;color:#a1a1aa;padding-top:16px">\
@@ -136,6 +160,8 @@ public class MailServiceImpl implements MailService {
                 HtmlUtils.htmlEscape(intro),
                 HtmlUtils.htmlEscape(otp),
                 expiry,
+                requestedAt == null ? "" : "\n      <tr><td style=\"font-size:14px;color:#71717a;padding-top:4px\">"
+                        + "Requested at " + requestedAt + ".</td></tr>",
                 HtmlUtils.htmlEscape(footnote),
                 HtmlUtils.htmlEscape(toEmail),
                 HtmlUtils.htmlEscape(mailProperties.brandName()),

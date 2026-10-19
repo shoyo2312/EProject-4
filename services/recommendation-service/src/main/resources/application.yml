@@ -17,6 +17,12 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    listener:
+      # One consumer thread per partition (topics are created with 3) rather than one thread for
+      # all of them — watch events in particular arrive faster than one thread drains them. Each
+      # partition keeps a single thread, so per-video order holds; every listener here claims its
+      # eventId with SETNX and writes with atomic Redis commands, so running side by side is safe.
+      concurrency: 3
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer

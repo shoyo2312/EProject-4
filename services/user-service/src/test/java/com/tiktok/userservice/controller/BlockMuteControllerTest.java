@@ -1,5 +1,7 @@
 package com.tiktok.userservice.controller;
 
+import com.tiktok.common.config.InternalApiAutoConfiguration;
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.userservice.config.SecurityConfig;
@@ -17,8 +19,8 @@ import com.tiktok.userservice.service.MuteService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -42,8 +44,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(controllers = {BlockController.class, MuteController.class})
-@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class})
-@TestPropertySource(properties = "jwt.secret=test-secret-at-least-32-bytes-long-0123456789")
+@Import({SecurityConfig.class, JwtSecurityAutoConfiguration.class, InternalApiAutoConfiguration.class})
+@TestPropertySource(properties = {
+        "jwt.secret=test-secret-at-least-32-bytes-long-0123456789",
+        "INTERNAL_API_TOKEN=internal-token-for-tests-0123456789abcdef"
+})
 class BlockMuteControllerTest {
 
     private static final String JWT_SECRET = "test-secret-at-least-32-bytes-long-0123456789";
@@ -51,10 +56,13 @@ class BlockMuteControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @Autowired
+    private InternalApiToken internalApiToken;
+
+    @MockitoBean
     private BlockService blockService;
 
-    @MockBean
+    @MockitoBean
     private MuteService muteService;
 
     private JwtProvider jwtProvider;
@@ -122,7 +130,7 @@ class BlockMuteControllerTest {
 
     @Test
     void listBlocked_withValidToken_returnsPagedProfiles() throws Exception {
-        UserProfileResponse blocked = new UserProfileResponse(9L, "eve", "Eve", null, null, 0, 0);
+        UserProfileResponse blocked = new UserProfileResponse(9L, "eve", "Eve", null, null, 0, 0, false, null);
         Page<UserProfileResponse> page = new PageImpl<>(List.of(blocked), PageRequest.of(0, 10), 1);
         when(blockService.listBlocked(eq(1L), any())).thenReturn(page);
 
@@ -176,7 +184,7 @@ class BlockMuteControllerTest {
 
     @Test
     void listMuted_withValidToken_returnsPagedProfiles() throws Exception {
-        UserProfileResponse muted = new UserProfileResponse(11L, "frank", "Frank", null, null, 0, 0);
+        UserProfileResponse muted = new UserProfileResponse(11L, "frank", "Frank", null, null, 0, 0, false, null);
         Page<UserProfileResponse> page = new PageImpl<>(List.of(muted), PageRequest.of(0, 10), 1);
         when(muteService.listMuted(eq(1L), any())).thenReturn(page);
 
@@ -195,9 +203,25 @@ class BlockMuteControllerTest {
     void blockBetween_answersWithoutATokenForInternalCallers() throws Exception {
         when(blockService.isBlockedBetween(1L, 2L)).thenReturn(true);
 
-        mockMvc.perform(get("/api/v1/users/internal/blocks").param("userA", "1").param("userB", "2"))
+        mockMvc.perform(get("/api/v1/users/internal/blocks").param("userA", "1").param("userB", "2")
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.blocked").value(true));
+    }
+
+    /**
+     * The gateway refusing this prefix is not enough on its own: anything that reaches this port
+     * directly has skipped it. Without the internal token the answer is no, and a user's own JWT
+     * does not stand in for it.
+     */
+    @Test
+    void internalPrefix_refusesACallerWithoutTheInternalToken() throws Exception {
+        mockMvc.perform(get("/api/v1/users/internal/blocks").param("userA", "1").param("userB", "2"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/users/internal/1/muted-ids")
+                        .header(InternalApiToken.HEADER, "a-guess")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
     }
 
     /**
@@ -208,7 +232,8 @@ class BlockMuteControllerTest {
     void mutedIds_answersWithoutATokenForInternalCallers() throws Exception {
         when(muteService.mutedIds(1L)).thenReturn(List.of(2L, 3L));
 
-        mockMvc.perform(get("/api/v1/users/internal/1/muted-ids"))
+        mockMvc.perform(get("/api/v1/users/internal/1/muted-ids")
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0]").value(2))
                 .andExpect(jsonPath("$.data[1]").value(3));

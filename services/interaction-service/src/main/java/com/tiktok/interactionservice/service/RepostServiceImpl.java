@@ -1,6 +1,6 @@
 package com.tiktok.interactionservice.service;
 
-import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
+import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.RepostContextResponse;
 import com.tiktok.interactionservice.dto.response.RepostStatusResponse;
@@ -10,8 +10,8 @@ import com.tiktok.interactionservice.entity.RepostByUserKey;
 import com.tiktok.interactionservice.entity.RepostByVideo;
 import com.tiktok.interactionservice.entity.RepostByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
-import com.tiktok.interactionservice.exception.InteractionConflictException;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
+import com.tiktok.interactionservice.exception.PrivateAccountException;
 import com.tiktok.interactionservice.exception.RepostRateLimitedException;
 import com.tiktok.interactionservice.repository.RepostByUserRepository;
 import com.tiktok.interactionservice.repository.RepostByVideoRepository;
@@ -24,9 +24,12 @@ import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.function.BooleanSupplier;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Repost is a toggle, exactly like {@link LikeServiceImpl} — not an event log like
@@ -38,8 +41,6 @@ import java.util.function.BooleanSupplier;
 @Service
 @RequiredArgsConstructor
 public class RepostServiceImpl implements RepostService {
-
-    private static final int MAX_LWT_RETRIES = 2;
 
     /** Same ceiling the paged listings and like-status batch use — one feed page's worth. */
     private static final int MAX_BATCH_SIZE = 50;
@@ -59,6 +60,7 @@ public class RepostServiceImpl implements RepostService {
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
     private final VideoOwnershipClient videoOwnershipClient;
+    private final FriendshipClient friendshipClient;
 
     @Override
     public RepostStatusResponse repost(Long videoId, Long currentUserId) {
@@ -67,9 +69,14 @@ public class RepostServiceImpl implements RepostService {
 
         long repostCount = counterCacheService.getCounts(videoId).repostCount();
 
-        Instant repostedAt = Instant.now();
-        boolean newlyReposted = executeLwtWithRetry(
-                () -> repostByVideoRepository.insertIfNotExists(videoId, currentUserId, repostedAt));
+        // Truncated to what Cassandra stores, so a retry can recognise the row as this call's own.
+        Instant repostedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        RepostByVideoKey key = RepostByVideoKey.builder().videoId(videoId).userId(currentUserId).build();
+        boolean newlyReposted = LwtRetry.run(
+                () -> repostByVideoRepository.insertIfNotExists(videoId, currentUserId, repostedAt),
+                () -> repostByVideoRepository.findById(key)
+                        .filter(row -> repostedAt.equals(row.getCreatedAt())).isPresent(),
+                "Repost/un-repost");
 
         if (newlyReposted) {
             boolean countered = false;
@@ -114,8 +121,8 @@ public class RepostServiceImpl implements RepostService {
 
         Instant repostedAt = claim.getCreatedAt();
 
-        boolean wasReposted = executeLwtWithRetry(
-                () -> repostByVideoRepository.deleteIfExists(videoId, currentUserId));
+        boolean wasReposted = LwtRetry.runDelete(
+                () -> repostByVideoRepository.deleteIfExists(videoId, currentUserId), "Repost/un-repost");
 
         if (wasReposted) {
             boolean countered = false;
@@ -148,28 +155,53 @@ public class RepostServiceImpl implements RepostService {
 
     @Override
     public List<RepostContextResponse> getContexts(List<Long> videoIds, Long currentUserId) {
-        return videoIds.stream()
+        List<Long> ids = videoIds.stream()
                 .filter(Objects::nonNull)
                 .distinct()
                 .limit(MAX_BATCH_SIZE)
-                .map(videoId -> getContext(videoId, currentUserId))
+                .toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        // One query for the page rather than one per card. Grouping keeps each video's reposters
+        // in the order its partition returned them, which is what the per-video read answered.
+        Map<Long, List<Long>> reposters = repostByVideoRepository.findByVideoIdIn(ids, RECENT_REPOSTERS_LIMIT)
+                .stream()
+                .collect(Collectors.groupingBy(row -> row.getKey().getVideoId(),
+                        Collectors.mapping(row -> row.getKey().getUserId(), Collectors.toList())));
+        Set<Long> repostedByMe = repostedBy(currentUserId, ids);
+        return ids.stream()
+                .map(videoId -> new RepostContextResponse(videoId, repostedByMe.contains(videoId),
+                        reposters.getOrDefault(videoId, List.of())))
                 .toList();
     }
 
-    private RepostContextResponse getContext(Long videoId, Long currentUserId) {
-        List<Long> reposterIds = repostByVideoRepository.findByVideoId(videoId, RECENT_REPOSTERS_LIMIT)
-                .stream()
-                .map(row -> row.getKey().getUserId())
-                .toList();
-        boolean repostedByMe = currentUserId != null && reposterIds.contains(currentUserId);
-        return new RepostContextResponse(videoId, repostedByMe, reposterIds);
+    /**
+     * Which of these videos the viewer reposted, asked of the table rather than read off the
+     * reposter sample. The sample is the first twenty by user_id, so anyone outside it was told
+     * they had not reposted a video they had, and the badge offered Repost instead of Remove.
+     * One query for the page.
+     */
+    private Set<Long> repostedBy(Long userId, List<Long> videoIds) {
+        if (userId == null || videoIds.isEmpty()) {
+            return Set.of();
+        }
+        return repostByVideoRepository.findByVideoIdInAndUserId(videoIds, userId).stream()
+                .map(row -> row.getKey().getVideoId())
+                .collect(Collectors.toSet());
     }
 
     @Override
-    public VideoIdPageResponse listReposts(Long currentUserId, String cursor, int size) {
+    public VideoIdPageResponse listReposts(Long viewerId, Long userId, String cursor, int size) {
+        // Refused outright rather than answered empty, so the client can say why.
+        if (!userId.equals(viewerId) && !friendshipClient.canSeeFollowerContent(userId, viewerId)) {
+            throw new PrivateAccountException();
+        }
+
         CassandraPageRequest pageRequest = CassandraCursors.decode(cursor, size, InvalidCursorException::new);
         try {
-            Slice<RepostByUser> slice = repostByUserRepository.findByUserId(currentUserId, pageRequest);
+            Slice<RepostByUser> slice = repostByUserRepository.findByUserId(userId, pageRequest);
             return CassandraCursors.page(slice, repost -> repost.getKey().getVideoId());
         } catch (CassandraInvalidQueryException e) {
             throw new InvalidCursorException();
@@ -191,20 +223,5 @@ public class RepostServiceImpl implements RepostService {
             log.error("Could not undo the {} after {}; its counter is now off by one",
                     what, cause.getMessage(), ex);
         }
-    }
-
-    private boolean executeLwtWithRetry(BooleanSupplier lwtOperation) {
-        WriteTimeoutException lastError = null;
-        for (int attempt = 0; attempt <= MAX_LWT_RETRIES; attempt++) {
-            try {
-                return lwtOperation.getAsBoolean();
-            } catch (WriteTimeoutException e) {
-                lastError = e;
-            }
-        }
-        InteractionConflictException failure = new InteractionConflictException(
-                "Repost/un-repost could not be confirmed after retries, please try again");
-        failure.initCause(lastError);
-        throw failure;
     }
 }

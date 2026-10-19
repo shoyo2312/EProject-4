@@ -18,7 +18,13 @@ import java.time.Instant;
 @AllArgsConstructor
 @Document(collection = "messages")
 @CompoundIndexes({
-        @CompoundIndex(name = "conversation_sent_idx", def = "{'conversationId': 1, 'sentAt': -1}")
+        // _id is in the key because the history pages by keyset on (sentAt, _id) — see
+        // MessageRepositoryCustom.findPage — and Mongo can only take a compound sort from an index
+        // carrying every field of it. Without _id, every page sorts everything older than its
+        // cursor in memory. A new name because auto-index-creation will not redefine an existing
+        // one; the two-field conversation_sent_idx it replaces stays on databases created before
+        // it until dropped: db.messages.dropIndex("conversation_sent_idx").
+        @CompoundIndex(name = "conversation_sent_id_idx", def = "{'conversationId': 1, 'sentAt': -1, '_id': -1}")
 })
 public class Message {
 

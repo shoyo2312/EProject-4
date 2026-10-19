@@ -1,7 +1,6 @@
 package com.tiktok.recommendationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.recommendationservice.service.InboxService;
@@ -28,7 +27,7 @@ class CommentEventConsumerTest {
     @Mock
     private InboxService inboxService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private CommentEventConsumer consumer() {
         return new CommentEventConsumer(recommendationService, inboxService, objectMapper);

@@ -1,52 +1,69 @@
 package com.tiktok.authservice.service;
 
+import com.tiktok.authservice.dto.request.CompletePasswordResetRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifyPasswordResetRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
+import com.tiktok.authservice.entity.AuthProvider;
+import com.tiktok.authservice.entity.AuthSecurityEvent;
 import com.tiktok.authservice.entity.OutboxEvent;
 import com.tiktok.authservice.entity.RefreshToken;
+import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
+import com.tiktok.authservice.entity.UserIdentity;
+import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
 import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
+import com.tiktok.authservice.exception.InvalidResetTokenException;
 import com.tiktok.authservice.exception.TooManyLoginAttemptsException;
 import com.tiktok.authservice.exception.TooManyOtpRequestsException;
 import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
+import com.tiktok.authservice.repository.AuthSecurityEventRepository;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
+import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.authservice.repository.VerificationTokenRepository;
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.crypto.jwt.RevocationKeys;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
@@ -55,9 +72,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
@@ -75,24 +94,27 @@ class AuthServiceImplTest {
 
     @Container
     @ServiceConnection
-    static PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
 
     @Container
     @ServiceConnection(name = "redis")
     static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
             .withExposedPorts(6379);
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
-    @MockBean
+    @MockitoBean
     private MailService mailService;
 
-    @MockBean
+    @MockitoBean
     private TurnstileService turnstileService;
 
     @Autowired
     private AuthService authService;
+
+    @Autowired
+    private InternalApiToken internalApiToken;
 
     @Autowired
     private UserRepository userRepository;
@@ -118,13 +140,46 @@ class AuthServiceImplTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private AuthSecurityEventRepository securityEventRepository;
+
+    @Autowired
+    private UserIdentityRepository userIdentityRepository;
+
     @BeforeEach
     void cleanUp() {
+        // Before the users it references — auth_security_events carries a foreign key, and these
+        // rows are committed by their own transaction rather than rolled back with the test.
+        securityEventRepository.deleteAll();
         outboxEventRepository.deleteAll();
         refreshTokenRepository.deleteAll();
         verificationTokenRepository.deleteAll();
+        userIdentityRepository.deleteAll();
         userRepository.deleteAll();
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushDb();
+    }
+
+    @AfterEach
+    void clearRequestContext() {
+        RequestContextHolder.resetRequestAttributes();
+    }
+
+    /**
+     * Puts a request on the thread the way Spring MVC would, so the recorder — which reads the
+     * current request rather than taking the address as a parameter — sees one. A client address
+     * arrives the way api-gateway forwards it: beside the internal token that vouches for it.
+     */
+    private MockHttpServletRequest arriveFrom(String clientIp, String userAgent) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        if (clientIp != null) {
+            request.addHeader("X-Client-Ip", clientIp);
+            request.addHeader(InternalApiToken.HEADER, internalApiToken.value());
+        }
+        if (userAgent != null) {
+            request.addHeader("User-Agent", userAgent);
+        }
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+        return request;
     }
 
     private RegisterRequest validRegisterRequest() {
@@ -207,6 +262,24 @@ class AuthServiceImplTest {
         TokenResponse tokens = authService.login(new LoginRequest("john@example.com", "password123"));
 
         assertThat(tokens.accessToken()).isNotBlank();
+    }
+
+    /**
+     * Signup no longer lets a username contain "@", but an account registered before that could
+     * still be named after someone else's address — and the lookup tried usernames first, so
+     * signing in with that address checked the password against the impostor's account.
+     */
+    @Test
+    @Transactional
+    void login_withEmail_isNotShadowedByAUsernameSpelledLikeIt() {
+        UserResponse victim = registerVerified();
+        authService.register(new RegisterRequest("john@example.com", "impostor@example.com",
+                "impostor-pass", "test-turnstile-token"));
+
+        TokenResponse tokens = authService.login(new LoginRequest("john@example.com", "password123"));
+
+        assertThat(jwtProvider.parseAccessToken(tokens.accessToken()).getSubject())
+                .isEqualTo(String.valueOf(victim.id()));
     }
 
     @Test
@@ -405,6 +478,18 @@ class AuthServiceImplTest {
 
         assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
                 .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    /** The same burst against a password: five attempts reach bcrypt, the rest are refused. */
+    @Test
+    void login_parallelBurst_getsNoMoreThanFiveAttempts() throws Exception {
+        registerVerified();
+
+        List<Class<?>> outcomes = inParallel(40,
+                () -> authService.login(new LoginRequest("johndoe", "wrongpass")));
+
+        assertThat(outcomes).filteredOn(InvalidCredentialsException.class::equals).hasSize(5);
+        assertThat(outcomes).filteredOn(TooManyLoginAttemptsException.class::equals).hasSize(35);
     }
 
     /**
@@ -698,6 +783,23 @@ class AuthServiceImplTest {
                 .isInstanceOf(TooManyOtpRequestsException.class);
     }
 
+    /**
+     * The limit used to read the counter and record a failure only after the code had been
+     * checked, so every submission in a parallel burst read the same count and got its guess.
+     * Taking the guess up front leaves exactly five of them, however many arrive at once.
+     */
+    @Test
+    void verifyEmail_parallelBurst_getsNoMoreThanFiveGuesses() throws Exception {
+        authService.register(validRegisterRequest());
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), org.mockito.ArgumentMatchers.anyString());
+
+        List<Class<?>> outcomes = inParallel(40,
+                () -> authService.verifyEmail(new VerifyEmailRequest("john@example.com", "000000")));
+
+        assertThat(outcomes).filteredOn(InvalidOtpException.class::equals).hasSize(5);
+        assertThat(outcomes).filteredOn(TooManyOtpRequestsException.class::equals).hasSize(35);
+    }
+
     @Test
     void verifyEmail_withUnknownEmail_countsAgainstTheGuessBudget() {
         for (int i = 0; i < 5; i++) {
@@ -728,7 +830,7 @@ class AuthServiceImplTest {
 
     @Test
     void forgotPassword_withUnknownEmail_doesNotThrow() {
-        authService.forgotPassword(new ForgotPasswordRequest("ghost@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("ghost@example.com", "test-turnstile-token", null));
     }
 
     @Test
@@ -736,7 +838,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
 
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
@@ -748,6 +850,147 @@ class AuthServiceImplTest {
 
         TokenResponse relogin = authService.login(new LoginRequest("johndoe", "newpassword123"));
         assertThat(relogin.accessToken()).isNotBlank();
+    }
+
+    /** The two-step reset answers a wrong code at the code step, before a password is asked for. */
+    @Test
+    void verifyPasswordReset_withWrongOtp_isRefusedAndChangesNothing() {
+        registerVerified();
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+        String wrong = otpCaptor.getValue().equals("000000") ? "111111" : "000000";
+
+        assertThatThrownBy(() -> authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("john@example.com", wrong)))
+                .isInstanceOf(InvalidOtpException.class);
+
+        // The right code is still good after a wrong one.
+        assertThat(authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("john@example.com", otpCaptor.getValue())).resetToken())
+                .isNotBlank();
+        assertThat(authService.login(new LoginRequest("johndoe", "password123")).accessToken()).isNotBlank();
+    }
+
+    @Test
+    void completePasswordReset_withTheTicket_changesPasswordAndRevokesSessions() {
+        registerVerified();
+        TokenResponse tokens = authService.login(new LoginRequest("johndoe", "password123"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+
+        String ticket = authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("john@example.com", otpCaptor.getValue())).resetToken();
+        authService.completePasswordReset(new CompletePasswordResetRequest(ticket, "newpassword123"));
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(tokens.refreshToken())))
+                .isInstanceOf(InvalidRefreshTokenException.class);
+        assertThat(authService.login(new LoginRequest("johndoe", "newpassword123")).accessToken()).isNotBlank();
+    }
+
+    @Test
+    void completePasswordReset_ticketIsSpentOnce_andTheCodeWithIt() {
+        registerVerified();
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+
+        String ticket = authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("john@example.com", otpCaptor.getValue())).resetToken();
+        authService.completePasswordReset(new CompletePasswordResetRequest(ticket, "newpassword123"));
+
+        assertThatThrownBy(() -> authService.completePasswordReset(
+                new CompletePasswordResetRequest(ticket, "attackerpass123")))
+                .isInstanceOf(InvalidResetTokenException.class);
+        assertThatThrownBy(() -> authService.resetPassword(
+                new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "attackerpass123")))
+                .as("verifying spent the code; it must not also work at the one-step endpoint")
+                .isInstanceOf(InvalidOtpException.class);
+    }
+
+    /** A social account has no password until the reset flow gives it one, and /me says so. */
+    @Test
+    void hasPassword_isFalseForASocialAccountUntilTheResetSetsOne() {
+        assertThat(authService.getCurrentUser(registerVerified().id()).hasPassword()).isTrue();
+
+        User social = User.builder()
+                .username("socialjane")
+                .email("jane@example.com")
+                .role(UserRole.USER)
+                .status(UserStatus.ACTIVE)
+                .build();
+        social.markEmailVerified();
+        Long socialId = userRepository.save(social).getId();
+        assertThat(authService.getCurrentUser(socialId).hasPassword()).isFalse();
+
+        authService.forgotPassword(new ForgotPasswordRequest("jane@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("jane@example.com"), otpCaptor.capture());
+        String ticket = authService.verifyPasswordReset(
+                new VerifyPasswordResetRequest("jane@example.com", otpCaptor.getValue())).resetToken();
+        authService.completePasswordReset(new CompletePasswordResetRequest(ticket, "newpassword123"));
+
+        assertThat(authService.getCurrentUser(socialId).hasPassword()).isTrue();
+        assertThat(authService.login(new LoginRequest("socialjane", "newpassword123")).accessToken()).isNotBlank();
+    }
+
+    /**
+     * The reset code goes to the address, so spending it proves the address. Without marking it,
+     * an account whose address was never verified set a password and then got 403
+     * EMAIL_NOT_VERIFIED on it: the case for every social account whose provider never vouched
+     * for its email.
+     */
+    @Test
+    void resetPassword_onAnUnverifiedAccount_verifiesTheAddress() {
+        authService.register(validRegisterRequest());
+        verify(mailService, timeout(2000)).sendVerificationOtp(eq("john@example.com"), org.mockito.ArgumentMatchers.anyString());
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+
+        authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThat(userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull("john@example.com").orElseThrow()
+                .isEmailVerified()).isTrue();
+        assertThat(authService.login(new LoginRequest("johndoe", "newpassword123")).accessToken()).isNotBlank();
+    }
+
+    /**
+     * Pre-account takeover, social half: a squatter signed up through Facebook with the victim's
+     * address. The victim registers, is told the address is taken, and resets the password — which
+     * hands them the account. The squatter's Facebook link must not come with it working.
+     */
+    @Test
+    void resetPassword_onAnUnverifiedAccount_flagsTheProviderLinksAlreadyOnIt() {
+        UserResponse squatted = authService.register(validRegisterRequest());
+        UserIdentity squattersFacebook = userIdentityRepository.save(UserIdentity.builder()
+                .userId(squatted.id()).provider(AuthProvider.FACEBOOK).providerUid("squatter-fb").build());
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+        authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThat(userIdentityRepository.findById(squattersFacebook.getId()).orElseThrow()
+                .isNeedsReconfirmation()).isTrue();
+    }
+
+    /** A link made after the address was proven was made against a proven address, and stays. */
+    @Test
+    void resetPassword_leavesLinksMadeAfterTheAddressWasProven() {
+        UserResponse owner = registerVerified();
+        UserIdentity ownGoogle = userIdentityRepository.save(UserIdentity.builder()
+                .userId(owner.id()).provider(AuthProvider.GOOGLE).providerUid("owner-google").build());
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+        authService.resetPassword(new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThat(userIdentityRepository.findById(ownGoogle.getId()).orElseThrow()
+                .isNeedsReconfirmation()).isFalse();
     }
 
     /**
@@ -856,6 +1099,70 @@ class AuthServiceImplTest {
                 .isNotBlank();
     }
 
+    /**
+     * Two devices of one account, each with its own chain, refreshing in the same instant — a
+     * phone and a laptop coming back from sleep. Every refresh stamped last_login_at by saving the
+     * user row, which bumped its version, so the slower of the two failed its optimistic lock and
+     * answered 409; a client that reads a failed refresh as "signed out" then was. Several rounds,
+     * because a single pair only collides when the two loads land before either commit.
+     */
+    @Test
+    void refresh_twoDevicesRefreshingAtOnce_bothKeepTheirSessions() throws Exception {
+        registerVerified();
+        String phone = authService.login(new LoginRequest("johndoe", "password123")).refreshToken();
+        String laptop = authService.login(new LoginRequest("johndoe", "password123")).refreshToken();
+
+        for (int round = 0; round < 10; round++) {
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            CyclicBarrier startTogether = new CyclicBarrier(2);
+            try {
+                List<Future<TokenResponse>> refreshed = pool.invokeAll(List.of(
+                        refreshTask(phone, startTogether),
+                        refreshTask(laptop, startTogether)));
+                phone = refreshed.get(0).get(30, TimeUnit.SECONDS).refreshToken();
+                laptop = refreshed.get(1).get(30, TimeUnit.SECONDS).refreshToken();
+            } finally {
+                pool.shutdownNow();
+            }
+        }
+
+        assertThat(userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull("johndoe").orElseThrow()
+                .getLastLoginAt())
+                .as("still advanced on every refresh, just without contending for the row's version")
+                .isNotNull();
+    }
+
+    /**
+     * Runs {@code action} on {@code count} threads released together, and answers with what each
+     * one threw — the exception class, or {@code Void.class} for a call that returned normally.
+     */
+    private List<Class<?>> inParallel(int count, Runnable action) throws InterruptedException {
+        ExecutorService pool = Executors.newFixedThreadPool(count);
+        CyclicBarrier startTogether = new CyclicBarrier(count);
+        Callable<Class<?>> task = () -> {
+            startTogether.await(30, TimeUnit.SECONDS);
+            try {
+                action.run();
+                return Void.class;
+            } catch (RuntimeException e) {
+                return e.getClass();
+            }
+        };
+        try {
+            List<Class<?>> outcomes = new ArrayList<>();
+            for (Future<Class<?>> outcome : pool.invokeAll(Collections.nCopies(count, task))) {
+                try {
+                    outcomes.add(outcome.get(30, TimeUnit.SECONDS));
+                } catch (ExecutionException | TimeoutException e) {
+                    throw new AssertionError("a parallel call did not finish", e);
+                }
+            }
+            return outcomes;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     private Callable<TokenResponse> refreshTask(String refreshToken, CyclicBarrier startTogether) {
         return () -> {
             startTogether.await(30, TimeUnit.SECONDS);
@@ -885,7 +1192,7 @@ class AuthServiceImplTest {
         registerVerified();
         TokenResponse attacker = authService.login(new LoginRequest("johndoe", "password123"));
 
-        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token"));
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
         ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
         verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
 
@@ -899,5 +1206,182 @@ class AuthServiceImplTest {
         assertThat(accessTokenBlacklist.isBlacklisted(jwtProvider.extractClaims(owner.accessToken())))
                 .as("the cutoff must not lock the user out of the session they just opened")
                 .isFalse();
+    }
+
+    // The security log below. No @Transactional on any of it: the recorder commits in a
+    // transaction of its own, which is the whole point of it, and a test that rolled back would
+    // be asserting against rows the production path never writes that way.
+
+    /**
+     * Client hints arrive as RFC 8941 quoted strings, so an unstripped value would be stored with
+     * its quotes — and the console would show a device called {@code "SM-A525F"}, quotes included.
+     */
+    @Test
+    void signIn_recordsTheDeviceModelTheBrowserDisclosed() {
+        registerVerified();
+        MockHttpServletRequest request = arriveFrom("203.0.113.7", "Mozilla/5.0 (Linux; Android 10; K) "
+                + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36");
+        request.addHeader("Sec-CH-UA-Model", "\"SM-A525F\"");
+        request.addHeader("Sec-CH-UA-Platform-Version", "\"15.0.0\"");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getDeviceModel, AuthSecurityEvent::getDeviceLabel)
+                .containsExactly(tuple("SM-A525F", "Chrome on Android 15 · SM-A525F"));
+    }
+
+    /** Every desktop Chromium answers the model hint with "" — stored, that is noise. */
+    @Test
+    void signIn_fromADesktopRecordsNoModelRatherThanAnEmptyOne() {
+        registerVerified();
+        MockHttpServletRequest request = arriveFrom("203.0.113.7", "Mozilla/5.0 (Macintosh; Intel Mac "
+                + "OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+        request.addHeader("Sec-CH-UA-Model", "\"\"");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getDeviceModel)
+                .containsExactly((String) null);
+    }
+
+    @Test
+    void signIn_isRecordedWithTheAddressAndDeviceItCameFrom() {
+        registerVerified();
+        arriveFrom("203.0.113.7", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                + "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getIpAddress,
+                        AuthSecurityEvent::getDeviceLabel)
+                .containsExactly(tuple(SecurityEventType.LOGIN_SUCCEEDED, "203.0.113.7", "Chrome on macOS"));
+    }
+
+    /**
+     * The entry that matters most is written on a path that then throws. Recorded in the caller's
+     * transaction it would be rolled back by that throw, and the log would hold every successful
+     * sign-in and no failed one — which is the opposite of what a security log is for.
+     */
+    @Test
+    void failedSignIn_isRecordedAlthoughTheAttemptThrows() {
+        UserResponse registered = registerVerified();
+        arriveFrom("203.0.113.9", null);
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpassword")))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getUserId)
+                .containsExactly(tuple(SecurityEventType.LOGIN_FAILED, registered.id()));
+    }
+
+    /**
+     * The hints are the sender's to write. An oversized one used to push the label past its column,
+     * the INSERT failed, and the recorder swallowed that — so the failed attempt was never logged.
+     */
+    @Test
+    void failedSignIn_withOversizedClientHints_isStillRecorded() {
+        UserResponse registered = registerVerified();
+        MockHttpServletRequest request = arriveFrom("203.0.113.9", "Mozilla/5.0 (Linux; Android 15) "
+                + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36");
+        request.addHeader("Sec-CH-UA-Model", "\"" + "X".repeat(500) + "\"");
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpassword")))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getUserId)
+                .containsExactly(tuple(SecurityEventType.LOGIN_FAILED, registered.id()));
+    }
+
+    /**
+     * An attempt on a name nobody holds has no account to be filed under, and inventing one keyed
+     * on the typed string would turn the log into a way of asking which usernames are real.
+     */
+    @Test
+    void failedSignIn_againstNoAccount_recordsNothing() {
+        arriveFrom("203.0.113.9", null);
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("ghost", "password123")))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        assertThat(securityEventRepository.findAll()).isEmpty();
+    }
+
+    /**
+     * A client refreshes every fifteen minutes. Recording that would bury every other event in
+     * the account's history under entries saying a session the log already has is still alive.
+     */
+    @Test
+    void refresh_isNotRecordedAsASignIn() {
+        registerVerified();
+        arriveFrom("203.0.113.7", null);
+        TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
+
+        authService.refresh(new RefreshTokenRequest(session.refreshToken()));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType)
+                .containsExactly(SecurityEventType.LOGIN_SUCCEEDED);
+    }
+
+    @Test
+    void passwordReset_isRecordedAtBothEnds() {
+        registerVerified();
+        arriveFrom("203.0.113.7", null);
+
+        authService.forgotPassword(new ForgotPasswordRequest("john@example.com", "test-turnstile-token", null));
+        ArgumentCaptor<String> otpCaptor = ArgumentCaptor.forClass(String.class);
+        verify(mailService, timeout(2000)).sendPasswordResetOtp(eq("john@example.com"), otpCaptor.capture());
+        authService.resetPassword(
+                new ResetPasswordRequest("john@example.com", otpCaptor.getValue(), "newpassword123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType)
+                .as("asking for a reset and completing one are different facts about an account")
+                .containsExactlyInAnyOrder(SecurityEventType.PASSWORD_RESET_REQUESTED,
+                        SecurityEventType.PASSWORD_RESET_COMPLETED);
+    }
+
+    /**
+     * X-Forwarded-For is written by the client on the way in, so believing it would let an
+     * attacker choose the address their own break-in is filed under. Only the header api-gateway
+     * sets after resolving the hop chain is read; everything else falls back to the peer.
+     */
+    @Test
+    void anAddressTheClientWroteItselfIsNeverBelieved() {
+        registerVerified();
+        MockHttpServletRequest request = arriveFrom(null, null);
+        request.addHeader("X-Forwarded-For", "198.51.100.66");
+        request.setRemoteAddr("10.0.0.4");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getIpAddress)
+                .containsExactly("10.0.0.4");
+    }
+
+    /**
+     * The gateway's header, written by something that is not the gateway: anything that reaches
+     * this service's port directly can set X-Client-Ip, and only the internal token says it came
+     * through api-gateway.
+     */
+    @Test
+    void aClientIpWithoutTheGatewaysTokenIsNotBelieved() {
+        registerVerified();
+        MockHttpServletRequest request = arriveFrom(null, null);
+        request.addHeader("X-Client-Ip", "198.51.100.66");
+        request.addHeader(InternalApiToken.HEADER, "a-guess");
+        request.setRemoteAddr("10.0.0.4");
+
+        authService.login(new LoginRequest("johndoe", "password123"));
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getIpAddress)
+                .containsExactly("10.0.0.4");
     }
 }

@@ -1,6 +1,6 @@
 package com.tiktok.videoservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.VideoViewedEvent;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -11,11 +11,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.MongoDBContainer;
+import org.testcontainers.mongodb.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -30,7 +30,7 @@ class VideoViewedEventConsumerTest {
     @ServiceConnection
     static MongoDBContainer MONGO = new MongoDBContainer("mongo:7");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     @Autowired
@@ -104,12 +104,11 @@ class VideoViewedEventConsumerTest {
     }
 
     /**
-     * A moderated video is off every read path, so the views still arriving are stale clients.
-     * Counting them builds a number nobody can see and nobody can account for the moment a
-     * restore puts the video back.
+     * A takedown is lifted by a restore, so a view interaction-service counted just before it —
+     * and delivered just after — belongs in the number the restored video shows.
      */
     @Test
-    void onMessage_takenDownVideo_leavesTheCountAlone() throws Exception {
+    void onMessage_takenDownVideo_stillCounts() throws Exception {
         Video video = publishedVideo();
         video.markTakenDown("policy violation");
         videoRepository.save(video);
@@ -117,7 +116,7 @@ class VideoViewedEventConsumerTest {
         consumer.onMessage(objectMapper.writeValueAsString(
                 VideoViewedEvent.of(Long.valueOf(video.getId()), 1L)));
 
-        assertThat(videoRepository.findById(video.getId()).orElseThrow().getViewCount()).isZero();
+        assertThat(videoRepository.findById(video.getId()).orElseThrow().getViewCount()).isEqualTo(1);
     }
 
     @Test

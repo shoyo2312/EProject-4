@@ -97,10 +97,17 @@ services:
   # Redis (Cache, Session, Cart, Pub/Sub)
   # ─────────────────────────────────────────────────────────────────
 
+  # noeviction, not an LRU policy: this Redis is not only a cache. It holds token revocations
+  # (auth:blacklist:*), OTP guess and login attempt counters, and recommendation-service's
+  # reco:video:taken-down / private / held sets. Evicting any of those silently undoes it — a
+  # logged-out token works again, the guess limit resets, a taken-down video returns to the feed.
+  # volatile-lru is no better: the revocation keys and counters carry TTLs, so they are exactly
+  # what it evicts. Under noeviction a full Redis refuses writes loudly instead; the caches here
+  # all expire on their own, and what grows without a TTL is recommendation's per-video hashes.
   redis:
     image: redis:7-alpine
     container_name: tt-redis
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -197,7 +204,7 @@ services:
 
   # Kafka UI (optional, dev-only)
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: provectuslabs/kafka-ui:v0.7.2
     container_name: tt-kafka-ui
     depends_on:
       - kafka
@@ -216,7 +223,7 @@ services:
   # ─────────────────────────────────────────────────────────────────
 
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.5
     container_name: tt-elasticsearch
     environment:
       - discovery.type=single-node
@@ -251,7 +258,9 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     healthcheck:
-      test: [ "CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1" ]
+      # 127.0.0.1, not localhost: inside this image localhost resolves to ::1 only, ClickHouse
+      # listens on IPv4, and busybox wget does not fall back — the check failed on a healthy server.
+      test: [ "CMD-SHELL", "wget -qO- http://127.0.0.1:8123/ping || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -314,6 +323,14 @@ services:
       AZURE_CONTENT_SAFETY_ENDPOINT: ${AZURE_CONTENT_SAFETY_ENDPOINT:-}
       AZURE_CONTENT_SAFETY_KEY: ${AZURE_CONTENT_SAFETY_KEY:-}
       MODERATION_ESCALATE_FRAMES: ${MODERATION_ESCALATE_FRAMES:-3}
+      # Seconds for the whole second opinion; keep it at most a third of media-worker's
+      # MODERATION_TIMEOUT_MILLIS, or media-worker gives up first and bills the frames again.
+      MODERATION_ESCALATE_BUDGET: ${MODERATION_ESCALATE_BUDGET:-10}
+      # /moderate/text (comments, captions). Only HATE at or over this holds; bump
+      # TEXT_MODERATION_MODEL_VERSION whenever it changes. The model and its commit are baked in at
+      # build — see the Dockerfile.
+      TEXT_HATE_HOLD_THRESHOLD: ${TEXT_HATE_HOLD_THRESHOLD:-0.90}
+      TEXT_MODERATION_MODEL_VERSION: ${TEXT_MODERATION_MODEL_VERSION:-hsd-v1}
     healthcheck:
       # Unhealthy until the weights are in memory, which takes a few seconds on a cold start.
       test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health')\"" ]
@@ -329,7 +346,7 @@ services:
   # ─────────────────────────────────────────────────────────────────
 
   minio:
-    image: quay.io/minio/minio:latest
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     container_name: tt-minio
     command: server /data --console-address ":9001"
     environment:
@@ -360,7 +377,7 @@ services:
   # ilm import replaces the whole config rather than appending, which is what makes re-running
   # this container a no-op instead of a duplicate-rule error.
   minio-init:
-    image: quay.io/minio/mc:latest
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
     container_name: tt-minio-init
     depends_on:
       minio:
@@ -376,7 +393,7 @@ services:
         set -e
         mc alias set tt http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
         mc mb --ignore-existing "tt/$$MINIO_BUCKET"
-        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}}]}' \
+        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}},{"ID":"expire-data-exports","Status":"Enabled","Filter":{"Prefix":"exports/"},"Expiration":{"Days":7}}]}' \
           | mc ilm import "tt/$$MINIO_BUCKET"
         echo "minio-init: bucket $$MINIO_BUCKET ready"
     networks:

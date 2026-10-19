@@ -1,9 +1,13 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
+import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.dto.response.RepostContextResponse;
 import com.tiktok.interactionservice.dto.response.RepostStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
+import com.tiktok.interactionservice.exception.EventNotPublishedException;
+import com.tiktok.interactionservice.exception.PrivacyCheckUnavailableException;
+import com.tiktok.interactionservice.exception.PrivateAccountException;
 import com.tiktok.interactionservice.exception.RepostRateLimitedException;
 import com.tiktok.interactionservice.repository.RepostByUserRepository;
 import com.tiktok.interactionservice.repository.RepostByVideoRepository;
@@ -12,6 +16,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
@@ -20,7 +25,9 @@ import java.util.concurrent.CompletableFuture;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -46,6 +53,10 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
 
     @Autowired
     private CounterCacheService counterCacheService;
+
+    // Default answer false: anyone but the owner is refused unless a test says they may look.
+    @MockitoBean
+    private FriendshipClient friendshipClient;
 
     @BeforeEach
     void cleanUp() {
@@ -114,6 +125,24 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(contexts.get(2).reposterIds()).isEmpty();
     }
 
+    /**
+     * The reposter sample is capped at twenty by user_id. The viewer's own repost is asked for
+     * directly, so a viewer outside the sample still sees their repost and can remove it.
+     */
+    @Test
+    void getContexts_viewerOutsideTheReposterSample_stillSeesTheirOwnRepost() {
+        for (long userId = 1; userId <= 25; userId++) {
+            repostByVideoRepository.insertIfNotExists(64L, userId, java.time.Instant.now());
+        }
+
+        RepostContextResponse context = repostService.getContexts(List.of(64L), 25L).get(0);
+
+        assertThat(context.reposterIds()).hasSize(20).doesNotContain(25L);
+        assertThat(context.repostedByMe()).isTrue();
+        assertThat(repostService.getContexts(List.of(64L), 26L).get(0).repostedByMe()).isFalse();
+        assertThat(repostService.getContexts(List.of(64L), null).get(0).repostedByMe()).isFalse();
+    }
+
     @Test
     void getContexts_afterUnrepost_dropsTheReposter() {
         repostService.repost(63L, 1L);
@@ -131,11 +160,11 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         repostService.repost(41L, 1L);
         repostService.repost(42L, 2L);
 
-        VideoIdPageResponse first = repostService.listReposts(1L, null, 1);
+        VideoIdPageResponse first = repostService.listReposts(1L, 1L, null, 1);
         assertThat(first.videoIds()).hasSize(1);
         assertThat(first.hasMore()).isTrue();
 
-        VideoIdPageResponse second = repostService.listReposts(1L, first.nextCursor(), 1);
+        VideoIdPageResponse second = repostService.listReposts(1L, 1L, first.nextCursor(), 1);
         assertThat(first.videoIds()).doesNotContainAnyElementsOf(second.videoIds());
         assertThat(first.videoIds().get(0) + second.videoIds().get(0)).isEqualTo(81L);
     }
@@ -145,7 +174,7 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         repostService.repost(43L, 1L);
         repostService.unrepost(43L, 1L);
 
-        assertThat(repostService.listReposts(1L, null, 20).videoIds()).isEmpty();
+        assertThat(repostService.listReposts(1L, 1L, null, 20).videoIds()).isEmpty();
     }
 
     /**
@@ -158,9 +187,9 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         when(kafkaTemplate.send(any(ProducerRecord.class)))
                 .thenThrow(new IllegalStateException("broker refused the record"));
 
-        assertThatThrownBy(() -> repostService.repost(16L, 1L)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> repostService.repost(16L, 1L)).isInstanceOf(EventNotPublishedException.class);
 
-        assertThat(repostService.listReposts(1L, null, 20).videoIds()).isEmpty();
+        assertThat(repostService.listReposts(1L, 1L, null, 20).videoIds()).isEmpty();
         assertThat(repostService.getContexts(List.of(16L), 1L).get(0).repostedByMe()).isFalse();
 
         reset(kafkaTemplate);
@@ -179,10 +208,10 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         when(kafkaTemplate.send(any(ProducerRecord.class)))
                 .thenThrow(new IllegalStateException("broker refused the record"));
 
-        assertThatThrownBy(() -> repostService.unrepost(18L, 1L)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> repostService.unrepost(18L, 1L)).isInstanceOf(EventNotPublishedException.class);
 
         assertThat(repostService.getContexts(List.of(18L), 1L).get(0).repostedByMe()).isTrue();
-        assertThat(repostService.listReposts(1L, null, 20).videoIds()).containsExactly(18L);
+        assertThat(repostService.listReposts(1L, 1L, null, 20).videoIds()).containsExactly(18L);
     }
 
     @Test
@@ -192,5 +221,35 @@ class RepostServiceImplTest extends AbstractInteractionServiceIT {
         assertThatThrownBy(() -> repostService.repost(70L, 1L))
                 .isInstanceOf(RepostRateLimitedException.class);
         assertThat(counterCacheService.getCounts(70L).repostCount()).isZero();
+    }
+
+    /**
+     * A private account's tab is for its owner and followers. user-service is asked about anyone
+     * but the owner — the anonymous caller included, as the question's null viewer.
+     */
+    @Test
+    void listReposts_ofAPrivateAccount_isForItsOwnerAndFollowersOnly() {
+        repostService.repost(19L, 1L);
+        when(friendshipClient.canSeeFollowerContent(1L, 2L)).thenReturn(true);
+
+        assertThat(repostService.listReposts(1L, 1L, null, 20).videoIds()).containsExactly(19L);
+        assertThat(repostService.listReposts(2L, 1L, null, 20).videoIds()).containsExactly(19L);
+        assertThatThrownBy(() -> repostService.listReposts(3L, 1L, null, 20))
+                .isInstanceOf(PrivateAccountException.class);
+        assertThatThrownBy(() -> repostService.listReposts(null, 1L, null, 20))
+                .isInstanceOf(PrivateAccountException.class);
+        verify(friendshipClient, never()).canSeeFollowerContent(1L, 1L);
+    }
+
+    /** The owner's own tab never asks, so a user-service outage cannot take it away. */
+    @Test
+    void listReposts_whenThePrivacyCheckIsUnavailable_isA503ForOthersOnly() {
+        repostService.repost(19L, 1L);
+        when(friendshipClient.canSeeFollowerContent(1L, 2L))
+                .thenThrow(new PrivacyCheckUnavailableException(new IllegalStateException("down")));
+
+        assertThatThrownBy(() -> repostService.listReposts(2L, 1L, null, 20))
+                .isInstanceOf(PrivacyCheckUnavailableException.class);
+        assertThat(repostService.listReposts(1L, 1L, null, 20).videoIds()).containsExactly(19L);
     }
 }

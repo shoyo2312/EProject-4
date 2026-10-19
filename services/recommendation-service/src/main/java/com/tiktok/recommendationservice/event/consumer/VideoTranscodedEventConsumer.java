@@ -1,6 +1,6 @@
 package com.tiktok.recommendationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.recommendationservice.service.InboxService;
 import com.tiktok.recommendationservice.service.RecommendationService;
@@ -11,9 +11,9 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 /**
- * Cleanup only. A transcode that failed is a video nothing will ever publish — media-worker does
- * not retry a permanent failure and no verdict is coming — so whatever the publication stashed
- * about it is taken back here rather than left to expire with its TTL.
+ * Withdrawal only. A transcode that failed is kept out of everything candidate generation reads,
+ * but not treated as deleted: video-service leaves FAILED open, and a redelivered publication that
+ * transcodes this time rescues the upload — see {@link RecommendationService#recordTranscodeFailed}.
  *
  * <p>A transcode that succeeded deliberately does nothing. It used to be what put the video in
  * front of viewers, but a playable video is not yet a screened one: video-service parks it at
@@ -44,7 +44,7 @@ public class VideoTranscodedEventConsumer {
         inboxService.runOnce(event.eventId(), () -> {
             log.warn("Transcode failed for videoId={}, keeping it out of the feed: {}",
                     event.videoId(), event.failureReason());
-            recommendationService.recordVideoDeleted(event.videoId());
+            recommendationService.recordTranscodeFailed(event.videoId());
         });
     }
 }

@@ -2,8 +2,12 @@ package com.tiktok.userservice.mapper;
 
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.entity.UserProfile;
+import com.tiktok.userservice.service.DisplayNameCooldown;
 import org.junit.jupiter.api.Test;
 import org.mapstruct.factory.Mappers;
+
+import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -35,5 +39,41 @@ class UserProfileMapperTest {
     @Test
     void toResponse_null_returnsNull() {
         assertThat(mapper.toResponse(null)).isNull();
+    }
+
+    @Test
+    void toResponse_carriesThePrivateAccountFlag() {
+        UserProfile profile = UserProfile.builder()
+                .userId(42L)
+                .displayName("Alice")
+                .privateAccount(true)
+                .build();
+
+        assertThat(mapper.toResponse(profile).privateAccount()).isTrue();
+    }
+
+    @Test
+    void onlyTheOwnersView_saysWhenTheNameMayNextChange() {
+        Instant changedAt = Instant.now().minus(Duration.ofDays(2));
+        UserProfile profile = UserProfile.builder()
+                .userId(42L)
+                .displayName("Alice")
+                .displayNameChangedAt(changedAt)
+                .build();
+
+        assertThat(mapper.toOwnResponse(profile).displayNameChangeableAt())
+                .isEqualTo(changedAt.plus(DisplayNameCooldown.PERIOD));
+        assertThat(mapper.toResponse(profile).displayNameChangeableAt()).isNull();
+    }
+
+    @Test
+    void toOwnResponse_onceTheWeekIsOver_saysNothing() {
+        UserProfile profile = UserProfile.builder()
+                .userId(42L)
+                .displayName("Alice")
+                .displayNameChangedAt(Instant.now().minus(Duration.ofDays(8)))
+                .build();
+
+        assertThat(mapper.toOwnResponse(profile).displayNameChangeableAt()).isNull();
     }
 }

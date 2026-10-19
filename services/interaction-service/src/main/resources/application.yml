@@ -32,9 +32,67 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # A like, comment, view, share, repost or save waits for the broker inside the request and is
+      # undone if the producer gives up (InteractionEventPublisher). That is only safe if giving up
+      # is final, and by default it is not for two minutes: the producer keeps retrying the record
+      # long after the request has undone the write. These bound the producer's answer to a few
+      # seconds instead, and the request waits for it.
+      #   delivery.timeout.ms  everything after send() returns, retries included. Keep it at or above
+      #                        request.timeout.ms + linger.ms (the producer refuses to start
+      #                        otherwise) and below the publisher's ACK_BACKSTOP.
+      #   max.block.ms         send() itself, while it fetches a topic's metadata. 60s by default,
+      #                        on the request thread. Failing here means the record was never queued.
+      # The fire-and-forget sends (watch sessions, comment likes) and the dead-letter publisher share
+      # this producer, so they also give up after 5s now rather than riding out a longer outage.
+      properties:
+        "[delivery.timeout.ms]": 5000
+        "[request.timeout.ms]": 4000
+        "[max.block.ms]": 2000
 
 downstream:
   video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+  # For the FRIENDS comment-audience check only; the commenter's own JWT is forwarded on the call,
+  # so no service credential here.
+  user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
+
+interaction:
+  comment:
+    # Every tier is checked on every comment; 0 switches one off. See CommentLimitProperties.
+    rate-limit:
+      cooldown: ${COMMENT_COOLDOWN:3s}
+      per-minute: ${COMMENT_PER_MINUTE:10}
+      per-hour: ${COMMENT_PER_HOUR:100}
+      per-day: ${COMMENT_PER_DAY:500}
+      per-video-per-hour: ${COMMENT_PER_VIDEO_PER_HOUR:60}
+    duplicate:
+      window: ${COMMENT_DUPLICATE_WINDOW:10m}
+      max-copies: ${COMMENT_DUPLICATE_MAX_COPIES:5}
+    # A comment refused for what it says, or removed by an admin, is a strike; this many within the
+    # window restrict commenting for the next duration in the list. threshold 0 switches it off.
+    # See CommentStrikeProperties.
+    strikes:
+      threshold: ${COMMENT_STRIKE_THRESHOLD:3}
+      window: ${COMMENT_STRIKE_WINDOW:24h}
+      restrictions: ${COMMENT_RESTRICTIONS:1h,24h,7d}
+      step-window: ${COMMENT_RESTRICTION_STEP_WINDOW:30d}
+
+moderation:
+  text:
+    # Screens every comment (moderation-lib). false keeps computing, logging and counting every
+    # verdict but refuses and holds nothing — for measuring false positives on real traffic before
+    # enforcing. See docs/moderation.md.
+    enforce: ${TEXT_MODERATION_ENFORCE:true}
+    # moderation-service's text classifier, asked when nothing else held the comment. It can hold,
+    # never refuse; unreachable, the rules decide alone (one timeout, then 30s without asking).
+    # enforce=false records its holds as notes on the comment and acts on none — for measuring it
+    # first. See docs/moderation.md.
+    classifier:
+      base-url: ${MODERATION_SERVICE_URL:http://localhost:8099}
+      enforce: ${TEXT_CLASSIFIER_ENFORCE:true}
+    # admin-service's terms, polled every minute on top of the shipped list. Unreachable, the last
+    # list stays — before the first answer, the shipped list alone.
+    admin-terms:
+      base-url: ${ADMIN_SERVICE_URL:http://localhost:8096}
 
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}

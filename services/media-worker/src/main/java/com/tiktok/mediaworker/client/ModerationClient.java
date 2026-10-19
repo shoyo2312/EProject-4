@@ -1,6 +1,6 @@
 package com.tiktok.mediaworker.client;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.mediaworker.config.ModerationProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

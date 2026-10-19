@@ -8,6 +8,6 @@ import jakarta.validation.constraints.Size;
 public record ResetPasswordRequest(
         @NotBlank @Email String email,
         @NotBlank @Pattern(regexp = "\\d{6}") String otp,
-        @NotBlank @Size(min = 8, max = 100) String newPassword
+        @NotBlank @Size(min = 8, max = 100) @FitsBcrypt String newPassword
 ) {
 }

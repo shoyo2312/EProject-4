@@ -13,7 +13,8 @@ public class UserPrincipalHandshakeHandler extends DefaultHandshakeHandler {
     protected Principal determineUser(ServerHttpRequest request, WebSocketHandler wsHandler,
                                        Map<String, Object> attributes) {
         String userId = (String) attributes.get(JwtHandshakeInterceptor.USER_ID_ATTRIBUTE);
-        return new StompPrincipal(userId);
+        // A guest is no Principal, not one named null: Spring's user registry keys sessions by name.
+        return userId == null ? null : new StompPrincipal(userId);
     }
 
     private record StompPrincipal(String name) implements Principal {

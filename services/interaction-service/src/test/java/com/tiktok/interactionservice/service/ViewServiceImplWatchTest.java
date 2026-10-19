@@ -57,7 +57,7 @@ class ViewServiceImplWatchTest {
 
     /** video-service knows the video's real length, probed out of the file by the transcode. */
     private ViewService viewServiceWithProbedDuration(long durationMs) {
-        org.mockito.Mockito.when(videoOwnershipClient.durationMs(7L)).thenReturn(durationMs);
+        org.mockito.Mockito.when(videoOwnershipClient.requireVisible(7L)).thenReturn(durationMs);
         return viewService();
     }
 

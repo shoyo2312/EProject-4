@@ -1,8 +1,10 @@
-"""Automatic content moderation for uploaded videos.
+"""Automatic content moderation for uploaded videos, and for the text around them.
 
 media-worker samples frames from a transcoded video and posts them here; this service scores
-them and answers with a verdict. It holds no state, no user data and no auth — it is reachable
-only on the internal Docker network, like rank-service, and is not routed at the gateway.
+them and answers with a verdict. interaction-service and video-service post comments and captions
+to /moderate/text, after their own word rules have run. It holds no state, no user data and no
+auth — it is reachable only on the internal Docker network, like rank-service, and is not routed
+at the gateway.
 
 V1 scores one thing: NSFW imagery, with an off-the-shelf ViT classifier that runs on CPU. Adding
 violence or weapon detection later is a second entry in SCORERS; the severity ordering that
@@ -28,6 +30,7 @@ from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 import escalation
+from text_verdict import TextThresholds, decide_text
 from verdict import Decision, Thresholds, decide, worst
 
 log = logging.getLogger("moderation")
@@ -57,12 +60,34 @@ MAX_FRAMES = int(os.getenv("MODERATION_MAX_FRAMES", "32"))
 # different NSFW model whose labels are spelled differently.
 NSFW_LABEL = os.getenv("MODERATION_NSFW_LABEL", "nsfw")
 
+# The text classifier. Empty switches /moderate/text off (503) and leaves frames alone: the callers
+# fail open to their word rules, so a deployment without the text model is a Phase 1 deployment.
+TEXT_MODEL = os.getenv("TEXT_MODERATION_MODEL", "visolex/phobert-v2-hsd")
+# A commit, not a branch: the image is built from bytes somebody looked at, and a push to the
+# repository's main must not change what this service runs on its next rebuild.
+TEXT_MODEL_REVISION = os.getenv("TEXT_MODERATION_MODEL_REVISION", "221aca47de6568d519eba61a94d7fdae3ca680ae")
+# Bumped by hand when the weights or the threshold change, like MODERATION_MODEL_VERSION. It ends up
+# in the version string stored with every comment and video the classifier flagged.
+TEXT_MODEL_VERSION = os.getenv("TEXT_MODERATION_MODEL_VERSION", "hsd-v1")
+
+TEXT_THRESHOLDS = TextThresholds(
+    hate_hold_at=float(os.getenv("TEXT_HATE_HOLD_THRESHOLD", "0.90")),
+)
+
+# Caps, for the same reason as MAX_FRAMES: a CPU shared by every caller. A request over the text
+# cap is refused rather than trimmed — unlike frames, every text needs its own answer, and the
+# callers send one to three.
+TEXT_MAX_TEXTS = int(os.getenv("TEXT_MAX_TEXTS", "16"))
+# 32 pieces of 64 tokens, 48 apart, is about 1,500 tokens: a 2,000-character description, whole.
+TEXT_MAX_WINDOWS = int(os.getenv("TEXT_MAX_WINDOWS", "32"))
+
 _classifier = None
+_text_scorer = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global _classifier
+    global _classifier, _text_scorer
     from transformers import pipeline
 
     log.info("Loading %s", MODEL)
@@ -71,8 +96,17 @@ async def lifespan(_: FastAPI):
     # would only ever surprise us on a machine that has one.
     _classifier = pipeline("image-classification", model=MODEL, device=-1)
     log.info("Loaded %s in %.1fs", MODEL, time.monotonic() - started)
+
+    if TEXT_MODEL:
+        import text_classifier
+
+        started = time.monotonic()
+        _text_scorer = text_classifier.TextScorer(
+            text_classifier.local_path(TEXT_MODEL, TEXT_MODEL_REVISION), TEXT_MAX_WINDOWS)
+        log.info("Loaded %s@%s in %.1fs", TEXT_MODEL, TEXT_MODEL_REVISION[:7], time.monotonic() - started)
     yield
     _classifier = None
+    _text_scorer = None
 
 
 app = FastAPI(title="moderation-service", lifespan=lifespan)
@@ -196,6 +230,61 @@ def moderate(request: ModerateRequest) -> ModerateResponse:
     )
 
 
+class ModerateTextRequest(BaseModel):
+    """Texts already sanitized by the caller: a comment, or a video's title, description and tags."""
+
+    texts: list[str] = Field(default_factory=list)
+
+
+class TextResult(BaseModel):
+    verdict: str
+    label: str
+    score: float
+    scores: dict[str, float]
+
+
+class ModerateTextResponse(BaseModel):
+    results: list[TextResult]
+    model: str
+    modelVersion: str
+    processingTimeMs: int
+
+
+@app.post("/moderate/text", response_model=ModerateTextResponse)
+def moderate_text(request: ModerateTextRequest) -> ModerateTextResponse:
+    """One result per text, in the order sent. HOLD only on HATE — see text_verdict.TextThresholds."""
+    if not TEXT_MODEL:
+        raise HTTPException(status_code=503, detail="text moderation is switched off")
+    if _text_scorer is None:
+        raise HTTPException(status_code=503, detail="model is still loading")
+    if len(request.texts) > TEXT_MAX_TEXTS:
+        raise HTTPException(status_code=400, detail=f"at most {TEXT_MAX_TEXTS} texts per request")
+
+    started = time.monotonic()
+    # Blank texts are clean without asking the model; the rest go through in one forward pass.
+    asked = [index for index, text in enumerate(request.texts) if text and text.strip()]
+    scored = _text_scorer([request.texts[index] for index in asked]) if asked else []
+    per_text: list[list[dict]] = [[] for _ in request.texts]
+    for index, text_windows in zip(asked, scored):
+        per_text[index] = text_windows
+
+    decisions = [decide_text(text_windows, TEXT_THRESHOLDS) for text_windows in per_text]
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    # Counts and labels, never the text: a log line per comment is a second copy of every comment.
+    log.info("texts=%d held=%d labels=%s in %dms", len(decisions),
+             sum(1 for decision in decisions if decision.verdict == "HOLD"),
+             ",".join(decision.label for decision in decisions), elapsed_ms)
+
+    return ModerateTextResponse(
+        results=[TextResult(verdict=decision.verdict, label=decision.label, score=round(decision.score, 4),
+                            scores=decision.scores) for decision in decisions],
+        model=TEXT_MODEL,
+        modelVersion=TEXT_MODEL_VERSION,
+        processingTimeMs=elapsed_ms,
+    )
+
+
 @app.get("/config")
 def config() -> dict:
     """What this service is currently deciding with, for the admin console to show.
@@ -218,12 +307,19 @@ def config() -> dict:
         "escalationCategories": list(escalation.CATEGORIES),
         "escalationRejectSeverity": escalation.REJECT_SEVERITY,
         "escalationApproveSeverity": escalation.APPROVE_SEVERITY,
+        "textEnabled": bool(TEXT_MODEL),
+        "textModel": TEXT_MODEL,
+        "textModelRevision": TEXT_MODEL_REVISION,
+        "textModelVersion": TEXT_MODEL_VERSION,
+        "textHateHoldAt": TEXT_THRESHOLDS.hate_hold_at,
+        "textMaxTexts": TEXT_MAX_TEXTS,
     }
 
 
 @app.get("/health")
 def health() -> dict:
-    """Unhealthy until the model is in memory, so nothing is routed here mid-load."""
-    if _classifier is None:
+    """Unhealthy until every configured model is in memory, so nothing is routed here mid-load."""
+    if _classifier is None or (TEXT_MODEL and _text_scorer is None):
         raise HTTPException(status_code=503, detail="model is still loading")
-    return {"status": "up", "model": MODEL, "modelVersion": MODEL_VERSION}
+    return {"status": "up", "model": MODEL, "modelVersion": MODEL_VERSION,
+            "textModel": TEXT_MODEL or None, "textModelVersion": TEXT_MODEL_VERSION if TEXT_MODEL else None}

@@ -22,6 +22,14 @@ public class User extends BaseEntity {
     private String username;
 
     /**
+     * When the owner last chose a new handle; null until they first do. The handle picked at
+     * signup, or invented for a social one, is not a change, so it does not start the 30 days —
+     * see {@code UsernameCooldown}.
+     */
+    @Column(name = "username_changed_at")
+    private Instant usernameChangedAt;
+
+    /**
      * Null for an account created by a social login whose provider gave no address — Facebook's
      * {@code email} permission is optional, and an account registered with a phone number has none
      * to give. Such an account cannot reset a password or receive mail until it supplies one, so
@@ -51,7 +59,8 @@ public class User extends BaseEntity {
 
     /**
      * Last time a token pair was issued for this account — a fresh sign-in or a refresh. Advanced
-     * from {@code TokenIssuer}, the one funnel every sign-in path ends in. Not a precise login
+     * from {@code TokenIssuer}, the one funnel every sign-in path ends in, by a bulk update that
+     * leaves {@code version} alone ({@code UserRepository.stampLastLogin}). Not a precise login
      * clock (a background refresh moves it too); enough to tell a dormant account from a live one.
      */
     @Column(name = "last_login_at")
@@ -77,6 +86,17 @@ public class User extends BaseEntity {
     private String banReason;
 
     /**
+     * When the owner closed the account; null while it is open. Kept under a ban laid on top, so
+     * that {@link #unban} returns the account to DEACTIVATED rather than reopening it.
+     */
+    @Column(name = "deactivated_at")
+    private Instant deactivatedAt;
+
+    /** When the deletion the owner asked for runs; null when they only paused the account. */
+    @Column(name = "deletion_scheduled_at")
+    private Instant deletionScheduledAt;
+
+    /**
      * Claims an address for an account that has none. Verified state is cleared rather than left
      * alone: the address is unproven until its OTP comes back, and an account that could set
      * {@code email} while {@code emailVerified} stayed true would be able to receive password
@@ -88,8 +108,21 @@ public class User extends BaseEntity {
         this.emailVerifiedAt = null;
     }
 
+    public void changeUsername(String newUsername, Instant at) {
+        this.username = newUsername;
+        this.usernameChangedAt = at;
+    }
+
     public void changePasswordHash(String newHash) {
         this.passwordHash = newHash;
+    }
+
+    /**
+     * Leaves the account with no password, as a social signup starts out: signing in by password
+     * is impossible until the owner sets one through the reset flow.
+     */
+    public void clearPassword() {
+        this.passwordHash = null;
     }
 
     public void lock() {
@@ -106,25 +139,48 @@ public class User extends BaseEntity {
 
     /**
      * Only lifts a ban. LOCKED comes from somewhere else entirely, and an unban that reset it to
-     * ACTIVE would silently undo that other decision.
+     * ACTIVE would silently undo that other decision. The same goes for an account its owner had
+     * closed before the ban: it goes back to DEACTIVATED.
      */
     public void unban() {
         if (this.status == UserStatus.BANNED) {
-            this.status = UserStatus.ACTIVE;
+            this.status = deactivatedAt != null ? UserStatus.DEACTIVATED : UserStatus.ACTIVE;
             this.bannedAt = null;
             this.bannedUntil = null;
             this.banReason = null;
         }
     }
 
-    /** Advances {@link #lastLoginAt}; see its field doc for why a refresh counts. */
-    public void recordLogin() {
-        this.lastLoginAt = Instant.now();
+    /** @param deletionScheduledAt when to delete it, or null to only pause it */
+    public void deactivate(Instant at, Instant deletionScheduledAt) {
+        this.status = UserStatus.DEACTIVATED;
+        this.deactivatedAt = at;
+        this.deletionScheduledAt = deletionScheduledAt;
+    }
+
+    /** The owner signed in again: open, and any scheduled deletion cancelled. */
+    public void reactivate() {
+        this.status = UserStatus.ACTIVE;
+        this.deactivatedAt = null;
+        this.deletionScheduledAt = null;
+    }
+
+    /**
+     * The scheduled deletion ran. The row stays, soft-deleted, but nothing on it can sign in or
+     * hold a name: the partial unique indexes skip deleted rows, so the username and address are
+     * free to be taken again, and the address and password are gone with the row's last use.
+     * Provider links are deleted by the caller — their index is not partial.
+     */
+    public void erase() {
+        this.email = null;
+        this.emailVerified = false;
+        this.emailVerifiedAt = null;
+        this.passwordHash = null;
+        markDeleted();
     }
 
     public void promoteToAdmin() {
         this.role = UserRole.ADMIN;
-        this.emailVerified = true;
     }
 
     public void markEmailVerified() {

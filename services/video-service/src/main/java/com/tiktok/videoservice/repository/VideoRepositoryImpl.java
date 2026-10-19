@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.repository;
 
 import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -23,7 +24,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 import static org.springframework.data.mongodb.core.query.Criteria.where;
@@ -39,8 +42,8 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     private final MongoTemplate mongoTemplate;
 
     @Override
-    public List<Video> findFeedPage(
-            Collection<Long> userIds, Instant beforeCreatedAt, String beforeId, int limit) {
+    public List<Video> findFeedPage(Collection<Long> userIds, Collection<Long> bannedOwners,
+                                    Instant beforeCreatedAt, String beforeId, int limit) {
         Criteria criteria = where("status").is(VideoStatus.PUBLISHED)
                 .and("visibility").is(VideoVisibility.PUBLIC)
                 .and("deletedAt").is(null);
@@ -53,6 +56,18 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         // and recreate — auto-index-creation will not redefine an existing name) if that changes.
         if (userIds != null) {
             criteria = criteria.and("userId").in(userIds);
+        } else {
+            // The public feed is for videos anyone may see, so a private owner's never appear on
+            // it — not even for their followers, who get them on the Following feed instead.
+            // ponytail: a residual filter after feed_idx, so a private owner's videos are read and
+            // skipped; add ownerPrivate to feed_idx if they ever become a large share of the feed.
+            criteria = criteria.and("ownerPrivate").ne(true);
+            // ponytail: every ban in force rides on this query as a $nin, read and skipped after
+            // feed_idx like the filter above; past a few thousand bans, stamp the ban on the
+            // videos and index it instead.
+            if (!bannedOwners.isEmpty()) {
+                criteria = criteria.and("userId").nin(bannedOwners);
+            }
         }
 
         if (beforeCreatedAt != null) {
@@ -76,7 +91,35 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
 
     @Override
     public Page<Video> findForAdmin(VideoStatus status, String term, Collection<Long> ownerIds,
-                                    Boolean deleted, Pageable pageable) {
+                                    Boolean deleted, Boolean purged, Pageable pageable) {
+        Criteria criteria = adminCriteria(status, term, ownerIds, deleted, purged);
+        Query query = Query.query(criteria).with(pageable);
+        List<Video> videos = mongoTemplate.find(query, Video.class);
+        // The count repeats the match without the paging, which is what Page needs for its total.
+        long total = mongoTemplate.count(Query.query(criteria), Video.class);
+        return new PageImpl<>(videos, pageable, total);
+    }
+
+    @Override
+    public Map<VideoStatus, Long> countForAdminByStatus(String term, Collection<Long> ownerIds,
+                                                        Boolean deleted, Boolean purged) {
+        Aggregation aggregation = Aggregation.newAggregation(
+                Aggregation.match(adminCriteria(null, term, ownerIds, deleted, purged)),
+                Aggregation.group("status").count().as("videos"));
+
+        Map<VideoStatus, Long> counts = new EnumMap<>(VideoStatus.class);
+        for (Document row : mongoTemplate.aggregate(aggregation, Video.class, Document.class)) {
+            counts.put(VideoStatus.valueOf(row.getString("_id")), asLong(row.get("videos")));
+        }
+        return counts;
+    }
+
+    /**
+     * The admin listing's match, shared by the listing and its per-status totals so that a total
+     * is always a count of exactly the rows the same filters list.
+     */
+    private static Criteria adminCriteria(VideoStatus status, String term, Collection<Long> ownerIds,
+                                          Boolean deleted, Boolean purged) {
         // Owner-deleted videos are included by default, unlike every other read path here: the
         // admin console is the one place that has to account for a video after its owner removed
         // it. `deleted` narrows to just the one side when a moderator wants only deleted rows, or
@@ -87,6 +130,11 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         }
         if (deleted != null) {
             criteria = deleted ? criteria.and("deletedAt").ne(null) : criteria.and("deletedAt").is(null);
+        }
+        if (purged != null) {
+            criteria = purged
+                    ? criteria.and("purgeEventPublishedAt").ne(null)
+                    : criteria.and("purgeEventPublishedAt").is(null);
         }
 
         List<Criteria> matches = new ArrayList<>(2);
@@ -104,12 +152,7 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         if (!matches.isEmpty()) {
             criteria = criteria.andOperator(new Criteria().orOperator(matches.toArray(new Criteria[0])));
         }
-
-        Query query = Query.query(criteria).with(pageable);
-        List<Video> videos = mongoTemplate.find(query, Video.class);
-        // The count repeats the match without the paging, which is what Page needs for its total.
-        long total = mongoTemplate.count(Query.query(criteria), Video.class);
-        return new PageImpl<>(videos, pageable, total);
+        return criteria;
     }
 
     @Override
@@ -187,8 +230,8 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     // goes while the video is down — see Video.applyOutcome. Leaving it out would drop
     // the only record of the result on exactly the videos that need it at restore time.
     @Override
-    public boolean updateTranscodeResult(Video video, VideoStatus expectedStatus) {
-        return compareAndSet(video.getId(), expectedStatus, new Update()
+    public boolean updateTranscodeResult(Video video, PipelineState expected) {
+        return compareAndSet(video.getId(), expected, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("thumbnailUrl", video.getThumbnailUrl())
@@ -197,12 +240,15 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
                 .set("durationSeconds", video.getDurationSeconds())
                 .set("width", video.getWidth())
                 .set("height", video.getHeight())
-                .set("failureReason", video.getFailureReason())); // null on the success path — clears a stale reason
+                .set("failureReason", video.getFailureReason()) // null on the success path — clears a stale reason
+                // A verdict that beat the transcode is applied with it (Video.markTranscoded), and
+                // an APPROVED one stamps this in memory like updateModeration's does.
+                .set("publishedAt", video.getPublishedAt()));
     }
 
     @Override
-    public boolean updateStatus(Video video, VideoStatus expectedStatus) {
-        return compareAndSet(video.getId(), expectedStatus, new Update()
+    public boolean updateStatus(Video video, PipelineState expected) {
+        return compareAndSet(video.getId(), expected, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 // Written on both sides of the pair: a takedown sets it, a restore clears it.
@@ -213,16 +259,16 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
-    public boolean updateFailed(Video video, VideoStatus expectedStatus) {
-        return compareAndSet(video.getId(), expectedStatus, new Update()
+    public boolean updateFailed(Video video, PipelineState expected) {
+        return compareAndSet(video.getId(), expected, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("failureReason", video.getFailureReason()));
     }
 
     @Override
-    public boolean updateModeration(Video video, VideoStatus expectedStatus) {
-        return compareAndSet(video.getId(), expectedStatus, new Update()
+    public boolean updateModeration(Video video, PipelineState expected) {
+        return compareAndSet(video.getId(), expected, new Update()
                 .set("status", video.getStatus())
                 .set("statusBeforeTakedown", video.getStatusBeforeTakedown())
                 .set("moderation", video.getModeration())
@@ -256,6 +302,14 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
+    public boolean requestPurge(String videoId) {
+        Query query = Query.query(where("_id").is(videoId)
+                .and("deletedAt").ne(null)
+                .and("purgeEventPublishedAt").is(null));
+        return write(query, new Update().set("purgeRequestedAt", Instant.now())) > 0;
+    }
+
+    @Override
     public void updateEventFailed(Video video) {
         update(video.getId(), new Update().set("eventFailedAt", video.getEventFailedAt()));
     }
@@ -263,6 +317,21 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     @Override
     public void updateSoftDeleted(Video video) {
         update(video.getId(), new Update().set("deletedAt", video.getDeletedAt()));
+    }
+
+    @Override
+    public List<String> softDeleteAllOf(Long userId, Instant at) {
+        Query live = Query.query(where("userId").is(userId).and("deletedAt").is(null));
+        live.fields().include("_id");
+        List<String> ids = mongoTemplate.find(live, Video.class).stream().map(Video::getId).toList();
+        if (ids.isEmpty()) {
+            return ids;
+        }
+        mongoTemplate.updateMulti(
+                Query.query(where("_id").in(ids).and("deletedAt").is(null)),
+                new Update().set("deletedAt", at).set("updatedAt", Instant.now()),
+                Video.class);
+        return ids;
     }
 
     @Override
@@ -282,34 +351,67 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
     }
 
     @Override
+    public List<String> markOwnerPrivacy(Long userId, boolean privateAccount, Instant pendingAt) {
+        // ponytail: every live video goes on the shared visibility outbox, which drains 100 per
+        // 5 s, so an owner with N videos holds back later visibility announcements by about N/20 s.
+        // Queue only the PUBLIC ones if that bites: the other audiences never change with the
+        // owner's privacy.
+        mongoTemplate.updateMulti(
+                Query.query(where("userId").is(userId).and("deletedAt").is(null)),
+                new Update()
+                        .set("ownerPrivate", privateAccount)
+                        .set("visibilityEventPendingAt", pendingAt)
+                        .set("updatedAt", Instant.now()),
+                Video.class);
+
+        // Read after the write, so a video inserted in between is evicted too — harmless — rather
+        // than missed.
+        Query owned = Query.query(where("userId").is(userId).and("deletedAt").is(null));
+        owned.fields().include("_id");
+        return mongoTemplate.find(owned, Video.class).stream().map(Video::getId).toList();
+    }
+
+    @Override
+    public void updateOwnerPrivacy(Video video) {
+        update(video.getId(), new Update()
+                .set("ownerPrivate", video.isOwnerPrivate())
+                .set("visibilityEventPendingAt", video.getVisibilityEventPendingAt()));
+    }
+
+    @Override
     public void updateCommentsDisabled(Video video) {
         update(video.getId(), new Update().set("commentsDisabled", video.isCommentsDisabled()));
     }
 
     /**
-     * The status the caller read is part of the filter, so a write only lands if nothing else
+     * The state the caller read is part of the filter, so a write only lands if nothing else
      * moved the video in between. Both callers are Kafka consumers on different topics, running
      * on different listener threads: a transcode result that takes minutes to arrive is routinely
      * overtaken by a moderator, and without this filter the later write wins by arriving last
      * rather than by being correct — a takedown silently replaced by PUBLISHED.
      *
-     * <p>The filter is on status rather than on {@code @Version} on purpose. Spring Data does bump
-     * the version on these field-scoped updates, so a version filter would also fail whenever a
-     * like landed concurrently — the exact competition {@link VideoRepositoryCustom} was shaped to
-     * remove. Status is the field being contended; a like moving likeCount is not a conflict.
+     * <p>The filter is on the pipeline fields rather than on {@code @Version} on purpose. Spring
+     * Data does bump the version on these field-scoped updates, so a version filter would also
+     * fail whenever a like landed concurrently — the exact competition {@link VideoRepositoryCustom}
+     * was shaped to remove. The pipeline fields are what is being contended; a like moving
+     * likeCount is not a conflict.
      *
-     * @return false when nothing matched, meaning the status changed underneath: the caller must
+     * @return false when nothing matched, meaning the state changed underneath: the caller must
      *         re-read and re-apply against the new state, never simply write again
      */
-    private boolean compareAndSet(String videoId, VideoStatus expectedStatus, Update update) {
+    private boolean compareAndSet(String videoId, PipelineState expected, Update update) {
         // deletedAt belongs in the filter alongside status. VideoStateUpdater checks it when it
         // reads, but a delete landing between that read and this write would still match on
         // _id and status alone, producing the deleted-and-PUBLISHED document that class says it
         // prevents. Transcoding runs for minutes, so the gap is not a theoretical one. Failing
         // here is harmless: a false return sends the caller back to re-read, and the re-read
         // finds the video deleted and stops.
-        Query query = Query.query(
-                where("_id").is(videoId).and("status").is(expectedStatus).and("deletedAt").is(null));
+        Criteria moderation = where("_id").is(videoId)
+                .and("status").is(expected.status())
+                .and("statusBeforeTakedown").is(expected.statusBeforeTakedown())
+                .and("deletedAt").is(null)
+                .and("moderation");
+        Query query = Query.query(expected.moderated() ? moderation.ne(null) : moderation.is(null));
         return write(query, update) > 0;
     }
 

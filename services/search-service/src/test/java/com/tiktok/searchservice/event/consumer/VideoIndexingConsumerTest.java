@@ -1,16 +1,21 @@
 package com.tiktok.searchservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
+import com.tiktok.event.admin.UserBannedEvent;
+import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
+import com.tiktok.event.user.AccountState;
+import com.tiktok.event.user.AccountStateChangedEvent;
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoTranscodedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
+import com.tiktok.searchservice.document.OwnerBanDocument;
 import com.tiktok.searchservice.document.ProcessedEventDocument;
 import com.tiktok.searchservice.document.VideoDocument;
 import com.tiktok.searchservice.service.SearchService;
@@ -21,6 +26,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.query.Query;
+import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.elasticsearch.ElasticsearchContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -32,17 +38,19 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
 @Testcontainers
+@ActiveProfiles("test")
 class VideoIndexingConsumerTest {
 
     @Container
     @ServiceConnection
     static ElasticsearchContainer ELASTICSEARCH = new ElasticsearchContainer(
-            DockerImageName.parse("docker.elastic.co/elasticsearch/elasticsearch:8.14.0"))
+            DockerImageName.parse("docker.elastic.co/elasticsearch/elasticsearch:9.4.5"))
             .withEnv("xpack.security.enabled", "false");
 
     @Autowired
@@ -61,6 +69,9 @@ class VideoIndexingConsumerTest {
     private AdminModerationEventConsumer adminModerationEventConsumer;
 
     @Autowired
+    private AccountStateEventConsumer accountStateEventConsumer;
+
+    @Autowired
     private ElasticsearchOperations elasticsearchOperations;
 
     @Autowired
@@ -73,6 +84,7 @@ class VideoIndexingConsumerTest {
     void cleanUp() {
         deleteAll(VideoDocument.class);
         deleteAll(ProcessedEventDocument.class);
+        deleteAll(OwnerBanDocument.class);
     }
 
     @Test
@@ -207,6 +219,71 @@ class VideoIndexingConsumerTest {
         assertThat(document.getThumbnailUrl()).isEqualTo("http://minio/thumb.jpg");
     }
 
+    /**
+     * The verdict read before its transcode result. The late transcode used to write
+     * PENDING_MODERATION over the PUBLISHED the verdict had set, and nothing came after it to put
+     * the video back into search. Held until the transcode lands, the verdict is applied then —
+     * and not before, since a video with no media is not playable.
+     */
+    @Test
+    void onMessage_verdictBeforeTranscode_publishesWhenTheTranscodeLands() throws Exception {
+        publish("v30", "verdict first", null, List.of());
+        moderate("v30", ModerationVerdict.APPROVED);
+
+        assertThat(video("v30").orElseThrow().getStatus()).isEqualTo("PROCESSING");
+
+        transcode(VideoTranscodedEvent.success("v30", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+
+        VideoDocument document = video("v30").orElseThrow();
+        assertThat(document.getStatus()).isEqualTo("PUBLISHED");
+        assertThat(document.getThumbnailUrl()).isEqualTo("http://minio/t.jpg");
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("verdict", null, PageRequest.of(0, 10)))
+                .extracting(response -> response.id())
+                .containsExactly("v30");
+    }
+
+    /** The same, with both outcomes ahead of the publication: all three orders end the same. */
+    @Test
+    void onMessage_verdictThenTranscodeThenPublication_endsPublished() throws Exception {
+        moderate("v31", ModerationVerdict.REJECTED);
+        transcode(VideoTranscodedEvent.success("v31", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        assertThat(video("v31").orElseThrow().getStatus()).isNull();
+
+        publish("v31", "all out of order", null, List.of());
+
+        assertThat(video("v31").orElseThrow().getStatus()).isEqualTo("REJECTED");
+    }
+
+    /**
+     * media-worker's retried publish sends a verdict again under a fresh eventId, which the inbox
+     * cannot recognise. Applied again after an admin approved the video, it put the video back
+     * under review.
+     */
+    @Test
+    void onMessage_secondVerdictAfterAnApproval_changesNothing() throws Exception {
+        publish("v32", "approved by hand", null, List.of());
+        transcode(VideoTranscodedEvent.success("v32", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v32", ModerationVerdict.REVIEW);
+        restore("v32");
+
+        moderate("v32", ModerationVerdict.REVIEW);
+
+        assertThat(video("v32").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /** A failure from an earlier attempt, read after the success, does not undo it. */
+    @Test
+    void onMessage_staleFailureAfterSuccess_changesNothing() throws Exception {
+        publish("v33", "failed once", null, List.of());
+        transcode(VideoTranscodedEvent.success("v33", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v33", ModerationVerdict.APPROVED);
+
+        transcode(VideoTranscodedEvent.failure("v33", "first attempt"));
+
+        assertThat(video("v33").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
     /** A publication landing after a transcode must not roll the status back to PROCESSING. */
     @Test
     void onMessage_publicationReplay_doesNotOverwriteTranscodedStatus() throws Exception {
@@ -298,6 +375,150 @@ class VideoIndexingConsumerTest {
     }
 
     /**
+     * An admin approving a video the classifier sent to review. The restore used to put back
+     * pendingStatus, which was still PENDING_REVIEW, so video-service published the video and
+     * search kept it hidden for good.
+     */
+    @Test
+    void onMessage_restoreOfAHeldVideo_publishesIt() throws Exception {
+        publish("v20", "held for review", null, List.of());
+        transcode(VideoTranscodedEvent.success("v20", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v20", ModerationVerdict.REVIEW);
+        assertThat(video("v20").orElseThrow().getStatus()).isEqualTo("PENDING_REVIEW");
+
+        restore("v20");
+
+        assertThat(video("v20").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        assertThat(searchService.searchVideos("held", null, PageRequest.of(0, 10)))
+                .extracting(response -> response.id())
+                .containsExactly("v20");
+    }
+
+    /** Overturning the classifier's own removal is the same approval. */
+    @Test
+    void onMessage_restoreOfARejectedVideo_publishesIt() throws Exception {
+        publish("v21", "wrongly rejected", null, List.of());
+        transcode(VideoTranscodedEvent.success("v21", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v21", ModerationVerdict.REJECTED);
+
+        restore("v21");
+
+        assertThat(video("v21").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /**
+     * A video taken down while it waited for review goes back to waiting, the same as in
+     * video-service, and only a second restore (the approval) publishes it. After that, a takedown
+     * and its restore return it to PUBLISHED, because the approval moved pendingStatus too.
+     */
+    @Test
+    void onMessage_heldVideoTakenDownThenRestored_goesBackToReview() throws Exception {
+        publish("v22", "held then down", null, List.of());
+        transcode(VideoTranscodedEvent.success("v22", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate("v22", ModerationVerdict.REVIEW);
+
+        takeDown("v22");
+        restore("v22");
+        assertThat(video("v22").orElseThrow().getStatus()).isEqualTo("PENDING_REVIEW");
+
+        restore("v22");
+        assertThat(video("v22").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+
+        takeDown("v22");
+        restore("v22");
+        assertThat(video("v22").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /** Nothing to approve before a verdict: the pipeline is still the one moving the status. */
+    @Test
+    void onMessage_restoreOfAVideoStillInThePipeline_changesNothing() throws Exception {
+        publish("v23", "still moderating", null, List.of());
+        transcode(VideoTranscodedEvent.success("v23", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+
+        restore("v23");
+
+        assertThat(video("v23").orElseThrow().getStatus()).isEqualTo("PENDING_MODERATION");
+    }
+
+    /**
+     * Taken down before the pipeline recorded anything, the restore had no pendingStatus to put
+     * back and fell back to PUBLISHED: searchable while still transcoding, never screened.
+     */
+    @Test
+    void onMessage_takedownDuringTheTranscode_restoresToProcessing() throws Exception {
+        publish("v24", "down while transcoding", null, List.of());
+        takeDown("v24");
+        restore("v24");
+
+        assertThat(video("v24").orElseThrow().getStatus()).isEqualTo("PROCESSING");
+
+        transcode(VideoTranscodedEvent.success("v24", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        assertThat(video("v24").orElseThrow().getStatus()).isEqualTo("PENDING_MODERATION");
+
+        moderate("v24", ModerationVerdict.APPROVED);
+        assertThat(video("v24").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /**
+     * The approval read before the verdict it overruled — this consumer lagging on the moderation
+     * topic, restarting, or waiting out an outage. The restore found no verdict and did nothing,
+     * and the REVIEW that landed afterwards held the video for good: published in video-service,
+     * never in search.
+     */
+    @Test
+    void onMessage_approvalReadBeforeItsHeldVerdict_stillPublishes() throws Exception {
+        publish("v26", "approved while search lagged", null, List.of());
+        transcode(VideoTranscodedEvent.success("v26", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        Instant verdictAt = Instant.now();
+
+        restore("v26", verdictAt.plusSeconds(30));
+        moderate("v26", ModerationVerdict.REVIEW, verdictAt);
+
+        assertThat(video("v26").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /** One step further behind: the transcode result is still to come too, and applies the approval. */
+    @Test
+    void onMessage_approvalReadBeforeTheTranscodeAndTheVerdict_publishesWhenBothLand() throws Exception {
+        publish("v27", "approved before the pipeline caught up", null, List.of());
+        Instant verdictAt = Instant.now();
+
+        restore("v27", verdictAt.plusSeconds(30));
+        transcode(VideoTranscodedEvent.success("v27", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        assertThat(video("v27").orElseThrow().getStatus()).isEqualTo("PENDING_MODERATION");
+        moderate("v27", ModerationVerdict.REJECTED, verdictAt);
+
+        assertThat(video("v27").orElseThrow().getStatus()).isEqualTo("PUBLISHED");
+    }
+
+    /**
+     * A restore from before the verdict existed approved nothing — video-service ignores it too —
+     * so the verdict that follows still decides.
+     */
+    @Test
+    void onMessage_restoreFromBeforeTheVerdictExisted_letsTheVerdictDecide() throws Exception {
+        publish("v28", "restored too early", null, List.of());
+        transcode(VideoTranscodedEvent.success("v28", "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        Instant restoredAt = Instant.now();
+
+        restore("v28", restoredAt);
+        moderate("v28", ModerationVerdict.REVIEW, restoredAt.plusSeconds(30));
+
+        assertThat(video("v28").orElseThrow().getStatus()).isEqualTo("PENDING_REVIEW");
+    }
+
+    /** A restore nobody took down for leaves a video still in the pipeline where it is. */
+    @Test
+    void onMessage_restoreWithoutATakedown_ofAVideoStillProcessing_changesNothing() throws Exception {
+        publish("v25", "never down", null, List.of());
+
+        restore("v25");
+
+        assertThat(video("v25").orElseThrow().getStatus()).isEqualTo("PROCESSING");
+    }
+
+    /**
      * A private video is PUBLISHED like any other — moderation is what sets that, and it does not
      * look at visibility. Search is a read path of its own, with no viewer identity and no call
      * into video-service, so filtering on status alone handed the title, description and thumbnail
@@ -342,6 +563,118 @@ class VideoIndexingConsumerTest {
         assertThat(searchService.searchVideos("beach", null, PageRequest.of(0, 10))).isEmpty();
     }
 
+    /**
+     * A ban used to stop at auth-service, and a banned account's videos stayed searchable — title,
+     * description and thumbnail. They leave the results while the ban is in force.
+     */
+    @Test
+    void searchVideos_leavesOutABannedOwnersVideos_untilTheUnban() throws Exception {
+        publishApprovedBy(7L, "b1", "banned dance");
+        publishApprovedBy(8L, "b2", "other dance");
+
+        ban(7L, null, Instant.now());
+        assertThat(searched("dance")).containsExactly("b2");
+
+        unban(7L, Instant.now());
+        assertThat(searched("dance")).containsExactlyInAnyOrder("b1", "b2");
+    }
+
+    /** Nothing announces the end of a temporary ban — auth-service lifts it quietly — so it ends here by itself. */
+    @Test
+    void searchVideos_keepsTheVideosOfABanThatHasRunOut() throws Exception {
+        publishApprovedBy(7L, "b3", "lapsed ban");
+
+        ban(7L, Instant.now().minusSeconds(60), Instant.now().minusSeconds(3600));
+
+        assertThat(searched("lapsed")).containsExactly("b3");
+    }
+
+    /** An older decision delivered late — a replay off the DLT — does not undo a newer one. */
+    @Test
+    void anOlderUnbanAfterANewerBan_keepsTheBan() throws Exception {
+        publishApprovedBy(7L, "b4", "still banned");
+        Instant now = Instant.now();
+
+        ban(7L, null, now);
+        unban(7L, now.minusSeconds(60));
+
+        assertThat(searched("still")).isEmpty();
+    }
+
+    @Test
+    void searchVideos_leavesOutAClosedAccountsVideos_untilItReopens() throws Exception {
+        publishApprovedBy(7L, "c1", "closed dance");
+        publishApprovedBy(8L, "c2", "other dance");
+        Instant now = Instant.now();
+
+        closure(7L, AccountState.DEACTIVATED, now);
+        assertThat(searched("dance")).containsExactly("c2");
+
+        closure(7L, AccountState.ACTIVE, now.plusSeconds(1));
+        assertThat(searched("dance")).containsExactlyInAnyOrder("c1", "c2");
+    }
+
+    /** Two decisions on one document, neither of which lifts the other. */
+    @Test
+    void anUnbanLeavesAClosedAccountHidden_andAReopeningLeavesABan() throws Exception {
+        publishApprovedBy(7L, "c3", "independent");
+        Instant now = Instant.now();
+
+        closure(7L, AccountState.DEACTIVATED, now);
+        ban(7L, null, now.plusSeconds(1));
+        unban(7L, now.plusSeconds(2));
+        assertThat(searched("independent")).isEmpty();
+
+        ban(7L, null, now.plusSeconds(3));
+        closure(7L, AccountState.ACTIVE, now.plusSeconds(4));
+        assertThat(searched("independent")).isEmpty();
+
+        unban(7L, now.plusSeconds(5));
+        assertThat(searched("independent")).containsExactly("c3");
+    }
+
+    @Test
+    void anOlderReopeningArrivingLate_keepsTheAccountClosed() throws Exception {
+        publishApprovedBy(7L, "c4", "late reopen");
+        Instant now = Instant.now();
+
+        closure(7L, AccountState.DEACTIVATED, now);
+        closure(7L, AccountState.ACTIVE, now.minusSeconds(60));
+
+        assertThat(searched("late")).isEmpty();
+    }
+
+    private void closure(long userId, AccountState state, Instant at) throws Exception {
+        AccountStateChangedEvent event = new AccountStateChangedEvent(UUID.randomUUID().toString(), at, userId, state, null);
+        accountStateEventConsumer.onMessage(objectMapper.writeValueAsString(event));
+    }
+
+    private void publishApprovedBy(long ownerId, String videoId, String title) throws Exception {
+        VideoPublishedEvent event = VideoPublishedEvent.of(
+                videoId, ownerId, title, null, "s3://raw/" + videoId + ".mp4", "PUBLIC", List.of());
+        videoEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
+        transcode(VideoTranscodedEvent.success(videoId, "http://minio/t.jpg", null, "http://minio/m.m3u8", 4));
+        moderate(videoId, ModerationVerdict.APPROVED);
+    }
+
+    private void ban(long userId, Instant until, Instant at) throws Exception {
+        UserBannedEvent event = new UserBannedEvent(UUID.randomUUID().toString(), at, userId, 99L, "spam", until);
+        adminModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("UserBannedEvent"));
+    }
+
+    private void unban(long userId, Instant at) throws Exception {
+        UserUnbannedEvent event = new UserUnbannedEvent(UUID.randomUUID().toString(), at, userId, 99L, "appeal");
+        adminModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("UserUnbannedEvent"));
+    }
+
+    private List<String> searched(String query) {
+        elasticsearchOperations.indexOps(VideoDocument.class).refresh();
+        elasticsearchOperations.indexOps(OwnerBanDocument.class).refresh();
+        return searchService.searchVideos(query, null, PageRequest.of(0, 10)).stream()
+                .map(response -> response.id())
+                .toList();
+    }
+
     private void publish(String videoId, String title, String description, List<String> tags) throws Exception {
         publish(videoId, title, description, "PUBLIC", tags);
     }
@@ -358,9 +691,28 @@ class VideoIndexingConsumerTest {
     }
 
     private void moderate(String videoId, ModerationVerdict verdict) throws Exception {
-        VideoModerationCompletedEvent event = VideoModerationCompletedEvent.of(
+        moderate(videoId, verdict, Instant.now());
+    }
+
+    private void moderate(String videoId, ModerationVerdict verdict, Instant at) throws Exception {
+        VideoModerationCompletedEvent event = new VideoModerationCompletedEvent(UUID.randomUUID().toString(), at,
                 videoId, verdict, "nsfw", 0.1, 0, 10, 900L, "model", "v1", null);
         videoModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event));
+    }
+
+    private void takeDown(String videoId) throws Exception {
+        adminModerationEventConsumer.onMessage(
+                objectMapper.writeValueAsString(VideoTakenDownEvent.of(videoId, 99L, "spam")),
+                header("VideoTakenDownEvent"));
+    }
+
+    private void restore(String videoId) throws Exception {
+        restore(videoId, Instant.now());
+    }
+
+    private void restore(String videoId, Instant at) throws Exception {
+        VideoRestoredEvent event = new VideoRestoredEvent(UUID.randomUUID().toString(), at, videoId, 99L, "approved");
+        adminModerationEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("VideoRestoredEvent"));
     }
 
     private void comment(String eventType, Object event) throws Exception {

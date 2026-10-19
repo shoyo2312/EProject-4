@@ -4,6 +4,7 @@ import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
 import com.tiktok.userservice.entity.UserProfile;
+import com.tiktok.userservice.exception.DisplayNameChangeTooSoonException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.mapper.UserProfileMapper;
@@ -17,6 +18,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -32,6 +34,12 @@ public class UserProfileServiceImpl implements UserProfileService {
     /** Matches avatar_url in V1__create_user_profiles_table.sql. */
     private static final int MAX_AVATAR_URL_LENGTH = 500;
 
+    /** A trigram is three characters; below that the V8 indexes cannot narrow anything. */
+    static final int MIN_ID_SEARCH_LENGTH = 3;
+
+    /** display_name (V1) and username (V8) are both VARCHAR(100). */
+    static final int MAX_NAME_LENGTH = 100;
+
     private final UserProfileRepository userProfileRepository;
     private final UserBlockRepository userBlockRepository;
     private final UserProfileMapper userProfileMapper;
@@ -43,8 +51,9 @@ public class UserProfileServiceImpl implements UserProfileService {
         profileVisibilityGuard.requireVisible(viewerId, userId);
 
         UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .filter(found -> !found.isDeactivated())
                 .orElseThrow(() -> new UserProfileNotFoundException(userId));
-        return userProfileMapper.toResponse(profile);
+        return toResponseFor(viewerId, profile);
     }
 
     @Override
@@ -56,11 +65,21 @@ public class UserProfileServiceImpl implements UserProfileService {
 
         UserProfile profile = userProfileRepository
                 .findFirstByUsernameIgnoreCaseAndDeletedAtIsNull(username.strip())
+                // A closed account answers like a missing one, as a block does: a distinct answer
+                // would confirm it exists. Its owner cannot be signed in, so nobody is exempt.
+                .filter(found -> !found.isDeactivated())
                 .orElseThrow(() -> new UserProfileNotFoundException(username));
 
         // After the lookup, not before: the guard needs the id the handle resolved to.
         profileVisibilityGuard.requireVisible(viewerId, profile.getUserId());
-        return userProfileMapper.toResponse(profile);
+        return toResponseFor(viewerId, profile);
+    }
+
+    /** The owner's own profile also says when their name may next change; nobody else's does. */
+    private UserProfileResponse toResponseFor(Long viewerId, UserProfile profile) {
+        return profile.getUserId().equals(viewerId)
+                ? userProfileMapper.toOwnResponse(profile)
+                : userProfileMapper.toResponse(profile);
     }
 
     @Override
@@ -77,14 +96,39 @@ public class UserProfileServiceImpl implements UserProfileService {
             return List.of();
         }
 
-        Set<Long> hidden = Set.copyOf(userBlockRepository.findBlockedIdsAmong(viewerId, wanted));
-        Map<Long, UserProfile> byUserId = userProfileRepository.findByUserIdInAndDeletedAtIsNull(wanted).stream()
+        // A guest has no blocks, so there is nothing to ask.
+        Set<Long> hidden = viewerId == null
+                ? Set.of()
+                : Set.copyOf(userBlockRepository.findBlockedIdsAmong(viewerId, wanted));
+        Map<Long, UserProfile> byUserId = userProfileRepository
+                .findByUserIdInAndDeletedAtIsNullAndDeactivatedAtIsNull(wanted).stream()
                 .collect(Collectors.toMap(UserProfile::getUserId, Function.identity()));
 
         // Answered in the order asked, so a caller rendering positionally rather than by map
         // lookup is not silently reordered by whatever order Postgres returned the rows in.
         return wanted.stream()
                 .filter(id -> !hidden.contains(id))
+                .map(byUserId::get)
+                .filter(Objects::nonNull)
+                .map(userProfileMapper::toResponse)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UserProfileResponse> getByUserIdsForAdmin(List<Long> userIds) {
+        if (userIds.size() > MAX_BATCH_IDS) {
+            throw new TooManyProfileIdsException(MAX_BATCH_IDS);
+        }
+
+        List<Long> wanted = userIds.stream().distinct().toList();
+        if (wanted.isEmpty()) {
+            return List.of();
+        }
+
+        Map<Long, UserProfile> byUserId = userProfileRepository.findByUserIdInAndDeletedAtIsNull(wanted).stream()
+                .collect(Collectors.toMap(UserProfile::getUserId, Function.identity()));
+        return wanted.stream()
                 .map(byUserId::get)
                 .filter(Objects::nonNull)
                 .map(userProfileMapper::toResponse)
@@ -124,8 +168,29 @@ public class UserProfileServiceImpl implements UserProfileService {
         // Blocks are excluded by the query, so the page comes back full and its total is a number
         // the caller can actually page to. Filtering the page here instead handed out short pages
         // under a total that counted rows this viewer is never shown.
-        return userProfileRepository.search(viewerId, query.strip(), unsorted)
+        return userProfileRepository.search(viewerId, escapeLike(query.strip()), unsorted)
                 .map(userProfileMapper::toResponse);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<Long> searchIds(String query, int limit) {
+        if (query == null) {
+            return List.of();
+        }
+        String term = query.strip();
+        // The trigram indexes (V8) cannot serve a term under three letters, so it scanned and
+        // sorted every profile — once per anonymous video search. Past the name columns' width
+        // nothing can contain it.
+        if (term.length() < MIN_ID_SEARCH_LENGTH || term.length() > MAX_NAME_LENGTH) {
+            return List.of();
+        }
+        return userProfileRepository.searchIds(escapeLike(term), PageRequest.of(0, limit));
+    }
+
+    /** The query is text to find, not a pattern: {@code _} and {@code %} match themselves. */
+    private static String escapeLike(String query) {
+        return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     @Override
@@ -134,9 +199,23 @@ public class UserProfileServiceImpl implements UserProfileService {
         UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
                 .orElseThrow(() -> new UserProfileNotFoundException(userId));
 
-        profile.updateProfile(request.displayName(), request.bio(), request.avatarUrl());
+        // Only a different name is a change, and whitespace around it is no difference: the current
+        // name sent back — by a client posting the whole form, or trimming a name stored with a
+        // stray space — neither spends the allowance nor trips over it. A new name is stored
+        // stripped.
+        String displayName = request.displayName() == null ? null : request.displayName().strip();
+        if (displayName != null && !displayName.equals(profile.getDisplayName().strip())) {
+            Instant now = Instant.now();
+            Instant changeableAt = DisplayNameCooldown.changeableAt(profile.getDisplayNameChangedAt(), now);
+            if (changeableAt != null) {
+                throw new DisplayNameChangeTooSoonException(changeableAt);
+            }
+            profile.changeDisplayName(displayName, now);
+        }
 
-        return userProfileMapper.toResponse(profile);
+        profile.updateProfile(request.bio(), request.avatarUrl());
+
+        return userProfileMapper.toOwnResponse(profile);
     }
 
     @Override
@@ -154,8 +233,8 @@ public class UserProfileServiceImpl implements UserProfileService {
                             .formatted(avatarUrl.length(), MAX_AVATAR_URL_LENGTH));
         }
 
-        profile.updateProfile(null, null, avatarUrl);
-        return userProfileMapper.toResponse(profile);
+        profile.updateProfile(null, avatarUrl);
+        return userProfileMapper.toOwnResponse(profile);
     }
 
     @Override
@@ -164,6 +243,8 @@ public class UserProfileServiceImpl implements UserProfileService {
         if (userProfileRepository.existsByUserIdAndDeletedAtIsNull(userId)) {
             return;
         }
+
+        userProfileRepository.releaseUsername(username, userId);
 
         UserProfile profile = UserProfile.builder()
                 .userId(userId)
@@ -177,13 +258,41 @@ public class UserProfileServiceImpl implements UserProfileService {
 
     @Override
     @Transactional
+    public void applyUsernameChange(Long userId, String username) {
+        // Before the read, not after: the release clears the persistence context, so a profile
+        // loaded first would be detached and the rename below silently dropped.
+        userProfileRepository.releaseUsername(username, userId);
+
+        // A missing profile is a rename that overtook the registration creating it — the two
+        // travel on different topics. Thrown, which rolls the release back with it, so the
+        // delivery is retried: kafka-lib tries three more times a second apart, enough for the
+        // usual gap, then parks the event on auth.username-events.DLT, where the profile keeps the
+        // old handle until the event is replayed. Written off here instead, the registration
+        // landing afterwards would carry the old handle and nothing would ever correct it.
+        UserProfile profile = userProfileRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .orElseThrow(() -> new UserProfileNotFoundException(userId));
+
+        profile.changeUsername(username);
+    }
+
+    @Override
+    @Transactional
     public void applyMirroredAvatar(Long userId, String sourceUrl, String avatarUrl) {
+        // A copy that overtook the registration creating its profile — the two travel on different
+        // topics. Thrown so the delivery is retried, as in applyUsernameChange. Written off, it left
+        // every new social account on the provider's URL until its owner happened to sign in again,
+        // and a Facebook URL stops resolving within days. Checked before the update rather than
+        // after a miss: a profile committed between the two would pass for one whose owner chose a
+        // picture, and the copy would be dropped after all.
+        if (!userProfileRepository.existsByUserIdAndDeletedAtIsNull(userId)) {
+            throw new UserProfileNotFoundException(userId);
+        }
+
         int updated = userProfileRepository.replaceProviderAvatar(userId, sourceUrl, avatarUrl);
 
         if (updated == 0) {
             // Not an error, and the common case once an account has been around: the user picked
-            // their own picture, or the profile does not exist yet because this raced the
-            // registration that creates it. The next sign-in announces the same avatar again.
+            // their own picture.
             log.debug("Left the avatar of user {} alone; it is not the provider's to replace", userId);
         }
     }

@@ -31,6 +31,12 @@ spring:
     consumer:
       group-id: analytics-service
       auto-offset-reset: earliest
+      # Let a poll fill up before it returns. Each poll the busy listeners get is one INSERT and so
+      # one ClickHouse part (KafkaBatchConfig), and by default a poll returns the moment one record
+      # is there — at moderate traffic still a part for every record or two. Up to a second late
+      # is nothing to a dashboard or a training run.
+      fetch-min-size: 64KB
+      fetch-max-wait: 1s
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 

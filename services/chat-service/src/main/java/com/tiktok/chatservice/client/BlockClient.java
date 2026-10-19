@@ -3,6 +3,7 @@ package com.tiktok.chatservice.client;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.tiktok.chatservice.exception.BlockCheckUnavailableException;
 import com.tiktok.chatservice.exception.MessagingBlockedException;
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.common.response.ApiResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -18,8 +19,9 @@ import org.springframework.web.client.RestClientException;
  * <p>Fails closed. The point of a block is that it cannot be walked around, and an outage of
  * user-service is not a reason for it to stop applying; messaging pauses instead.
  *
- * <p>The internal endpoint takes no token because the check runs for WebSocket frames too, where
- * there is no Authorization header to forward. Timeouts come from {@code RestClientConfig}.
+ * <p>The internal endpoint takes no user token — only the internal API token — because the check
+ * runs for WebSocket frames too, where there is no Authorization header to forward. Timeouts come
+ * from {@code RestClientConfig}.
  */
 @Component
 public class BlockClient {
@@ -31,8 +33,10 @@ public class BlockClient {
     private final RestClient restClient;
 
     public BlockClient(RestClient.Builder builder,
-                       @Value("${downstream.user-service-uri}") String userServiceUri) {
-        this.restClient = builder.baseUrl(userServiceUri).build();
+                       @Value("${downstream.user-service-uri}") String userServiceUri,
+                       InternalApiToken internalApiToken) {
+        this.restClient = builder.baseUrl(userServiceUri)
+                .defaultHeader(InternalApiToken.HEADER, internalApiToken.value()).build();
     }
 
     public void requireNotBlocked(Long userA, Long userB) {

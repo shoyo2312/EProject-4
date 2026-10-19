@@ -5,9 +5,11 @@ spring:
   application:
     name: chat-service
 
+  mongodb:
+    uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:password}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/chat_db?authSource=admin
+
   data:
     mongodb:
-      uri: mongodb://${MONGO_USERNAME:root}:${MONGO_PASSWORD:password}@${MONGO_HOST:localhost}:${MONGO_PORT:27017}/chat_db?authSource=admin
       # Off by default since Spring Data Mongo 3.x. Without it the unique
       # participant_key_idx was never created, which is the whole mechanism
       # ConversationServiceImpl.createConversation relies on to converge two
@@ -24,11 +26,12 @@ spring:
 
   task:
     scheduling:
-      # One thread per @Scheduled component that can block on a downstream read (the two
-      # flushers) plus the session sweep. On the default pool of one they take turns, and a slow
-      # interaction-service stalls the profile stats as well as the video counters.
+      # One thread per @Scheduled method: the two counter flushers, which can block on a
+      # downstream read, the session sweep and AdminFanout's flush. On the default pool of one they
+      # take turns, and a slow interaction-service stalls the profile stats, the video counters and
+      # the admin consoles' refresh along with it.
       pool:
-        size: 3
+        size: 4
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}

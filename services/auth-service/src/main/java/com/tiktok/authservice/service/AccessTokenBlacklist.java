@@ -75,12 +75,8 @@ public class AccessTokenBlacklist {
      */
     public boolean isBlacklisted(Claims claims) {
         try {
-            String jti = RevocationKeys.jtiOf(claims);
-            if (jti != null && Boolean.TRUE.equals(redisTemplate.hasKey(RevocationKeys.forJti(jti)))) {
-                return true;
-            }
-            String cutoff = redisTemplate.opsForValue().get(RevocationKeys.forUser(claims.getSubject()));
-            return RevocationKeys.isIssuedBefore(claims, cutoff);
+            return RevocationKeys.isRevoked(claims,
+                    redisTemplate.opsForValue().multiGet(RevocationKeys.keysOf(claims)));
         } catch (RuntimeException e) {
             log.warn("Redis unavailable for blacklist check, failing open", e);
             return false;

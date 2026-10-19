@@ -11,4 +11,10 @@ public interface MessageService {
     MessagePageResponse listMessages(String conversationId, Long currentUserId, String cursor, int size);
 
     void markRead(String conversationId, Long currentUserId);
+
+    /**
+     * {@link #listMessages} without the participant check, for user-service's "Download your data"
+     * job — it asks on behalf of a participant, through the internal prefix, with no token.
+     */
+    MessagePageResponse exportMessages(String conversationId, String cursor, int size);
 }

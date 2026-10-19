@@ -6,6 +6,7 @@ import com.tiktok.analyticsservice.dto.response.DailySignupResponse;
 import com.tiktok.analyticsservice.dto.response.TopVideoResponse;
 import com.tiktok.analyticsservice.dto.response.VideoEngagementSummaryResponse;
 
+import java.time.Instant;
 import java.util.List;
 
 public interface AnalyticsService {
@@ -18,5 +19,6 @@ public interface AnalyticsService {
 
     List<DailyActiveUsersResponse> getDailyActiveUsers(int days);
 
-    List<TopVideoResponse> getTopVideos(int days, int limit);
+    /** The {@code days} before {@code until}, end exclusive; before now when {@code until} is null. */
+    List<TopVideoResponse> getTopVideos(int days, int limit, Instant until);
 }

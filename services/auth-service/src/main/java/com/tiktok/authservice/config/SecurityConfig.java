@@ -25,13 +25,21 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST,
                                 "/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/login/otp",
+                                "/api/v1/auth/register/start", "/api/v1/auth/register/verify",
+                                "/api/v1/auth/register/complete",
                                 "/api/v1/auth/refresh", "/api/v1/auth/logout",
                                 "/api/v1/auth/verify-email", "/api/v1/auth/resend-verification",
                                 "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
+                                "/api/v1/auth/reset-password/verify", "/api/v1/auth/reset-password/complete",
                                 // Sign-in endpoints: requiring a session to start one is circular.
                                 "/api/v1/auth/oauth/google", "/api/v1/auth/oauth/facebook",
                                 "/api/v1/auth/oauth/google/link", "/api/v1/auth/oauth/facebook/link").permitAll()
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        // A container probe and a Prometheus scrape carry no JWT. The same set
+                        // security-lib opens for the other services; the gateway routes /api/v1/**
+                        // only, so this is the internal network's to reach.
+                        .requestMatchers("/actuator/health", "/actuator/health/**",
+                                "/actuator/info", "/actuator/prometheus").permitAll()
                         // The admin console's user directory — the whole platform's accounts,
                         // not the caller's own, so authenticated is not enough.
                         .requestMatchers("/api/v1/auth/admin/**").hasRole("ADMIN")

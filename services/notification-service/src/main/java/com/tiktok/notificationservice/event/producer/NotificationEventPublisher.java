@@ -1,6 +1,6 @@
 package com.tiktok.notificationservice.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.notification.NotificationCreatedEvent;
 import com.tiktok.notificationservice.entity.Notification;
 import lombok.RequiredArgsConstructor;

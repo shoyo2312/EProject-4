@@ -1,7 +1,6 @@
 package com.tiktok.recommendationservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
@@ -32,7 +31,7 @@ class AdminModerationEventConsumerTest {
     @Mock
     private InboxService inboxService;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private AdminModerationEventConsumer consumer() {
         return new AdminModerationEventConsumer(recommendationService, inboxService, objectMapper);
@@ -66,7 +65,7 @@ class AdminModerationEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoRestoredEvent"));
 
-        verify(recommendationService).recordRestored("vid1");
+        verify(recommendationService).recordRestored("vid1", event.occurredAt());
     }
 
     /** A shared topic: other services' events, and header-less ones, are not ours to guess at. */

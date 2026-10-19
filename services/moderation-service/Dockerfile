@@ -15,10 +15,26 @@ RUN pip install --no-cache-dir -r requirements.txt
 ARG MODERATION_MODEL=Falconsai/nsfw_image_detection
 RUN python -c "from transformers import pipeline; pipeline('image-classification', model='${MODERATION_MODEL}')"
 
+# The text classifier, the same way. A commit rather than a branch, the weights checked against
+# their SHA-256, and only the files that hold no code (see text_classifier.FILES). The test load is
+# the point of the last line: a checkpoint whose shape is not what text_classifier.py expects fails
+# here, at build, instead of on the first comment. An empty TEXT_MODERATION_MODEL builds an image
+# without it, and /moderate/text then answers 503 — the callers fall back to their word rules.
+ARG TEXT_MODERATION_MODEL=visolex/phobert-v2-hsd
+ARG TEXT_MODERATION_MODEL_REVISION=221aca47de6568d519eba61a94d7fdae3ca680ae
+ARG TEXT_MODERATION_MODEL_SHA256=72c9e731290e13995f143370b82d9076b2c6f6d41b0c099abc32d91aa0e10bf7
+COPY text_verdict.py text_classifier.py ./
+RUN if [ -n "$TEXT_MODERATION_MODEL" ]; then python -c "import os, text_classifier as t; \
+t.TextScorer(t.download(os.environ['TEXT_MODERATION_MODEL'], os.environ['TEXT_MODERATION_MODEL_REVISION'], \
+os.environ['TEXT_MODERATION_MODEL_SHA256']), 1)"; fi
+
 # Nothing may reach out at runtime: with the cache already populated this turns a would-be
-# network call into an immediate error instead of a hang inside a request.
+# network call into an immediate error instead of a hang inside a request. The text model's name
+# and commit are carried into the runtime defaults, so the service reads what the build fetched.
 ENV HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1
+    TRANSFORMERS_OFFLINE=1 \
+    TEXT_MODERATION_MODEL=${TEXT_MODERATION_MODEL} \
+    TEXT_MODERATION_MODEL_REVISION=${TEXT_MODERATION_MODEL_REVISION}
 
 COPY verdict.py escalation.py app.py ./
 

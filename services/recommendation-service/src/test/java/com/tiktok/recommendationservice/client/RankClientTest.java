@@ -1,6 +1,6 @@
 package com.tiktok.recommendationservice.client;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.recommendationservice.dto.rank.CandidateFeatures;
 import org.junit.jupiter.api.Test;
 

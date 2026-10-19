@@ -1,5 +1,6 @@
 package com.tiktok.adminservice.service;
 
+import com.tiktok.adminservice.client.AccountRoleClient;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.ReportGroupResponse;
@@ -12,6 +13,7 @@ import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.event.producer.AdminEventProducer;
 import com.tiktok.adminservice.exception.InvalidModerationTargetException;
+import com.tiktok.adminservice.exception.InvalidSortException;
 import com.tiktok.adminservice.exception.ReportAlreadyResolvedException;
 import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
@@ -24,11 +26,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -55,11 +60,33 @@ class AdminServiceImplTest {
     @Mock
     private AdminEventProducer adminEventProducer;
 
+    // Default answer is false: every ban here targets an ordinary account unless a test says so.
+    @Mock
+    private AccountRoleClient accountRoleClient;
+
     private AdminServiceImpl adminService;
 
     @BeforeEach
     void setUp() {
-        adminService = new AdminServiceImpl(reportRepository, moderationActionRepository, adminMapper, adminEventProducer);
+        adminService = new AdminServiceImpl(reportRepository, moderationActionRepository, adminMapper,
+                adminEventProducer, accountRoleClient);
+    }
+
+    /**
+     * auth-service refuses an admin ban, and nothing told this side: the audit row said banned,
+     * the account's reports closed as handled, and its videos were hidden for a ban that never
+     * landed. Refused here first, before anything is written.
+     */
+    @Test
+    void moderate_banningAnotherAdmin_isRefusedAndRecordsNothing() {
+        when(accountRoleClient.isAdmin(8L)).thenReturn(true);
+
+        assertThatThrownBy(() -> adminService.moderate(1L, ReportTargetType.USER, "8",
+                ModerationActionType.BAN_USER, "spam"))
+                .isInstanceOf(InvalidModerationTargetException.class);
+
+        verify(moderationActionRepository, never()).save(any(ModerationAction.class));
+        verifyNoInteractions(adminEventProducer);
     }
 
     /**
@@ -110,6 +137,25 @@ class AdminServiceImplTest {
         assertThat(saved.getValue().getBannedUntil()).isNull();
     }
 
+    /**
+     * Both overloads must be declared on the class, each carrying {@code @Transactional}. As a
+     * {@code default} on the interface the short one was self-invocation, so no transaction was
+     * open: the saves committed one by one, the event published and the status changed, and then
+     * the bulk report-closing update failed with TransactionRequiredException — a 500 for an
+     * action that had already happened.
+     */
+    @Test
+    void moderate_isTransactionalOnBothOverloads() throws Exception {
+        for (Class<?>[] args : List.<Class<?>[]>of(
+                new Class<?>[]{Long.class, ReportTargetType.class, String.class, ModerationActionType.class, String.class},
+                new Class<?>[]{Long.class, ReportTargetType.class, String.class, ModerationActionType.class, String.class, Integer.class})) {
+            assertThat(AdminServiceImpl.class.getDeclaredMethod("moderate", args)
+                    .isAnnotationPresent(org.springframework.transaction.annotation.Transactional.class))
+                    .as("moderate/%d must be declared on AdminServiceImpl with @Transactional", args.length)
+                    .isTrue();
+        }
+    }
+
     /** A takedown has no duration, and nothing reverses one on a timer. */
     @Test
     void moderate_ignoresADurationOnAnythingButABan() {
@@ -144,7 +190,7 @@ class AdminServiceImplTest {
     void resolveReport_unknownReport_throwsNotFound() {
         when(reportRepository.findByIdAndDeletedAtIsNull(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> adminService.resolveReport(1L, 99L, new ResolveReportRequest(ModerationActionType.WARN_USER, "warn")))
+        assertThatThrownBy(() -> adminService.resolveReport(1L, 99L, new ResolveReportRequest(ModerationActionType.WARN_USER, "warn", null)))
                 .isInstanceOf(ReportNotFoundException.class);
     }
 
@@ -160,7 +206,7 @@ class AdminServiceImplTest {
                 .build();
         when(reportRepository.findByIdAndDeletedAtIsNull(5L)).thenReturn(Optional.of(resolved));
 
-        assertThatThrownBy(() -> adminService.resolveReport(1L, 5L, new ResolveReportRequest(ModerationActionType.WARN_USER, "warn")))
+        assertThatThrownBy(() -> adminService.resolveReport(1L, 5L, new ResolveReportRequest(ModerationActionType.WARN_USER, "warn", null)))
                 .isInstanceOf(ReportAlreadyResolvedException.class);
     }
 
@@ -178,7 +224,7 @@ class AdminServiceImplTest {
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
                 new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "nudity", ReportStatus.RESOLVED, 2L, null, null));
 
-        ReportResponse response = adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation"));
+        ReportResponse response = adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation", null));
 
         assertThat(response.status()).isEqualTo(ReportStatus.RESOLVED);
         assertThat(pending.getStatus()).isEqualTo(ReportStatus.RESOLVED);
@@ -207,7 +253,7 @@ class AdminServiceImplTest {
             return new ReportResponse(r.getId(), r.getReporterId(), r.getTargetType(), r.getTargetId(), r.getReason(), r.getStatus(), r.getResolvedBy(), r.getResolvedAt(), null);
         });
 
-        ReportResponse response = adminService.resolveReport(2L, 8L, new ResolveReportRequest(ModerationActionType.DISMISS_REPORT, "not a violation"));
+        ReportResponse response = adminService.resolveReport(2L, 8L, new ResolveReportRequest(ModerationActionType.DISMISS_REPORT, "not a violation", null));
 
         assertThat(response.status()).isEqualTo(ReportStatus.DISMISSED);
     }
@@ -251,10 +297,56 @@ class AdminServiceImplTest {
         when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
                 10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
         when(reportRepository.saveAndFlush(any(Report.class)))
-                .thenThrow(new DataIntegrityViolationException("idx_reports_one_per_reporter_target"));
+                .thenThrow(violationOf("idx_reports_one_per_reporter_target"));
 
         assertThatThrownBy(() -> adminService.submitReport(10L, request))
                 .isInstanceOf(ReportAlreadySubmittedException.class);
+    }
+
+    /** Anything but the duplicate index is our bug, and calling it a duplicate said "filed" for a report that was not. */
+    @Test
+    void submitReport_otherConstraintViolation_isNotCalledADuplicate() {
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content");
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.saveAndFlush(any(Report.class))).thenThrow(violationOf("reports_reason_check"));
+
+        assertThatThrownBy(() -> adminService.submitReport(10L, request))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    private static DataIntegrityViolationException violationOf(String constraint) {
+        return new DataIntegrityViolationException("could not execute statement",
+                new ConstraintViolationException("violation", new SQLException(), constraint));
+    }
+
+    @Test
+    void resolveReport_banCarriesItsDuration() {
+        Report pending = Report.builder()
+                .id(9L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.USER)
+                .targetId("42")
+                .reason("harassment")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(9L)).thenReturn(Optional.of(pending));
+
+        adminService.resolveReport(2L, 9L, new ResolveReportRequest(ModerationActionType.BAN_USER, "harassment", 3));
+
+        ArgumentCaptor<ModerationAction> saved = ArgumentCaptor.forClass(ModerationAction.class);
+        verify(moderationActionRepository).save(saved.capture());
+        assertThat(saved.getValue().getBannedUntil())
+                .isCloseTo(Instant.now().plus(3, ChronoUnit.DAYS), within(1, ChronoUnit.MINUTES));
+    }
+
+    /** auth-service refuses it anyway; this is the 400 instead of an audit row for a ban that never lands. */
+    @Test
+    void moderate_anAdminCannotBanThemselves() {
+        assertThatThrownBy(() -> adminService.moderate(
+                2L, ReportTargetType.USER, "2", ModerationActionType.BAN_USER, "oops", null))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository, adminEventProducer);
     }
 
     @Test
@@ -272,7 +364,7 @@ class AdminServiceImplTest {
         // Otherwise this publishes a UserBannedEvent carrying a Mongo document id where a user id
         // belongs — or, when the id happens to parse, a ban aimed at whoever owns that number.
         assertThatThrownBy(() -> adminService.resolveReport(2L, 9L,
-                new ResolveReportRequest(ModerationActionType.BAN_USER, "ban")))
+                new ResolveReportRequest(ModerationActionType.BAN_USER, "ban", null)))
                 .isInstanceOf(InvalidModerationTargetException.class);
         verifyNoInteractions(moderationActionRepository, adminEventProducer);
         assertThat(pending.getStatus()).isEqualTo(ReportStatus.PENDING);
@@ -280,9 +372,86 @@ class AdminServiceImplTest {
 
     @Test
     void listActions_targetTypeWithoutTargetId_rejected() {
-        assertThatThrownBy(() -> adminService.listActions(ReportTargetType.USER, null, Pageable.unpaged()))
+        assertThatThrownBy(() -> adminService.listActions(ReportTargetType.USER, null,
+                null, null, null, null, Pageable.unpaged()))
                 .isInstanceOf(InvalidModerationTargetException.class);
         verifyNoInteractions(moderationActionRepository);
+    }
+
+    @Test
+    void listActions_passesEveryFilterThrough_withTheTargetInItsOneSpelling() {
+        Instant from = Instant.parse("2026-10-06T00:00:00Z");
+        Instant to = Instant.parse("2026-10-07T00:00:00Z");
+        when(moderationActionRepository.findFiltered(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        adminService.listActions(ReportTargetType.USER, "+042", 7L, ModerationActionType.BAN_USER,
+                from, to, Pageable.unpaged());
+
+        verify(moderationActionRepository).findFiltered(eq(ReportTargetType.USER), eq("42"), eq(7L),
+                eq(ModerationActionType.BAN_USER), eq(from), eq(to), any(Pageable.class));
+    }
+
+    @Test
+    void listActions_noSortAsked_readsNewestFirst() {
+        assertThat(auditPageFor(PageRequest.of(2, 25)))
+                .satisfies(page -> {
+                    assertThat(page.getPageNumber()).isEqualTo(2);
+                    assertThat(page.getPageSize()).isEqualTo(25);
+                    assertThat(page.getSort()).isEqualTo(Sort.by(Sort.Direction.DESC, "createdAt", "id"));
+                });
+    }
+
+    /** Ties on the asked-for column go newest first, so a page boundary never splits them unevenly. */
+    @Test
+    void listActions_sortedByType_breaksTiesByTimeThenId() {
+        assertThat(auditPageFor(PageRequest.of(0, 25, Sort.by(Sort.Direction.ASC, "actionType"))).getSort())
+                .isEqualTo(Sort.by(Sort.Direction.ASC, "actionType")
+                        .and(Sort.by(Sort.Direction.DESC, "createdAt", "id")));
+    }
+
+    @Test
+    void listActions_oldestFirst_breaksTiesTheSameWay() {
+        assertThat(auditPageFor(PageRequest.of(0, 25, Sort.by(Sort.Direction.ASC, "createdAt"))).getSort())
+                .isEqualTo(Sort.by(Sort.Direction.ASC, "createdAt", "id"));
+    }
+
+    @Test
+    void listActions_sortOnAnotherProperty_rejected() {
+        assertThatThrownBy(() -> adminService.listActions(null, null, null, null, null, null,
+                PageRequest.of(0, 25, Sort.by("reason"))))
+                .isInstanceOf(InvalidSortException.class);
+        verifyNoInteractions(moderationActionRepository);
+    }
+
+    private Pageable auditPageFor(Pageable requested) {
+        when(moderationActionRepository.findFiltered(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+        adminService.listActions(null, null, null, null, null, null, requested);
+        ArgumentCaptor<Pageable> sent = ArgumentCaptor.forClass(Pageable.class);
+        verify(moderationActionRepository).findFiltered(any(), any(), any(), any(), any(), any(), sent.capture());
+        return sent.getValue();
+    }
+
+    /** The search reaches the query as an escaped LIKE pattern, and as an id only when it is one. */
+    @Test
+    void listReports_searchIsEscapedAndReadAsAnIdOnlyWhenNumeric() {
+        Instant from = Instant.parse("2026-10-06T00:00:00Z");
+        Instant to = Instant.parse("2026-10-07T00:00:00Z");
+        when(reportRepository.findFiltered(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        adminService.listReports(null, null, null, null, "  50%_Off ", from, to, Pageable.unpaged());
+        verify(reportRepository).findFiltered(null, null, null, null, "%50\\%\\_off%", null, from, to,
+                Pageable.unpaged());
+
+        adminService.listReports(null, null, null, null, "367120", null, null, Pageable.unpaged());
+        verify(reportRepository).findFiltered(null, null, null, null, "%367120%", 367120L, null, null,
+                Pageable.unpaged());
+
+        adminService.listReports(null, null, null, null, "   ", null, null, Pageable.unpaged());
+        verify(reportRepository).findFiltered(null, null, null, null, null, null, null, null,
+                Pageable.unpaged());
     }
 
     @Test
@@ -327,6 +496,104 @@ class AdminServiceImplTest {
     }
 
     @Test
+    void submitReport_userStillServingATemporaryBan_closesTheReportOnArrival() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42")).thenReturn(Optional.empty());
+        standingBan(Instant.now().plus(3, ChronoUnit.DAYS));
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "42", "Spam"));
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.RESOLVED);
+        verify(adminEventProducer, never()).publishReportSubmitted(any());
+    }
+
+    @Test
+    void submitReport_userWhoseTemporaryBanRanOut_staysPending() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42")).thenReturn(Optional.empty());
+        // The ban ended on its own: auth-service's sweep lifted it and recorded nothing here, so
+        // the BAN_USER row is still the newest state-changing action. The account is back, and a
+        // report against it has to reach an admin like any other.
+        standingBan(Instant.now().minus(23, ChronoUnit.DAYS));
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "42", "Spam"));
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.PENDING);
+        assertThat(captor.getValue().getResolvedAt()).isNull();
+        verify(adminEventProducer).publishReportSubmitted(captor.getValue());
+    }
+
+    @Test
+    void submitReport_userUnderPermanentBan_closesTheReportOnArrival() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42")).thenReturn(Optional.empty());
+        standingBan(null);
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "42", "Spam"));
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getStatus()).isEqualTo(ReportStatus.RESOLVED);
+    }
+
+    /** "007" and "7" are one account: the repeat finds the report already filed under "7". */
+    @Test
+    void submitReport_anotherSpellingOfTheSameTarget_isTheSameReport() {
+        Report filed = Report.builder().id(3L).reporterId(10L).targetType(ReportTargetType.USER)
+                .targetId("7").reason("Spam").status(ReportStatus.PENDING).build();
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "7")).thenReturn(Optional.of(filed));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "007", "Spam"));
+
+        verify(reportRepository, never()).saveAndFlush(any());
+        verify(adminMapper).toResponse(filed);
+    }
+
+    @Test
+    void submitReport_storesTheTargetInItsOneSpelling() {
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.COMMENT, " 007:+8 ", "Spam"));
+
+        ArgumentCaptor<Report> captor = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getTargetId()).isEqualTo("7:8");
+    }
+
+    /** The self-ban guard compares strings, so it has to see the admin's id spelled as theirs. */
+    @Test
+    void moderate_banningYourselfUnderAnotherSpelling_isStillRefused() {
+        assertThatThrownBy(() -> adminService.moderate(42L, ReportTargetType.USER, "+042",
+                ModerationActionType.BAN_USER, "test"))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(adminEventProducer);
+    }
+
+    /** A row stored before ids were canonical is acted on, and its siblings closed, under the one id. */
+    @Test
+    void resolveReport_aReportStoredUnderAnOldSpelling_actsOnTheCanonicalId() {
+        Report pending = Report.builder().id(9L).reporterId(1L).targetType(ReportTargetType.USER)
+                .targetId("007").reason("Spam").status(ReportStatus.PENDING).build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(9L)).thenReturn(Optional.of(pending));
+
+        adminService.resolveReport(2L, 9L, new ResolveReportRequest(ModerationActionType.BAN_USER, "spam", null));
+
+        ArgumentCaptor<ModerationAction> action = ArgumentCaptor.forClass(ModerationAction.class);
+        verify(moderationActionRepository).save(action.capture());
+        assertThat(action.getValue().getTargetId()).isEqualTo("7");
+        verify(reportRepository).closePendingFor(eq(ReportTargetType.USER), eq("7"),
+                eq(ReportStatus.RESOLVED), eq(2L), eq(9L), any(Instant.class));
+    }
+
+    @Test
     void resolveReport_closesEveryOtherReportAgainstTheSameTarget() {
         Report pending = Report.builder()
                 .id(7L)
@@ -340,7 +607,7 @@ class AdminServiceImplTest {
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
                 new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "x", ReportStatus.RESOLVED, 2L, null, null));
 
-        adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation"));
+        adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation", null));
 
         // Everyone else who flagged the same video is answered by the same decision; leaving them
         // PENDING is how the video comes back up the queue with an admin about to decide it twice.
@@ -367,6 +634,77 @@ class AdminServiceImplTest {
         // opposite of what restoring the video decided.
         verify(reportRepository).closePendingFor(eq(ReportTargetType.VIDEO), eq("v1"),
                 eq(ReportStatus.DISMISSED), eq(2L), isNull(), any(Instant.class));
+    }
+
+    @Test
+    void moderate_purgeLeavesTheReportsStanding() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.PURGE_VIDEO, "owner asked");
+
+        // video-service ignores a purge for a video that is not in the trash, so the video may
+        // well be live. Closing the reports here answered them without anything having happened.
+        verify(reportRepository, never()).closePendingFor(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void resolveReport_purgeIsNotADecisionOnAReport() {
+        Report pending = Report.builder()
+                .id(9L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("v1")
+                .reason("nudity")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(9L)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> adminService.resolveReport(2L, 9L,
+                new ResolveReportRequest(ModerationActionType.PURGE_VIDEO, "purge", null)))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository, adminEventProducer);
+        assertThat(pending.getStatus()).isEqualTo(ReportStatus.PENDING);
+    }
+
+    /**
+     * Signing an account out secures it; it says nothing about whether the reports against it were
+     * right, so they stay in the queue for whoever decides that.
+     */
+    @Test
+    void moderate_revokingSessionsLeavesTheReportsStanding() {
+        adminService.moderate(2L, ReportTargetType.USER, "42", ModerationActionType.REVOKE_SESSIONS,
+                "account taken over");
+
+        verify(moderationActionRepository).save(any(ModerationAction.class));
+        verify(adminEventProducer).publishFor(any(ModerationAction.class));
+        verify(reportRepository, never()).closePendingFor(any(), any(), any(), any(), any(), any());
+        verify(adminEventProducer, never()).publishReportsResolved(any(), any());
+    }
+
+    @Test
+    void resolveReport_revokingSessionsIsNotADecisionOnAReport() {
+        Report pending = Report.builder()
+                .id(9L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.USER)
+                .targetId("42")
+                .reason("hacked account posting spam")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(9L)).thenReturn(Optional.of(pending));
+
+        assertThatThrownBy(() -> adminService.resolveReport(2L, 9L,
+                new ResolveReportRequest(ModerationActionType.REVOKE_SESSIONS, "sign out", null)))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository, adminEventProducer);
+        assertThat(pending.getStatus()).isEqualTo(ReportStatus.PENDING);
+    }
+
+    /** A video has no sessions: the user id in the event would be a Mongo document id. */
+    @Test
+    void moderate_revokingSessionsOfAVideo_rejected() {
+        assertThatThrownBy(() -> adminService.moderate(2L, ReportTargetType.VIDEO, "v1",
+                ModerationActionType.REVOKE_SESSIONS, "sign out"))
+                .isInstanceOf(InvalidModerationTargetException.class);
+        verifyNoInteractions(moderationActionRepository, adminEventProducer);
     }
 
     @Test
@@ -402,10 +740,97 @@ class AdminServiceImplTest {
         assertThat(group.priority()).isEqualTo(120L);
     }
 
+    @Test
+    void submitReport_newPendingReport_isAnnouncedToTheConsole() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content"));
+
+        ArgumentCaptor<Report> saved = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(saved.capture());
+        verify(adminEventProducer).publishReportSubmitted(saved.getValue());
+    }
+
+    @Test
+    void submitReport_repeatSubmission_announcesNothing() {
+        Report standing = Report.builder()
+                .id(3L)
+                .reporterId(10L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("v1")
+                .reason("spam content")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.of(standing));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content"));
+
+        verify(adminEventProducer, never()).publishReportSubmitted(any());
+    }
+
+    @Test
+    void submitReport_targetAlreadyEnforced_announcesNothing() {
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        standingAction(ModerationActionType.TAKEDOWN_VIDEO);
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "Nudity and sexual content"));
+
+        // Closed on arrival: no admin will ever see it in the queue, so it is not news.
+        verify(adminEventProducer, never()).publishReportSubmitted(any());
+    }
+
+    @Test
+    void resolveReport_dismissAnnouncesTheClosedReports() {
+        Report pending = Report.builder()
+                .id(8L)
+                .reporterId(1L)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId("p1")
+                .reason("false report")
+                .status(ReportStatus.PENDING)
+                .build();
+        when(reportRepository.findByIdAndDeletedAtIsNull(8L)).thenReturn(Optional.of(pending));
+
+        adminService.resolveReport(2L, 8L,
+                new ResolveReportRequest(ModerationActionType.DISMISS_REPORT, "not a violation", null));
+
+        // DISMISS_REPORT writes no moderation event, so without this another admin's bell keeps it.
+        verify(adminEventProducer).publishReportsResolved(ReportTargetType.VIDEO, "p1");
+    }
+
+    @Test
+    void moderate_answeringActionAnnouncesTheClosedReports() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.TAKEDOWN_VIDEO, "policy violation");
+
+        verify(adminEventProducer).publishReportsResolved(ReportTargetType.VIDEO, "v1");
+    }
+
+    @Test
+    void moderate_purgeAnnouncesNoReportChange() {
+        adminService.moderate(2L, ReportTargetType.VIDEO, "v1", ModerationActionType.PURGE_VIDEO, "owner asked");
+
+        verify(adminEventProducer, never()).publishReportsResolved(any(), any());
+    }
+
     /** The newest decision that moved this target in or out of enforcement. */
     private void standingAction(ModerationActionType actionType) {
         when(moderationActionRepository.findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
                 any(ReportTargetType.class), anyString(), any()))
                 .thenReturn(Optional.of(ModerationAction.builder().actionType(actionType).build()));
+    }
+
+    /** A BAN_USER as the newest such decision; {@code bannedUntil} null is a permanent ban. */
+    private void standingBan(Instant bannedUntil) {
+        when(moderationActionRepository.findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
+                any(ReportTargetType.class), anyString(), any()))
+                .thenReturn(Optional.of(ModerationAction.builder()
+                        .actionType(ModerationActionType.BAN_USER)
+                        .bannedUntil(bannedUntil)
+                        .build()));
     }
 }

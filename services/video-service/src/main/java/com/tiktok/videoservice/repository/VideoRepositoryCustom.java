@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.repository;
 
 import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
+import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
 
@@ -55,12 +56,15 @@ public interface VideoRepositoryCustom {
      * would be a second place to keep those three in step.
      *
      * @param userIds         restrict to these authors — the Following feed — or null for the
-     *                        public feed, which is every author
+     *                        public feed, which is every author whose account is not private
+     * @param bannedOwners    left out of the public feed; the Following feed's authors are
+     *                        narrowed before the call instead
      * @param beforeCreatedAt null for the first page, together with {@code beforeId}
      * @param limit           ask for one more than the page holds — a row beyond it is how the
      *                        caller learns there is a next page without counting anything
      */
-    List<Video> findFeedPage(Collection<Long> userIds, Instant beforeCreatedAt, String beforeId, int limit);
+    List<Video> findFeedPage(Collection<Long> userIds, Collection<Long> bannedOwners,
+                             Instant beforeCreatedAt, String beforeId, int limit);
 
     /**
      * The admin console's video listing: every video regardless of owner, status or visibility.
@@ -87,19 +91,31 @@ public interface VideoRepositoryCustom {
      * @param ownerIds videos by these owners match too, or null/empty for no owner filter
      * @param deleted  null for no filter on it (the default — both live and deleted rows match);
      *                 {@code true} for deleted rows only; {@code false} for live rows only
+     * @param purged   same three states on whether the media is already erased; {@code false}
+     *                 with {@code deleted = true} is the trash — deleted, still watchable
      */
     org.springframework.data.domain.Page<Video> findForAdmin(
             VideoStatus status, String term, java.util.Collection<Long> ownerIds,
-            Boolean deleted, org.springframework.data.domain.Pageable pageable);
+            Boolean deleted, Boolean purged, org.springframework.data.domain.Pageable pageable);
 
     /**
-     * Transcode succeeded: the media fields it produced, plus where the outcome was recorded.
+     * How many videos stand in each status among those {@link #findForAdmin} matches for the same
+     * filters, in one aggregation. The console's status totals were a one-row listing per status:
+     * five requests through the gateway on every render of the videos page. A status with no
+     * video in it is absent from the map.
+     */
+    java.util.Map<VideoStatus, Long> countForAdminByStatus(
+            String term, java.util.Collection<Long> ownerIds, Boolean deleted, Boolean purged);
+
+    /**
+     * Transcode succeeded: the media fields it produced, plus where the outcome was recorded, and
+     * {@code publishedAt} for a verdict that was waiting on it and publishes the video now.
      *
-     * @param expectedStatus the status read before the change was applied — see
-     *                       {@link #updateStatus} for what conditioning on it prevents
+     * @param expected the state read before the change was applied — see {@link #updateStatus}
+     *                 for what conditioning on it prevents
      * @return whether the write landed
      */
-    boolean updateTranscodeResult(Video video, VideoStatus expectedStatus);
+    boolean updateTranscodeResult(Video video, PipelineState expected);
 
     /**
      * The status pair alone, with no media fields to write: a moderation takedown or restore.
@@ -111,29 +127,30 @@ public interface VideoRepositoryCustom {
      * {@code markRestored()}. A failed transcode writes the same pair but owns {@code failureReason}
      * on top of it — see {@link #updateFailed}.
      *
-     * <p>Conditioned on the status the caller read, because these race each other across two Kafka
+     * <p>Conditioned on the state the caller read, because these race each other across two Kafka
      * topics and two listener threads. Transcoding takes minutes, so a moderator's takedown
      * routinely lands while a transcode result is in flight; an unconditional write lets whichever
      * arrives last win, which puts a taken-down video back on the feed with nothing left to say it
-     * was ever removed.
+     * was ever removed. The condition covers more than {@code status}; {@link PipelineState} says
+     * why.
      *
-     * @param expectedStatus the status read before the change was applied
-     * @return false when the status moved underneath — re-read and re-apply, do not retry the
+     * @param expected the state read before the change was applied
+     * @return false when the state moved underneath — re-read and re-apply, do not retry the
      *         same write
      */
-    boolean updateStatus(Video video, VideoStatus expectedStatus);
+    boolean updateStatus(Video video, PipelineState expected);
 
     /**
      * A failed transcode: the status pair plus the reason it failed. Separate from
      * {@link #updateStatus} (takedown/restore) because only this path owns {@code failureReason} —
      * keeping the write field-scoped to what the operation owns, like every other method here.
      *
-     * <p>Conditioned on the status the caller read, same as {@link #updateStatus}: a takedown can
+     * <p>Conditioned on the state the caller read, same as {@link #updateStatus}: a takedown can
      * land while the transcode is still running.
      *
-     * @return false when the status moved underneath — re-read and re-apply
+     * @return false when the state moved underneath — re-read and re-apply
      */
-    boolean updateFailed(Video video, VideoStatus expectedStatus);
+    boolean updateFailed(Video video, PipelineState expected);
 
     /**
      * The automatic moderation verdict: the status pair plus the scores behind it.
@@ -141,13 +158,13 @@ public interface VideoRepositoryCustom {
      * <p>Separate from {@link #updateStatus} because only this path owns {@code moderation},
      * keeping each write scoped to the fields its own operation owns.
      *
-     * <p>Conditioned on the status the caller read, for the reason {@link #updateStatus} gives and
+     * <p>Conditioned on the state the caller read, for the reason {@link #updateStatus} gives and
      * one specific to this path: a moderator can take a video down while the classifier is still
      * scoring it, and an unconditional APPROVED landing afterwards would put it back on the feed.
      *
-     * @return false when the status moved underneath — re-read and re-apply
+     * @return false when the state moved underneath — re-read and re-apply
      */
-    boolean updateModeration(Video video, VideoStatus expectedStatus);
+    boolean updateModeration(Video video, PipelineState expected);
 
     /** Outbox flag, set once the broker acknowledges the VideoPublishedEvent. */
     void updateEventPublished(Video video);
@@ -172,6 +189,15 @@ public interface VideoRepositoryCustom {
      * away by {@link VideoRepository#findTop100ByDeletedAtIsNotNullAndDeleteEventPublishedAtIsNullOrderByDeletedAtAsc}.
      */
     List<Video> findPendingPurge(Instant purgeBefore, int limit);
+
+    /**
+     * An admin emptying one video out of the trash early: stamps {@code purgeRequestedAt}, which
+     * puts the row on the early-purge poll. Conditioned on the video being in the trash, so a
+     * request against a live video, or one already purged, changes nothing.
+     *
+     * @return whether the video was in the trash
+     */
+    boolean requestPurge(String videoId);
 
     /**
      * Parks a row whose event could not be built, taking it out of the poll — see
@@ -215,6 +241,15 @@ public interface VideoRepositoryCustom {
     void updateSoftDeleted(Video video);
 
     /**
+     * Every live video of an account whose deletion ran goes to the trash, as if its owner had
+     * deleted each one: the deletion outbox announces them, and the trash retention purges them.
+     * Safe to repeat — a video already in the trash is not matched again.
+     *
+     * @return the ids moved, for the caller to evict
+     */
+    List<String> softDeleteAllOf(Long userId, Instant at);
+
+    /**
      * The owner toggling PUBLIC/PRIVATE from the detail page. Unconditional like
      * {@link #updateSoftDeleted}: visibility is owner-driven and not contended by the Kafka
      * consumers the {@code compareAndSet} writes guard against.
@@ -231,6 +266,24 @@ public interface VideoRepositoryCustom {
      *         poll will send it
      */
     boolean clearVisibilityEventPending(String videoId, java.time.Instant announced);
+
+    /**
+     * An owner's account switched between private and public: stamps the flag on every live video
+     * they own and queues each one's visibility announcement, in one write.
+     *
+     * <p>Every video, not only the PUBLIC ones whose audience actually changes: consumers take a
+     * repeated audience as the no-op it is, and one update keeps the flag and its announcement
+     * together.
+     *
+     * @return the ids of those videos, for the caller to evict
+     */
+    List<String> markOwnerPrivacy(Long userId, boolean privateAccount, Instant pendingAt);
+
+    /**
+     * One video's copy of its owner's privacy, found stale by the second read in
+     * {@code VideoServiceImpl.publish}. Both fields in one write, like {@link #updateVisibility}.
+     */
+    void updateOwnerPrivacy(Video video);
 
     /**
      * The owner turning comments on/off from the detail page. Unconditional, same reasoning as

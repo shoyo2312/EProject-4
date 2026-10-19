@@ -4,6 +4,7 @@ import com.tiktok.notificationservice.dto.response.NotificationResponse;
 import com.tiktok.notificationservice.entity.DeviceToken;
 import com.tiktok.notificationservice.entity.Notification;
 import com.tiktok.notificationservice.entity.NotificationType;
+import com.tiktok.notificationservice.exception.InvalidNotificationCursorException;
 import com.tiktok.notificationservice.exception.NotNotificationOwnerException;
 import com.tiktok.notificationservice.event.producer.NotificationEventPublisher;
 import com.tiktok.notificationservice.exception.NotificationNotFoundException;
@@ -118,9 +119,18 @@ public class NotificationServiceImpl implements NotificationService {
                 .ifPresent(deviceTokenRepository::delete);
     }
 
+    /**
+     * Paged, because an inbox only grows: every like, comment and follow adds an entry, and the
+     * whole of it used to be read and sent on every open. The cursor is an entry's own id rather
+     * than a page number, so entries arriving while someone scrolls do not shift the next page.
+     */
     @Override
-    public List<NotificationResponse> listByUser(Long recipientId) {
-        return notificationRepository.findByRecipientIdOrderByCreatedAtDesc(recipientId).stream()
+    public List<NotificationResponse> listByUser(Long recipientId, String before, int size) {
+        Notification after = before == null ? null : notificationRepository.findById(before)
+                .filter(notification -> recipientId.equals(notification.getRecipientId()))
+                .orElseThrow(() -> new InvalidNotificationCursorException(before));
+        int limit = Math.clamp(size, 1, MAX_PAGE_SIZE);
+        return notificationRepository.findPage(recipientId, after, limit).stream()
                 .map(notificationMapper::toResponse)
                 .toList();
     }
@@ -143,10 +153,9 @@ public class NotificationServiceImpl implements NotificationService {
         notificationRepository.save(notification);
     }
 
+    /** One update, however many are unread; it used to load them all to save them back one by one. */
     @Override
     public void markAllAsRead(Long requesterId) {
-        List<Notification> unread = notificationRepository.findByRecipientIdAndReadFalse(requesterId);
-        unread.forEach(Notification::markRead);
-        notificationRepository.saveAll(unread);
+        notificationRepository.markAllRead(requesterId);
     }
 }

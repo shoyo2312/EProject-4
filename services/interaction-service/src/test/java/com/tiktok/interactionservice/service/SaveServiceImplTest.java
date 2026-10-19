@@ -11,7 +11,7 @@ import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -156,7 +156,7 @@ class SaveServiceImplTest extends AbstractInteractionServiceIT {
         assertThat(counterCacheService.getCounts(33L).saveCount()).isZero();
     }
 
-    @SpyBean
+    @MockitoSpyBean
     private InteractionEventPublisher eventPublisher;
 
     @Test

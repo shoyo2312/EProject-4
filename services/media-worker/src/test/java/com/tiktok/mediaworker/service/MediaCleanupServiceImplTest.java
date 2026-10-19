@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
 class MediaCleanupServiceImplTest {
 
     private static final MinioProperties PROPERTIES =
-            new MinioProperties("http://localhost:9000", "key", "secret", "video-media");
+            new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret", "video-media");
 
     @Mock
     private MinioClient minioClient;
@@ -99,6 +99,21 @@ class MediaCleanupServiceImplTest {
 
         assertThat(removedKeys()).contains(
                 "quarantine/thumbnails/vid1.jpg", "quarantine/previews/vid1.webp", "quarantine/markers/vid1");
+    }
+
+    /** The purge is the end of a deletion's hold, and of every other: nothing is left to lift them. */
+    @Test
+    void deleteMediaFor_removesTheHoldMarkers() throws Exception {
+        stubListing();
+        Item hold = org.mockito.Mockito.mock(Item.class);
+        when(hold.objectName()).thenReturn("quarantine/holds/vid1/DELETED");
+        when(minioClient.listObjects(org.mockito.ArgumentMatchers.argThat(
+                (ListObjectsArgs args) -> args != null && "quarantine/holds/vid1/".equals(args.prefix()))))
+                .thenReturn(List.of(new Result<>(hold)));
+
+        service().deleteMediaFor("vid1", "s3://video-media/raw/7/vid1.mp4");
+
+        assertThat(removedKeys()).contains("quarantine/holds/vid1/DELETED");
     }
 
     /** One object that will not go must not take the rest of the cleanup with it. */

@@ -1,8 +1,9 @@
 package com.tiktok.authservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.authservice.service.UserModerationService;
 import com.tiktok.event.admin.UserBannedEvent;
+import com.tiktok.event.admin.UserSessionsRevokedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -23,6 +24,7 @@ public class AdminModerationEventConsumer {
 
     private static final String USER_BANNED = "UserBannedEvent";
     private static final String USER_UNBANNED = "UserUnbannedEvent";
+    private static final String USER_SESSIONS_REVOKED = "UserSessionsRevokedEvent";
 
     private final UserModerationService userModerationService;
     private final ObjectMapper objectMapper;
@@ -39,13 +41,16 @@ public class AdminModerationEventConsumer {
         } else if (USER_UNBANNED.equals(eventType)) {
             UserUnbannedEvent event = objectMapper.readValue(payload, UserUnbannedEvent.class);
             userModerationService.unban(event.userId(), event.adminId());
+        } else if (USER_SESSIONS_REVOKED.equals(eventType)) {
+            UserSessionsRevokedEvent event = objectMapper.readValue(payload, UserSessionsRevokedEvent.class);
+            userModerationService.revokeSessions(event.userId(), event.adminId());
         } else if (eventType == null) {
             // Routing is header-only, so a ban that arrives without one would be dropped in
             // silence and the account would stay usable with nothing to say why. Logged rather
             // than thrown: a retry cannot add a header the producer never set.
             log.warn("Moderation event without an eventType header, dropped: {}", payload);
         } else {
-            // VideoTakenDown, ProductSuspended, ... — other services' events on a shared topic.
+            // VideoTakenDown, CommentRemoved, ... — other services' events on a shared topic.
             log.debug("Ignoring moderation eventType={}", eventType);
         }
     }

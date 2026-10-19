@@ -21,7 +21,6 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doThrow;
@@ -107,8 +106,7 @@ class MessageServiceImplTest {
     void listMessages_requiresParticipant() {
         Conversation conversation = Conversation.builder().id("c1").participantIds(List.of(1L, 2L)).build();
         when(conversationService.requireParticipant(1L, "c1")).thenReturn(conversation);
-        when(messageRepository.findByConversationIdAndDeletedAtIsNullAndSentAtBefore(anyString(), any(), any()))
-                .thenReturn(List.of());
+        when(messageRepository.findPage("c1", null, null, 21)).thenReturn(List.of());
 
         var page = messageService.listMessages("c1", 1L, null, 20);
 

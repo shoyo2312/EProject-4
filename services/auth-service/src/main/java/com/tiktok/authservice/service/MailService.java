@@ -14,4 +14,7 @@ public interface MailService {
      *                 this mail if they are told which account is asking to be attached.
      */
     void sendSocialLinkOtp(String toEmail, String otp, String provider);
+
+    /** The code that confirms deactivating or deleting the account. */
+    void sendAccountClosureOtp(String toEmail, String otp);
 }

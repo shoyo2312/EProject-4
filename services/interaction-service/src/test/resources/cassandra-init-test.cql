@@ -54,8 +54,29 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
     parent_id  bigint,
     reply_to_user_id bigint,
     likes      int,
+    status      text,
+    mod_reason  text,
+    mod_version text,
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
+
+-- A video owner's queue of held comments.
+CREATE TABLE IF NOT EXISTS held_comments_by_video (
+    video_id   bigint,
+    comment_id bigint,
+    PRIMARY KEY ((video_id), comment_id)
+) WITH CLUSTERING ORDER BY (comment_id DESC);
+
+-- Who is banned, as admin-service decided — UserBannedEvent / UserUnbannedEvent on
+-- admin.moderation-events. The comment listings drop a banned author's comments while banned_until
+-- is in the future; changed_at keeps a late decision from undoing a newer one (an LWT on it).
+CREATE TABLE IF NOT EXISTS user_bans (
+    user_id      bigint PRIMARY KEY,
+    banned_until timestamp,
+    changed_at   timestamp
+);
+ALTER TABLE user_bans ADD IF NOT EXISTS deactivated_at timestamp;
+ALTER TABLE user_bans ADD IF NOT EXISTS account_state_changed_at timestamp;
 
 -- Index that makes both comment listings a single-partition read.
 --

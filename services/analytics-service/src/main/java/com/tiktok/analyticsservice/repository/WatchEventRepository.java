@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -41,8 +42,14 @@ public class WatchEventRepository {
                 days);
     }
 
-    /** The most-watched videos of the window, by time spent rather than by view count. */
-    public List<TopVideoResponse> findTopVideos(int days, int limit) {
+    /**
+     * The most-watched videos of {@code [from, to)}, by time spent rather than by view count.
+     *
+     * <p>The bounds go in as epoch milliseconds. A {@code Timestamp} parameter is spliced into the
+     * statement by the driver as bare local-time text — a syntax error, and in the JVM's zone
+     * rather than the instant's even if it parsed.
+     */
+    public List<TopVideoResponse> findTopVideos(Instant from, Instant to, int limit) {
         return jdbcTemplate.query(
                 """
                 SELECT video_id,
@@ -51,7 +58,8 @@ public class WatchEventRepository {
                        countIf(completed = 1) AS completions,
                        uniqExact(user_id) AS viewers
                 FROM watch_events FINAL
-                WHERE occurred_at >= now() - INTERVAL ? DAY
+                WHERE occurred_at >= fromUnixTimestamp64Milli(?)
+                  AND occurred_at < fromUnixTimestamp64Milli(?)
                 GROUP BY video_id
                 ORDER BY watched_ms DESC
                 LIMIT ?
@@ -62,6 +70,6 @@ public class WatchEventRepository {
                         rs.getLong("watched_ms"),
                         rs.getLong("completions"),
                         rs.getLong("viewers")),
-                days, limit);
+                from.toEpochMilli(), to.toEpochMilli(), limit);
     }
 }

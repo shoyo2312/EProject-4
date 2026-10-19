@@ -4,17 +4,28 @@ import com.tiktok.authservice.config.JwtProperties;
 import com.tiktok.authservice.config.OtpProperties;
 import com.tiktok.authservice.dto.request.AddEmailRequest;
 import com.tiktok.authservice.dto.request.AdminLoginOtpRequest;
+import com.tiktok.authservice.dto.request.CompletePasswordResetRequest;
+import com.tiktok.authservice.dto.request.CompleteSignupRequest;
 import com.tiktok.authservice.dto.request.ForgotPasswordRequest;
 import com.tiktok.authservice.dto.request.LoginRequest;
 import com.tiktok.authservice.dto.request.RefreshTokenRequest;
 import com.tiktok.authservice.dto.request.RegisterRequest;
 import com.tiktok.authservice.dto.request.ResendVerificationRequest;
 import com.tiktok.authservice.dto.request.ResetPasswordRequest;
+import com.tiktok.authservice.dto.request.StartSignupRequest;
 import com.tiktok.authservice.dto.request.VerifyEmailRequest;
+import com.tiktok.authservice.dto.request.VerifyPasswordResetRequest;
+import com.tiktok.authservice.dto.request.VerifySignupRequest;
+import com.tiktok.authservice.dto.response.OtpSentResponse;
+import com.tiktok.authservice.dto.response.PasswordResetTicketResponse;
+import com.tiktok.authservice.dto.response.SignupTicketResponse;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.dto.response.UserResponse;
+import com.tiktok.authservice.entity.AuthProvider;
 import com.tiktok.authservice.entity.RefreshToken;
+import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
+import com.tiktok.authservice.entity.UserIdentity;
 import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.entity.UserStatus;
 import com.tiktok.authservice.entity.VerificationTokenType;
@@ -27,11 +38,14 @@ import com.tiktok.authservice.exception.EmailNotVerifiedException;
 import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
+import com.tiktok.authservice.exception.InvalidResetTokenException;
+import com.tiktok.authservice.exception.InvalidSignupTokenException;
 import com.tiktok.authservice.exception.MfaRequiredException;
 import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
 import com.tiktok.authservice.mapper.UserMapper;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
+import com.tiktok.authservice.repository.UserIdentityRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
@@ -40,12 +54,14 @@ import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.exception.ConstraintViolationException;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 
 @Slf4j
@@ -56,6 +72,8 @@ public class AuthServiceImpl implements AuthService {
     private static final String CLAIM_JTI = "jti";
     private static final String PURPOSE_EMAIL_VERIFICATION = "email-verification";
     private static final String PURPOSE_PASSWORD_RESET = "password-reset";
+    /** Its own budget: a pending signup has no account whose verification budget it could share. */
+    private static final String PURPOSE_SIGNUP = "signup";
 
     private final UserRepository userRepository;
     private final UserMapper userMapper;
@@ -71,7 +89,16 @@ public class AuthServiceImpl implements AuthService {
     private final SessionRevoker sessionRevoker;
     private final TokenIssuer tokenIssuer;
     private final TurnstileService turnstileService;
+    private final OtpSendGate otpSendGate;
     private final AdminMfaService adminMfaService;
+    private final SecurityEventRecorder securityEventRecorder;
+    private final IdentityReconfirmation identityReconfirmation;
+    private final SignupChallenge signupChallenge;
+    private final PasswordResetChallenge passwordResetChallenge;
+    private final OtpGenerator otpGenerator;
+    private final ApplicationEventPublisher eventPublisher;
+    private final AccountClosureService accountClosureService;
+    private final UserIdentityRepository userIdentityRepository;
 
     @Override
     @Transactional
@@ -82,30 +109,85 @@ public class AuthServiceImpl implements AuthService {
         // casing the user chose, and only its uniqueness check is case-insensitive.
         String email = request.email().toLowerCase(Locale.ROOT);
 
-        if (userRepository.existsByUsernameIgnoreCaseAndDeletedAtIsNull(request.username())) {
-            throw new UsernameAlreadyExistsException(request.username());
-        }
-        if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
-            throw new EmailAlreadyExistsException(email);
-        }
-
-        User user = User.builder()
-                .username(request.username())
-                .email(email)
-                .passwordHash(HashUtils.bcryptHash(request.password()))
-                .role(UserRole.USER)
-                .status(UserStatus.ACTIVE)
-                .build();
-
-        User saved = saveUnique(user, request.username(), email);
-
-        userEventProducer.publishUserRegistered(
-                UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail()));
+        User saved = createPasswordAccount(request.username(), email, request.password(), false);
 
         otpService.issue(saved, VerificationTokenType.EMAIL_VERIFICATION, otpProperties.emailVerificationExpiryMillis(),
                 otp -> new EmailVerificationRequestedEvent(saved.getEmail(), otp));
 
         return userMapper.toResponse(saved);
+    }
+
+    /**
+     * Transactional only so the mail goes out: the listener that sends it fires after commit, and
+     * with no transaction to commit it would never fire. Nothing here writes to Postgres.
+     *
+     * <p>Answering 409 for a taken address says the address has an account, exactly as
+     * {@link #register} always has; the same Turnstile gate stands in front of both, and a resend
+     * ticket only covers the address that already passed it. Checked ahead of the send budget, as
+     * {@link #addEmail} does, so a mistyped address costs no mail.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public OtpSentResponse startSignup(StartSignupRequest request) {
+        String email = request.email().toLowerCase(Locale.ROOT);
+        String resendTicket = otpSendGate.admit(PURPOSE_SIGNUP, email,
+                request.turnstileToken(), request.resendTicket());
+
+        if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
+            throw new EmailAlreadyExistsException(email);
+        }
+
+        otpRateLimiter.checkAllowed(PURPOSE_SIGNUP, email);
+
+        String otp = otpGenerator.generate();
+        signupChallenge.storeCode(email, otp,
+                Duration.ofMillis(otpProperties.emailVerificationExpiryMillis()));
+        eventPublisher.publishEvent(new EmailVerificationRequestedEvent(email, otp));
+        return new OtpSentResponse(resendTicket);
+    }
+
+    /**
+     * The guess is spent before the code is checked and the limiter fails closed, for the reasons
+     * {@link OtpRateLimiter#acquireGuess} gives — a pending signup's code is the same 1e6-value
+     * secret as any other.
+     */
+    @Override
+    public SignupTicketResponse verifySignup(VerifySignupRequest request) {
+        String email = request.email().toLowerCase(Locale.ROOT);
+        otpRateLimiter.acquireGuess(PURPOSE_SIGNUP, email);
+
+        if (!signupChallenge.spendCode(email, request.otp())) {
+            throw new InvalidOtpException();
+        }
+        otpRateLimiter.recordGuessSuccess(PURPOSE_SIGNUP, email);
+
+        return new SignupTicketResponse(signupChallenge.issueTicket(email),
+                SignupChallenge.TICKET_TTL.toMillis());
+    }
+
+    /**
+     * The ticket is read first and spent last, inside the transaction: a taken username throws
+     * before it is spent, so the user just picks another, while two requests racing on one ticket
+     * both create a row and the loser of the {@code spendTicket} rolls its row back, registration
+     * event included. The unique index on email is the second line behind that.
+     */
+    @Override
+    @Transactional
+    public TokenResponse completeSignup(CompleteSignupRequest request) {
+        String email = signupChallenge.emailFor(request.signupToken())
+                .orElseThrow(InvalidSignupTokenException::new);
+
+        // Verified from the start: the address was proven before the row existed — that is what
+        // the ticket is.
+        User saved = createPasswordAccount(request.username(), email, request.password(), true);
+
+        if (!signupChallenge.spendTicket(request.signupToken())) {
+            throw new InvalidSignupTokenException();
+        }
+
+        securityEventRecorder.record(saved.getId(), SecurityEventType.EMAIL_VERIFIED, email);
+
+        return tokenIssuer.issue(saved, SecurityEventType.LOGIN_SUCCEEDED);
     }
 
     /**
@@ -127,17 +209,17 @@ public class AuthServiceImpl implements AuthService {
         // Resolved before the limit is checked, because the account is what the limit is about.
         // Keyed on the string the client sent, "bob" and "bob@example.com" were two counters for
         // one account and alternating them bought 10 attempts instead of 5.
-        User user = userRepository.findByUsernameIgnoreCaseAndDeletedAtIsNull(identifier)
-                .or(() -> userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(identifier))
-                .orElse(null);
+        User user = userRepository.findSignInAccount(identifier).orElse(null);
 
         String key = rateLimitKey(user, identifier);
-        loginRateLimiter.checkAllowed(key);
+        loginRateLimiter.acquireAttempt(key);
 
         // Checked after the limit, so a locked-out account costs one indexed read rather than a
         // bcrypt verification per attempt — the work an attacker would otherwise get for free.
+        // A closed account checks its password like an open one: what happened to it is told only
+        // to someone who proved they may open it, further down.
         boolean valid = user != null
-                && user.getStatus() == UserStatus.ACTIVE
+                && (user.getStatus() == UserStatus.ACTIVE || user.getStatus() == UserStatus.DEACTIVATED)
                 // An account created by a social login has no password to match. Stated rather
                 // than left to bcrypt — which does answer false for a null hash, after logging a
                 // warning about it on every attempt — because "there is no password" is a fact
@@ -146,7 +228,11 @@ public class AuthServiceImpl implements AuthService {
                 && HashUtils.bcryptMatches(request.password(), user.getPasswordHash());
 
         if (!valid) {
-            loginRateLimiter.recordFailure(key);
+            // Null for an identifier matching no account, which the recorder drops: an attempt
+            // against a name nobody holds has no history to belong to, and filing it under the
+            // typed string would make the log itself a way of asking which names are real.
+            securityEventRecorder.record(user == null ? null : user.getId(),
+                    SecurityEventType.LOGIN_FAILED);
             throw new InvalidCredentialsException();
         }
 
@@ -158,6 +244,8 @@ public class AuthServiceImpl implements AuthService {
             throw new EmailNotVerifiedException();
         }
 
+        user = accountClosureService.admit(user, request.wantsReactivation());
+
         // Admin-console sessions get a second factor: Cloudflare Turnstile, then an emailed OTP
         // unless this browser was remembered. Everyone else signs in on the password alone.
         if (user.getRole() == UserRole.ADMIN) {
@@ -168,7 +256,7 @@ public class AuthServiceImpl implements AuthService {
             }
         }
 
-        return issueTokens(user);
+        return tokenIssuer.issue(user, SecurityEventType.LOGIN_SUCCEEDED);
     }
 
     /**
@@ -237,7 +325,7 @@ public class AuthServiceImpl implements AuthService {
                 .filter(u -> !u.isDeleted() && u.getStatus() == UserStatus.ACTIVE)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        return issueTokens(user);
+        return tokenIssuer.reissue(user);
     }
 
     /**
@@ -259,6 +347,8 @@ public class AuthServiceImpl implements AuthService {
         if (token.wasRotatedBefore(now.minusMillis(jwtProperties.rotationGraceMillis()))) {
             log.warn("Refresh token replay detected for user {} — revoking all sessions", token.getUserId());
             sessionRevoker.revokeAllSessions(token.getUserId());
+            securityEventRecorder.record(token.getUserId(), SecurityEventType.SESSIONS_REVOKED,
+                    "refresh token replay detected");
         }
         return new InvalidRefreshTokenException();
     }
@@ -310,6 +400,10 @@ public class AuthServiceImpl implements AuthService {
                 .ifPresent(storedToken -> {
                     storedToken.revoke();
                     refreshTokenRepository.save(storedToken);
+                    // Inside the ifPresent: an unknown token revokes nothing, and logging a
+                    // logout that ended no session would put sessions in the trail that never
+                    // existed.
+                    securityEventRecorder.record(owner, SecurityEventType.LOGOUT);
                 });
     }
 
@@ -365,15 +459,23 @@ public class AuthServiceImpl implements AuthService {
                 .filter(u -> !u.isDeleted())
                 .orElseThrow(() -> new UserNotFoundException(String.valueOf(userId)));
 
-        return userMapper.toResponse(user);
+        // Only here: the client reads them to offer a social-only account the right way to
+        // reconfirm before closing it.
+        List<AuthProvider> providers = userIdentityRepository.findByUserIdOrderByCreatedAtAsc(userId).stream()
+                .map(UserIdentity::getProvider)
+                .distinct()
+                .toList();
+        return userMapper.toResponse(user, providers);
     }
 
     @Override
     @Transactional
-    public void addEmail(Long userId, AddEmailRequest request) {
-        turnstileService.verify(request.turnstileToken());
-
+    public OtpSentResponse addEmail(Long userId, AddEmailRequest request) {
         String email = request.email().toLowerCase(Locale.ROOT);
+        // Takes no ticket: once this has run the address is the account's own, so sending to it
+        // again is resendVerification's job, and the ticket handed back is for that.
+        String resendTicket = otpSendGate.admit(PURPOSE_EMAIL_VERIFICATION, email,
+                request.turnstileToken(), null);
 
         User user = userRepository.findById(userId)
                 .filter(u -> !u.isDeleted())
@@ -398,9 +500,12 @@ public class AuthServiceImpl implements AuthService {
         user.changeEmail(email);
         saveUnique(user, user.getUsername(), email);
 
+        securityEventRecorder.record(user.getId(), SecurityEventType.EMAIL_CHANGED, email);
+
         otpService.issue(user, VerificationTokenType.EMAIL_VERIFICATION,
                 otpProperties.emailVerificationExpiryMillis(),
                 otp -> new EmailVerificationRequestedEvent(email, otp));
+        return new OtpSentResponse(resendTicket);
     }
 
     @Override
@@ -411,12 +516,15 @@ public class AuthServiceImpl implements AuthService {
 
         user.markEmailVerified();
         userRepository.save(user);
+
+        securityEventRecorder.record(user.getId(), SecurityEventType.EMAIL_VERIFIED, user.getEmail());
     }
 
     @Override
     @Transactional
-    public void resendVerification(ResendVerificationRequest request) {
-        turnstileService.verify(request.turnstileToken());
+    public OtpSentResponse resendVerification(ResendVerificationRequest request) {
+        String resendTicket = otpSendGate.admit(PURPOSE_EMAIL_VERIFICATION, request.email(),
+                request.turnstileToken(), request.resendTicket());
         otpRateLimiter.checkAllowed(PURPOSE_EMAIL_VERIFICATION, request.email());
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
@@ -424,19 +532,30 @@ public class AuthServiceImpl implements AuthService {
                 .ifPresent(user -> otpService.issue(user, VerificationTokenType.EMAIL_VERIFICATION,
                         otpProperties.emailVerificationExpiryMillis(),
                         otp -> new EmailVerificationRequestedEvent(user.getEmail(), otp)));
+        // Handed back whether or not a code went out; otherwise the ticket would tell which
+        // addresses belong to an unverified account.
+        return new OtpSentResponse(resendTicket);
     }
 
     @Override
     @Transactional
-    public void forgotPassword(ForgotPasswordRequest request) {
-        turnstileService.verify(request.turnstileToken());
+    public OtpSentResponse forgotPassword(ForgotPasswordRequest request) {
+        String resendTicket = otpSendGate.admit(PURPOSE_PASSWORD_RESET, request.email(),
+                request.turnstileToken(), request.resendTicket());
         otpRateLimiter.checkAllowed(PURPOSE_PASSWORD_RESET, request.email());
 
         userRepository.findByEmailIgnoreCaseAndDeletedAtIsNull(request.email())
                 .filter(user -> user.getStatus() == UserStatus.ACTIVE)
-                .ifPresent(user -> otpService.issue(user, VerificationTokenType.PASSWORD_RESET,
-                        otpProperties.passwordResetExpiryMillis(),
-                        otp -> new PasswordResetRequestedEvent(user.getEmail(), otp)));
+                .ifPresent(user -> {
+                    otpService.issue(user, VerificationTokenType.PASSWORD_RESET,
+                            otpProperties.passwordResetExpiryMillis(),
+                            otp -> new PasswordResetRequestedEvent(user.getEmail(), otp));
+                    securityEventRecorder.record(user.getId(),
+                            SecurityEventType.PASSWORD_RESET_REQUESTED);
+                });
+        // Handed back whether or not the address has an account; otherwise the ticket would tell
+        // which ones do.
+        return new OtpSentResponse(resendTicket);
     }
 
     @Override
@@ -444,14 +563,63 @@ public class AuthServiceImpl implements AuthService {
     public void resetPassword(ResetPasswordRequest request) {
         User user = otpService.consume(PURPOSE_PASSWORD_RESET, VerificationTokenType.PASSWORD_RESET,
                 request.email(), request.otp());
+        setNewPassword(user, request.newPassword());
+    }
 
-        user.changePasswordHash(HashUtils.bcryptHash(request.newPassword()));
+    /**
+     * The code is spent here, not at completion, so a wrong one is answered on the code screen —
+     * under the same guess budget as {@link #resetPassword}, since {@link OtpService#consume}
+     * counts it. Nothing about the account changes until the ticket is redeemed.
+     */
+    @Override
+    @Transactional
+    public PasswordResetTicketResponse verifyPasswordReset(VerifyPasswordResetRequest request) {
+        User user = otpService.consume(PURPOSE_PASSWORD_RESET, VerificationTokenType.PASSWORD_RESET,
+                request.email(), request.otp());
+        return new PasswordResetTicketResponse(passwordResetChallenge.issueTicket(user.getId()),
+                PasswordResetChallenge.TICKET_TTL.toMillis());
+    }
+
+    /**
+     * Spent before anything is written: there is no retryable failure after it, unlike a taken
+     * username at {@link #completeSignup}, so a ticket worth keeping does not exist. An account
+     * deleted since the code was spent is answered like an expired ticket.
+     */
+    @Override
+    @Transactional
+    public void completePasswordReset(CompletePasswordResetRequest request) {
+        User user = passwordResetChallenge.spendTicket(request.resetToken())
+                .flatMap(userRepository::findById)
+                .filter(u -> !u.isDeleted())
+                .orElseThrow(InvalidResetTokenException::new);
+        setNewPassword(user, request.newPassword());
+    }
+
+    /** What a proven reset does, whichever of the two flows proved it. */
+    private void setNewPassword(User user, String newPassword) {
+        // Before the address is marked verified below, which would move the cutoff this reads: the
+        // provider links attached before the address was proven may be a squatter's, and a reset is
+        // the mailbox owner taking the account over. See IdentityReconfirmation.
+        identityReconfirmation.onMailboxOwnerTakesOver(user);
+
+        user.changePasswordHash(HashUtils.bcryptHash(newPassword));
+        // The code was mailed to the address, so spending it proves the address. Without this an
+        // account created through a social login that never asserted its address could set a
+        // password here and still not log in with it: login refuses unverified addresses.
+        if (!user.isEmailVerified()) {
+            user.markEmailVerified();
+        }
         userRepository.save(user);
 
         // Revoking refresh tokens alone left the attacker's already-issued access token working
         // until it expired — the reset is usually done *because* the account is suspected stolen,
         // so the whole point is to cut access now.
         sessionRevoker.revokeAllSessions(user.getId());
+
+        // One entry rather than two: a completed reset always ends every session, so a separate
+        // SESSIONS_REVOKED beside it would read as a second thing having happened.
+        securityEventRecorder.record(user.getId(), SecurityEventType.PASSWORD_RESET_COMPLETED,
+                "all sessions revoked");
     }
 
     /**
@@ -474,10 +642,46 @@ public class AuthServiceImpl implements AuthService {
     }
 
     /**
+     * The account both password signups end in — {@link #register} and {@link #completeSignup} —
+     * and the event user-service builds its profile from. The event goes to the outbox in the
+     * caller's transaction, so a caller that throws after this takes both back.
+     *
+     * <p>The exists checks are what name the taken field in the common case; {@link #saveUnique}
+     * is the line behind them for a request that raced past.
+     *
+     * @param emailVerified true when the address was proven before the account existed
+     */
+    private User createPasswordAccount(String username, String email, String password,
+                                       boolean emailVerified) {
+        if (userRepository.existsByUsernameIgnoreCaseAndDeletedAtIsNull(username)) {
+            throw new UsernameAlreadyExistsException(username);
+        }
+        if (userRepository.existsByEmailIgnoreCaseAndDeletedAtIsNull(email)) {
+            throw new EmailAlreadyExistsException(email);
+        }
+
+        User user = User.builder()
+                .username(username)
+                .email(email)
+                .passwordHash(HashUtils.bcryptHash(password))
+                .role(UserRole.USER)
+                .status(UserStatus.ACTIVE)
+                .build();
+        if (emailVerified) {
+            user.markEmailVerified();
+        }
+
+        User saved = saveUnique(user, username, email);
+        userEventProducer.publishUserRegistered(
+                UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail()));
+        return saved;
+    }
+
+    /**
      * Persists the new account, converting a lost uniqueness race into the same 409 the
      * sequential case returns.
      *
-     * <p>The existsBy checks in {@link #register} are not the guarantee: two concurrent
+     * <p>The existsBy checks in {@link #createPasswordAccount} are not the guarantee: two concurrent
      * registrations for the same identity both read nothing and both go on to insert, and only
      * uq_users_email / uq_users_username stops the second. The id is assigned rather than
      * generated, so Hibernate defers the INSERT to flush — left to {@code save()} the violation
@@ -516,9 +720,5 @@ public class AuthServiceImpl implements AuthService {
             return new EmailAlreadyExistsException(email);
         }
         return ex;
-    }
-
-    private TokenResponse issueTokens(User user) {
-        return tokenIssuer.issue(user);
     }
 }

@@ -17,6 +17,7 @@ public class JaveVideoProbe implements VideoProbe {
     @Override
     public ProbedVideo probe(String url) {
         try {
+            // A file: URL carries a drive letter on Windows that ffmpeg cannot open; hand it a File.
             MultimediaObject media = url.startsWith("file:")
                     ? new MultimediaObject(java.nio.file.Path.of(URI.create(url)).toFile())
                     : new MultimediaObject(URI.create(url).toURL());

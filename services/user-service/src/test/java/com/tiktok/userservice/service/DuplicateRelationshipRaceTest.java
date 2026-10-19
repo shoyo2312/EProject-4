@@ -1,8 +1,11 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.userservice.entity.UserProfile;
 import com.tiktok.userservice.exception.AlreadyBlockedException;
 import com.tiktok.userservice.exception.AlreadyFollowingException;
 import com.tiktok.userservice.exception.AlreadyMutedException;
+import com.tiktok.userservice.exception.AlreadyRequestedException;
+import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserMuteRepository;
@@ -11,13 +14,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -53,9 +56,9 @@ class DuplicateRelationshipRaceTest {
 
     @Container
     @ServiceConnection
-    static PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
     @Autowired
@@ -70,14 +73,17 @@ class DuplicateRelationshipRaceTest {
     @Autowired
     private UserProfileService userProfileService;
 
-    @SpyBean
+    @MockitoSpyBean
     private UserFollowRepository userFollowRepository;
 
-    @SpyBean
+    @MockitoSpyBean
     private UserBlockRepository userBlockRepository;
 
-    @SpyBean
+    @MockitoSpyBean
     private UserMuteRepository userMuteRepository;
+
+    @MockitoSpyBean
+    private FollowRequestRepository followRequestRepository;
 
     @Autowired
     private UserProfileRepository userProfileRepository;
@@ -90,6 +96,7 @@ class DuplicateRelationshipRaceTest {
         userFollowRepository.deleteAll();
         userBlockRepository.deleteAll();
         userMuteRepository.deleteAll();
+        followRequestRepository.deleteAll();
         userProfileRepository.deleteAll();
 
         userProfileService.createFromRegisteredEvent(1L, "alice", null);
@@ -155,5 +162,22 @@ class DuplicateRelationshipRaceTest {
         // not the normal path.
         assertThatThrownBy(() -> followService.follow(1L, 2L))
                 .isInstanceOf(AlreadyFollowingException.class);
+    }
+
+    /** Same race as the follow edge, same backstop: uq_user_follow_requests_requester_target. */
+    @Test
+    void followRequest_losingADuplicateRace_reports409NotAServerError() {
+        userProfileRepository.save(UserProfile.builder()
+                .userId(3L)
+                .displayName("carol")
+                .privateAccount(true)
+                .build());
+        followService.follow(1L, 3L);
+        doReturn(Optional.empty())
+                .when(followRequestRepository)
+                .findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 3L);
+
+        assertThatThrownBy(() -> followService.follow(1L, 3L))
+                .isInstanceOf(AlreadyRequestedException.class);
     }
 }

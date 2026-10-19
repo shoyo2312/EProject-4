@@ -1,5 +1,6 @@
 package com.tiktok.adminservice.service;
 
+import com.tiktok.adminservice.client.AccountRoleClient;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.DailyAdminStatsResponse;
@@ -14,6 +15,7 @@ import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.event.producer.AdminEventProducer;
 import com.tiktok.adminservice.exception.InvalidModerationTargetException;
+import com.tiktok.adminservice.exception.InvalidSortException;
 import com.tiktok.adminservice.exception.ReportAlreadyResolvedException;
 import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
@@ -22,10 +24,12 @@ import com.tiktok.adminservice.repository.ModerationActionRepository;
 import com.tiktok.adminservice.repository.ReportQueueRow;
 import com.tiktok.adminservice.repository.ReportRepository;
 import lombok.RequiredArgsConstructor;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +37,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
@@ -45,13 +50,15 @@ public class AdminServiceImpl implements AdminService {
     private final ModerationActionRepository moderationActionRepository;
     private final AdminMapper adminMapper;
     private final AdminEventProducer adminEventProducer;
+    private final AccountRoleClient accountRoleClient;
 
     @Override
     @Transactional
     public ReportResponse submitReport(Long reporterId, SubmitReportRequest request) {
         // Checked here and not only at resolve time: an id nobody can act on is a report that
-        // cannot be closed, discovered days later by the admin who tries.
-        request.targetType().validateTargetId(request.targetId());
+        // cannot be closed, discovered days later by the admin who tries. Stored in its one
+        // spelling, or "007" and "7" would be two targets — see ReportTargetType.
+        String targetId = request.targetType().canonicalTargetId(request.targetId());
 
         // The ordinary repeat — the same user reporting the same thing again — answers with the
         // report they already filed. Reading first rather than inserting and recovering: Postgres
@@ -59,7 +66,7 @@ public class AdminServiceImpl implements AdminService {
         // against a dead transaction and fails with "current transaction is aborted".
         Optional<Report> existing = reportRepository
                 .findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                        reporterId, request.targetType(), request.targetId());
+                        reporterId, request.targetType(), targetId);
         if (existing.isPresent()) {
             return adminMapper.toResponse(existing.get());
         }
@@ -68,12 +75,12 @@ public class AdminServiceImpl implements AdminService {
         // bulk of a busy queue: the video is gone, everyone who saw it before reports it, and an
         // admin opens fifty rows to decide nothing. They are recorded — the report is still the
         // record that someone objected — and closed on arrival.
-        boolean alreadyEnforced = standingEnforcement(request.targetType(), request.targetId()).isPresent();
+        boolean alreadyEnforced = standingEnforcement(request.targetType(), targetId).isPresent();
 
         Report report = Report.builder()
                 .reporterId(reporterId)
                 .targetType(request.targetType())
-                .targetId(request.targetId())
+                .targetId(targetId)
                 .reason(request.reason())
                 .status(alreadyEnforced ? ReportStatus.RESOLVED : ReportStatus.PENDING)
                 // resolvedBy stays null, which is how the console tells a decision the service
@@ -81,31 +88,60 @@ public class AdminServiceImpl implements AdminService {
                 .resolvedAt(alreadyEnforced ? Instant.now() : null)
                 .build();
 
+        Report saved;
         try {
             // Flushed here so the unique index answers inside this method. Left to commit time it
             // would surface as a raw DataIntegrityViolationException from the transaction proxy
             // and be served as a 500.
-            return adminMapper.toResponse(reportRepository.saveAndFlush(report));
+            saved = reportRepository.saveAndFlush(report);
         } catch (DataIntegrityViolationException e) {
             // Lost the race with a concurrent submit of the same report. 409 rather than the
             // other request's row, because that row cannot be read from this transaction any more.
-            throw new ReportAlreadySubmittedException();
+            // Only for that index: any other violation is a bug on our side, and calling it a
+            // duplicate told the reporter their report was filed when nothing was.
+            if (e.getCause() instanceof ConstraintViolationException cause
+                    && "idx_reports_one_per_reporter_target".equalsIgnoreCase(cause.getConstraintName())) {
+                throw new ReportAlreadySubmittedException();
+            }
+            throw e;
         }
+
+        if (!alreadyEnforced) {
+            adminEventProducer.publishReportSubmitted(saved);
+        }
+        return adminMapper.toResponse(saved);
     }
 
     @Override
-    public Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType, Pageable pageable) {
-        Page<Report> reports;
-        if (status != null && targetType != null) {
-            reports = reportRepository.findByStatusAndTargetTypeAndDeletedAtIsNull(status, targetType, pageable);
-        } else if (status != null) {
-            reports = reportRepository.findByStatusAndDeletedAtIsNull(status, pageable);
-        } else if (targetType != null) {
-            reports = reportRepository.findByTargetTypeAndDeletedAtIsNull(targetType, pageable);
-        } else {
-            reports = reportRepository.findByDeletedAtIsNull(pageable);
+    public Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType,
+                                            String targetId, Long reporterId, String q,
+                                            Instant from, Instant to, Pageable pageable) {
+        // Canonical only when the type says how: a bare targetId filter is matched as typed.
+        String id = targetType != null && targetId != null ? targetType.canonicalTargetId(targetId) : targetId;
+        String term = q == null || q.isBlank() ? null : q.strip();
+        // Contains, not equals, on the target id: a comment target is "videoId:commentId", and the
+        // id an admin has to hand is usually one half of it.
+        String pattern = term == null ? null : "%" + escapeLike(term.toLowerCase(Locale.ROOT)) + "%";
+        return reportRepository.findFiltered(status, targetType, id, reporterId, pattern,
+                        term == null ? null : asReportId(term), from, to, pageable)
+                .map(adminMapper::toResponse);
+    }
+
+    /** LIKE's own characters, escaped with the backslash the query names, so they match as typed. */
+    private static String escapeLike(String term) {
+        return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+    }
+
+    /** The search read as a report id, or null when it is not one. */
+    private static Long asReportId(String term) {
+        if (term.isEmpty() || !term.chars().allMatch(Character::isDigit)) {
+            return null;
         }
-        return reports.map(adminMapper::toResponse);
+        try {
+            return Long.valueOf(term);
+        } catch (NumberFormatException tooLong) {
+            return null;
+        }
     }
 
     @Override
@@ -144,10 +180,15 @@ public class AdminServiceImpl implements AdminService {
         // them up — see ModerationActionType. Reports predating the submit-time check above can
         // still carry an id this action cannot use, so both halves are verified.
         request.actionType().requireApplicableTo(report.getTargetType());
-        report.getTargetType().validateTargetId(report.getTargetId());
+        String targetId = report.getTargetType().canonicalTargetId(report.getTargetId());
+        if (!request.actionType().answersReports()) {
+            throw new InvalidModerationTargetException(
+                    request.actionType() + " is not a decision on a report");
+        }
 
-        record(adminId, report.getTargetType(), report.getTargetId(),
-                request.actionType(), request.reason(), report.getId());
+        record(adminId, report.getTargetType(), targetId,
+                request.actionType(), request.reason(), report.getId(),
+                bannedUntil(request.actionType(), request.banDays()));
 
         ReportStatus finalStatus = request.actionType().resolutionStatus();
         report.resolve(adminId, finalStatus);
@@ -155,10 +196,26 @@ public class AdminServiceImpl implements AdminService {
         // Everyone else who reported the same thing is answered by the same decision. Without
         // this their reports stay PENDING and come back up the queue as a target with no
         // history — the admin who takes it next sees a video already down and decides it again.
-        reportRepository.closePendingFor(report.getTargetType(), report.getTargetId(),
+        reportRepository.closePendingFor(report.getTargetType(), targetId,
                 finalStatus, adminId, report.getId(), Instant.now());
+        adminEventProducer.publishReportsResolved(report.getTargetType(), targetId);
 
         return adminMapper.toResponse(report);
+    }
+
+    /**
+     * Implemented here rather than as a {@code default} on the interface: a default method is
+     * self-invocation once the proxy calls through to it, so the {@code @Transactional} on the
+     * overload below never applied. The two repository writes below still committed on their own
+     * (Spring Data wraps {@code save}), the event published and the status changed — and then the
+     * bulk {@code closePendingFor} update failed with TransactionRequiredException, so the caller
+     * got a 500 for an action that had in fact happened.
+     */
+    @Override
+    @Transactional
+    public ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
+                                            ModerationActionType actionType, String reason) {
+        return moderate(adminId, targetType, targetId, actionType, reason, null);
     }
 
     @Override
@@ -166,29 +223,30 @@ public class AdminServiceImpl implements AdminService {
     public ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
                                             ModerationActionType actionType, String reason, Integer banDays) {
         actionType.requireApplicableTo(targetType);
-        targetType.validateTargetId(targetId);
+        String id = targetType.canonicalTargetId(targetId);
 
-        // Only a ban has a duration, and only here is it turned into an instant: computing it at
-        // the consumer would date the ban from whenever the event happened to be delivered.
-        Instant bannedUntil = banDays != null && actionType == ModerationActionType.BAN_USER
-                ? Instant.now().plus(banDays, ChronoUnit.DAYS)
-                : null;
-
-        ModerationAction action = record(adminId, targetType, targetId, actionType, reason, null, bannedUntil);
+        ModerationAction action = record(adminId, targetType, id, actionType, reason, null,
+                bannedUntil(actionType, banDays));
 
         // The console resolves a whole queue row through this path — one decision, every
         // standing report against that target closed. It is also what a takedown taken straight
         // from the video listing does, which is the point: an action nobody tied to a report
         // still answers the reports, and leaving them PENDING is how the same video comes back
-        // to the top of the queue an hour after it was dealt with.
-        reportRepository.closePendingFor(targetType, targetId, actionType.resolutionStatus(),
-                adminId, null, Instant.now());
+        // to the top of the queue an hour after it was dealt with. A purge is the exception: it
+        // says nothing about whether the reports were right, so they stay where they are.
+        if (actionType.answersReports()) {
+            reportRepository.closePendingFor(targetType, id, actionType.resolutionStatus(),
+                    adminId, null, Instant.now());
+            adminEventProducer.publishReportsResolved(targetType, id);
+        }
 
         return adminMapper.toResponse(action);
     }
 
     @Override
-    public Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Pageable pageable) {
+    public Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Long adminId,
+                                                      ModerationActionType actionType, Instant from, Instant to,
+                                                      Pageable pageable) {
         // Both or neither. Silently ignoring a half-filled filter answers a narrow question with
         // the whole platform's audit log, which reads as "no actions were taken against this one".
         if (targetType == null ^ targetId == null) {
@@ -196,21 +254,51 @@ public class AdminServiceImpl implements AdminService {
                     "targetType and targetId must be given together, or both omitted");
         }
 
-        Page<ModerationAction> actions = targetType != null
-                ? moderationActionRepository.findByTargetTypeAndTargetIdOrderByCreatedAtDesc(targetType, targetId, pageable)
-                : moderationActionRepository.findAllByOrderByCreatedAtDesc(pageable);
-        return actions.map(adminMapper::toResponse);
+        String id = targetType != null ? targetType.canonicalTargetId(targetId) : null;
+        return moderationActionRepository.findFiltered(
+                        targetType, id, adminId, actionType, from, to, auditOrder(pageable))
+                .map(adminMapper::toResponse);
+    }
+
+    /**
+     * The orders the audit log can be read in: the action's own columns worth sorting by. Spring
+     * Data answers any other property with a 500, and the reason is free text that no one orders
+     * a log by.
+     */
+    private static final List<String> AUDIT_SORT_PROPERTIES = List.of("createdAt", "actionType", "targetType");
+
+    /**
+     * Newest first when the caller asks for nothing, and every order finished with createdAt and
+     * then id. Rows that tie on the requested column — most of them, sorted by type — would
+     * otherwise come back in whatever order Postgres likes, and a row could land on two pages or
+     * on none.
+     */
+    static Pageable auditOrder(Pageable pageable) {
+        Sort requested = pageable.getSort();
+        for (Sort.Order order : requested) {
+            if (!AUDIT_SORT_PROPERTIES.contains(order.getProperty())) {
+                throw new InvalidSortException("The audit log cannot be sorted by " + order.getProperty());
+            }
+        }
+        Sort sort = requested.getOrderFor("createdAt") != null
+                ? requested
+                : requested.and(Sort.by(Sort.Direction.DESC, "createdAt"));
+        sort = sort.and(Sort.by(sort.getOrderFor("createdAt").getDirection(), "id"));
+        return pageable.isPaged()
+                ? PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort)
+                : Pageable.unpaged(sort);
     }
 
     @Override
     public long countStrikes(ReportTargetType targetType, String targetId) {
         return moderationActionRepository.countByTargetTypeAndTargetIdAndActionTypeIn(
-                targetType, targetId, ModerationActionType.ENFORCING);
+                targetType, targetType.canonicalTargetId(targetId), ModerationActionType.ENFORCING);
     }
 
     @Override
     public long countReports(ReportTargetType targetType, String targetId) {
-        return reportRepository.countByTargetTypeAndTargetIdAndDeletedAtIsNull(targetType, targetId);
+        return reportRepository.countByTargetTypeAndTargetIdAndDeletedAtIsNull(
+                targetType, targetType.canonicalTargetId(targetId));
     }
 
     @Override
@@ -268,30 +356,53 @@ public class AdminServiceImpl implements AdminService {
 
     /**
      * The enforcement currently standing against a target, if any — the newest ban, takedown or
-     * removal that has not since been undone. Empty means nothing has been done to it, or the
-     * last word was a restore or an unban.
+     * removal that has not since been undone or run out. Empty means nothing has been done to it,
+     * the last word was a restore or an unban, or the last word was a ban whose term is over.
      *
      * <p>Read from this service's own audit log rather than asked of video-service or
      * auth-service: §6 forbids reaching into another service's database, and an HTTP call per
      * submitted report would put the report path behind another service's availability for an
      * answer this one already holds.
+     *
+     * <p>A temporary ban ends without anything landing in that log: auth-service's sweep lifts it
+     * and tells nobody. Its end date is in the log, though, and has to be read — otherwise the
+     * ban's audit row stands forever, and every report against the account it no longer holds is
+     * closed on arrival and never reaches an admin.
      */
     private Optional<ModerationAction> standingEnforcement(ReportTargetType targetType, String targetId) {
+        Instant now = Instant.now();
         return moderationActionRepository
                 .findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
                         targetType, targetId, ModerationActionType.STATE_CHANGING)
-                .filter(action -> action.getActionType().effect() == ModerationActionType.Effect.ENFORCE);
+                .filter(action -> action.getActionType().effect() == ModerationActionType.Effect.ENFORCE)
+                .filter(action -> action.getBannedUntil() == null || action.getBannedUntil().isAfter(now));
+    }
+
+    /**
+     * Only a ban has a duration, and only here is it turned into an instant: computing it at the
+     * consumer would date the ban from whenever the event happened to be delivered.
+     */
+    private static Instant bannedUntil(ModerationActionType actionType, Integer banDays) {
+        return banDays != null && actionType == ModerationActionType.BAN_USER
+                ? Instant.now().plus(banDays, ChronoUnit.DAYS)
+                : null;
     }
 
     /** Writes the audit row and the outbox event for one decision. */
     private ModerationAction record(Long adminId, ReportTargetType targetType, String targetId,
-                                    ModerationActionType actionType, String reason, Long reportId) {
-        return record(adminId, targetType, targetId, actionType, reason, reportId, null);
-    }
-
-    private ModerationAction record(Long adminId, ReportTargetType targetType, String targetId,
                                     ModerationActionType actionType, String reason, Long reportId,
                                     Instant bannedUntil) {
+        // auth-service refuses to ban any admin account, since only it knows roles, and its refusal
+        // reached nobody: this side kept an audit row for a ban that never landed, closed the
+        // reports against the account as handled, and the services that hide a banned owner's
+        // videos hid an admin's. So a ban asks the role first. The self-ban check stays ahead of
+        // it — it needs no call, and still holds when auth-service cannot be asked.
+        if (actionType == ModerationActionType.BAN_USER && targetId.equals(String.valueOf(adminId))) {
+            throw new InvalidModerationTargetException("An admin cannot ban their own account");
+        }
+        if (actionType == ModerationActionType.BAN_USER && accountRoleClient.isAdmin(Long.valueOf(targetId))) {
+            throw new InvalidModerationTargetException("An admin account cannot be banned");
+        }
         // No existence check against the owning service: this one cannot read its database, and an
         // extra HTTP call would only move the failure. An action against an id that does not exist
         // is a no-op on the consumer side, and the audit row is still the honest record of the

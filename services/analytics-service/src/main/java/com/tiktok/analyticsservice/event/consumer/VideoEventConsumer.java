@@ -1,6 +1,6 @@
 package com.tiktok.analyticsservice.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.analyticsservice.repository.EngagementEventRepository;
 import com.tiktok.analyticsservice.repository.TrainingDataRepository;
 import com.tiktok.event.video.VideoPublishedEvent;

@@ -1,6 +1,6 @@
 package com.tiktok.mediaworker.event.consumer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import com.tiktok.mediaworker.service.MediaQuarantineService;
@@ -42,9 +42,10 @@ public class AdminModerationEventConsumer {
                           @Header(name = "eventType", required = false) byte[] eventTypeHeader) {
         String eventType = eventTypeHeader == null ? null : new String(eventTypeHeader, StandardCharsets.UTF_8);
         if (VIDEO_TAKEN_DOWN.equals(eventType)) {
-            quarantine.quarantine(objectMapper.readValue(payload, VideoTakenDownEvent.class).videoId());
+            quarantine.hold(objectMapper.readValue(payload, VideoTakenDownEvent.class).videoId(),
+                    MediaQuarantineService.Hold.TAKEN_DOWN);
         } else if (VIDEO_RESTORED.equals(eventType)) {
-            quarantine.release(objectMapper.readValue(payload, VideoRestoredEvent.class).videoId());
+            quarantine.restore(objectMapper.readValue(payload, VideoRestoredEvent.class).videoId());
         } else {
             log.debug("Ignoring moderation eventType={}", eventType);
         }

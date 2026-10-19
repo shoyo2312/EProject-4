@@ -17,7 +17,8 @@ import org.springframework.web.bind.annotation.RestController;
  * A user's interaction history. Likes and saves are "me" only — they are private, and a
  * {userId} path would be an authorisation question this service has no answer for. Reposts are
  * the exception: reposting is a public act, shown on the reposter's profile to everyone, so that
- * listing takes a {userId} and needs no token.
+ * listing takes a {userId} and needs no token — unless the account is private, when the token is
+ * how a follower is told from a stranger.
  */
 @RestController
 @RequestMapping("/api/v1/interactions/users")
@@ -49,13 +50,17 @@ public class UserInteractionController {
                 saveService.listSavedVideos(currentUserId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
     }
 
-    /** Public: anyone opening a profile's Reposts tab sees the same list its owner does. */
+    /**
+     * Public for a public account: anyone opening the Reposts tab sees what its owner sees. A
+     * private account's is for its owner and followers — 403 PRIVATE_ACCOUNT to anyone else.
+     */
     @GetMapping("/{userId}/reposts")
     public ApiResponse<VideoIdPageResponse> listRepostedVideos(
+            @AuthenticationPrincipal Long currentUserId,
             @PathVariable Long userId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.success(
-                repostService.listReposts(userId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
+        return ApiResponse.success(repostService.listReposts(
+                currentUserId, userId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
     }
 }

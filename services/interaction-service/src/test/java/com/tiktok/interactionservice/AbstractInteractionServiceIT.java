@@ -3,12 +3,12 @@ package com.tiktok.interactionservice;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
-import org.testcontainers.containers.CassandraContainer;
+import org.testcontainers.cassandra.CassandraContainer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -38,7 +38,7 @@ public abstract class AbstractInteractionServiceIT {
 
     @Container
     @ServiceConnection
-    static final CassandraContainer<?> CASSANDRA = new CassandraContainer<>("cassandra:5.0")
+    static final CassandraContainer CASSANDRA = new CassandraContainer("cassandra:5.0")
             .withInitScript("cassandra-init-test.cql");
 
     @Container
@@ -46,7 +46,7 @@ public abstract class AbstractInteractionServiceIT {
     static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
             .withExposedPorts(6379);
 
-    @MockBean
+    @MockitoBean
     protected KafkaTemplate<String, String> kafkaTemplate;
 
     /**

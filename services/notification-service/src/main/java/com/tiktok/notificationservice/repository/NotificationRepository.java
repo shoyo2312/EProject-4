@@ -5,15 +5,11 @@ import com.tiktok.notificationservice.entity.NotificationType;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 
-public interface NotificationRepository extends MongoRepository<Notification, String> {
+public interface NotificationRepository extends MongoRepository<Notification, String>, NotificationRepositoryCustom {
 
-    List<Notification> findByRecipientIdOrderByCreatedAtDesc(Long recipientId);
-
-    List<Notification> findByRecipientIdAndReadFalse(Long recipientId);
-
+    /** Backed by {@code recipient_unread_idx}, so the badge does not scan the whole inbox. */
     long countByRecipientIdAndReadFalse(Long recipientId);
 
     /**

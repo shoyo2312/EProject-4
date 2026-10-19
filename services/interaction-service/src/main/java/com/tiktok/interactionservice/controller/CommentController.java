@@ -4,6 +4,7 @@ import com.tiktok.common.response.ApiResponse;
 import com.tiktok.interactionservice.dto.request.AddCommentRequest;
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
+import com.tiktok.interactionservice.dto.response.CommentPermissionResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.service.CommentService;
 import jakarta.validation.Valid;
@@ -57,6 +58,18 @@ public class CommentController {
     }
 
     /**
+     * Whether the caller may comment here, so the client can show why instead of a comment box
+     * that only fails on send. Not under {@code /comments/}, where the segment after it is a
+     * comment id.
+     */
+    @GetMapping("/videos/{videoId}/comment-permission")
+    public ApiResponse<CommentPermissionResponse> commentPermission(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long videoId) {
+        return ApiResponse.success(commentService.commentPermission(videoId, currentUserId));
+    }
+
+    /**
      * The replies of one comment. Split off the listing above, which returns top-level comments
      * only: a thread of 200 replies is not something every comment page should be carrying.
      */
@@ -69,6 +82,29 @@ public class CommentController {
             @RequestParam(defaultValue = "3") int size) {
         return ApiResponse.success(commentService.listReplies(
                 videoId, commentId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE), currentUserId));
+    }
+
+    /**
+     * The comments the text rules held on the caller's video, newest first — the owner's review
+     * queue. Not under {@code /comments/}, where the segment after it is a comment id.
+     */
+    @GetMapping("/videos/{videoId}/held-comments")
+    public ApiResponse<CommentPageResponse> listHeldComments(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long videoId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success(commentService.listHeld(
+                videoId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE), currentUserId));
+    }
+
+    /** The owner publishes a held comment. Rejecting one is deleting it, below. */
+    @PostMapping("/videos/{videoId}/comments/{commentId}/approve")
+    public ApiResponse<CommentResponse> approveComment(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable Long videoId,
+            @PathVariable Long commentId) {
+        return ApiResponse.success(commentService.approveComment(videoId, commentId, currentUserId));
     }
 
     @DeleteMapping("/videos/{videoId}/comments/{commentId}")

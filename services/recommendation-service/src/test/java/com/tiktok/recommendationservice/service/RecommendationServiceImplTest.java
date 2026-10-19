@@ -14,13 +14,17 @@ import org.springframework.data.redis.connection.zset.Weights;
 import org.springframework.data.redis.core.HashOperations;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.RedisScript;
 
+import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -46,6 +50,9 @@ class RecommendationServiceImplTest {
     @Mock
     private HashOperations<String, Object, Object> hashOperations;
 
+    @Mock
+    private ValueOperations<String, String> valueOperations;
+
     private RecommendationServiceImpl recommendationService;
 
     @BeforeEach
@@ -54,6 +61,8 @@ class RecommendationServiceImplTest {
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(redisTemplate.<Object, Object>opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        MockPipeline.install(redisTemplate);
     }
 
     /**
@@ -72,6 +81,7 @@ class RecommendationServiceImplTest {
         recommendationService.recordVideoDeleted("vid1");
 
         verify(hashOperations).delete("reco:video:owner", "vid1");
+        verify(setOperations).remove("reco:video:held", "vid1");
     }
 
     /**
@@ -145,6 +155,25 @@ class RecommendationServiceImplTest {
     }
 
     /**
+     * A failed transcode can still be rescued by a redelivered publication, and the rescue comes
+     * back through recordVideoReady. A tombstone would turn it away for eight days, and erasing the
+     * private flag would let a private video into trending once it got in.
+     */
+    @Test
+    void recordTranscodeFailed_withdrawsTheVideo_butLeavesNoTombstoneAndKeepsTheStash() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordTranscodeFailed("vid1");
+
+        verify(zSetOperations).remove("reco:tag:dance", (Object) "vid1");
+        verify(zSetOperations).remove("reco:trending", (Object) "vid1");
+        verify(valueOperations, never()).set(eq("reco:video:deleted:vid1"), anyString(), any(java.time.Duration.class));
+        verify(redisTemplate, never()).delete("reco:video:tags:vid1");
+        verify(hashOperations, never()).delete(eq("reco:video:owner"), any());
+        verify(setOperations, never()).remove(eq("reco:video:private"), any());
+    }
+
+    /**
      * A takedown hid the video everywhere except here: it stayed in trending and the tag indexes,
      * so the feed kept handing out an id that hydrates to nothing and costs the viewer a slot.
      */
@@ -163,6 +192,47 @@ class RecommendationServiceImplTest {
         verify(redisTemplate, never()).delete("reco:video:tags:vid1");
     }
 
+    /**
+     * A deletion clears every other marker the video had, so it leaves one of its own — outliving
+     * the broker's retention, since that is how late an event about the video can still arrive.
+     */
+    @Test
+    void recordVideoDeleted_leavesATombstoneThatOutlivesAnyDelivery() {
+        recommendationService.recordVideoDeleted("vid1");
+
+        verify(valueOperations).set("reco:video:deleted:vid1", "1", RecoKeys.DELETED_TTL);
+        assertThat(RecoKeys.DELETED_TTL).isGreaterThan(java.time.Duration.ofDays(7));
+    }
+
+    /**
+     * Likes arrive on another topic than the deletion, so one consumed late landed in the current
+     * hour's bucket and the next rebuild put the deleted video back into trending for a day.
+     */
+    @Test
+    void engagementArrivingAfterTheDeletion_doesNotPutTheVideoBackIntoTrending() {
+        when(redisTemplate.hasKey("reco:video:deleted:vid1")).thenReturn(true);
+
+        recommendationService.recordLike("vid1", true);
+        recommendationService.recordComment("vid1", true);
+
+        verify(zSetOperations, never()).incrementScore(startsWith("reco:trend:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * A video deleted while it was still transcoding or in moderation gets its verdict afterwards,
+     * and an approval scored and indexed it as a fresh publication.
+     */
+    @Test
+    void recordVideoReady_forADeletedVideo_recordsNothing() {
+        when(redisTemplate.hasKey("reco:video:deleted:vid1")).thenReturn(true);
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordVideoReady("vid1");
+
+        verify(zSetOperations, never()).add(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations, never()).incrementScore(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
     /** Otherwise the owner's own likes on a hidden video walk it back into trending. */
     @Test
     void engagementOnAHiddenVideo_doesNotPutItBackIntoTrending() {
@@ -175,25 +245,136 @@ class RecommendationServiceImplTest {
 
     @Test
     void recordRestored_putsTheVideoBackUnderItsTagsAtItsOriginalPublishTime() {
+        when(setOperations.remove("reco:video:taken-down", "vid1")).thenReturn(1L);
         when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
 
-        recommendationService.recordRestored("vid1");
+        recommendationService.recordRestored("vid1", Instant.now());
 
-        verify(setOperations).remove("reco:video:taken-down", "vid1");
         verify(zSetOperations).add("reco:tag:dance", "vid1", 1700.0);
     }
 
     /** Restoring a takedown must not undo the owner making the video private. */
     @Test
     void recordRestored_ofAPrivateVideo_keepsItOutOfTheFeed() {
+        when(setOperations.remove("reco:video:taken-down", "vid1")).thenReturn(1L);
         when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
         when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
         when(setOperations.isMember("reco:video:private", "vid1")).thenReturn(true);
 
-        recommendationService.recordRestored("vid1");
+        recommendationService.recordRestored("vid1", Instant.now());
 
         verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * A verdict other than APPROVED used to run the deletion cleanup, which threw away the tags
+     * and owner that an admin's approval later needs to index the video.
+     */
+    @Test
+    void recordHeld_withdrawsTheVideoButKeepsWhatAnApprovalNeeds() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordHeld("vid1", Instant.now());
+
+        verify(setOperations).add("reco:video:held", "vid1");
+        verify(zSetOperations).remove("reco:tag:dance", (Object) "vid1");
+        verify(zSetOperations).remove("reco:trending", (Object) "vid1");
+        verify(redisTemplate, never()).delete("reco:video:tags:vid1");
+        verify(hashOperations, never()).delete("reco:video:owner", "vid1");
+    }
+
+    /** The owner watching and liking their own held video must not walk it into trending. */
+    @Test
+    void engagementOnAHeldVideo_doesNotPutItIntoTrending() {
+        when(setOperations.isMember("reco:video:held", "vid1")).thenReturn(true);
+
+        recommendationService.recordLike("vid1", true);
+
+        verify(zSetOperations, never()).incrementScore(startsWith("reco:trend:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * An admin approving a held video: it goes into the feed the way an APPROVED verdict would
+     * have put it there, under its stashed tags and published as of now.
+     */
+    @Test
+    void recordRestored_ofAHeldVideo_putsItIntoTheFeed() {
+        when(setOperations.remove("reco:video:held", "vid1")).thenReturn(1L);
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordRestored("vid1", Instant.now());
+
+        verify(zSetOperations).add(eq("reco:video:published"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations).add(eq("reco:tag:dance"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * Taken down while it waited for review: the restore lifts the takedown and nothing more,
+     * as video-service returns it to PENDING_REVIEW. Approving it takes a second restore.
+     */
+    @Test
+    void recordRestored_ofAHeldVideoThatWasTakenDown_onlyLiftsTheTakedown() {
+        when(setOperations.remove("reco:video:taken-down", "vid1")).thenReturn(1L);
+        when(setOperations.isMember("reco:video:held", "vid1")).thenReturn(true);
+
+        recommendationService.recordRestored("vid1", Instant.now());
+
+        verify(setOperations, never()).remove("reco:video:held", "vid1");
+        verify(zSetOperations, never()).add(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /** Neither down nor held: already live, or never heard of. Nothing to undo either way. */
+    @Test
+    void recordRestored_withNothingToUndo_indexesNothing() {
+        recommendationService.recordRestored("vid1", Instant.now());
+
+        verify(zSetOperations, never()).add(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations, never()).incrementScore(anyString(), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * Nothing to undo may only mean the verdict has not been read yet — this consumer lagging on
+     * the moderation topic. The time of the decision is kept for that verdict to be held against.
+     */
+    @Test
+    void recordRestored_beforeAnyVerdict_remembersWhenTheAdminDecided() {
+        Instant restoredAt = Instant.ofEpochMilli(1_700_000_000_000L);
+
+        recommendationService.recordRestored("vid1", restoredAt);
+
+        verify(valueOperations).set("reco:video:approved-at:vid1", "1700000000000", RecoKeys.DELETED_TTL);
+    }
+
+    /**
+     * The approval was read before the verdict it overruled. The verdict used to hold the video
+     * for good: approved and published in video-service, never in the feed.
+     */
+    @Test
+    void recordHeld_afterAnApprovalThatOverruledIt_putsTheVideoInTheFeed() {
+        Instant checkedAt = Instant.ofEpochMilli(1_700_000_000_000L);
+        when(valueOperations.get("reco:video:approved-at:vid1"))
+                .thenReturn(String.valueOf(checkedAt.plusSeconds(30).toEpochMilli()));
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+
+        recommendationService.recordHeld("vid1", checkedAt);
+
+        verify(setOperations, never()).add("reco:video:held", "vid1");
+        verify(zSetOperations).add(eq("reco:video:published"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+        verify(zSetOperations).add(eq("reco:tag:dance"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /** A restore from before the verdict existed approved nothing, so the verdict still holds the video. */
+    @Test
+    void recordHeld_afterARestoreFromBeforeTheVerdict_stillHoldsIt() {
+        Instant checkedAt = Instant.ofEpochMilli(1_700_000_000_000L);
+        when(valueOperations.get("reco:video:approved-at:vid1"))
+                .thenReturn(String.valueOf(checkedAt.minusSeconds(30).toEpochMilli()));
+
+        recommendationService.recordHeld("vid1", checkedAt);
+
+        verify(setOperations).add("reco:video:held", "vid1");
     }
 
     /**
@@ -251,6 +432,18 @@ class RecommendationServiceImplTest {
                 .remove(startsWith("reco:trend:"), eq((Object) "vid1"));
     }
 
+    /** Sixty shares an hour from one account used to be worth a hundred viewers' likes. */
+    @Test
+    void recordShare_scoresOnlyAViewersFirstShareOfTheVideo() {
+        when(valueOperations.setIfAbsent(eq("reco:shared:vid1:9"), any(), any(java.time.Duration.class)))
+                .thenReturn(true, false);
+
+        recommendationService.recordShare("vid1", 9L);
+        recommendationService.recordShare("vid1", 9L);
+
+        verify(zSetOperations, times(1)).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(5.0));
+    }
+
     @Test
     void recordLike_unliked_takesTheScoreBackOff() {
         recommendationService.recordLike("vid1", false);
@@ -265,8 +458,11 @@ class RecommendationServiceImplTest {
      */
     @Test
     void recordWatch_scoresEngagementByTheWatchedFraction() {
+        viewersBestWatchRisesBy("0.5");
+
         recommendationService.recordWatch("vid1", 7L, 5_000L, 10_000L, false);
 
+        verify(redisTemplate).execute(any(RedisScript.class), eq(List.of("reco:watched:vid1:7")), eq("0.5"), any());
         verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(1.0));
         verify(zSetOperations).incrementScore("reco:video:watches", "vid1", 1);
         verify(zSetOperations, never()).incrementScore(eq("reco:video:completions"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
@@ -313,7 +509,40 @@ class RecommendationServiceImplTest {
     void recordWatch_zeroDuration_doesNotDivideByIt() {
         recommendationService.recordWatch("vid1", 7L, 0L, 0L, false);
 
-        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(0.0));
+        verify(zSetOperations, never()).incrementScore(startsWith("reco:trend:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /**
+     * The share loophole, on watches: a completed watch reported sixty times an hour by one
+     * account was sixty full scores. Past the viewer's best, a rewatch adds nothing to trending.
+     */
+    @Test
+    void recordWatch_aViewersRewatchAddsNothingToTrending() {
+        viewersBestWatchRisesBy("1.0", "0");
+
+        recommendationService.recordWatch("vid1", 7L, 10_000L, 10_000L, true);
+        recommendationService.recordWatch("vid1", 7L, 10_000L, 10_000L, true);
+
+        verify(zSetOperations, times(1)).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(2.0));
+        // The model's features still see every session.
+        verify(zSetOperations, times(2)).incrementScore("reco:video:watches", "vid1", 1);
+    }
+
+    /** A skip first and a real watch later is still one real watch, not one skip. */
+    @Test
+    void recordWatch_aLaterFullerWatchCountsTheDifference() {
+        viewersBestWatchRisesBy("0.1", "0.9");
+
+        recommendationService.recordWatch("vid1", 7L, 1_000L, 10_000L, false);
+        recommendationService.recordWatch("vid1", 7L, 10_000L, 10_000L, true);
+
+        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(0.2));
+        verify(zSetOperations).incrementScore(startsWith("reco:trend:"), eq("vid1"), eq(1.8));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void viewersBestWatchRisesBy(String first, String... then) {
+        when(redisTemplate.execute(any(RedisScript.class), anyList(), any(), any())).thenReturn(first, then);
     }
 
     /**

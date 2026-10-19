@@ -1,0 +1,34 @@
+# The ITs assume there is no video-service: the visibility, ownership and comments-off checks all
+# fail open when it cannot be reached. A video-service running on the default port — a local stack
+# left up — answers 404 for every made-up id these tests use instead, and refuses their likes,
+# shares and views before the code under test runs. Nothing listens on port 1, so the connection is
+# refused at once. Tests that need an answer from video-service mock VideoOwnershipClient.
+downstream:
+  video-service-uri: http://localhost:1
+  # Same for user-service: the reply block check fails open on a refused connection, where a local
+  # user-service would answer about made-up ids. Tests that need an answer mock the client.
+  user-service-uri: http://localhost:1
+
+# The comment tests post in a loop, as no person does; the limits have tests of their own
+# (CommentRateLimiterTest, DuplicateCommentGuardTest) that build their limiter with real numbers.
+interaction:
+  comment:
+    rate-limit:
+      cooldown: 0s
+      per-minute: 0
+      per-hour: 0
+      per-day: 0
+      per-video-per-hour: 0
+    # Off for the same reason: a test refusing comments in a loop would restrict its own account.
+    # CommentStrikesTest builds its counter with real numbers.
+    strikes:
+      threshold: 0
+
+moderation:
+  text:
+    # No moderation-service or admin-service in tests: the classifier is never asked and no poller
+    # starts. CommentScreeningTest gives the classifier's answers by hand.
+    classifier:
+      base-url: ""
+    admin-terms:
+      base-url: ""

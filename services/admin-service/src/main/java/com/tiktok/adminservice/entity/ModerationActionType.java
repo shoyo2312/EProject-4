@@ -21,10 +21,22 @@ public enum ModerationActionType {
     UNBAN_USER(ReportTargetType.USER, Effect.REVERSE),
     TAKEDOWN_VIDEO(ReportTargetType.VIDEO, Effect.ENFORCE),
     RESTORE_VIDEO(ReportTargetType.VIDEO, Effect.REVERSE),
+    /**
+     * Empties a video its owner deleted out of the trash early. NONE rather than ENFORCE: the
+     * owner removed it, not moderation, so it is no strike against them and says nothing about
+     * whether the video was ever under enforcement.
+     */
+    PURGE_VIDEO(ReportTargetType.VIDEO, Effect.NONE),
     /** No reversal exists: interaction-service removes the comment row, it does not hide it. */
     REMOVE_COMMENT(ReportTargetType.COMMENT, Effect.ENFORCE),
     /** Audit-only, and an admin may warn over any kind of report, so nothing to pin it to. */
     WARN_USER(null, Effect.NONE),
+    /**
+     * Ends every session the account holds and changes nothing else — for an account someone else
+     * has signed in to, where a ban would lock the owner out along with them. NONE: no strike, and
+     * the account was never out of good standing.
+     */
+    REVOKE_SESSIONS(ReportTargetType.USER, Effect.NONE),
     /** Audit-only: closing a report without acting says nothing about what it pointed at. */
     DISMISS_REPORT(null, Effect.NONE);
 
@@ -71,6 +83,18 @@ public enum ModerationActionType {
             throw new InvalidModerationTargetException(
                     this + " applies to a " + appliesTo + " target, but the target is a " + targetType);
         }
+    }
+
+    /**
+     * Whether this decision is an answer to the reports standing against its target. False for
+     * PURGE_VIDEO, which decides nothing about the video: it empties the trash, and video-service
+     * ignores it for a video that is not in there. Closing reports on it answered them "handled"
+     * while the video stayed live — and the queue is the only place they surface. False for
+     * REVOKE_SESSIONS too: it secures an account, and says nothing about whether the reports
+     * against it were right.
+     */
+    public boolean answersReports() {
+        return this != PURGE_VIDEO && this != REVOKE_SESSIONS;
     }
 
     /**

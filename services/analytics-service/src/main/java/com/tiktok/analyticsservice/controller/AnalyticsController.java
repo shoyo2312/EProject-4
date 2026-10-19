@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.List;
 
 @RestController
@@ -27,9 +28,14 @@ public class AnalyticsController {
 
     private final AnalyticsService analyticsService;
 
+    /**
+     * Engagement events per day and type. Three years like the other daily series: the console
+     * asks for a year of trend ending on its "as of" day, plus the gap back to that day from
+     * today, and a cap of one year turned every earlier date into a 400.
+     */
     @GetMapping("/engagement/daily")
     public ApiResponse<List<DailyCountResponse>> getDailyEngagement(
-            @RequestParam(defaultValue = "7") @Min(1) @Max(365) int days) {
+            @RequestParam(defaultValue = "7") @Min(1) @Max(1095) int days) {
         return ApiResponse.success(analyticsService.getDailyEngagement(days));
     }
 
@@ -51,14 +57,17 @@ public class AnalyticsController {
     }
 
     /**
-     * The most-watched videos of the window. The limit is capped for the same reason the window
-     * is: this aggregates every watch row in the slice, and nothing on a screen needs a thousand.
+     * The most-watched videos of the {@code days} before {@code until}, or before now when it is
+     * not given — the console passes the end of its "as of" day, so this list moves back in time
+     * with every other figure on the page. The limit is capped for the same reason the window is:
+     * this aggregates every watch row in the slice, and nothing on a screen needs a thousand.
      */
     @GetMapping("/videos/top")
     public ApiResponse<List<TopVideoResponse>> getTopVideos(
             @RequestParam(defaultValue = "7") @Min(1) @Max(365) int days,
-            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit) {
-        return ApiResponse.success(analyticsService.getTopVideos(days, limit));
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int limit,
+            @RequestParam(required = false) Instant until) {
+        return ApiResponse.success(analyticsService.getTopVideos(days, limit, until));
     }
 
     @GetMapping("/signups/daily")

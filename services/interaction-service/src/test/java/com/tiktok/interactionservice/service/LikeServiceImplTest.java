@@ -3,11 +3,13 @@ package com.tiktok.interactionservice.service;
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
 import com.tiktok.interactionservice.dto.response.LikeStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
+import com.tiktok.interactionservice.exception.EventNotPublishedException;
 import com.tiktok.interactionservice.exception.LikeRateLimitedException;
 import com.tiktok.interactionservice.repository.LikeByUserRepository;
 import com.tiktok.interactionservice.repository.LikeByVideoRepository;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.KafkaException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,6 +20,7 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
@@ -113,7 +116,7 @@ class LikeServiceImplTest extends AbstractInteractionServiceIT {
         when(kafkaTemplate.send(any(ProducerRecord.class)))
                 .thenThrow(new IllegalStateException("broker refused the record"));
 
-        assertThatThrownBy(() -> likeService.like(16L, 1L)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> likeService.like(16L, 1L)).isInstanceOf(EventNotPublishedException.class);
 
         reset(kafkaTemplate);
         when(kafkaTemplate.send(any(ProducerRecord.class)))
@@ -133,10 +136,29 @@ class LikeServiceImplTest extends AbstractInteractionServiceIT {
         when(kafkaTemplate.send(any(ProducerRecord.class)))
                 .thenThrow(new IllegalStateException("broker refused the record"));
 
-        assertThatThrownBy(() -> likeService.like(17L, 1L)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> likeService.like(17L, 1L)).isInstanceOf(EventNotPublishedException.class);
 
         assertThat(likeService.listLikedVideos(1L, null, 20).videoIds()).isEmpty();
         assertThat(likeService.getStatus(17L, 1L).liked()).isFalse();
+    }
+
+    /**
+     * How a broker actually says no: send() returns, and the future it handed back fails. That
+     * failure used to leave the publisher as a checked exception, which the undo — catching
+     * RuntimeException — never saw. The like stayed stored and counted with no event behind it,
+     * and the client's retry found it already there, so nothing ever sent one.
+     */
+    @Test
+    void like_whenTheBrokerRefusesTheRecord_leavesNeitherTheRowNorTheCount() {
+        when(kafkaTemplate.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.failedFuture(new KafkaException("not enough replicas")));
+
+        Throwable thrown = catchThrowable(() -> likeService.like(19L, 1L));
+
+        assertThat(likeService.getStatus(19L, 1L).liked()).isFalse();
+        assertThat(likeService.listLikedVideos(1L, null, 20).videoIds()).isEmpty();
+        assertThat(counterCacheService.getCounts(19L).likeCount()).isZero();
+        assertThat(thrown).isInstanceOf(EventNotPublishedException.class);
     }
 
     /** The mirror image: a failed unlike must not empty the list it half-removed the video from. */
@@ -148,7 +170,7 @@ class LikeServiceImplTest extends AbstractInteractionServiceIT {
         when(kafkaTemplate.send(any(ProducerRecord.class)))
                 .thenThrow(new IllegalStateException("broker refused the record"));
 
-        assertThatThrownBy(() -> likeService.unlike(18L, 1L)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> likeService.unlike(18L, 1L)).isInstanceOf(EventNotPublishedException.class);
 
         assertThat(likeService.getStatus(18L, 1L).liked()).isTrue();
         assertThat(likeService.listLikedVideos(1L, null, 20).videoIds()).containsExactly(18L);

@@ -1,11 +1,11 @@
 package com.tiktok.chatservice.config;
 
+import com.tiktok.common.http.PooledRequestFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.client.ClientHttpRequestFactories;
-import org.springframework.boot.web.client.ClientHttpRequestFactorySettings;
-import org.springframework.boot.web.client.RestClientCustomizer;
+import org.springframework.boot.restclient.RestClientCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.client.ClientHttpRequestFactory;
 
 import java.time.Duration;
 
@@ -17,6 +17,10 @@ import java.time.Duration;
  * other realtime frame in the process. The values sit under the flush window on purpose: a call
  * that has not answered by the time the next window opens has already missed its frame, and the
  * next event on that video produces another one.
+ *
+ * <p>One pooled factory shared by every client: Boot's {@code ClientHttpRequestFactories.get}
+ * falls back to HttpURLConnection when no other HTTP library is present, and that keeps five idle
+ * connections per host — see {@link PooledRequestFactory}.
  */
 @Configuration
 public class RestClientConfig {
@@ -25,9 +29,8 @@ public class RestClientConfig {
     public RestClientCustomizer downstreamTimeouts(
             @Value("${downstream.connect-timeout-millis}") long connectTimeoutMillis,
             @Value("${downstream.read-timeout-millis}") long readTimeoutMillis) {
-        ClientHttpRequestFactorySettings settings = ClientHttpRequestFactorySettings.DEFAULTS
-                .withConnectTimeout(Duration.ofMillis(connectTimeoutMillis))
-                .withReadTimeout(Duration.ofMillis(readTimeoutMillis));
-        return builder -> builder.requestFactory(ClientHttpRequestFactories.get(settings));
+        ClientHttpRequestFactory requestFactory = PooledRequestFactory.create(
+                Duration.ofMillis(connectTimeoutMillis), Duration.ofMillis(readTimeoutMillis));
+        return builder -> builder.requestFactory(requestFactory);
     }
 }

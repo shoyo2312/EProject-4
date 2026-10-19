@@ -131,7 +131,7 @@ def test_candidate_tags_keeps_only_the_window_serving_reads():
         "published_at": list(range(PER_TAG + 5)) + [0],
     })
 
-    kept = candidate_tags(tags)
+    kept = candidate_tags(tags, as_of=PER_TAG + 5)
 
     dance = kept[kept["tag"] == "dance"]
     assert len(dance) == PER_TAG
@@ -140,3 +140,23 @@ def test_candidate_tags_keeps_only_the_window_serving_reads():
     assert f"v{PER_TAG + 4}" in set(dance["video_id"])
     # The cap is per tag, so a quiet tag keeps its only video.
     assert set(kept[kept["tag"] == "music"]["video_id"]) == {"old"}
+
+
+def test_candidate_tags_rebuilds_the_window_that_stood_back_then():
+    """Uploads after the moment being reconstructed were not in the window a viewer was served.
+
+    video_tags holds every upload up to today, and ranking all of it put later uploads in the
+    window and pushed out the videos a viewer could actually have been offered — so the model saw
+    tag_affinity at zero where serving had a real value.
+    """
+    tags = pd.DataFrame({
+        "video_id": [f"v{i}" for i in range(PER_TAG + 5)],
+        "tag": ["dance"] * (PER_TAG + 5),
+        "published_at": list(range(PER_TAG + 5)),
+    })
+
+    # As of PER_TAG, only v0..v{PER_TAG-1} existed: all of them were in the window, the five
+    # later uploads were not.
+    kept = set(candidate_tags(tags, as_of=PER_TAG)["video_id"])
+
+    assert kept == {f"v{i}" for i in range(PER_TAG)}

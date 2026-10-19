@@ -1,14 +1,16 @@
 package com.tiktok.videoservice.event.producer;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoPurgedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.repository.VideoRepository;
+import com.tiktok.videoservice.service.CaptionModeration;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -16,7 +18,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -135,6 +136,28 @@ public class VideoEventPublisher {
     }
 
     /**
+     * The same purge, for a video an admin emptied out of the trash before its window ran out.
+     * A row that is both requested and past its window can be picked by both polls in one round;
+     * media-worker treats a second purge as the no-op it is.
+     */
+    @Scheduled(fixedDelay = 5000)
+    public void publishRequestedPurges() {
+        List<Video> requested = videoRepository
+                .findTop100ByPurgeRequestedAtIsNotNullAndPurgeEventPublishedAtIsNullOrderByPurgeRequestedAtAsc();
+
+        if (requested.isEmpty()) {
+            return;
+        }
+
+        int published = outboxDispatcher.dispatch(requested, this::toPurgedRecord, this::markPurgePublished);
+
+        if (published < requested.size()) {
+            log.warn("Published {}/{} requested purge events, the rest stay pending for the next poll",
+                    published, requested.size());
+        }
+    }
+
+    /**
      * The owner moved a video between PUBLIC, FRIENDS and PRIVATE. Announced because visibility
      * rides on the publication event, and that one is sent once: without this poll a video
      * indexed while it was public stays searchable by anyone for as long as the index lives.
@@ -146,7 +169,7 @@ public class VideoEventPublisher {
     @Scheduled(fixedDelay = 5000)
     public void publishPendingVisibilityChanges() {
         List<Video> pending = videoRepository
-                .findTop100ByVisibilityEventPendingAtIsNotNullOrderByVisibilityEventPendingAtAsc();
+                .findTop100ByVisibilityEventPendingAtIsNotNullAndEventPublishedAtIsNotNullOrderByVisibilityEventPendingAtAsc();
         if (pending.isEmpty()) {
             return;
         }
@@ -163,10 +186,11 @@ public class VideoEventPublisher {
     private ProducerRecord<String, String> toPublishedRecord(Video video) {
         VideoPublishedEvent event = VideoPublishedEvent.of(
                 video.getId(), video.getUserId(), video.getTitle(), video.getDescription(),
-                video.getRawFileUrl(), visibilityName(video), video.getTags());
+                video.getRawFileUrl(), audience(video), video.getTags(),
+                CaptionModeration.eventVerdict(video.getTextModeration()));
         try {
             return record(video.getId(), "VideoPublishedEvent", objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException ex) {
+        } catch (JacksonException ex) {
             // Park the row before rethrowing. The dispatcher skips a record it cannot build and
             // moves on, but the poll reads the oldest hundred unpublished videos every five
             // seconds, so without this the same row comes back in the same first position for
@@ -174,7 +198,7 @@ public class VideoEventPublisher {
             // document serializes the same way every time.
             markEventFailed(video);
             // Unchecked so the dispatcher can skip this one row and still send the rest.
-            throw new UncheckedIOException(ex);
+            throw ex;
         }
     }
 
@@ -188,8 +212,8 @@ public class VideoEventPublisher {
         VideoDeletedEvent event = VideoDeletedEvent.of(video.getId(), video.getUserId(), video.getRawFileUrl());
         try {
             return record(video.getId(), "VideoDeletedEvent", objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException ex) {
-            throw new UncheckedIOException(ex);
+        } catch (JacksonException ex) {
+            throw ex;
         }
     }
 
@@ -198,33 +222,39 @@ public class VideoEventPublisher {
         VideoPurgedEvent event = VideoPurgedEvent.of(video.getId(), video.getUserId(), video.getRawFileUrl());
         try {
             return record(video.getId(), "VideoPurgedEvent", objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException ex) {
-            throw new UncheckedIOException(ex);
+        } catch (JacksonException ex) {
+            throw ex;
         }
     }
 
     private ProducerRecord<String, String> toVisibilityRecord(Video video) {
         VideoVisibilityChangedEvent event = VideoVisibilityChangedEvent.of(
-                video.getId(), video.getUserId(), visibilityName(video),
+                video.getId(), video.getUserId(), audience(video),
                 video.getVisibilityEventPendingAt());
         try {
             return record(video.getId(), "VideoVisibilityChangedEvent",
                     objectMapper.writeValueAsString(event));
-        } catch (JsonProcessingException ex) {
+        } catch (JacksonException ex) {
             // No parking counterpart, for the same reason as the deletion event: every field is an
             // id or an enum name this service produced, so there is nothing here Jackson can
             // refuse that would not be a bug in the event class.
-            throw new UncheckedIOException(ex);
+            throw ex;
         }
     }
 
     /**
-     * Documents written before the visibility field existed have none. PUBLIC is what they
-     * behaved as, so that is what the consumers are told rather than a null they would each have
-     * to decide about.
+     * Who may see the video, in the one word every consumer that keeps a copy understands: its
+     * visibility, except that a private owner's PUBLIC video is FOLLOWERS. Consumers treat
+     * anything but PUBLIC as hidden, so FOLLOWERS takes it out of search, For You and trending
+     * with no code on their side.
+     *
+     * <p>Documents written before the visibility field existed have none. PUBLIC is what they
+     * behaved as, so that is what they are taken to be rather than a null each consumer would
+     * have to decide about.
      */
-    private static String visibilityName(Video video) {
-        return video.getVisibility() == null ? "PUBLIC" : video.getVisibility().name();
+    static String audience(Video video) {
+        VideoVisibility visibility = video.getVisibility() == null ? VideoVisibility.PUBLIC : video.getVisibility();
+        return visibility == VideoVisibility.PUBLIC && video.isOwnerPrivate() ? "FOLLOWERS" : visibility.name();
     }
 
     private ProducerRecord<String, String> record(String key, String eventType, String payload) {

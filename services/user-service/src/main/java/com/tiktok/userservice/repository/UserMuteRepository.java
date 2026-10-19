@@ -4,8 +4,11 @@ import com.tiktok.userservice.entity.UserMute;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 
 import java.util.Optional;
@@ -27,4 +30,10 @@ public interface UserMuteRepository extends JpaRepository<UserMute, Long> {
 
     @Query("select m.mutedId from UserMute m where m.muterId = :muterId and m.deletedAt is null")
     List<Long> findMutedIds(Long muterId);
+
+    /** Both directions — a full scan for the muted side, see the class comment; deletion is rare. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("update UserMute m set m.deletedAt = :at "
+            + "where (m.muterId = :userId or m.mutedId = :userId) and m.deletedAt is null")
+    int softDeleteAllOf(@Param("userId") Long userId, @Param("at") Instant at);
 }

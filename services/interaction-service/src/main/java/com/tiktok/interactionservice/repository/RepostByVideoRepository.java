@@ -12,6 +12,14 @@ import java.util.List;
 public interface RepostByVideoRepository extends CassandraRepository<RepostByVideo, RepostByVideoKey> {
 
     /**
+     * Which of these videos this user has reposted — at most one row per video, since the user is
+     * the clustering key inside each video's partition. A direct read rather than a scan of who
+     * reposted: a capped scan only answers for whoever happens to be in it.
+     */
+    @Query("SELECT * FROM reposts_by_video WHERE video_id IN :videoIds AND user_id = :userId")
+    List<RepostByVideo> findByVideoIdInAndUserId(@Param("videoIds") List<Long> videoIds, @Param("userId") Long userId);
+
+    /**
      * Lightweight-transaction insert. Returns whether the row was newly created — the caller
      * must only mutate the repost counter when this is true, otherwise a retried/duplicate repost
      * would double-count.
@@ -24,11 +32,13 @@ public interface RepostByVideoRepository extends CassandraRepository<RepostByVid
     boolean deleteIfExists(@Param("videoId") Long videoId, @Param("userId") Long userId);
 
     /**
-     * Who has reposted this video, capped, for the repost-badge lookup. No time ordering —
-     * user_id is the clustering key, not created_at — so this is "up to `limit` reposters",
-     * not "the most recent ones". Fine for the badge: it only needs to find one match against
-     * the viewer's following set, not the newest one.
+     * Who has reposted each of these videos, capped per video, for the repost-badge lookup — the
+     * whole page in one query, where it used to be one query per card. PER PARTITION LIMIT keeps
+     * the cap per video rather than across all of them. No time ordering — user_id is the
+     * clustering key, not created_at — so this is "up to `limit` reposters" of each, not "the most
+     * recent ones". Fine for the badge: it only needs to find one match against the viewer's
+     * following set, not the newest one.
      */
-    @Query("SELECT * FROM reposts_by_video WHERE video_id = :videoId LIMIT :limit")
-    List<RepostByVideo> findByVideoId(@Param("videoId") Long videoId, @Param("limit") int limit);
+    @Query("SELECT * FROM reposts_by_video WHERE video_id IN :videoIds PER PARTITION LIMIT :limit")
+    List<RepostByVideo> findByVideoIdIn(@Param("videoIds") List<Long> videoIds, @Param("limit") int limit);
 }

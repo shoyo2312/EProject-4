@@ -24,6 +24,6 @@ class ConnectionSettingsTest {
         new YamlPropertySourceLoader().load("app", new ClassPathResource("application.yml"))
                 .forEach(environment.getPropertySources()::addLast);
 
-        assertThat(environment.getProperty("spring.data.mongodb.uri")).contains("chat:s3cret@mongo.internal");
+        assertThat(environment.getProperty("spring.mongodb.uri")).contains("chat:s3cret@mongo.internal");
     }
 }

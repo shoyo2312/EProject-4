@@ -1,6 +1,6 @@
 package com.tiktok.mediaworker.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoModerationCompletedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;

@@ -15,5 +15,11 @@ public enum AdminCommentFilter {
     REPLIES,
 
     /** Everything removed on the video, top-level and replies alike, newest first. */
-    REMOVED
+    REMOVED,
+
+    /**
+     * Everything still waiting for the video owner's approval, top-level and replies alike, newest
+     * first. The only view a held top-level comment appears in: it has no row in the thread's index.
+     */
+    HELD
 }

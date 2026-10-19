@@ -59,9 +59,15 @@ Response `data` → `UserProfileResponse`:
   "bio": "Xin chào",
   "avatarUrl": "https://cdn.tiktok-clone.local/avatars/123.jpg",
   "followerCount": 10,
-  "followingCount": 5
+  "followingCount": 5,
+  "privateAccount": false,
+  "displayNameChangeableAt": null
 }
 ```
+
+`displayNameChangeableAt`: khi nào được đổi `displayName` lần tới (mục 3.2). **Chỉ chủ tài khoản thấy**, trên profile của chính mình (`GET /me`, `PATCH /me`, `POST /me/avatar`, và `GET /{userId}` / `GET /by-username/{username}` khi người gọi là chủ); `null` ở mọi chỗ khác, và `null` với chủ khi đổi được ngay.
+
+`privateAccount = true`: tài khoản riêng tư — chỉ người đã được duyệt follow mới xem được video, danh sách followers/following và tab Reposts (mục 3.16). Profile và các con số (followers, following, likes, số video) vẫn công khai như TikTok. Field này có trên **mọi** `UserProfileResponse` (mục 3.3, 3.3b, danh sách, tìm kiếm).
 
 > Ngay sau khi `register` ở auth-service, profile được tạo **bất đồng bộ qua Kafka** (không đồng bộ ngay trong response của `/register`). Có thể có 1 khoảng trễ ngắn (thường vài trăm ms) mà `GET /me` trả `404 USER_PROFILE_NOT_FOUND`. Client nên **retry nhẹ** (1-2 lần, delay ngắn) nếu gặp lỗi này ngay sau khi đăng ký/đăng nhập lần đầu, thay vì coi là lỗi cứng.
 
@@ -81,6 +87,7 @@ Request (mọi field đều optional, `UpdateProfileRequest`):
 - **Không gửi field** (field vắng mặt trong JSON, hoặc `null`) → giữ nguyên giá trị cũ trên server.
 - **Gửi field = `""`** (chuỗi rỗng) → **xoá** giá trị (set về `null` trong DB). Áp dụng cho `bio` và `avatarUrl`.
 - **`displayName` không thể xoá bằng chuỗi rỗng** — server từ chối whitespace-only bằng `VALIDATION_ERROR` (400). Chỉ có thể giữ nguyên (không gửi) hoặc thay bằng giá trị khác.
+- **`displayName` chỉ đổi được 1 lần mỗi 7 ngày.** Đổi lần nữa khi chưa đủ 7 ngày → `429 DISPLAY_NAME_CHANGE_TOO_SOON`, và **cả request bị từ chối** (bio/avatar gửi kèm cũng không được lưu). Gửi lại đúng tên hiện tại không tính là đổi, kể cả khi chỉ khác khoảng trắng ở đầu/cuối (`"Alice "` và `"Alice"` là cùng một tên); tên mới được lưu sau khi bỏ khoảng trắng đó. Tên ban đầu (copy từ username lúc đăng ký) không tính, nên lần đổi đầu tiên luôn được phép. `bio`/`avatarUrl` không bị giới hạn. Đọc `displayNameChangeableAt` (mục 3.1) để khoá ô tên kèm ngày mở lại.
 
 → Vì vậy, khi build request body ở Flutter: **chỉ đưa key nào user thực sự chỉnh sửa vào JSON** (dùng `Map<String, dynamic>` build tay hoặc `@JsonKey(includeIfNull: false)` + loại bỏ field không đổi), tuyệt đối không serialize nguyên object rồi gửi full — nếu form có field trống mặc định (`""`), gửi nguyên request sẽ vô tình xoá `bio`/`avatarUrl` hiện có của user.
 
@@ -93,14 +100,14 @@ Response `data` → `UserProfileResponse` (giống mục 3.1, đã áp dụng th
 Đăng ký/đăng nhập bằng Google hoặc Facebook thì profile tự có ảnh của provider, client không phải làm gì:
 
 1. auth-service gửi kèm ảnh provider trong `UserRegisteredEvent` → profile mới có `avatarUrl` ngay (URL của Google/Facebook).
-2. Mỗi lần đăng nhập social, auth-service phát `SocialAvatarDiscoveredEvent` (topic `auth.social-avatar-events`). media-worker tải ảnh về MinIO (`avatars/{userId}.jpg`) rồi phát `AvatarMirroredEvent` (topic `media.avatar-events`).
-3. user-service đổi `avatarUrl` sang bản trong MinIO — ví dụ `http://localhost:9000/video-media/avatars/123.jpg`. Cần bước này vì URL ảnh Facebook hết hạn sau vài ngày.
+2. Mỗi lần đăng nhập social, auth-service phát `SocialAvatarDiscoveredEvent` (topic `auth.social-avatar-events`; lần tạo tài khoản thì đi qua outbox ngay sau `UserRegisteredEvent`, để không tới trước profile). media-worker tải ảnh về MinIO (`avatars/{userId}`) rồi phát `AvatarMirroredEvent` (topic `media.avatar-events`).
+3. user-service đổi `avatarUrl` sang bản trong MinIO — ví dụ `http://localhost:9000/video-media/avatars/123`. Cần bước này vì URL ảnh Facebook hết hạn sau vài ngày.
 
 Bước 3 **chỉ** ghi đè khi `avatarUrl` đang trống hoặc vẫn đúng URL provider vừa được sao chép. Ảnh user tự đặt qua `PATCH /me` không bao giờ bị thay. Tài khoản social tạo trước tính năng này (`avatarUrl` null) được điền ảnh ở lần đăng nhập kế tiếp.
 
-Client hiển thị đúng URL server trả về, không suy đoán host. Next.js phải khai báo host trong `images.remotePatterns` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, và origin MinIO) mới render được qua `next/image`.
+Client hiển thị đúng URL server trả về, không suy đoán host. Next.js phải khai báo host trong `images.remotePatterns` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, và origin MinIO) mới render được qua `next/image`. Ảnh render bằng `<img>` thường thì phải có `referrerPolicy="no-referrer"`: Google trả lỗi (503) thay vì ảnh khi request mang `Referer` là trang của client.
 
-Lỗi: `VALIDATION_ERROR` (400).
+Lỗi: `VALIDATION_ERROR` (400), `DISPLAY_NAME_CHANGE_TOO_SOON` (429).
 
 ### 3.2b `POST /me/avatar`
 
@@ -110,11 +117,14 @@ Upload ảnh đại diện. `multipart/form-data`, đúng một part tên `file`
 - Tối đa 5 MB (`AVATAR_MAX_BYTES`). Quá cỡ → `INVALID_AVATAR` (400 nếu qua được servlet, 413 nếu bị chặn ở giới hạn multipart).
 - Sai định dạng / part rỗng → `INVALID_AVATAR` (400).
 
-Server ghi file vào MinIO tại `avatars/{userId}.jpg` (đúng key media-worker dùng khi mirror ảnh social, nên một user chỉ có một object ảnh), rồi tự set `avatarUrl` và trả về **cả profile** — `UserProfileResponse` như mục 3.1. Client refresh từ response này giống hệt sau `PATCH /me`.
+Server ghi file vào MinIO tại `avatars/{userId}` — không có đuôi file, content type (đọc từ chính các byte) lưu trên object (đúng key media-worker dùng khi mirror ảnh social, nên một user chỉ có một object ảnh), rồi tự set `avatarUrl` và trả về **cả profile** — `UserProfileResponse` như mục 3.1. Client refresh từ response này giống hệt sau `PATCH /me`.
 
-URL trả về có đuôi `?v={epochSeconds}`, ví dụ `http://localhost:9000/video-media/avatars/123.jpg?v=1756000000`. Key cố định nên nếu thiếu query này, lần upload thứ hai trả đúng URL cũ và trình duyệt/CDN vẫn phục vụ ảnh cũ. **Client phải lưu nguyên URL kèm query**, không cắt bỏ.
+URL trả về có đuôi `?v={epochSeconds}`, ví dụ `http://localhost:9000/video-media/avatars/123?v=1756000000`. Key cố định nên nếu thiếu query này, lần upload thứ hai trả đúng URL cũ và trình duyệt/CDN vẫn phục vụ ảnh cũ. **Client phải lưu nguyên URL kèm query**, không cắt bỏ.
 
 Luồng đúng ở client: chọn ảnh → chỉ preview local (object URL / file path), **chưa gọi API** → khi user bấm Save mới `POST /me/avatar`; upload lỗi thì huỷ luôn cả lần save đó, đừng để đổi được tên mà ảnh thì không.
+
+### 3.2c Tài khoản do chủ tự đóng
+Chủ tài khoản deactivate hoặc yêu cầu xoá (auth-service, `auth-service-api.md` mục 3.19) thì profile **không tồn tại với người khác**: `GET /{userId}`, `/by-username/{u}` trả `404 USER_PROFILE_NOT_FOUND` (giống block, không lộ gì), batch `?ids=` bỏ qua, `/search` và `/internal/search-ids` loại ra, danh sách followers/following bỏ người đó ra (tổng cũng khớp), danh sách của chính tài khoản đó trả `404`, `POST /{userId}/follow` trả `404`. Follow edge và **counter giữ nguyên** — mở lại là mọi thứ như cũ. `/friendship` và check follow nội bộ không đổi. Cột `deactivated_at` + guard `account_state_changed_at` (V16), ghi bởi `AccountStateEventConsumer` (mục 8). Khi xoá thật chạy: mọi follow hai chiều bị gỡ và counter phía bên kia giảm, mỗi edge phát một `UserFollowChangedEvent(followed=false)`; follow request, block, mute, settings và profile bị soft-delete.
 
 ### 3.3 `GET /{userId}`
 Xem profile người khác. Trả `200 OK`.
@@ -137,9 +147,13 @@ Dành cho màn hình đã có sẵn danh sách `userId` mà chưa có profile: f
 ### 3.4 `POST /{userId}/follow`
 Follow 1 user. Trả `201 Created`.
 
-Response `data` → `FollowResponse`: `{ "followerId": ..., "followingId": ... }`.
+Response `data` → `FollowResponse`: `{ "followerId": ..., "followingId": ..., "status": "FOLLOWING" }`.
 
-Lỗi: `CANNOT_FOLLOW_SELF` (400 — tự follow chính mình), `USER_BLOCKED` (403 — giữa 2 bên đang có quan hệ block, theo cả 2 chiều), `USER_PROFILE_NOT_FOUND` (404), `ALREADY_FOLLOWING` (409).
+`status` cho biết chuyện gì đã xảy ra — cả hai đều trả `201`:
+- `FOLLOWING` — đã follow ngay (tài khoản công khai).
+- `REQUESTED` — tài khoản **riêng tư**: server tạo **lời mời follow**, chưa follow. Chủ tài khoản duyệt thì mới thành follow (mục 3.16). Nút đổi thành "Requested"; bấm lại (`DELETE`, mục 3.5) là rút lời mời.
+
+Lỗi: `CANNOT_FOLLOW_SELF` (400 — tự follow chính mình), `USER_BLOCKED` (403 — giữa 2 bên đang có quan hệ block, theo cả 2 chiều), `USER_PROFILE_NOT_FOUND` (404), `ALREADY_FOLLOWING` (409), `ALREADY_REQUESTED` (409 — đã có lời mời đang chờ duyệt).
 
 `USER_PROFILE_NOT_FOUND` ở đây có **2 nguồn**, client cần phân biệt vì cách xử lý khác nhau:
 - Profile của **người được follow** không tồn tại → hiển thị "người dùng không tồn tại" như mục 3.3.
@@ -148,14 +162,14 @@ Lỗi: `CANNOT_FOLLOW_SELF` (400 — tự follow chính mình), `USER_BLOCKED` (
 Cách phân biệt rẻ nhất: nếu `GET /me` đang chạy được bình thường thì 404 chắc chắn đến từ target.
 
 ### 3.5 `DELETE /{userId}/follow`
-Unfollow. Trả `200 OK`, `data` rỗng/null.
+Unfollow. Trả `200 OK`, `data` rỗng/null. Chưa follow nhưng đang có lời mời chờ duyệt (tài khoản riêng tư) thì endpoint này **rút lời mời** — cùng một nút trên UI, không phát thông báo gì.
 
-Lỗi: `NOT_FOLLOWING` (404), `CONCURRENT_MODIFICATION` (409 — bấm unfollow 2 lần sát nhau/2 thiết bị cùng lúc; retry 1 lần là hết, xem mục 5).
+Lỗi: `NOT_FOLLOWING` (404 — không follow, cũng không có lời mời nào đang chờ), `CONCURRENT_MODIFICATION` (409 — bấm unfollow 2 lần sát nhau/2 thiết bị cùng lúc; retry 1 lần là hết, xem mục 5).
 
 ### 3.6 `GET /{userId}/followers`
 Danh sách follower của `userId`. Query param phân trang chuẩn Spring: `?page=0&size=20&sort=field,dir`. Trả `200 OK`, `data` → `Page<UserProfileResponse>` (xem mục 2).
 
-Lỗi: `USER_PROFILE_NOT_FOUND` (404) — áp dụng cùng luật ẩn-do-block như mục 3.3 (không xem được followers của người đã block/bị block mình).
+Lỗi: `USER_PROFILE_NOT_FOUND` (404) — áp dụng cùng luật ẩn-do-block như mục 3.3 (không xem được followers của người đã block/bị block mình). `PRIVATE_ACCOUNT` (403) — tài khoản riêng tư mà người gọi không phải chủ, cũng không phải follower. Là 403 chứ không phải 404 vì profile đã công khai việc tài khoản riêng tư; UI hiện "This account is private".
 
 ### 3.7 `GET /{userId}/following`
 Danh sách người `userId` đang follow. Tham số & lỗi giống hệt mục 3.6.
@@ -199,28 +213,214 @@ Lỗi: `NOT_MUTED` (404), `CONCURRENT_MODIFICATION` (409 — xem mục 3.5).
 ### 3.13 `GET /me/muted`
 Danh sách user mình đang mute. Phân trang giống mục 3.6. Trả `200 OK`, `data` → `Page<UserProfileResponse>`.
 
+### 3.14 `GET /me/settings`
+
+Cài đặt tài khoản (phần đứng sau trang `/setting` của web). **Bắt buộc token.** Trả `200 OK`, `data` → `UserSettingsResponse`:
+
+```json
+{
+  "commentAudience": "EVERYONE",
+  "dmAudience": "EVERYONE",
+  "screenTimeLimitMinutes": null,
+  "sleepHoursStart": null,
+  "sleepHoursEnd": null,
+  "weeklyScreenTimeDigest": true,
+  "privateAccount": false,
+  "filterSpamOffensive": true,
+  "filterAllComments": false,
+  "commentKeywords": []
+}
+```
+
+> **Không bao giờ trả `404`.** Tài khoản chưa từng đổi cài đặt nào thì **không có row trong DB** và endpoint trả đúng bộ giá trị mặc định ở trên — khác `GET /me` (mục 3.1), ở đây client không phải retry và không phải xử lý case "chưa có cài đặt". Đọc cũng **không** tạo row.
+
+- Đây là một **object phẳng theo key**, không phải cây section/group mà trang settings vẽ ra. Layout là việc của client; server chỉ giữ giá trị.
+- `null` ở ba field screen-time nghĩa là **tắt** — không có cờ enable riêng, và `screenTimeLimitMinutes = 0` là lỗi validate chứ không phải cách thứ hai để nói "tắt".
+- `sleepHoursStart`/`sleepHoursEnd` là **giờ treo tường, không mang timezone** (`"22:30"`, định dạng `HH:mm`). Không tài khoản nào trên hệ thống này có timezone, nên hai field đó chỉ có thể hiểu là "22:30 theo giờ của chính máy người dùng" và **client là phía enforce**. Server không bao giờ hẹn được lịch từ hai field này.
+- Bốn field screen-time hiện **chỉ được lưu và trả lại, không có gì đọc chúng** ở server. Đó là trạng thái cố ý: giới hạn thời gian dùng app do client enforce, việc của server là sync cài đặt đó giữa các thiết bị.
+- `commentAudience` / `dmAudience` **có** hiệu lực thật, do interaction-service và chat-service enforce — xem mục 3.15. Ba bộ lọc comment (`filterSpamOffensive`, `filterAllComments`, `commentKeywords`) cũng vậy, do interaction-service áp lên comment dưới video của tài khoản này.
+- `privateAccount` được lưu trên **profile** chứ không phải bảng settings (mọi người xem đều cần nó — header profile, nút Follow), nhưng bật/tắt ở đây vì công tắc nằm trên trang `/setting`. Chưa có profile thì trả `false`.
+
+### 3.15 `PATCH /me/settings`
+
+Sửa cài đặt. **Bắt buộc token.** Trả `200 OK`, `data` → `UserSettingsResponse` (toàn bộ, sau khi đã áp thay đổi).
+
+Request (mọi field optional, `UpdateUserSettingsRequest`):
+```json
+{
+  "commentAudience": "FRIENDS",
+  "dmAudience": "NO_ONE",
+  "screenTimeLimitMinutes": 60,
+  "sleepHoursStart": "22:30",
+  "sleepHoursEnd": "07:00",
+  "weeklyScreenTimeDigest": false,
+  "privateAccount": true,
+  "filterSpamOffensive": false,
+  "filterAllComments": false,
+  "commentKeywords": ["spoiler", "giảm giá"]
+}
+```
+
+**Quy tắc partial update — KHÁC `PATCH /me` (mục 3.2), đừng áp dụng lẫn nhau:**
+
+| Client gửi | Kết quả |
+|---|---|
+| **Không có key** trong JSON | Giữ nguyên giá trị cũ |
+| Key = `null`, với 3 field **nullable** (`screenTimeLimitMinutes`, `sleepHoursStart`, `sleepHoursEnd`) | **Xoá** giá trị (về `null` = tắt) |
+| Key = `null`, với `commentAudience` / `dmAudience` / `weeklyScreenTimeDigest` / `privateAccount` / `filterSpamOffensive` / `filterAllComments` / `commentKeywords` | `VALIDATION_ERROR` (400) — các cột này NOT NULL, không có `null` để xoá về. Xoá hết từ khoá thì gửi `"commentKeywords": []` |
+| Chuỗi rỗng `""` | **Không** phải cách xoá field ở endpoint này (khác mục 3.2) — sẽ là `VALIDATION_ERROR` |
+
+→ Ở Flutter: build body bằng `Map<String, dynamic>` chỉ chứa key user vừa đổi. Muốn tắt giới hạn thời gian thì gửi đúng `{"screenTimeLimitMinutes": null}`, **phải có key**, đừng bỏ trống.
+
+Validate:
+
+- `commentAudience`, `dmAudience` ∈ `EVERYONE` | `FRIENDS` | `NO_ONE` → sai giá trị là `VALIDATION_ERROR` (400).
+- `screenTimeLimitMinutes` ∈ `[10, 1440]` hoặc `null`.
+- `sleepHoursStart`/`sleepHoursEnd`: **cùng có hoặc cùng không** — set một cái và để cái kia `null` là `VALIDATION_ERROR`, kể cả khi cái kia đang có sẵn trong DB (luật được kiểm trên **kết quả sau khi merge**, không phải trên request). Hai đầu **bằng nhau** là lỗi; `start > end` thì **hợp lệ** (khung giờ vắt qua nửa đêm là chuyện thường).
+- Định dạng giờ là `HH:mm` đúng như response trả về — gửi `"22:30:00"` hoặc `"10:30 PM"` sẽ bị body parser từ chối với `400 BAD_REQUEST` (không phải `VALIDATION_ERROR`).
+- `commentKeywords`: **cả danh sách**, thay danh sách cũ (không phải thêm vào). Tối đa **50** từ khoá; mỗi từ được làm sạch như nội dung comment (bỏ ký tự vô hình, gộp khoảng trắng, một dòng) rồi phải dài **1–30 ký tự** (đếm theo code point) và có ít nhất một chữ cái hoặc chữ số — từ khoá chỉ có emoji/dấu câu sẽ không bao giờ khớp được nên bị từ chối (`VALIDATION_ERROR`). Trùng nhau (không phân biệt hoa thường: "Spoiler"/"spoiler") thì giữ cách viết đầu tiên. Response trả lại danh sách đã lưu.
+
+`CONCURRENT_MODIFICATION` (409) nếu hai thiết bị ghi cùng lúc — đọc lại rồi thử lại một lần, giống mục 3.5.
+
+**Các field có hiệu lực thật ở service khác:**
+
+- `commentAudience` do **interaction-service** enforce khi post comment: `NO_ONE` chặn tất cả, `FRIENDS` chỉ cho người follow lẫn nhau → `COMMENTS_NOT_ALLOWED` (403). Cờ tắt comment của **từng video** vẫn thắng cài đặt tài khoản: video đã tắt comment thì tắt hẳn, và trả mã riêng `COMMENTS_DISABLED`. `NO_ONE` chặn cả chủ video — mọi video của tài khoản đó coi như đã tắt comment (ẩn ô nhập, ẩn số comment, ẩn danh sách). Chủ video chỉ được miễn `FRIENDS`.
+- `dmAudience` do **chat-service** enforce **lúc mở cuộc hội thoại**, không phải mỗi tin nhắn → `MESSAGING_NOT_ALLOWED` (403). Hội thoại đã mở trước khi người kia siết cài đặt thì vẫn gửi được (giống "người đang follow không bị ảnh hưởng" của private account). Chỉ cài đặt của **người nhận** được xét: người gửi dù đặt `NO_ONE` vẫn chủ động mở được hội thoại.
+- **Bộ lọc comment** do **interaction-service** enforce khi có người comment dưới video của tài khoản này (`interaction-service-api.md` mục 3.4). Comment bị lọc **không bị từ chối** mà bị giữ lại chờ chủ video duyệt (`status: HELD`, hàng chờ ở mục 3.4b bên đó). Comment của chính chủ tài khoản không bao giờ bị giữ.
+  - `filterSpamOffensive` (mặc định `true`) — tắt đi thì comment chỉ bị gắn cờ thô tục, xúc phạm hoặc spam/link được đăng thẳng. Không tắt được phần bảo vệ người đọc: lời lẽ thù ghét, nội dung tình dục, đe doạ, lừa đảo/cờ bạc, số điện thoại/email vẫn bị giữ, và comment vi phạm nặng vẫn bị từ chối.
+  - `filterAllComments` (mặc định `false`) — mọi comment của người khác đều chờ duyệt.
+  - `commentKeywords` — comment chứa một trong các từ khoá thì chờ duyệt. Khớp **theo cả âm tiết** ("spoiler" không khớp "spoilers"); từ khoá **có dấu chỉ khớp đúng chữ có dấu** ("tạch" không khớp "tách"), từ khoá **không dấu khớp mọi cách viết** ("giam gia" khớp "Giảm GIÁ"). Giống cách blocklist của hệ thống khớp.
+- Đổi `commentAudience` hoặc bộ lọc comment có thể mất tới ~3 giây mới có tác dụng (kể cả `accountCommentsOff` trên video): video-service cache cài đặt của chủ video trong Redis với TTL ngắn (`USER_SETTINGS_CACHE_TTL`, mặc định 3s). Không có event invalidate.
+
+**`privateAccount`** — bật thì từ lúc đó chỉ người được duyệt mới follow được (mục 3.4, 3.16) và xem được video, danh sách followers/following, tab Reposts. **Follower hiện có giữ nguyên.** Gửi đúng giá trị đang có là no-op, không phát event. Tắt (về công khai) thì **mọi lời mời đang chờ được duyệt hết** trong cùng request — không còn gì chặn việc follow, và những người đó đã xin rồi. Chưa có profile → `USER_PROFILE_NOT_FOUND` (404). Video của tài khoản rời khỏi For You, trending, feed mới nhất và tìm kiếm trong vòng vài chục giây (video-service đánh dấu lại từng video, 100 video mỗi 5 giây).
+
+### 3.16 Lời mời follow — `GET /me/follow-requests`, `POST /me/follow-requests/{requesterId}/approve`, `DELETE /me/follow-requests/{requesterId}`
+
+Phía **chủ tài khoản riêng tư**. **Bắt buộc token.**
+
+| Endpoint | Trả về | Lỗi |
+|---|---|---|
+| `GET /me/follow-requests` | `200`, `data` → `Page<UserProfileResponse>` của người xin follow, **mới nhất trước**. Phân trang giống mục 3.6 | — |
+| `POST /me/follow-requests/{requesterId}/approve` | `200`, `data` → `FollowResponse` với `status: "FOLLOWING"` | `FOLLOW_REQUEST_NOT_FOUND` (404) |
+| `DELETE /me/follow-requests/{requesterId}` | `200`, `data` null. **Im lặng** — người xin không được báo | `FOLLOW_REQUEST_NOT_FOUND` (404) |
+
+- Duyệt tạo follow y như follow thường (counter, event). Người xin nhận thông báo `FOLLOW_REQUEST_ACCEPTED`; chủ tài khoản **không** nhận `NEW_FOLLOWER` (chính họ vừa bấm duyệt).
+- Có lời mời mới thì chủ tài khoản nhận thông báo `FOLLOW_REQUEST`. Lời mời bị rút hoặc bị từ chối **vẫn còn thông báo trong inbox** — danh sách ở đây mới là nguồn sự thật; bấm vào thông báo cũ thì mở danh sách này.
+- Block (bất kể chiều nào) xoá luôn lời mời giữa hai bên.
+- Bị từ chối rồi vẫn xin lại được — đó là một lời mời mới.
+
+### 3.17 `GET /{userId}/friendship`
+
+Quan hệ giữa người gọi và `userId` — đủ cho nút Follow trong **một** lần gọi. **Bắt buộc token.** Trả `200 OK`, `data` → `FriendshipResponse`:
+
+```json
+{
+  "userId": 42,
+  "friends": false,
+  "following": false,
+  "requested": true,
+  "privateAccount": true
+}
+```
+
+- `following` — mình đang follow người này. `requested` — mình có lời mời đang chờ duyệt. `friends` — follow **lẫn nhau**. `privateAccount` — tài khoản kia riêng tư.
+- Nút Follow: `following` → "Following"; `requested` → "Requested"; còn lại → "Follow". Không cần tự dò danh sách following của mình nữa.
+- Không có lỗi `404`: id không tồn tại chỉ trả toàn `false`.
+
+
+### 3.18 `GET /search?q=...&page=0&size=20` — tìm người dùng
+**Bắt buộc token.** Khớp `q` ở **giữa** cả `username` lẫn `displayName` (không phân biệt hoa thường), xếp theo **số follower giảm dần**. Trả `data` → `Page<UserProfileResponse>` (format phân trang ở mục 2), mỗi phần tử như mục 3.1.
+
+- `q` rỗng hoặc chỉ toàn khoảng trắng → trang rỗng, **không** phải toàn bộ user.
+- Ký tự `%`/`_` trong `q` được hiểu theo nghĩa đen.
+- Tài khoản đang chặn người gọi (hoặc bị người gọi chặn) bị loại ngay trong query, nên `totalElements` khớp với số trang thật sự lật được.
+- Tham số `sort` bị bỏ qua — thứ tự luôn là follower.
+
+### 3.19 `GET /stats/batch?ids=1,2,3` — số follower/following của nhiều người
+Qua gateway thì **bắt buộc token**. Trả `data` → `[{ "userId": 1, "followerCount": 10, "followingCount": 3 }]`. Chỉ có số đếm, không có thông tin cá nhân. Id không có profile không xuất hiện trong kết quả; id trùng được gộp. Tối đa **100** id → quá thì `TOO_MANY_PROFILE_IDS` (400).
+
+### 3.20 `GET /admin?ids=1,2,3` — batch cho admin console
+**Chỉ token có role ADMIN** (khác thì `403`); app mobile không dùng. Giống mục 3.3b nhưng không áp quy tắc người xem: không lọc block, và tài khoản do chủ tự đóng (mục 3.2c) **vẫn có mặt**, để report, video và trang tài khoản trên console còn hiện `@handle`. Profile đã xoá thật thì vắng mặt. Cùng giới hạn 100 id và cùng thứ tự như 3.3b.
+
+### 3.21 "Download your data" — `/me/data-exports`
+File làm **bất đồng bộ**, như TikTok: gửi yêu cầu → `PROCESSING` → `DataExportWorker` (poll 5s) đọc dữ liệu, nén ZIP, ghi lên MinIO (`exports/{userId}/{id}-{uuid}.zip`) → `READY`, tải được trong **4 ngày** → `EXPIRED`. Gửi yêu cầu mới thì file đang `READY` hết hạn ngay. Mỗi tài khoản chỉ một yêu cầu `PROCESSING` cùng lúc.
+
+| Method & path | Body / trả về | Lỗi |
+|---|---|---|
+| `GET /me/data-exports` | 20 yêu cầu mới nhất, mới trước. Poll lại khi còn `PROCESSING` | — |
+| `POST /me/data-exports` → `201` | `{ "format": "TXT" \| "JSON", "categories": ["POSTS", ...] }` (≥ 1) | `VALIDATION_ERROR` 400, `DATA_EXPORT_IN_PROGRESS` 409 |
+| `POST /me/data-exports/{id}/cancel` | Chỉ khi còn `PROCESSING` | `DATA_EXPORT_NOT_FOUND` 404, `DATA_EXPORT_NOT_CANCELABLE` 409 |
+| `GET /me/data-exports/{id}/download-url` | `{ url, expiresAt }` — link MinIO ký sẵn, sống **5 phút**; tạo mới mỗi lần bấm | `DATA_EXPORT_NOT_FOUND` 404, `DATA_EXPORT_UNAVAILABLE` 409 (chưa xong / hết hạn) |
+
+Phần tử: `{ id, format, categories, status, requestedAt, readyAt, expiresAt, sizeBytes }`. `status` ∈ `PROCESSING`, `READY`, `CANCELED`, `FAILED`, `EXPIRED`; file `READY` đã quá `expiresAt` được trả về là `EXPIRED` kể cả khi job dọn chưa chạy.
+
+`categories` (`DataExportCategory`) và nguồn dữ liệu — job chạy nền nên không có token user, đọc qua prefix internal của từng service:
+
+| Category | Nội dung | Nguồn |
+|---|---|---|
+| `PROFILE_AND_SETTINGS` | Profile, cài đặt | user-service |
+| `POSTS` | Mọi video chưa xoá, mọi status/visibility | video-service `GET /api/v1/videos/internal/users/{id}/videos` |
+| `LIKES_AND_FAVORITES` | Like, video đã lưu (kèm thời điểm) | interaction-service `GET /api/v1/interactions/internal/users/{id}/likes\|saves` |
+| `DIRECT_MESSAGES` | Mọi hội thoại và tin nhắn | chat-service `GET /api/v1/conversations/internal/users/{id}`, `.../internal/{conversationId}/messages` |
+| `YOUR_ACTIVITY` | Following, followers, repost, block, mute | user-service + interaction-service `.../reposts` |
+
+**Không có comment**: comment lưu theo video (`comments_by_video`), không có bảng nào liệt kê theo tác giả. Thêm thì phải có bảng `comments_by_author` ở interaction-service trước.
+
+Build lỗi (service nào đó chết) → giữ lease, thử lại sau `lease` (10 phút), quá 3 lần → `FAILED`. Bị huỷ giữa chừng → file vừa ghi bị xoá, không thành `READY`. `DataExportCleanup` (15 phút/lần) chuyển `READY` quá hạn sang `EXPIRED` và xoá file của mọi row không còn tải được; MinIO có thêm rule ILM xoá `exports/` sau 7 ngày làm lưới an toàn. Tài khoản bị xoá thật (mục 3.2c) → mọi yêu cầu bị xoá mềm, file bị dọn.
+
+### 3.22 `GET /admin/data-exports/summary` — theo dõi job "Download your data"
+**Chỉ token có role ADMIN** (khác thì `403`). Trang System → Queues của admin console đọc endpoint này. Không tính yêu cầu của tài khoản đã xoá thật.
+
+```json
+{ "processing": 2, "oldestProcessingSince": "2026-10-18T13:50:39Z", "stalled": 0, "readyFiles": 14,
+  "failedSince": "2026-10-11T13:55:00Z", "failed": 1,
+  "recentFailures": [{ "id": 1, "userId": 7, "format": "TXT", "categories": ["POSTS"], "attempts": 3,
+                       "requestedAt": "…", "failedAt": "…" }] }
+```
+
+- `stalled`: số yêu cầu `PROCESSING` cũ hơn `lease × max-attempts` (30 phút) — worker không xử lý nổi, ví dụ scheduler chết hoặc hàng đợi dồn.
+- `readyFiles`: file `READY` chưa quá hạn, tức đang chiếm chỗ trên MinIO.
+- `failed`: số yêu cầu thành `FAILED` trong 7 ngày gần nhất; `recentFailures` là 20 cái mới nhất. `failedAt` lấy từ `updated_at` — sau khi `FAILED` không còn gì cập nhật row nữa.
+
 ## 4. Enums
 
-Không có enum nào ở user-service (không có trạng thái "visibility", "follow status"... — follow/block/mute chỉ là quan hệ có/không, xoá mềm qua `deletedAt`). Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
+| Enum | Giá trị | Dùng ở đâu |
+|---|---|---|
+| `DataExportFormat` | `TXT`, `JSON` | mục 3.21 |
+| `DataExportCategory` | `DIRECT_MESSAGES`, `LIKES_AND_FAVORITES`, `POSTS`, `PROFILE_AND_SETTINGS`, `YOUR_ACTIVITY` | mục 3.21 |
+| `DataExportStatus` | `PROCESSING`, `READY`, `CANCELED`, `FAILED`, `EXPIRED` | mục 3.21 |
+| `SettingsAudience` | `EVERYONE`, `FRIENDS`, `NO_ONE` | `commentAudience` và `dmAudience` ở mục 3.14 / 3.15. `FRIENDS` nghĩa là **follow lẫn nhau** (mutual), không phải "người tôi follow" |
+| `FollowResponse.status` | `FOLLOWING`, `REQUESTED` | `status` ở mục 3.4 và 3.16 |
+
+Ngoài các enum trên, follow/block/mute và lời mời follow đều là quan hệ có/không, xoá mềm qua `deletedAt`. Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
 
 ## 5. Bảng mã lỗi (`code`) đầy đủ
 
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
 | `INVALID_AVATAR` | 400 / 413 | File upload ở `POST /me/avatar` sai định dạng, rỗng, hoặc quá 5 MB |
-| `VALIDATION_ERROR` | 400 | Body không đúng ràng buộc (`displayName`/`bio`/`avatarUrl` sai định dạng/độ dài) |
+| `VALIDATION_ERROR` | 400 | Body không đúng ràng buộc (`displayName`/`bio`/`avatarUrl` sai định dạng/độ dài); ở mục 3.15: audience sai giá trị, `screenTimeLimitMinutes` ngoài `[10, 1440]`, `null` trên field NOT NULL, hoặc khung giờ ngủ thiếu một đầu / hai đầu bằng nhau |
+| `BAD_REQUEST` | 400 | Body không parse được — ví dụ giờ ngủ không đúng định dạng `HH:mm` (mục 3.15). Khác `VALIDATION_ERROR` ở chỗ request chưa bao giờ thành object để validate |
 | `TOO_MANY_PROFILE_IDS` | 400 | Gửi quá 100 id cho `GET /?ids=` (mục 3.3b). Chia nhỏ theo trang, đừng gộp cả feed vào 1 lần gọi |
+| `DISPLAY_NAME_CHANGE_TOO_SOON` | 429 | `PATCH /me` đổi `displayName` khi chưa đủ 7 ngày từ lần đổi trước (mục 3.2). Retry vô ích cho tới `displayNameChangeableAt` |
 | `CANNOT_FOLLOW_SELF` | 400 | Gọi `follow` lên chính `userId` của mình |
 | `CANNOT_BLOCK_SELF` | 400 | Gọi `block` lên chính mình |
 | `CANNOT_MUTE_SELF` | 400 | Gọi `mute` lên chính mình |
 | `USER_BLOCKED` | 403 | `follow` thất bại vì đang có quan hệ block (2 chiều) giữa 2 bên |
+| `PRIVATE_ACCOUNT` | 403 | Xem danh sách followers/following của tài khoản riêng tư mà không phải chủ hay follower (mục 3.6) |
 | `USER_PROFILE_NOT_FOUND` | 404 | User không tồn tại, bị ẩn do có block giữa 2 bên (server cố tình gộp 2 case, xem mục 3.3), **hoặc** profile của chính người gọi chưa được tạo xong qua Kafka (xem mục 3.4) |
 | `ALREADY_FOLLOWING` | 409 | Follow lại người đã follow |
+| `ALREADY_REQUESTED` | 409 | Follow tài khoản riêng tư khi đã có lời mời đang chờ (mục 3.4) |
 | `ALREADY_BLOCKED` | 409 | Block lại người đã block |
 | `ALREADY_MUTED` | 409 | Mute lại người đã mute |
-| `NOT_FOLLOWING` | 404 | Unfollow người chưa follow |
+| `NOT_FOLLOWING` | 404 | Unfollow người chưa follow và cũng không có lời mời đang chờ |
+| `FOLLOW_REQUEST_NOT_FOUND` | 404 | Duyệt/từ chối khi không có lời mời nào đang chờ từ người đó (mục 3.16) |
 | `NOT_BLOCKED` | 404 | Unblock người chưa block |
 | `NOT_MUTED` | 404 | Unmute người chưa mute |
+| `DATA_EXPORT_NOT_FOUND` | 404 | Yêu cầu tải dữ liệu không tồn tại hoặc không phải của người gọi (mục 3.21) |
+| `DATA_EXPORT_IN_PROGRESS` | 409 | Đã có một yêu cầu tải dữ liệu đang `PROCESSING` (mục 3.21) |
+| `DATA_EXPORT_NOT_CANCELABLE` | 409 | Huỷ yêu cầu đã xong / đã huỷ / đã hết hạn (mục 3.21) |
+| `DATA_EXPORT_UNAVAILABLE` | 409 | Xin link tải khi file chưa xong hoặc đã hết hạn (mục 3.21) |
 | `CONCURRENT_MODIFICATION` | 409 | Hai request sửa cùng 1 bản ghi đúng lúc (2 lần bấm unfollow/unblock/unmute sát nhau, hoặc 2 thiết bị cùng thao tác). **Mã 409 duy nhất nên retry** — đọc lại trạng thái rồi thử lại 1 lần; các mã `ALREADY_*` là lỗi nghiệp vụ, retry vô ích |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 
@@ -241,17 +441,37 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của user-service, đế
 - Không dừng infinite scroll khi `content` ngắn hơn `size` — dùng `number + 1 >= totalPages`, vì server có thể bỏ qua vài id không còn profile trong trang (xem mục 2).
 - Không coi mọi `409` như nhau: `CONCURRENT_MODIFICATION` nên retry 1 lần, còn `ALREADY_FOLLOWING`/`ALREADY_BLOCKED`/`ALREADY_MUTED` thì phải đồng bộ lại UI chứ retry không giải quyết gì.
 - Không cho user bấm liên tục nút follow/unfollow (debounce nút sau khi bấm) — 2 request song song sẽ tạo `CONCURRENT_MODIFICATION` và counter hiển thị nhấp nháy.
+- Không dùng luật "chuỗi rỗng = xoá field" của `PATCH /me` cho `PATCH /me/settings` — ở endpoint settings, xoá một field nullable là gửi **đúng `null`** (và phải có key); chuỗi rỗng là lỗi validate. Hai endpoint đứng cạnh nhau nhưng cố ý khác nhau (mục 3.15).
+- Không coi `GET /me/settings` trả mặc định là "chưa load xong" rồi retry — tài khoản chưa đổi cài đặt nào thì đó **là** câu trả lời đúng, không có row nào cả (mục 3.14).
+- Không kỳ vọng đổi `commentAudience` có hiệu lực ngay lập tức trên mọi video — có cache TTL ngắn ở video-service; nếu UI vừa đổi vừa test thì chờ vài chục giây (mục 3.15).
 - Không gọi thẳng `user-service:8082` từ production build — luôn qua gateway `:8080`.
 
 ## 8. Sự kiện Kafka (Events)
 
-Phần này cho người tích hợp backend, không phải client mobile. `user-service` **chỉ tiêu thụ**, không phát event nào (follow/block/mute chỉ ghi Postgres, không announce ra Kafka). Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+Phần này cho người tích hợp backend, không phải client mobile. `user-service` vừa phát vừa tiêu thụ event. Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+
+### Phát (producer) — outbox
+
+Ghi vào bảng `outbox_events` trong **cùng transaction** với thay đổi; `OutboxPublisher` poll mỗi 5s và chỉ đánh dấu published sau khi broker ack. Mỗi `aggregate_type` một topic, mỗi topic đúng một loại event — không có header `eventType`.
+
+| Topic | Event | Key | Payload | Khi nào |
+|---|---|---|---|---|
+| `user.follow-events` | `UserFollowChangedEvent` | `followingId` | `eventId, occurredAt, followerId, followingId, followed, requestApproved` | Follow / unfollow / block cắt follow; duyệt lời mời (`requestApproved = true`). Event cũ không có `requestApproved` → đọc là `false` |
+| `user.follow-request-events` | `FollowRequestedEvent` | `targetId` | `eventId, occurredAt, requesterId, targetId` | Follow tài khoản riêng tư. Rút hay từ chối **không** phát gì |
+| `user.privacy-events` | `UserPrivacyChangedEvent` | `userId` | `eventId, occurredAt, userId, privateAccount` | `privateAccount` ở mục 3.15 thật sự đổi giá trị |
+
+Consumer: `user.follow-events` → notification-service (`NEW_FOLLOWER` / `FOLLOW_REQUEST_ACCEPTED`) và chat-service (counter realtime); `user.follow-request-events` → notification-service (`FOLLOW_REQUEST`); `user.privacy-events` → video-service (collection `owner_privacy` và đánh dấu lại video).
+
+### Tiêu thụ (consumer)
 
 | Topic | Event | Payload | Consumer & tác dụng |
 |---|---|---|---|
-| `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` | `UserRegisteredEventConsumer` → tạo `UserProfile` (`displayName = username`, `avatarUrl` = ảnh provider nếu có). **Claim `eventId` vào bảng `inbox_events` TRƯỚC khi tạo** (`tryClaim` = `INSERT ... ON CONFLICT DO NOTHING`) — hai redelivery đua nhau chỉ một cái INSERT thắng, không tạo profile đôi. Đây là độ trễ khiến `GET /me` trả `404` ngay sau register (mục 3.1) |
-| `media.avatar-events` | `AvatarMirroredEvent` | `eventId, occurredAt, userId, sourceUrl, avatarUrl` | `AvatarMirroredEventConsumer` → `applyMirroredAvatar`: đổi `avatarUrl` sang bản MinIO **chỉ khi** field đang trống hoặc đúng bằng `sourceUrl`. Ảnh user tự đặt qua `PATCH /me` / `POST /me/avatar` không bao giờ bị đè. Không cần inbox claim — công việc là một UPDATE có điều kiện về giá trị cố định, redelivery là no-op |
+| `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` | `UserRegisteredEventConsumer` → tạo `UserProfile` (`displayName = username`, `avatarUrl` = ảnh provider nếu có). **Claim `eventId` vào bảng `inbox_events` TRƯỚC khi tạo** (`tryClaim` = `INSERT ... ON CONFLICT DO NOTHING`) — hai redelivery đua nhau chỉ một cái INSERT thắng, không tạo profile đôi. Đây là độ trễ khiến `GET /me` trả `404` ngay sau register (mục 3.1). Profile khác còn giữ đúng handle này thì bị gỡ handle, như ở `auth.username-events` |
+| `media.avatar-events` | `AvatarMirroredEvent` | `eventId, occurredAt, userId, sourceUrl, avatarUrl` | `AvatarMirroredEventConsumer` → `applyMirroredAvatar`: đổi `avatarUrl` sang bản MinIO **chỉ khi** field đang trống hoặc đúng bằng `sourceUrl`. Ảnh user tự đặt qua `PATCH /me` / `POST /me/avatar` không bao giờ bị đè. Không cần inbox claim — công việc là một UPDATE có điều kiện về giá trị cố định, redelivery là no-op. Profile chưa tồn tại (bản sao đến trước `UserRegisteredEvent`) → **throw** để `kafka-lib` retry 3 lần cách nhau 1 giây rồi vào `media.avatar-events.DLT`, như `auth.username-events` — bỏ qua thì profile tạo sau giữ URL của provider cho tới lần đăng nhập kế tiếp |
+| `auth.username-events` | `UsernameChangedEvent` | `eventId, occurredAt, userId, username, previousUsername` | `UsernameChangedEventConsumer` → `applyUsernameChange`: đổi bản sao `username` của profile (không đụng `displayName`). Claim `eventId` vào `inbox_events` trong cùng transaction. Profile chưa tồn tại (rename đến trước `UserRegisteredEvent` vì hai topic khác nhau) → **throw** để `kafka-lib` retry, thay vì bỏ qua — bỏ qua thì event đăng ký đến sau sẽ ghi username cũ và không gì sửa lại được. Retry chỉ thêm 3 lần, cách nhau 1 giây (đủ cho độ trễ thường gặp), sau đó event nằm ở `auth.username-events.DLT` và profile giữ handle cũ cho tới khi event được replay. Cột `username` không unique ở đây (auth-service giữ uniqueness): khi gán handle cho một profile, profile khác còn giữ đúng handle đó (không phân biệt hoa thường) bị gỡ handle (`username = null`) cho tới khi rename của chính nó tới — auth-service chỉ cho một tài khoản giữ một handle tại một thời điểm, nên bản sao kia chắc chắn đã cũ. Nhờ vậy `GET /by-username/{username}` trả về người đang giữ handle chứ không phải bản sao cũ |
 
-`auth.user-events` chỉ mang đúng một loại event nên hai consumer parse thẳng payload vào `UserRegisteredEvent`, không đọc header. Đó là lý do `auth-service` phát `SocialAvatarDiscoveredEvent` trên topic **riêng** (`auth.social-avatar-events`, media-worker nghe) chứ không dùng chung topic này.
+| `auth.account-events` | `AccountStateChangedEvent` | `eventId, occurredAt, userId, state, deletionScheduledAt` | `AccountStateEventConsumer`. `DEACTIVATED`/`ACTIVE` → ghi/xoá `deactivated_at` bằng một UPDATE có guard `account_state_changed_at < occurredAt` (không claim — redelivery ghi lại cùng giá trị, event cũ đến muộn không khớp row nào). `DELETED` → claim `eventId` vào `inbox_events` cùng transaction rồi gỡ toàn bộ tài khoản (mục 3.2c) |
 
-`kafka-lib` error handler: `user-service` **có** dùng → consumer lỗi retry 3 lần → `<topic>.DLT`. Không có outbox (không phát event).
+`auth.user-events` chỉ mang đúng một loại event nên hai consumer parse thẳng payload vào `UserRegisteredEvent`, không đọc header. Đó là lý do `auth-service` phát `SocialAvatarDiscoveredEvent` và `UsernameChangedEvent` trên topic **riêng** (`auth.social-avatar-events`, `auth.username-events`) chứ không dùng chung topic này.
+
+`kafka-lib` error handler: `user-service` **có** dùng → consumer lỗi retry 3 lần → `<topic>.DLT`.

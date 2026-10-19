@@ -16,14 +16,18 @@
     <name>event-schema</name>
 
     <dependencies>
-        <!-- Kafka event POJOs cần Jackson để (de)serialize -->
+        <!-- The records need no Jackson to compile; each service brings the mapper it (de)serializes
+             them with. The test runs them through the mapper Spring Boot configures for those services. -->
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jackson</artifactId>
+            <scope>test</scope>
         </dependency>
+        <!-- Its PrimitiveDefaultsModule, which every service's mapper finds the same way. -->
         <dependency>
-            <groupId>com.fasterxml.jackson.datatype</groupId>
-            <artifactId>jackson-datatype-jsr310</artifactId>
+            <groupId>com.tiktok</groupId>
+            <artifactId>common-lib</artifactId>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 </project>

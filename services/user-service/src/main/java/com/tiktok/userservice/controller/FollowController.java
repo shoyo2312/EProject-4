@@ -23,9 +23,11 @@ public class FollowController {
     private final FollowService followService;
 
     @Operation(summary = "Follow a user",
-            description = "400 CANNOT_FOLLOW_SELF, 404 USER_PROFILE_NOT_FOUND when either side "
-                    + "has no profile, 409 ALREADY_FOLLOWING, 409 CANNOT_FOLLOW_BLOCKED_USER "
-                    + "when a block exists in either direction.")
+            description = "201 either way: status FOLLOWING, or REQUESTED when the account is "
+                    + "private and its owner has to approve. 400 CANNOT_FOLLOW_SELF, "
+                    + "404 USER_PROFILE_NOT_FOUND when either side has no profile, 403 USER_BLOCKED "
+                    + "when a block exists in either direction, 409 ALREADY_FOLLOWING, "
+                    + "409 ALREADY_REQUESTED.")
     @PostMapping("/follow")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<FollowResponse> follow(
@@ -34,7 +36,9 @@ public class FollowController {
         return ApiResponse.success(followService.follow(currentUserId, userId));
     }
 
-    @Operation(summary = "Unfollow a user", description = "404 NOT_FOLLOWING when there is no edge.")
+    @Operation(summary = "Unfollow a user",
+            description = "Removes the edge, or withdraws a pending request when there is none. "
+                    + "404 NOT_FOLLOWING when there is neither.")
     @DeleteMapping("/follow")
     public ApiResponse<Void> unfollow(
             @AuthenticationPrincipal Long currentUserId,
@@ -43,8 +47,14 @@ public class FollowController {
         return ApiResponse.success(null);
     }
 
-    @Operation(summary = "Whether the viewer and this user follow each other",
-            description = "Edge-only: an id with no account is simply not a friend, not a 404.")
+    /**
+     * The tokenless sibling of this, for services with no bearer token to forward, is
+     * {@link InternalFollowController} — keep the two answering the same question.
+     */
+    @Operation(summary = "The viewer's relationship to this user",
+            description = "following, requested (a pending follow request), friends (mutual) and "
+                    + "whether the account is private — everything a Follow button needs. "
+                    + "Edge-only: an id with no account is all false, not a 404.")
     @GetMapping("/friendship")
     public ApiResponse<FriendshipResponse> friendship(
             @AuthenticationPrincipal Long currentUserId,
@@ -54,7 +64,9 @@ public class FollowController {
 
     @Operation(summary = "Who follows this user",
             description = "404 USER_PROFILE_NOT_FOUND if a block hides the account from the "
-                    + "viewer. Accounts that blocked the viewer are absent from the page.")
+                    + "viewer. 403 PRIVATE_ACCOUNT if the account is private and the viewer "
+                    + "neither owns nor follows it. Accounts that blocked the viewer are absent "
+                    + "from the page.")
     @GetMapping("/followers")
     public ApiResponse<Page<UserProfileResponse>> listFollowers(
             @AuthenticationPrincipal Long currentUserId,

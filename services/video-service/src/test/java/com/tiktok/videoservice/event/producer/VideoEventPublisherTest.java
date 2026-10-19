@@ -1,10 +1,13 @@
 package com.tiktok.videoservice.event.producer;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
+import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.repository.VideoRepository;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -48,7 +51,7 @@ class VideoEventPublisherTest {
     @Mock
     private KafkaOperations<String, String> kafkaOperations;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     private VideoEventPublisher publisher;
 
@@ -189,7 +192,7 @@ class VideoEventPublisherTest {
                 .thenReturn(List.of(video));
 
         ObjectMapper broken = org.mockito.Mockito.mock(ObjectMapper.class);
-        when(broken.writeValueAsString(any())).thenThrow(new JsonProcessingException("no") {
+        when(broken.writeValueAsString(any())).thenThrow(new JacksonException("no") {
         });
         VideoEventPublisher brokenPublisher = new VideoEventPublisher(
                 videoRepository, new OutboxDispatcher(kafkaOperations, Duration.ofSeconds(5)), broken,
@@ -384,5 +387,112 @@ class VideoEventPublisherTest {
                 .tags(List.of("dance"))
                 .status(VideoStatus.PUBLISHED)
                 .build();
+    }
+
+    /**
+     * The caption's verdict rides on the publication for media-worker to fold into the moderation
+     * verdict — only when it was enforced: a verdict that was only measured must not hold the video
+     * downstream, and a video from before text moderation has nothing to say.
+     */
+    @Test
+    void publishPending_carriesTheCaptionVerdict_onlyWhenItWasEnforced() throws Exception {
+        Video held = withCaption(ModerationVerdict.REVIEW, true);
+        Video measured = withCaption(ModerationVerdict.REVIEW, false);
+        Video older = pendingVideo();
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(held, measured, older));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPending();
+
+        ArgumentCaptor<ProducerRecord<String, String>> captor = ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaOperations, times(3)).send(captor.capture());
+        List<ModerationVerdict> sent = new java.util.ArrayList<>();
+        for (ProducerRecord<String, String> record : captor.getAllValues()) {
+            sent.add(objectMapper.readValue(record.value(), VideoPublishedEvent.class).textVerdict());
+        }
+        assertThat(sent).containsExactly(ModerationVerdict.REVIEW, null, null);
+    }
+
+    private Video withCaption(ModerationVerdict verdict, boolean enforced) {
+        return Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("Săn sale")
+                .rawFileUrl("s3://video-media/raw/1.mp4")
+                .visibility(VideoVisibility.PUBLIC)
+                .tags(List.of())
+                .status(VideoStatus.PROCESSING)
+                .textModeration(VideoTextModeration.builder()
+                        .verdict(verdict).flags(List.of("DESCRIPTION:SPAM:link:abc.xyz"))
+                        .version("rules-test").enforced(enforced).checkedAt(Instant.now()).build())
+                .build();
+    }
+
+    /**
+     * A private owner's PUBLIC video goes out as FOLLOWERS: search, For You and trending keep their
+     * own copy and show only PUBLIC, so the one word keeps it off all three.
+     */
+    @Test
+    void publishPending_aPrivateOwnersPublicVideo_goesOutAsFollowers() {
+        Video video = videoWith(VideoVisibility.PUBLIC, true);
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPending();
+
+        assertThat(visibilityOf(captureRecord())).isEqualTo("FOLLOWERS");
+    }
+
+    @Test
+    void publishPendingVisibilityChanges_announcesTheAudience() {
+        Video video = videoWith(VideoVisibility.PUBLIC, true);
+        video.changeVisibility(VideoVisibility.PUBLIC);
+        when(videoRepository
+                .findTop100ByVisibilityEventPendingAtIsNotNullAndEventPublishedAtIsNotNullOrderByVisibilityEventPendingAtAsc())
+                .thenReturn(List.of(video));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPendingVisibilityChanges();
+
+        ProducerRecord<String, String> record = captureRecord();
+        assertThat(eventTypeOf(record)).isEqualTo("VideoVisibilityChangedEvent");
+        assertThat(visibilityOf(record)).isEqualTo("FOLLOWERS");
+    }
+
+    /** The stored visibility is the owner's choice and stays; only the announced word changes. */
+    @Test
+    void audience_isTheVisibilityExceptForAPrivateOwnersPublicVideo() {
+        assertThat(VideoEventPublisher.audience(videoWith(VideoVisibility.PUBLIC, false))).isEqualTo("PUBLIC");
+        assertThat(VideoEventPublisher.audience(videoWith(VideoVisibility.PUBLIC, true))).isEqualTo("FOLLOWERS");
+        assertThat(VideoEventPublisher.audience(videoWith(VideoVisibility.FRIENDS, true))).isEqualTo("FRIENDS");
+        assertThat(VideoEventPublisher.audience(videoWith(VideoVisibility.PRIVATE, true))).isEqualTo("PRIVATE");
+        // No stored visibility reads as PUBLIC, so it takes the same turn.
+        assertThat(VideoEventPublisher.audience(videoWith(null, true))).isEqualTo("FOLLOWERS");
+    }
+
+    private Video videoWith(VideoVisibility visibility, boolean ownerPrivate) {
+        return Video.builder()
+                .id(Video.newId())
+                .userId(1L)
+                .title("My video")
+                .rawFileUrl("s3://video-media/raw/1.mp4")
+                .visibility(visibility)
+                .ownerPrivate(ownerPrivate)
+                .tags(List.of("dance"))
+                .status(VideoStatus.PUBLISHED)
+                .build();
+    }
+
+    private String visibilityOf(ProducerRecord<String, String> record) {
+        try {
+            return objectMapper.readTree(record.value()).get("visibility").asText();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 }

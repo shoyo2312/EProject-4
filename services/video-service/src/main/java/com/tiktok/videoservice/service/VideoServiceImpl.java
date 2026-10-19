@@ -1,6 +1,11 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.common.storage.ObjectKeys;
+import com.tiktok.videoservice.client.BlockClient;
+import com.tiktok.videoservice.client.FollowClient;
 import com.tiktok.videoservice.client.FriendshipClient;
+import com.tiktok.videoservice.client.OwnerCommentSettings;
+import com.tiktok.videoservice.client.UserSettingsClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
@@ -10,30 +15,38 @@ import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.entity.OwnerBan;
+import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.AlreadyPublishedException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.PrivateAccountException;
 import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
+import com.tiktok.videoservice.repository.OwnerBanRepository;
+import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
 import com.tiktok.videoservice.repository.UserVideoStats;
 import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
 import io.minio.PostPolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
+import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
-import java.net.URI;
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.Collection;
 import java.util.LinkedHashSet;
@@ -42,7 +55,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -56,6 +71,9 @@ public class VideoServiceImpl implements VideoService {
      * bucket's lifecycle rule expires abandoned uploads by matching this prefix.
      */
     private static final String UPLOAD_PREFIX = "raw";
+
+    /** The last segment of an upload key as createUploadUrl issues it: a Snowflake and an extension. */
+    private static final Pattern UPLOAD_FILE_NAME = Pattern.compile("[A-Za-z0-9_-]+\\.[A-Za-z0-9]+");
 
     /**
      * How many authors one Following feed request may name. Well above what a real account follows
@@ -91,12 +109,20 @@ public class VideoServiceImpl implements VideoService {
 
     private final VideoRepository videoRepository;
     private final VideoMapper videoMapper;
-    private final SpringDataWebProperties pageableProperties;
+    private final DataWebProperties pageableProperties;
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
     private final VideoCache videoCache;
     private final FriendshipClient friendshipClient;
     private final UploadLimitProperties uploadLimits;
+    private final QuarantinedMediaUrls quarantinedMediaUrls;
+    private final BlockClient blockClient;
+    private final UserSettingsClient userSettingsClient;
+    private final FollowClient followClient;
+    private final OwnerPrivacyRepository ownerPrivacyRepository;
+    private final OwnerBanRepository ownerBanRepository;
+    private final CaptionModeration captionModeration;
+    private final UploadRateLimiter uploadRateLimiter;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -113,6 +139,7 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
+        uploadRateLimiter.requireUploadUrl(userId);
         String contentType = mediaType(request.contentType());
         String extension = UPLOAD_EXTENSIONS.get(contentType);
         if (extension == null) {
@@ -141,23 +168,31 @@ public class VideoServiceImpl implements VideoService {
         formFields.put("key", objectKey);
         formFields.put("Content-Type", contentType);
 
-        String uploadUrl = "%s/%s".formatted(minioProperties.endpoint(), minioProperties.bucket());
-        String fileUrl = "s3://%s/%s".formatted(minioProperties.bucket(), objectKey);
-        return new UploadUrlResponse(uploadUrl, formFields, fileUrl, expirySeconds);
+        String uploadUrl = "%s/%s".formatted(minioProperties.uploadUrl(), minioProperties.bucket());
+        return new UploadUrlResponse(uploadUrl, formFields, storedUrl(objectKey), expirySeconds);
     }
 
     @Override
     public VideoResponse publish(Long userId, CreateVideoRequest request) {
-        requireOwnUpload(userId, request.rawFileUrl());
+        // First: a publish refused for anything after this — a foreign upload, its caption — still
+        // spends budget, so neither can be probed at speed.
+        uploadRateLimiter.requirePublish(userId);
+        String rawFileUrl = storedUrl(requireOwnUpload(userId, request.rawFileUrl()));
+        List<String> tags = normalizeTags(request.tags(), request.description());
+        // Before the insert: a caption refused here leaves nothing behind, so the same upload can
+        // be published again once the text is fixed.
+        VideoTextModeration textModeration = captionModeration.screen(request.title(), request.description(), tags);
 
         Video video = Video.builder()
                 .id(Video.newId())
                 .userId(userId)
                 .title(request.title())
                 .description(request.description())
-                .rawFileUrl(request.rawFileUrl())
+                .rawFileUrl(rawFileUrl)
                 .visibility(request.visibility())
-                .tags(normalizeTags(request.tags(), request.description()))
+                .ownerPrivate(isPrivateOwner(userId))
+                .tags(tags)
+                .textModeration(textModeration)
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)
                 .likeCount(0)
@@ -165,12 +200,28 @@ public class VideoServiceImpl implements VideoService {
                 .build();
 
         try {
-            return videoMapper.toResponse(videoRepository.save(video));
+            videoRepository.save(video);
         } catch (DuplicateKeyException e) {
             // raw_file_idx. The only unique index on this collection besides _id, and _id is a
-            // fresh Snowflake generated a few lines above.
+            // fresh Snowflake generated a few lines above. rawFileUrl is rebuilt from the key, so
+            // two spellings of one object (s3:// and the CDN URL, say) collide here too.
             throw new AlreadyPublishedException();
         }
+
+        // Read again after the insert. UserPrivacyEventConsumer records a switch and then stamps
+        // every video the owner has: if its stamping ran before this insert, its recording did too
+        // and this read sees it; if after, it rewrote this video with the rest. With the first
+        // read alone, a switch landing between it and the insert would leave this video wrong for
+        // good. And again after each corrective write, as the consumer does after its stamp:
+        // whoever writes last checks last, so a correction that went stale on its way in is not
+        // the final word.
+        boolean ownerPrivate = isPrivateOwner(userId);
+        while (ownerPrivate != video.isOwnerPrivate()) {
+            video.changeOwnerPrivacy(ownerPrivate);
+            videoRepository.updateOwnerPrivacy(video);
+            ownerPrivate = isPrivateOwner(userId);
+        }
+        return withAccountComments(videoMapper.toResponse(video));
     }
 
     /**
@@ -217,37 +268,39 @@ public class VideoServiceImpl implements VideoService {
     /**
      * {@code @ValidMediaUrl} answers "does this point at our storage" — scheme, host, bucket. It
      * says nothing about <em>whose</em> file it is, and every upload key already carries that:
-     * createUploadUrl above issues {@code raw/{userId}/...} and nothing else can write there.
-     * Without this check, publishing someone else's raw key republishes their video under the
-     * caller's name, and the transcode pipeline does the rest.
+     * createUploadUrl above issues {@code raw/{userId}/{id}.{ext}} and nothing else can write
+     * there. Without this check, publishing someone else's raw key republishes their video under
+     * the caller's name, and the transcode pipeline does the rest.
      *
-     * <p>Matched on the segment after {@code raw/} rather than on a fixed prefix, because the
-     * same key reaches this method as an {@code s3://bucket/key} URI and as an {@code https} CDN
-     * URL, which put a different number of segments in front of it. A URL with no {@code raw}
-     * segment at all is rejected too: it is not something this service ever handed out.
+     * <p>The key is read with {@link ObjectKeys#objectKey}, the same parser media-worker fetches
+     * the file with. Reading it any other way checks one object and transcodes another: this used
+     * to match the segment after the first {@code raw}, so
+     * {@code https://cdn/raw/1/video-media/quarantine/hls/555/source.mp4} passed as user 1's upload
+     * while media-worker, reading from the bucket name on, pulled a taken-down video out of
+     * quarantine. The whole key has to have the exact shape createUploadUrl issues — a prefix
+     * alone would still admit {@code raw/1/x/../../2/y.mp4}, whose dot segments only an
+     * encoded slash hides from normalization.
+     *
+     * @return the object key, for the caller to store in canonical form
      */
-    private void requireOwnUpload(Long userId, String rawFileUrl) {
-        // normalize() before reading segments, because java.net.URI does not resolve dot
-        // segments on its own and every HTTP client downstream does. Without it,
-        // ".../raw/{attacker}/../{victim}/file.mp4" satisfies the check below on the segment
-        // after the first "raw" and then addresses the victim's object the moment anything
-        // fetches it.
-        String path = URI.create(rawFileUrl).normalize().getPath();
-        if (path == null) {
+    private String requireOwnUpload(Long userId, String rawFileUrl) {
+        String key = ObjectKeys.objectKey(rawFileUrl, minioProperties.bucket())
+                .orElseThrow(ForeignUploadException::new);
+
+        String ownPrefix = "%s/%d/".formatted(UPLOAD_PREFIX, userId);
+        if (!key.startsWith(ownPrefix)
+                || !UPLOAD_FILE_NAME.matcher(key.substring(ownPrefix.length())).matches()) {
             throw new ForeignUploadException();
         }
+        return key;
+    }
 
-        String[] segments = path.split("/");
-        for (int i = 0; i < segments.length - 1; i++) {
-            if (UPLOAD_PREFIX.equals(segments[i])) {
-                if (!String.valueOf(userId).equals(segments[i + 1])) {
-                    throw new ForeignUploadException();
-                }
-                return;
-            }
-        }
-
-        throw new ForeignUploadException();
+    /**
+     * The form a raw upload is stored in: the key under an {@code s3://} bucket authority, which is
+     * what media-worker reads and what raw_file_idx compares.
+     */
+    private String storedUrl(String objectKey) {
+        return "s3://%s/%s".formatted(minioProperties.bucket(), objectKey);
     }
 
     /**
@@ -257,18 +310,32 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public VideoResponse getById(Long requesterId, String videoId) {
-        return requireVisible(requesterId, load(videoId), videoId);
+        VideoResponse video = requireVisible(requesterId, load(videoId), videoId);
+        // After the cache, never into it: a signed URL expires, and the entry serves everyone.
+        return withAccountComments(
+                isSelf(requesterId, video.userId()) ? quarantinedMediaUrls.forOwner(video) : video);
     }
 
     /**
-     * Owner and comment setting, and nothing the caller has to be allowed to see — so no
+     * Owner and comment settings, and nothing the caller has to be allowed to see — so no
      * visibility check runs here. {@link VideoPolicyResponse} has the reason.
+     *
+     * <p>The account-level comment settings are fetched rather than read off the video, and
+     * deliberately not denormalised onto the document: this endpoint is already a per-request
+     * lookup, so a cached call is O(1) and near-fresh, while denormalising would mean rewriting
+     * every document a creator owns each time they change the setting. The feed filter, which
+     * cannot call per row, is the case that will need the opposite answer.
      */
     @Override
     public VideoPolicyResponse getPolicy(String videoId) {
         VideoResponse video = load(videoId);
-        return new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled(),
-                video.durationSeconds());
+        OwnerCommentSettings owner = userSettingsClient.commentSettings(video.userId());
+        return owner == null
+                ? new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled(),
+                        video.durationSeconds(), null, null, null, null)
+                : new VideoPolicyResponse(video.id(), video.userId(), video.commentsDisabled(),
+                        video.durationSeconds(), owner.commentAudience(), owner.filterSpamOffensive(),
+                        owner.filterAllComments(), owner.commentKeywords());
     }
 
     /**
@@ -288,6 +355,32 @@ public class VideoServiceImpl implements VideoService {
         VideoResponse response = videoMapper.toResponse(video);
         videoCache.put(response);
         return response;
+    }
+
+    /**
+     * Marks the videos whose owner accepts comments from no one. On the way out, never into the
+     * cache: a cached entry is the video's own state and serves every caller, while the account
+     * setting changes on its own clock — {@link UserSettingsCache} already bounds how stale that
+     * may be, and baking it into the video entry would stack the video cache's TTL on top.
+     */
+    private List<VideoResponse> withAccountComments(List<VideoResponse> videos) {
+        if (videos.isEmpty()) {
+            return videos;
+        }
+        Set<Long> closed = userSettingsClient.closedToComments(
+                videos.stream().map(VideoResponse::userId).toList());
+        return closed.isEmpty() ? videos : videos.stream()
+                .map(video -> closed.contains(video.userId()) ? video.withAccountCommentsOff() : video)
+                .toList();
+    }
+
+    private VideoResponse withAccountComments(VideoResponse video) {
+        return withAccountComments(List.of(video)).get(0);
+    }
+
+    private Page<VideoResponse> withAccountComments(Page<VideoResponse> page) {
+        return new PageImpl<>(withAccountComments(page.getContent()), page.getPageable(),
+                page.getTotalElements());
     }
 
     /**
@@ -334,11 +427,15 @@ public class VideoServiceImpl implements VideoService {
 
         // Filtered after the lookup, not during it, so the cache holds one entry per video
         // rather than one per (video, viewer) — see getById.
-        return wanted.stream()
+        List<VideoResponse> ordered = wanted.stream()
                 .map(found::get)
                 .filter(Objects::nonNull)
-                .filter(video -> isVisibleTo(requesterId, video))
                 .toList();
+        Set<Long> followed = followedPrivateOwners(requesterId, ordered);
+        Set<Long> banned = hiddenAmong(ordered.stream().map(VideoResponse::userId).collect(Collectors.toSet()));
+        return withAccountComments(ordered.stream()
+                .filter(video -> isVisibleTo(requesterId, video, followed, banned))
+                .toList());
     }
 
     private int maxBatchSize() {
@@ -357,7 +454,7 @@ public class VideoServiceImpl implements VideoService {
 
     @Override
     public CursorPage<VideoResponse> getFollowingFeed(
-            List<Long> followedUserIds, String cursor, Integer size) {
+            Long requesterId, List<Long> followedUserIds, String cursor, Integer size) {
         // Following nobody is an empty tab, not the public feed. Returning early also keeps an
         // empty $in — which matches nothing but still costs a query — off the wire.
         if (followedUserIds == null || followedUserIds.isEmpty()) {
@@ -369,11 +466,22 @@ public class VideoServiceImpl implements VideoService {
 
         // Deduplicated: the caller assembles this from a paged listing, and a repeat id widens the
         // $in for nothing.
-        return feedPage(new LinkedHashSet<>(followedUserIds), cursor, size);
+        Set<Long> authors = new LinkedHashSet<>(followedUserIds);
+        // The ids come from the client, so naming a private account is not the same as following
+        // it. Dropped before the query rather than filtered out of the page, which would come back
+        // short under a cursor that already went past what it hid.
+        authors.removeAll(privateOwnersHiddenFrom(requesterId, authors));
+        // Followers included: a banned account's videos are gone for everyone.
+        authors.removeAll(hiddenAmong(authors));
+        if (authors.isEmpty()) {
+            return new CursorPage<>(List.of(), null);
+        }
+        return feedPage(authors, cursor, size);
     }
 
     /**
      * @param userIds the Following feed's authors, or null for the public feed — every author
+     *                whose account is not private
      */
     private CursorPage<VideoResponse> feedPage(
             Collection<Long> userIds, String cursor, Integer size) {
@@ -384,6 +492,7 @@ public class VideoServiceImpl implements VideoService {
         // a count query gives, for the cost of one extra document instead of a second scan.
         List<Video> rows = videoRepository.findFeedPage(
                 userIds,
+                userIds == null ? hiddenOwners() : Set.of(),
                 after == null ? null : after.createdAt(),
                 after == null ? null : after.id(),
                 limit + 1);
@@ -396,7 +505,8 @@ public class VideoServiceImpl implements VideoService {
         // guessing otherwise would need the count this method exists to avoid.
         String nextCursor = hasMore ? FeedCursor.of(page.get(page.size() - 1)).encode() : null;
 
-        return new CursorPage<>(page.stream().map(videoMapper::toResponse).toList(), nextCursor);
+        return new CursorPage<>(
+                withAccountComments(page.stream().map(videoMapper::toResponse).toList()), nextCursor);
     }
 
     /**
@@ -406,7 +516,7 @@ public class VideoServiceImpl implements VideoService {
      * {@code ?size=100000} has to stay clamped whichever pagination style the endpoint uses.
      */
     private int clampSize(Integer size) {
-        SpringDataWebProperties.Pageable limits = pageableProperties.getPageable();
+        DataWebProperties.Pageable limits = pageableProperties.getPageable();
         return size == null
                 ? limits.getDefaultPageSize()
                 : Math.clamp(size, 1, limits.getMaxPageSize());
@@ -417,13 +527,44 @@ public class VideoServiceImpl implements VideoService {
      * public — the same line {@link #getById} draws for a single video, applied to the list.
      * The endpoint takes no token, so requesterId is null for anonymous callers and they fall
      * to the filtered branch.
+     *
+     * <p>A private account's grid is for its followers, and anyone else is told so with a 403
+     * rather than an empty page — the client shows "This account is private", not "No videos yet".
+     * Asked of owner_privacy rather than of the videos, so an account with nothing on its grid
+     * answers the same way.
      */
     @Override
+    public CursorPage<VideoResponse> listForExport(Long userId, int page, int size) {
+        Page<Video> videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                userId, PageRequest.of(page, size));
+        List<VideoResponse> items = videos.getContent().stream()
+                .map(videoMapper::toResponse)
+                .map(quarantinedMediaUrls::forOwner)
+                .toList();
+        return new CursorPage<>(items, videos.hasNext() ? String.valueOf(page + 1) : null);
+    }
+
+    @Override
     public Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable) {
-        Page<Video> videos;
         if (isSelf(requesterId, userId)) {
-            videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable);
-        } else if (friendshipClient.areFriends(userId, requesterId)) {
+            return withAccountComments(
+                    videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
+                            .map(videoMapper::toResponse)
+                            .map(quarantinedMediaUrls::forOwner));
+        }
+
+        // Empty rather than an error a client would have to learn: the grid simply has nothing in it.
+        if (!hiddenAmong(List.of(userId)).isEmpty()) {
+            return Page.empty(pageable);
+        }
+
+        if (isPrivateOwner(userId)
+                && !followClient.followedAmong(requesterId, List.of(userId)).contains(userId)) {
+            throw new PrivateAccountException();
+        }
+
+        Page<Video> videos;
+        if (friendshipClient.areFriends(userId, requesterId)) {
             // One friendship check per page load, not per video: the answer is the same for every
             // video on this owner's grid.
             videos = videoRepository.findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByCreatedAtDesc(
@@ -434,7 +575,7 @@ public class VideoServiceImpl implements VideoService {
                     userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
         }
 
-        return videos.map(videoMapper::toResponse);
+        return withAccountComments(videos.map(videoMapper::toResponse));
     }
 
     /**
@@ -443,6 +584,10 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public UserVideoStatsResponse getUserStats(Long requesterId, Long userId) {
+        // Zero over an empty grid, the one listByUser serves a banned account.
+        if (!isSelf(requesterId, userId) && !hiddenAmong(List.of(userId)).isEmpty()) {
+            return new UserVideoStatsResponse(userId, 0, 0, 0);
+        }
         UserVideoStats stats = videoRepository.sumUserVideoStats(userId, isSelf(requesterId, userId));
         return new UserVideoStatsResponse(
                 userId, stats.videoCount(), stats.totalLikes(), stats.totalViews());
@@ -505,7 +650,7 @@ public class VideoServiceImpl implements VideoService {
         videoRepository.updateVisibility(video);
         videoCache.evict(videoId);
 
-        return videoMapper.toResponse(video);
+        return withAccountComments(videoMapper.toResponse(video));
     }
 
     /**
@@ -526,11 +671,22 @@ public class VideoServiceImpl implements VideoService {
         videoRepository.updateCommentsDisabled(video);
         videoCache.evict(videoId);
 
-        return videoMapper.toResponse(video);
+        return withAccountComments(videoMapper.toResponse(video));
     }
 
+    /**
+     * The single-video read, and so also the gate every interaction passes: interaction-service
+     * asks this with the caller's token before a like, comment, save, repost, share or view. A
+     * block between the viewer and the owner hides the video from both sides here, which is what
+     * keeps a blocked account from commenting on or liking the blocker's videos.
+     *
+     * <p>ponytail: listings and batches ({@link #isVisibleTo}) are not block-filtered — that is one
+     * user-service call per video. Needs a batch block endpoint if feeds must hide them too.
+     */
     private VideoResponse requireVisible(Long requesterId, VideoResponse video, String videoId) {
-        if (!isVisibleTo(requesterId, video)) {
+        if (!isVisibleTo(requesterId, video, followedPrivateOwners(requesterId, List.of(video)),
+                hiddenAmong(List.of(video.userId())))
+                || blockClient.isBlockedBetween(video.userId(), requesterId)) {
             throw new VideoNotFoundException(videoId);
         }
         return video;
@@ -538,25 +694,89 @@ public class VideoServiceImpl implements VideoService {
 
     /**
      * Decided from the response rather than the entity, because by this point the value may have
-     * come from Redis and there is no entity. The three fields it reads — userId, status,
-     * visibility — are on both, and a video the requester does not own is only theirs to see once
-     * it is both PUBLISHED and PUBLIC.
+     * come from Redis and there is no entity. The fields it reads — userId, status, visibility,
+     * ownerPrivate — are on both, and a video the requester does not own is only theirs to see
+     * once it is PUBLISHED and its audience takes them in.
+     *
+     * @param followedPrivateOwners the private owners on this request the requester follows — see
+     *                              {@link #followedPrivateOwners}
+     * @param hiddenOwners          the owners on this request banned or closed — see {@link #hiddenAmong}
      */
-    private boolean isVisibleTo(Long requesterId, VideoResponse video) {
+    private boolean isVisibleTo(Long requesterId, VideoResponse video, Set<Long> followedPrivateOwners,
+                                Set<Long> hiddenOwners) {
         if (isSelf(requesterId, video.userId())) {
             return true;
         }
-        if (video.status() != VideoStatus.PUBLISHED) {
+        if (video.status() != VideoStatus.PUBLISHED || hiddenOwners.contains(video.userId())) {
             return false;
         }
         return switch (video.visibility()) {
-            case PUBLIC -> true;
+            case PUBLIC -> !video.ownerPrivate() || followedPrivateOwners.contains(video.userId());
             // ponytail: one user-service call per FRIENDS video the requester does not own. PUBLIC
             // videos short-circuit above, so a normal feed/batch makes none; a list that is mostly
             // FRIENDS videos (rare) would. Add a batch friendship endpoint if that ever shows up.
+            // A private owner changes nothing here: a mutual follow already implies following.
             case FRIENDS -> friendshipClient.areFriends(video.userId(), requesterId);
             case PRIVATE -> false;
         };
+    }
+
+    /**
+     * The owners on this request whose PUBLIC videos the requester may see only as a follower,
+     * narrowed to the ones they do follow. One call for all of them, and none when nothing on the
+     * request belongs to a private owner — every page from accounts nobody made private.
+     */
+    private Set<Long> followedPrivateOwners(Long requesterId, List<VideoResponse> videos) {
+        Set<Long> privateOwners = videos.stream()
+                .filter(video -> video.ownerPrivate() && video.visibility() == VideoVisibility.PUBLIC)
+                .map(VideoResponse::userId)
+                .filter(owner -> !isSelf(requesterId, owner))
+                .collect(Collectors.toSet());
+        return privateOwners.isEmpty() ? Set.of() : followClient.followedAmong(requesterId, privateOwners);
+    }
+
+    private boolean isPrivateOwner(Long userId) {
+        return ownerPrivacyRepository.existsByUserIdAndPrivateAccountTrue(userId);
+    }
+
+    /**
+     * The owners among {@code owners} hidden as of now, banned or closed — see {@link OwnerBan}.
+     * One query on _id, none for an empty list. Asked after the cache, like every other viewer
+     * check: the cached entry is the video's own state, and this is the owner's.
+     */
+    private Set<Long> hiddenAmong(Collection<Long> owners) {
+        if (owners.isEmpty()) {
+            return Set.of();
+        }
+        return ownerBanRepository.findHiddenAmong(owners, Instant.now()).stream()
+                .map(OwnerBan::getUserId)
+                .collect(Collectors.toSet());
+    }
+
+    /** Every hidden owner, for the public feed, which has no author list to narrow first. */
+    private Set<Long> hiddenOwners() {
+        return ownerBanRepository.findAllHidden(Instant.now()).stream()
+                .map(OwnerBan::getUserId)
+                .collect(Collectors.toSet());
+    }
+
+    /**
+     * The private accounts among {@code owners} whose videos {@code requesterId} may not see:
+     * neither theirs nor followed. One owner_privacy query, and a follow lookup only when one of
+     * them is private.
+     */
+    private Set<Long> privateOwnersHiddenFrom(Long requesterId, Collection<Long> owners) {
+        Set<Long> privateOwners = ownerPrivacyRepository.findByUserIdInAndPrivateAccountTrue(owners).stream()
+                .map(OwnerPrivacy::getUserId)
+                .filter(owner -> !isSelf(requesterId, owner))
+                .collect(Collectors.toSet());
+        if (privateOwners.isEmpty()) {
+            return privateOwners;
+        }
+        Set<Long> followed = followClient.followedAmong(requesterId, privateOwners);
+        return privateOwners.stream()
+                .filter(owner -> !followed.contains(owner))
+                .collect(Collectors.toSet());
     }
 
     private boolean isOwner(Long requesterId, Video video) {

@@ -16,13 +16,13 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
@@ -47,20 +47,20 @@ class AdminMfaServiceTest {
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
 
     @Container
     @ServiceConnection(name = "redis")
     static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
             .withExposedPorts(6379);
 
-    @MockBean
+    @MockitoBean
     private KafkaTemplate<String, String> kafkaTemplate;
 
-    @MockBean
+    @MockitoBean
     private MailService mailService;
 
-    @MockBean
+    @MockitoBean
     private TurnstileService turnstileService;
 
     @Autowired
@@ -157,6 +157,22 @@ class AdminMfaServiceTest {
         // Same credentials, now with the trusted-device token: straight to a session, no throw.
         TokenResponse tokens = authService.login(
                 new LoginRequest("adminfour", "password123", "turnstile", deviceToken));
+        assertThat(tokens.accessToken()).isNotBlank();
+    }
+
+    /** The console signs in by email too, so an account named after that email must not answer for it. */
+    @Test
+    void adminSignInByEmail_isNotShadowedByAUsernameSpelledLikeIt() {
+        admin("adminfive", "admin5@example.com");
+        authService.register(new RegisterRequest("admin5@example.com", "impostor@example.com", "impostor-pass", "t"));
+
+        assertThatThrownBy(() -> authService.login(
+                new LoginRequest("admin5@example.com", "password123", "turnstile", null)))
+                .isInstanceOf(MfaRequiredException.class);
+        String otp = mailedOtp("admin5@example.com");
+
+        TokenResponse tokens = authService.loginWithOtp(
+                new AdminLoginOtpRequest("admin5@example.com", otp, "turnstile", false));
         assertThat(tokens.accessToken()).isNotBlank();
     }
 

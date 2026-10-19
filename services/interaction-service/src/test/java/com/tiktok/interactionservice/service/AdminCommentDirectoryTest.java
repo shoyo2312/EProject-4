@@ -1,11 +1,14 @@
 package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.AbstractInteractionServiceIT;
+import com.tiktok.interactionservice.client.CommentAudience;
+import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.request.AdminCommentFilter;
 import com.tiktok.interactionservice.dto.response.AdminCommentPageResponse;
 import com.tiktok.interactionservice.dto.response.AdminCommentResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
+import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
 import com.tiktok.interactionservice.repository.CommentIndexRepository;
@@ -13,12 +16,14 @@ import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.when;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -47,7 +52,7 @@ class AdminCommentDirectoryTest extends AbstractInteractionServiceIT {
 
     // Same reason as CommentServiceImplTest: the real client talks to video-service over HTTP, and
     // the default answer (comments enabled) is what the tests want anyway.
-    @MockBean
+    @MockitoBean
     private VideoOwnershipClient videoOwnershipClient;
 
     @BeforeEach
@@ -56,6 +61,10 @@ class AdminCommentDirectoryTest extends AbstractInteractionServiceIT {
         commentIndexRepository.deleteAll();
         videoCountersRepository.deleteAll();
         redisTemplate.getConnectionFactory().getConnection().flushAll();
+
+        // These tests seed comments through addComment, whose guard reads a whole policy. A mock's
+        // default would be null, which the real client never returns — it fails open.
+        when(videoOwnershipClient.commentPolicy(anyLong())).thenReturn(CommentPolicy.unrestricted());
     }
 
     /** The whole point of the admin read: a comment somebody removed is still on the page. */
@@ -229,6 +238,26 @@ class AdminCommentDirectoryTest extends AbstractInteractionServiceIT {
         assertThat(page.items()).extracting(AdminCommentResponse::content).containsExactly("removed first");
     }
 
+    /** A held comment has no row in the thread's index: this view is the only one that shows it. */
+    @Test
+    void listForAdmin_heldFilter_showsWhatWaitsForTheOwner_atBothLevels() {
+        // The owner holds every comment but their own for approval.
+        when(videoOwnershipClient.commentPolicy(73L))
+                .thenReturn(new CommentPolicy(9L, false, CommentAudience.EVERYONE, true, true, List.of()));
+        CommentResponse owners = commentService.addComment(73L, 9L, "the owner's own");
+        commentService.addComment(73L, 1L, "held comment");
+        commentService.addComment(73L, 2L, "held reply", owners.commentId());
+        CommentResponse withdrawn = commentService.addComment(73L, 3L, "held, then deleted");
+        commentService.deleteComment(73L, withdrawn.commentId(), 3L);
+
+        assertThat(adminCommentDirectory.listForAdmin(73L, AdminCommentFilter.HELD, null, 20).items())
+                .extracting(AdminCommentResponse::content)
+                .containsExactly("held reply", "held comment");
+        assertThat(adminCommentDirectory.listForAdmin(73L, AdminCommentFilter.THREAD, null, 20).items())
+                .extracting(AdminCommentResponse::content)
+                .containsExactly("the owner's own");
+    }
+
     /** The parent a reply answers, looked up for the context line — removed parents included. */
     @Test
     void listByIds_returnsTheRequestedComments_andSkipsUnknownIds() {
@@ -242,6 +271,29 @@ class AdminCommentDirectoryTest extends AbstractInteractionServiceIT {
                     assertThat(comment.deletedAt()).isNotNull();
                 });
         assertThat(adminCommentDirectory.listByIds(72L, List.of())).isEmpty();
+    }
+
+    /**
+     * A warning filed against a comment has to reach whoever wrote it, and a warning is as likely
+     * to follow a removal as to replace one — so a removed comment still answers.
+     */
+    @Test
+    void authorOf_namesTheWriter_ofALiveOrARemovedComment() {
+        CommentResponse live = commentService.addComment(73L, 5L, "still up");
+        CommentResponse removed = commentService.addComment(73L, 6L, "taken down");
+        commentService.deleteComment(73L, removed.commentId(), 6L);
+
+        assertThat(adminCommentDirectory.authorOf(73L, live.commentId()).userId()).isEqualTo(5L);
+        assertThat(adminCommentDirectory.authorOf(73L, removed.commentId()).userId()).isEqualTo(6L);
+    }
+
+    /** A comment id that was never stored — or stored under another video — is a 404, not a guess. */
+    @Test
+    void authorOf_anUnknownComment_isNotFound() {
+        CommentResponse elsewhere = commentService.addComment(74L, 5L, "on another video");
+
+        assertThatThrownBy(() -> adminCommentDirectory.authorOf(75L, elsewhere.commentId()))
+                .isInstanceOf(CommentNotFoundException.class);
     }
 
     /** A made-up cursor is the client's typo — a 400, not the 500 the catch-all would report. */

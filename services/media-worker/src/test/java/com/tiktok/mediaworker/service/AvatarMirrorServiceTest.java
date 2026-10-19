@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
 class AvatarMirrorServiceTest {
 
     private static final MinioProperties PROPERTIES =
-            new MinioProperties("http://localhost:9000", "key", "secret", "video-media");
+            new MinioProperties("http://localhost:9000", "https://media.example", "key", "secret", "video-media");
 
     private static final List<String> ALLOWED = List.of("lh3.googleusercontent.com");
 
@@ -82,7 +82,7 @@ class AvatarMirrorServiceTest {
 
         String url = service().mirror(42L, "https://lh3.googleusercontent.com/a/x");
 
-        assertThat(url).isEqualTo("http://localhost:9000/video-media/avatars/42");
+        assertThat(url).isEqualTo("https://media.example/video-media/avatars/42");
         verify(minioClient, never()).putObject(any(PutObjectArgs.class));
     }
 }

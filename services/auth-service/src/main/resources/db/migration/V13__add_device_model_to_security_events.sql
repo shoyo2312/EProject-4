@@ -1,0 +1,15 @@
+-- The device a sign-in came from, when the browser will say.
+--
+-- Not parsed from the user agent: that no longer carries it. Browsers reduced the UA for privacy,
+-- so every Mac reports "Intel Mac OS X 10_15_7" whatever it is, an iPhone reports only "iPhone",
+-- and Chrome on Android freezes the model to the literal "K". This column holds the
+-- Sec-CH-UA-Model client hint instead, which auth-service asks for via Accept-CH.
+--
+-- Expect it to be null more often than not, and that is the honest outcome rather than a bug:
+--   * only Chromium implements client hints at all — Safari and Firefox send nothing;
+--   * the hint is specified to be empty on every desktop platform, so a Mac mini or a desktop PC
+--     can never populate it;
+--   * Apple hardware models are not exposed to the web by any means, on any browser.
+-- In practice it is filled for Chromium on Android ("SM-A525F", "Pixel 9") and empty elsewhere.
+-- 64 characters is far past the longest model code in circulation.
+ALTER TABLE auth_security_events ADD COLUMN device_model VARCHAR(64);

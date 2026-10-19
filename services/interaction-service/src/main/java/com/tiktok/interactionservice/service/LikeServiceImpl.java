@@ -1,6 +1,5 @@
 package com.tiktok.interactionservice.service;
 
-import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.response.LikeStatusResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
@@ -9,7 +8,6 @@ import com.tiktok.interactionservice.entity.LikeByUserKey;
 import com.tiktok.interactionservice.entity.LikeByVideo;
 import com.tiktok.interactionservice.entity.LikeByVideoKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
-import com.tiktok.interactionservice.exception.InteractionConflictException;
 import com.tiktok.interactionservice.exception.InvalidCursorException;
 import com.tiktok.interactionservice.exception.LikeRateLimitedException;
 import com.tiktok.interactionservice.repository.LikeByUserRepository;
@@ -23,16 +21,17 @@ import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
-import java.util.function.BooleanSupplier;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class LikeServiceImpl implements LikeService {
-
-    private static final int MAX_LWT_RETRIES = 2;
 
     /** Same ceiling the paged listings use — one feed page's worth of cards. */
     private static final int MAX_BATCH_SIZE = 50;
@@ -59,9 +58,14 @@ public class LikeServiceImpl implements LikeService {
         // One timestamp for both tables, not Instant.now() twice: it is the reverse index's
         // clustering key, so unlike addresses that row by the value stored on the claim. Two
         // different instants and the unlike would delete nothing.
-        Instant likedAt = Instant.now();
-        boolean newlyLiked = executeLwtWithRetry(
-                () -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, likedAt));
+        // Truncated to what Cassandra stores, so a retry can recognise the row as this call's own.
+        Instant likedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        LikeByVideoKey key = LikeByVideoKey.builder().videoId(videoId).userId(currentUserId).build();
+        boolean newlyLiked = LwtRetry.run(
+                () -> likeByVideoRepository.insertIfNotExists(videoId, currentUserId, likedAt),
+                () -> likeByVideoRepository.findById(key)
+                        .filter(row -> likedAt.equals(row.getCreatedAt())).isPresent(),
+                "Like/unlike");
 
         if (newlyLiked) {
             // The LWT is what grants the right to move the counter, and it grants it exactly once:
@@ -121,8 +125,8 @@ public class LikeServiceImpl implements LikeService {
 
         Instant likedAt = claim.getCreatedAt();
 
-        boolean wasLiked = executeLwtWithRetry(
-                () -> likeByVideoRepository.deleteIfExists(videoId, currentUserId));
+        boolean wasLiked = LwtRetry.runDelete(
+                () -> likeByVideoRepository.deleteIfExists(videoId, currentUserId), "Like/unlike");
 
         if (wasLiked) {
             // Symmetric with like(): the LWT delete is the one call allowed to decrement, so a
@@ -172,17 +176,28 @@ public class LikeServiceImpl implements LikeService {
 
     @Override
     public List<LikeStatusResponse> getStatuses(List<Long> videoIds, Long currentUserId) {
-        // One point read per id against Cassandra/Redis rather than a fan-out of HTTP requests
-        // through the gateway — the batch endpoint exists to collapse the latter, not the former.
-        // Which is also why the cap is here and not in the controller: every id costs a Cassandra
-        // point read and a cache read, and the ids arrive in a query string, so nothing else stops
-        // one request asking for thousands of round trips. Distinct first, so a list padded with
-        // one repeated id cannot use up the cap.
-        return videoIds.stream()
+        // Two reads for the whole page — the viewer's likes in one IN, the counters in one batch —
+        // where it used to be a Cassandra point read and a cache read per id, one after another.
+        // The cap stays here rather than in the controller: the ids arrive in a query string, so
+        // nothing else stops one request naming thousands of partitions. Distinct first, so a list
+        // padded with one repeated id cannot use up the cap.
+        List<Long> ids = videoIds.stream()
                 .filter(Objects::nonNull)
                 .distinct()
                 .limit(MAX_BATCH_SIZE)
-                .map(videoId -> getStatus(videoId, currentUserId))
+                .toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        Set<Long> liked = currentUserId == null ? Set.of()
+                : likeByVideoRepository.findLikedAmong(ids, currentUserId).stream()
+                        .map(row -> row.getKey().getVideoId())
+                        .collect(Collectors.toSet());
+        Map<Long, VideoCounts> counts = counterCacheService.getCounts(ids);
+        return ids.stream()
+                .map(videoId -> new LikeStatusResponse(videoId, liked.contains(videoId),
+                        counts.getOrDefault(videoId, VideoCounts.ZERO).likeCount()))
                 .toList();
     }
 
@@ -222,28 +237,5 @@ public class LikeServiceImpl implements LikeService {
             log.error("Could not undo the {} after {}; its counter is now off by one",
                     what, cause.getMessage(), ex);
         }
-    }
-
-    /**
-     * A WriteTimeoutException on a lightweight transaction leaves the true outcome
-     * indeterminate. Retrying the LWT itself is safe (IF NOT EXISTS / IF EXISTS is
-     * idempotent by nature); a bare counter increment must never be blindly retried.
-     *
-     * <p>The last timeout is attached as the cause: what the coordinator said about the failed
-     * write is the only thing that explains a conflict nobody can reproduce afterwards.
-     */
-    private boolean executeLwtWithRetry(BooleanSupplier lwtOperation) {
-        WriteTimeoutException lastError = null;
-        for (int attempt = 0; attempt <= MAX_LWT_RETRIES; attempt++) {
-            try {
-                return lwtOperation.getAsBoolean();
-            } catch (WriteTimeoutException e) {
-                lastError = e;
-            }
-        }
-        InteractionConflictException failure = new InteractionConflictException(
-                "Like/unlike could not be confirmed after retries, please try again");
-        failure.initCause(lastError);
-        throw failure;
     }
 }

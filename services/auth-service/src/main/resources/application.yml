@@ -19,6 +19,14 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
+  task:
+    scheduling:
+      # One thread per @Scheduled method: the outbox poll, the ban sweep and the retention cleanup.
+      # On the default pool of one they take turns, and an outbox poll waiting out its ack
+      # timeout on a dead broker holds up every other job behind it.
+      pool:
+        size: 3
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -29,6 +37,13 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # send() blocks the caller while it fetches the topic's metadata, 60s by default. Social
+      # sign-in sends the provider avatar straight to the broker on the request thread
+      # (SocialAvatarEventProducer), so with Kafka down every Google/Facebook login hung for a
+      # minute over a cosmetic picture. The outbox dispatcher shares this producer and only gains:
+      # a record that cannot be queued stays unpublished and the next poll retries it.
+      properties:
+        "[max.block.ms]": 2000
 
   data:
     redis:
@@ -43,9 +58,9 @@ spring:
         max-page-size: 50
 
   mail:
-    host: ${MAIL_HOST:smtp-relay.brevo.com}
+    host: ${MAIL_HOST:smtp.resend.com}
     port: ${MAIL_PORT:587}
-    username: ${MAIL_USERNAME:}
+    username: ${MAIL_USERNAME:resend}
     password: ${MAIL_PASSWORD:}
     properties:
       mail:
@@ -79,6 +94,11 @@ auth:
     verification-token-grace: 1d
     published-outbox-grace: 7d
     remembered-device-grace: 1d
+    # The exception to the line above: this one runs from when the entry was written, because a
+    # sign-in never stops being true. Six months is how far back an account-recovery or abuse
+    # investigation realistically reaches; shorten it only against a real size problem, and know
+    # that shortening it is deleting evidence.
+    security-event-grace: 180d
   admin:
     # First ADMIN account for the admin console. Both must be set or nothing is provisioned;
     # an account that already owns this email is promoted, never overwritten.
@@ -92,8 +112,9 @@ auth:
     logo-url: ${MAIL_LOGO_URL:}
     site-url: ${MAIL_SITE_URL:https://tiktok-clone.dev}
   turnstile:
-    # Checked on every OTP-issuing call (register, addEmail, resendVerification,
-    # forgotPassword) before anything else runs.
+    # Checked on every OTP-issuing call (register, startSignup, addEmail,
+    # resendVerification, forgotPassword) before anything else runs, except a
+    # resend carrying the ticket an earlier pass earned (OtpSendGate).
     secret-key: ${TURNSTILE_SECRET_KEY:}
   oauth:
     google:

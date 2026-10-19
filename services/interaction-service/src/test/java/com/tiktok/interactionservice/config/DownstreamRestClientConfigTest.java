@@ -1,8 +1,10 @@
 package com.tiktok.interactionservice.config;
 
 import com.sun.net.httpserver.HttpServer;
+import com.tiktok.common.http.InternalApiToken;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.env.MockEnvironment;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 
@@ -12,6 +14,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DownstreamRestClientConfigTest {
+
+    private static final InternalApiToken TOKEN = InternalApiToken.from(new MockEnvironment()
+            .withProperty("INTERNAL_API_TOKEN", "internal-token-for-tests-0123456789abcdef"));
 
     private HttpServer hungServer;
 
@@ -39,7 +44,7 @@ class DownstreamRestClientConfigTest {
         hungServer.start();
 
         RestClient client = new DownstreamRestClientConfig()
-                .videoServiceRestClient("http://localhost:" + hungServer.getAddress().getPort(), 300);
+                .videoServiceRestClient("http://localhost:" + hungServer.getAddress().getPort(), 300, TOKEN);
 
         long started = System.nanoTime();
         assertThatThrownBy(() -> client.get().uri("/anything").retrieve().toBodilessEntity())

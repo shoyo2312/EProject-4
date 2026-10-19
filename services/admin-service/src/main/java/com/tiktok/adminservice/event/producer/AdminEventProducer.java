@@ -1,16 +1,23 @@
 package com.tiktok.adminservice.event.producer;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.ObjectMapper;
 import com.tiktok.adminservice.entity.CommentTarget;
 import com.tiktok.adminservice.entity.ModerationAction;
 import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.OutboxEvent;
+import com.tiktok.adminservice.entity.Report;
+import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.repository.OutboxEventRepository;
 import com.tiktok.event.DomainEvent;
 import com.tiktok.event.admin.CommentRemovedEvent;
+import com.tiktok.event.admin.ReportResolvedEvent;
+import com.tiktok.event.admin.ReportSubmittedEvent;
+import com.tiktok.event.admin.StaleReportsDismissedEvent;
 import com.tiktok.event.admin.UserBannedEvent;
+import com.tiktok.event.admin.UserSessionsRevokedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.admin.UserWarnedEvent;
+import com.tiktok.event.admin.VideoPurgeRequestedEvent;
 import com.tiktok.event.admin.VideoRestoredEvent;
 import com.tiktok.event.admin.VideoTakenDownEvent;
 import lombok.RequiredArgsConstructor;
@@ -19,15 +26,20 @@ import org.springframework.stereotype.Component;
 
 /**
  * Translates a moderation decision into the matching admin.* domain event and writes it to
- * the outbox. DISMISS_REPORT has no downstream event — nothing happened, so there is nothing to
- * tell anyone. A warning does: it changes no state anywhere, and telling the person is the only
- * effect it can have.
+ * the outbox. DISMISS_REPORT has no moderation event — nothing happened to the target, so no
+ * service has anything to change — though the reports it closes still go out through
+ * {@link #publishReportsResolved}, as for every decision that answers reports. A warning does
+ * get one: it changes no state anywhere, and telling the person is the only effect it can have.
  */
 @Component
 @RequiredArgsConstructor
 public class AdminEventProducer {
 
     private static final String AGGREGATE_TYPE = "MODERATION_ACTION";
+    /** Read by OutboxPublisher to send these to admin.report-events instead. */
+    static final String REPORT_AGGREGATE = "REPORT";
+    /** The Kafka key of every sweep event: there is no one target to key them by. */
+    static final String STALE_SWEEP_KEY = "stale-report-sweep";
 
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -37,7 +49,21 @@ public class AdminEventProducer {
         if (event == null) {
             return;
         }
-        writeToOutbox(action.getTargetId(), event);
+        writeToOutbox(AGGREGATE_TYPE, action.getTargetId(), event);
+    }
+
+    public void publishReportSubmitted(Report report) {
+        writeToOutbox(REPORT_AGGREGATE, report.getTargetId(),
+                ReportSubmittedEvent.of(report.getId(), report.getTargetType().name(), report.getTargetId()));
+    }
+
+    public void publishReportsResolved(ReportTargetType targetType, String targetId) {
+        writeToOutbox(REPORT_AGGREGATE, targetId, ReportResolvedEvent.of(targetType.name(), targetId));
+    }
+
+    /** One batch of the stale-report sweep; see {@code StaleReportSweep}. */
+    public void publishStaleReportsDismissed(int dismissed) {
+        writeToOutbox(REPORT_AGGREGATE, STALE_SWEEP_KEY, StaleReportsDismissedEvent.of(dismissed));
     }
 
     private DomainEvent toEvent(ModerationAction action) {
@@ -50,6 +76,7 @@ public class AdminEventProducer {
             case UNBAN_USER -> UserUnbannedEvent.of(Long.valueOf(targetId), adminId, reason);
             case TAKEDOWN_VIDEO -> VideoTakenDownEvent.of(targetId, adminId, reason);
             case RESTORE_VIDEO -> VideoRestoredEvent.of(targetId, adminId, reason);
+            case PURGE_VIDEO -> VideoPurgeRequestedEvent.of(targetId, adminId, reason);
             case REMOVE_COMMENT -> {
                 CommentTarget target = CommentTarget.parse(targetId);
                 yield CommentRemovedEvent.of(target.videoId(), target.commentId(), adminId, reason);
@@ -57,14 +84,15 @@ public class AdminEventProducer {
             // A warning changes nothing about the platform, so it carries the report's target
             // rather than a user id: notification-service resolves a video to its owner.
             case WARN_USER -> UserWarnedEvent.of(action.getTargetType().name(), targetId, adminId, reason);
+            case REVOKE_SESSIONS -> UserSessionsRevokedEvent.of(Long.valueOf(targetId), adminId, reason);
             case DISMISS_REPORT -> null;
         };
     }
 
     @SneakyThrows
-    private void writeToOutbox(String aggregateId, DomainEvent event) {
+    private void writeToOutbox(String aggregateType, String aggregateId, DomainEvent event) {
         OutboxEvent outboxEvent = OutboxEvent.builder()
-                .aggregateType(AGGREGATE_TYPE)
+                .aggregateType(aggregateType)
                 .aggregateId(aggregateId)
                 .eventType(event.getClass().getSimpleName())
                 .payload(objectMapper.writeValueAsString(event))

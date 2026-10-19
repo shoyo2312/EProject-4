@@ -5,13 +5,13 @@ import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
+import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -35,7 +35,7 @@ class ReportQueueRepositoryTest {
 
     @Container
     @SuppressWarnings("resource")
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:16-alpine");
 
     @DynamicPropertySource
     static void datasource(DynamicPropertyRegistry registry) {
@@ -157,6 +157,138 @@ class ReportQueueRepositoryTest {
         assertThat(statusOf(sibling)).isEqualTo(ReportStatus.RESOLVED);
         assertThat(statusOf(resolvedByHand)).isEqualTo(ReportStatus.PENDING);
         assertThat(statusOf(elsewhere)).isEqualTo(ReportStatus.PENDING);
+    }
+
+    /**
+     * The ledger filter, exercised against real Postgres rather than a mock, because
+     * {@code (:param IS NULL OR ...)} is the kind of thing that parses, deploys, and then fails
+     * at execution time on "could not determine data type of parameter". Four filters means
+     * sixteen combinations; these cover all-null, each one alone, and two together.
+     *
+     * <p>Lives in this class to share its container — a second {@code @Testcontainers} class
+     * boots a second Postgres for the same schema.
+     */
+    @Test
+    void anUnfilteredLedgerReturnsEveryReport() {
+        report("v1", SPAM, hoursAgo(3));
+        report("v2", SELF_HARM, hoursAgo(2));
+
+        assertThat(reportRepository.findFiltered(null, null, null, null, null, null, null, null, PageRequest.of(0, 10)))
+                .hasSize(2);
+    }
+
+    @Test
+    void theLedgerNarrowsToOneReporter() {
+        Report mine = filedBy(42L, "v1");
+        filedBy(43L, "v2");
+        filedBy(44L, "v3");
+
+        assertThat(reportRepository.findFiltered(null, null, null, 42L, null, null, null, null, PageRequest.of(0, 10)))
+                .extracting(Report::getId)
+                .containsExactly(mine.getId());
+    }
+
+    @Test
+    void theLedgerCombinesReporterWithStatus() {
+        Report pending = filedBy(42L, "v1");
+        Report resolved = filedBy(42L, "v2");
+        resolved.resolve(99L, ReportStatus.RESOLVED);
+        reportRepository.saveAndFlush(resolved);
+        filedBy(43L, "v3");
+
+        assertThat(reportRepository.findFiltered(ReportStatus.PENDING, null, null, 42L, null, null, null, null, PageRequest.of(0, 10)))
+                .extracting(Report::getId)
+                .containsExactly(pending.getId());
+    }
+
+    @Test
+    void theLedgerFiltersByTargetTypeAndHidesSoftDeletedRows() {
+        report("v1", SPAM, hoursAgo(3));
+        Report gone = report("v2", SPAM, hoursAgo(2));
+        entityManager.getEntityManager()
+                .createNativeQuery("UPDATE reports SET deleted_at = now() WHERE id = :id")
+                .setParameter("id", gone.getId())
+                .executeUpdate();
+        entityManager.clear();
+
+        assertThat(reportRepository.findFiltered(null, ReportTargetType.VIDEO, null, null, null, null, null, null, PageRequest.of(0, 10)))
+                .hasSize(1);
+        assertThat(reportRepository.findFiltered(null, ReportTargetType.USER, null, null, null, null, null, null, PageRequest.of(0, 10)))
+                .isEmpty();
+    }
+
+    @Test
+    void theLedgerNarrowsToOneTarget() {
+        report("v-wanted", SPAM, hoursAgo(3));
+        report("v-wanted", SELF_HARM, hoursAgo(2));
+        report("v-other", SPAM, hoursAgo(1));
+
+        assertThat(reportRepository.findFiltered(
+                null, ReportTargetType.VIDEO, "v-wanted", null, null, null, null, null, PageRequest.of(0, 10)))
+                .hasSize(2);
+    }
+
+    @Test
+    void theLedgerSearchesTheReasonAndEitherHalfOfACommentTarget() {
+        Report spam = report("v1", SPAM, hoursAgo(3));
+        Report onComment = report("v2:c77", SELF_HARM, hoursAgo(2));
+        report("v3", SELF_HARM, hoursAgo(1));
+
+        assertThat(search("%spam%", null)).extracting(Report::getId).containsExactly(spam.getId());
+        assertThat(search("%c77%", null)).extracting(Report::getId).containsExactly(onComment.getId());
+    }
+
+    @Test
+    void theLedgerFindsOneReportByItsId() {
+        report("v1", SPAM, hoursAgo(3));
+        Report wanted = report("v2", SPAM, hoursAgo(2));
+
+        assertThat(search("%" + wanted.getId() + "%", wanted.getId()))
+                .extracting(Report::getId)
+                .containsExactly(wanted.getId());
+    }
+
+    /** The service escapes LIKE's wildcards with a backslash; this is the query honouring that. */
+    @Test
+    void anEscapedWildcardMatchesOnlyItself() {
+        Report literal = report("v1", "Says 100% legit", hoursAgo(3));
+        report("v2", "Says 1000 legit", hoursAgo(2));
+
+        assertThat(search("%100\\%%", null)).extracting(Report::getId).containsExactly(literal.getId());
+    }
+
+    /** From inclusive, to exclusive, the same as the audit log, so consecutive days tile. */
+    @Test
+    void theLedgerNarrowsToATimeRange() {
+        Instant dayStart = Instant.parse("2026-10-06T00:00:00Z");
+        Instant dayEnd = Instant.parse("2026-10-07T00:00:00Z");
+        report("v1", SPAM, dayStart.minusMillis(1));
+        Report first = report("v2", SPAM, dayStart);
+        Report last = report("v3", SPAM, dayEnd.minusMillis(1));
+        report("v4", SPAM, dayEnd);
+        entityManager.clear();
+
+        assertThat(reportRepository.findFiltered(null, null, null, null, null, null, dayStart, dayEnd,
+                PageRequest.of(0, 10)))
+                .extracting(Report::getId)
+                .containsExactlyInAnyOrder(first.getId(), last.getId());
+    }
+
+    private List<Report> search(String pattern, Long reportId) {
+        entityManager.clear();
+        return reportRepository.findFiltered(null, null, null, null, pattern, reportId, null, null,
+                PageRequest.of(0, 10)).getContent();
+    }
+
+    /** A report by a named reporter — the filter tests turn on who filed it, not when. */
+    private Report filedBy(long reporterId, String targetId) {
+        return reportRepository.saveAndFlush(Report.builder()
+                .reporterId(reporterId)
+                .targetType(ReportTargetType.VIDEO)
+                .targetId(targetId)
+                .reason(SPAM)
+                .status(ReportStatus.PENDING)
+                .build());
     }
 
     /**

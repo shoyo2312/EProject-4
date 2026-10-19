@@ -76,6 +76,10 @@
     {
       "key": "tooManyIds",
       "value": ""
+    },
+    {
+      "key": "turnstileToken",
+      "value": "XXXX.DUMMY.TOKEN.XXXX"
     }
   ],
   "item": [
@@ -92,7 +96,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "const rand = Date.now();",
-                  "pm.environment.set('testUsername', 'userA_' + rand);",
+                  "pm.environment.set('testUsername', 'usera_' + rand);",
                   "pm.environment.set('testEmail', 'userA_' + rand + '@example.com');"
                 ]
               }
@@ -198,7 +202,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "const rand = Date.now() + 1;",
-                  "pm.environment.set('testUsernameB', 'userB_' + rand);",
+                  "pm.environment.set('testUsernameB', 'userb_' + rand);",
                   "pm.environment.set('testEmailB', 'userB_' + rand + '@example.com');"
                 ]
               }
@@ -325,7 +329,7 @@
                 },
                 "url": "{{authBaseUrl}}/api/v1/auth/register"
               },
-              "description": "username 3-50 chars, email must parse, password 8-100 chars."
+              "description": "username 3-50 chars of a-z 0-9 _ . starting with a letter, email must parse, password 8-100 chars."
             },
             {
               "name": "Register - Duplicate Username",
@@ -386,6 +390,202 @@
                 "url": "{{authBaseUrl}}/api/v1/auth/register"
               },
               "description": "Needs '0. Setup' to have run so {{testEmail}} is taken."
+            }
+          ]
+        },
+        {
+          "name": "Register (email-first)",
+          "item": [
+            {
+              "name": "Register Start - Success",
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.environment.set('signupEmail', 'signup-' + Date.now() + '@example.com');"
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "console.log('A signup code for ' + pm.environment.get('signupEmail') + ' is in the auth-service log - paste it into {{signupOtp}}.');"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"{{signupEmail}}\",\n  \"turnstileToken\": \"{{turnstileToken}}\"\n}"
+                },
+                "url": "{{authBaseUrl}}/api/v1/auth/register/start"
+              },
+              "description": "Step 1 of the signup the web app uses: mails a code to an address with no account. Nothing is created yet. {{turnstileToken}} is Cloudflare's dummy token: it passes only while auth-service runs with the always-pass test secret (TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA). Against a real secret, every OTP-issuing call answers 403 TURNSTILE_VERIFICATION_FAILED."
+            },
+            {
+              "name": "Register Start - Taken Email (409)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('409 EMAIL_ALREADY_EXISTS', () => pm.response.to.have.status(409));",
+                      "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('EMAIL_ALREADY_EXISTS'));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"turnstileToken\": \"{{turnstileToken}}\"\n}"
+                },
+                "url": "{{authBaseUrl}}/api/v1/auth/register/start"
+              },
+              "description": "Needs '0. Setup' to have run so {{testEmail}} is taken. Refused before any mail is sent."
+            },
+            {
+              "name": "Register Verify - Invalid OTP",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 INVALID_OTP', () => pm.response.to.have.status(400));",
+                      "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('INVALID_OTP'));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"{{signupEmail}}\",\n  \"otp\": \"{{wrongOtp}}\"\n}"
+                },
+                "url": "{{authBaseUrl}}/api/v1/auth/register/verify"
+              }
+            },
+            {
+              "name": "Register Verify - Success (paste {{signupOtp}} first)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                      "const data = pm.response.json().data;",
+                      "pm.test('answers a signup ticket', () => pm.expect(data.signupToken).to.be.a('string').and.not.empty);",
+                      "pm.test('good for 30 minutes', () => pm.expect(data.expiresInMillis).to.eql(1800000));",
+                      "pm.environment.set('signupToken', data.signupToken);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"{{signupEmail}}\",\n  \"otp\": \"{{signupOtp}}\"\n}"
+                },
+                "url": "{{authBaseUrl}}/api/v1/auth/register/verify"
+              },
+              "description": "Spends the code and stores the ticket in {{signupToken}} for the next request."
+            },
+            {
+              "name": "Register Complete - Success",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                      "pm.test('signed in at once', () => pm.expect(pm.response.json().data.accessToken).to.be.a('string').and.not.empty);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"signupToken\": \"{{signupToken}}\",\n  \"username\": \"signup_{{$timestamp}}\",\n  \"password\": \"{{testPassword}}\"\n}"
+                },
+                "url": "{{authBaseUrl}}/api/v1/auth/register/complete"
+              },
+              "description": "Creates the account already verified and answers a token pair - no /login needed. The email is whatever the ticket proved."
+            },
+            {
+              "name": "Register Complete - Ticket Already Used (400)",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('400 SIGNUP_SESSION_EXPIRED', () => pm.response.to.have.status(400));",
+                      "pm.test('code matches', () => pm.expect(pm.response.json().code).to.eql('SIGNUP_SESSION_EXPIRED'));"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"signupToken\": \"{{signupToken}}\",\n  \"username\": \"signup_again_{{$timestamp}}\",\n  \"password\": \"{{testPassword}}\"\n}"
+                },
+                "url": "{{authBaseUrl}}/api/v1/auth/register/complete"
+              },
+              "description": "Replays the ticket the request above spent - a ticket is single-use."
             }
           ]
         },
@@ -4173,6 +4373,17 @@
               },
               "event": [
                 {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// interaction-service allows one comment per account every 3s (interaction.comment.rate-limit.cooldown).",
+                      "// Postman waits for pending timers before it sends, so this keeps a fast run from meeting it.",
+                      "setTimeout(() => {}, 3100);"
+                    ]
+                  }
+                },
+                {
                   "listen": "test",
                   "script": {
                     "type": "text/javascript",
@@ -4295,6 +4506,231 @@
                     "type": "text/javascript",
                     "exec": [
                       "pm.test('200', () => pm.response.to.have.status(200));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Add Comment - Held for review (201 HELD)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessTokenB}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"content\": \"Visit my shop at abc.xyz\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// User B: the video's owner (User A) is never held on their own video."
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('201', () => pm.response.to.have.status(201));",
+                      "pm.test('held for the owner, not posted', () => pm.expect(pm.response.json().data.status).to.eql('HELD'));",
+                      "pm.environment.set('heldCommentId', String(pm.response.json().data.commentId));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "List Held Comments - Not Owner (403 NOT_VIDEO_OWNER)",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessTokenB}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/held-comments"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('403', () => pm.response.to.have.status(403));",
+                      "pm.test('code', () => pm.expect(pm.response.json().code).to.eql('NOT_VIDEO_OWNER'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "List Held Comments - Owner",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/held-comments"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('the held comment is in the queue', () => {",
+                      "  const ids = pm.response.json().data.items.map(c => String(c.commentId));",
+                      "  pm.expect(ids).to.include(pm.environment.get('heldCommentId'));",
+                      "});"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Approve Held Comment - Owner (200 VISIBLE)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessToken}}"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments/{{heldCommentId}}/approve"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('200', () => pm.response.to.have.status(200));",
+                      "pm.test('now visible', () => pm.expect(pm.response.json().data.status).to.eql('VISIBLE'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Add Comment - Duplicate (429 DUPLICATE_COMMENT)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessTokenB}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"content\": \"Visit my shop at abc.xyz\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// interaction-service allows one comment per account every 3s (interaction.comment.rate-limit.cooldown).",
+                      "// Postman waits for pending timers before it sends, so this keeps a fast run from meeting it.",
+                      "setTimeout(() => {}, 3100);"
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('429', () => pm.response.to.have.status(429));",
+                      "pm.test('code', () => pm.expect(pm.response.json().code).to.eql('DUPLICATE_COMMENT'));",
+                      "pm.test('says when to try again', () => pm.response.to.have.header('Retry-After'));"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Add Comment - Rejected (422 COMMENT_REJECTED)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Authorization",
+                    "value": "Bearer {{accessTokenB}}"
+                  },
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": "{{interactionBaseUrl}}/api/v1/interactions/videos/{{videoId}}/comments",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"content\": \"dcm may\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "event": [
+                {
+                  "listen": "prerequest",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "// interaction-service allows one comment per account every 3s (interaction.comment.rate-limit.cooldown).",
+                      "// Postman waits for pending timers before it sends, so this keeps a fast run from meeting it.",
+                      "setTimeout(() => {}, 3100);"
+                    ]
+                  }
+                },
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('422', () => pm.response.to.have.status(422));",
+                      "pm.test('code', () => pm.expect(pm.response.json().code).to.eql('COMMENT_REJECTED'));"
                     ]
                   }
                 }

@@ -108,14 +108,15 @@ public class ViewServiceImpl implements ViewService {
 
     @Override
     public WatchResponse recordWatch(Long videoId, Long currentUserId, WatchRequest request) {
-        videoOwnershipClient.requireVisible(videoId);
+        // The visibility check reads the video anyway, so the probed duration comes with it.
+        long probedMs = videoOwnershipClient.requireVisible(videoId);
         // The denominator comes from video-service when it knows it, and only falls back to the
         // client's own claim when it does not. Both numbers arriving from the client is not merely
         // a wrong row, it is the most attractive row in the training set — the label is a ratio,
         // and the highest ratios are what a ranker learns hardest from. The fallback is clamped
         // into [MIN, MAX]: past the ceiling the report describes a video that cannot exist here,
         // and under the floor it describes one nobody could have watched.
-        long durationMs = resolveDurationMs(videoId, request.durationMs());
+        long durationMs = resolveDurationMs(probedMs, request.durationMs());
         long watchedMs = Math.min(request.watchedMs(), durationMs);
         boolean completed = watchedMs >= durationMs * COMPLETION_RATIO;
 
@@ -134,8 +135,7 @@ public class ViewServiceImpl implements ViewService {
      * <p>Fails open to the clamped client value: a video still transcoding has no probed duration
      * at all, and an unreachable video-service must not stop watches being recorded.
      */
-    private long resolveDurationMs(Long videoId, long reportedMs) {
-        long probedMs = videoOwnershipClient.durationMs(videoId);
+    private long resolveDurationMs(long probedMs, long reportedMs) {
         if (probedMs > 0) {
             return Math.min(probedMs, MAX_DURATION_MS);
         }

@@ -12,6 +12,7 @@ import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Mono;
 
 import java.time.Instant;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -33,7 +34,8 @@ class MeControllerTest {
     void getMe_forwardsAuthorizationHeaderAndWrapsResultInApiResponse() {
         MeResponse meResponse = new MeResponse(
                 1L, "alice", "alice@example.com", "USER", "ACTIVE", Instant.parse("2024-01-01T00:00:00Z"),
-                "Alice A", "hello", "https://example.com/avatar.png", 10L, 5L, true);
+                "Alice A", "hello", "https://example.com/avatar.png", 10L, 5L, true, null, null, true,
+                true, List.of("GOOGLE"));
         when(meService.getMe(anyString())).thenReturn(Mono.just(meResponse));
 
         WebTestClient client = WebTestClient.bindToController(new MeController(meService)).build();
@@ -47,7 +49,10 @@ class MeControllerTest {
                 .jsonPath("$.data.id").isEqualTo(1)
                 .jsonPath("$.data.username").isEqualTo("alice")
                 .jsonPath("$.data.displayName").isEqualTo("Alice A")
-                .jsonPath("$.data.profileReady").isEqualTo(true);
+                .jsonPath("$.data.profileReady").isEqualTo(true)
+                .jsonPath("$.data.hasPassword").isEqualTo(true)
+                .jsonPath("$.data.emailVerified").isEqualTo(true)
+                .jsonPath("$.data.providers[0]").isEqualTo("GOOGLE");
 
         ArgumentCaptor<String> headerCaptor = ArgumentCaptor.forClass(String.class);
         verify(meService).getMe(headerCaptor.capture());
@@ -58,7 +63,7 @@ class MeControllerTest {
     void getMe_whenProfileNotReady_returnsNullProfileFieldsButStillOk() {
         MeResponse meResponse = new MeResponse(
                 1L, "alice", "alice@example.com", "USER", "ACTIVE", Instant.parse("2024-01-01T00:00:00Z"),
-                null, null, null, null, null, false);
+                null, null, null, null, null, false, null, null, false, false, List.of());
         when(meService.getMe(anyString())).thenReturn(Mono.just(meResponse));
 
         WebTestClient client = WebTestClient.bindToController(new MeController(meService)).build();

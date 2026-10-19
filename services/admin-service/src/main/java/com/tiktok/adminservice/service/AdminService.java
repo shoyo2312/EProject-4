@@ -13,13 +13,23 @@ import com.tiktok.adminservice.entity.ReportTargetType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.time.Instant;
 import java.util.List;
 
 public interface AdminService {
 
     ReportResponse submitReport(Long reporterId, SubmitReportRequest request);
 
-    Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType, Pageable pageable);
+    /**
+     * The report ledger. Every filter is optional: {@code reporterId} narrows it to what one
+     * account has filed and {@code targetId} to what was filed against one target, which is
+     * both halves of what an account's activity history reads. {@code q} searches the reason and
+     * the target id, and a report's own id when it is a number. {@code from} is inclusive,
+     * {@code to} exclusive.
+     */
+    Page<ReportResponse> listReports(ReportStatus status, ReportTargetType targetType,
+                                     String targetId, Long reporterId, String q,
+                                     Instant from, Instant to, Pageable pageable);
 
     /**
      * The queue an admin works: one row per reported target, heaviest first. Separate from
@@ -37,10 +47,8 @@ public interface AdminService {
      * {@code targetId} is a string because target ids are not one type: a user is a Snowflake
      * long, a video is a Mongo document id.
      */
-    default ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
-                                              ModerationActionType actionType, String reason) {
-        return moderate(adminId, targetType, targetId, actionType, reason, null);
-    }
+    ModerationActionResponse moderate(Long adminId, ReportTargetType targetType, String targetId,
+                                      ModerationActionType actionType, String reason);
 
     /**
      * @param banDays how long a BAN_USER lasts, or null for a ban that does not lapse. Ignored
@@ -59,7 +67,15 @@ public interface AdminService {
      */
     long countStrikes(ReportTargetType targetType, String targetId);
 
-    Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Pageable pageable);
+    /**
+     * The audit log, newest first unless the pageable sorts by {@code createdAt},
+     * {@code actionType} or {@code targetType}; any other sort is a 400. Every filter is optional;
+     * {@code targetType} and {@code targetId} only make sense together. {@code from} is inclusive,
+     * {@code to} exclusive.
+     */
+    Page<ModerationActionResponse> listActions(ReportTargetType targetType, String targetId, Long adminId,
+                                               ModerationActionType actionType, Instant from, Instant to,
+                                               Pageable pageable);
 
     /** Number of reports filed against one target — the console shows it next to that user/video. */
     long countReports(ReportTargetType targetType, String targetId);

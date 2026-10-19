@@ -1,11 +1,11 @@
 package com.tiktok.recommendationservice.client;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.tiktok.common.http.PooledRequestFactory;
 import com.tiktok.recommendationservice.dto.rank.CandidateFeatures;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -38,13 +38,12 @@ public class RankClient {
                       @Value("${reco.rank.timeout-millis:150}") long timeoutMillis) {
         this.enabled = enabled;
 
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofMillis(timeoutMillis));
-        requestFactory.setReadTimeout(Duration.ofMillis(timeoutMillis));
-
+        // Pooled: inside a 150 ms budget, a fresh TCP connection per feed request is a cost the
+        // ranker's own answer has to share.
+        Duration timeout = Duration.ofMillis(timeoutMillis);
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
-                .requestFactory(requestFactory)
+                .requestFactory(PooledRequestFactory.create(timeout, timeout))
                 .build();
     }
 

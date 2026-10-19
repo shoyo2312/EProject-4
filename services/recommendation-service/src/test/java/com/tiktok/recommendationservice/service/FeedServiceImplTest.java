@@ -56,6 +56,7 @@ class FeedServiceImplTest {
         feedService = new FeedServiceImpl(redisTemplate, rankClient, userMuteClient);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(redisTemplate.<Object, Object>opsForHash()).thenReturn(hashOperations);
+        MockPipeline.install(redisTemplate);
         givenTrending();
         givenTags();
         givenSeen();
