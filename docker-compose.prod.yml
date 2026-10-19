@@ -212,11 +212,11 @@ services:
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:9.4.5
     restart: unless-stopped
-    mem_limit: 2g
+    mem_limit: 4g
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
     healthcheck:
@@ -264,7 +264,7 @@ services:
   moderation-service:
     build: ./services/moderation-service
     restart: unless-stopped
-    mem_limit: 2g
+    mem_limit: 3g
     environment:
       MODERATION_REVIEW_THRESHOLD: ${MODERATION_REVIEW_THRESHOLD:-0.60}
       MODERATION_REJECT_THRESHOLD: ${MODERATION_REJECT_THRESHOLD:-0.90}
