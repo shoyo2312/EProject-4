@@ -41,6 +41,13 @@ moderation:
     admin-terms:
       base-url: ${ADMIN_SERVICE_URL:http://localhost:8096}
 
+downstream:
+  # user-service: who a viewer follows among private owners, mutual follows for FRIENDS stories,
+  # and blocks. The internal calls carry INTERNAL_API_TOKEN; the friendship one also forwards the
+  # viewer's own JWT.
+  user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
+  timeout-millis: ${USER_SERVICE_TIMEOUT_MILLIS:1000}
+
 minio:
   # The same bucket video-service and media-worker use. endpoint is what presigned reads are
   # signed for — SigV4 signs the host — so outside the service network it is the public address.
