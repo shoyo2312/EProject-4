@@ -84,7 +84,6 @@ services:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongodb-data:/data/db
-      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/admin -u ${MONGO_USERNAME:-root} -p ${MONGO_PASSWORD:-password} --quiet
       interval: 10s
@@ -170,14 +169,24 @@ services:
     volumes:
       - zookeeper-data:/var/lib/zookeeper/data
       - zookeeper-log:/var/lib/zookeeper/log
+    healthcheck:
+      test: [ "CMD", "cub", "zk-ready", "localhost:2181", "5" ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
     networks:
       - tiktok-network
 
+  # Kafka gives up after zookeeper.connection.timeout.ms (18s) and exits; it also exits with
+  # NodeExists when restarted before zookeeper has expired its previous session. Both clear up
+  # on a later attempt, so wait for a healthy zookeeper and let docker retry.
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     container_name: tt-kafka
+    restart: unless-stopped
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "127.0.0.1:9092:9092"
     environment:
