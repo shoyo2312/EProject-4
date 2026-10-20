@@ -91,6 +91,30 @@
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
     "dismissed" : 3
   },
+  "StoryCreatedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "storyId" : "storyId-3",
+    "userId" : 1004,
+    "mediaKey" : "mediaKey-5",
+    "mediaType" : "mediaType-6",
+    "textVerdict" : "REVIEW"
+  },
+  "StoryModerationCompletedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "storyId" : "storyId-3",
+    "verdict" : "REVIEW",
+    "label" : "label-5",
+    "maxScore" : 6.25,
+    "suspiciousFrames" : 7,
+    "totalFrames" : 8,
+    "processingTimeMs" : 1009,
+    "model" : "model-10",
+    "modelVersion" : "modelVersion-11",
+    "reason" : "reason-12",
+    "durationSeconds" : 13
+  },
   "UserBannedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
