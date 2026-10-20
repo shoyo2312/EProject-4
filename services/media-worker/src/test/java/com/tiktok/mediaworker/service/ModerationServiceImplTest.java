@@ -49,6 +49,8 @@ class ModerationServiceImplTest {
     private ModerationClient moderationClient;
     @Mock
     private Ffmpeg ffmpeg;
+    @Mock
+    private VideoProbe videoProbe;
 
     @Test
     void moderate_passesTheModelsVerdictAndScoresThrough() throws Exception {
@@ -172,8 +174,70 @@ class ModerationServiceImplTest {
         assertThat(asked).containsExactly("hls/vid123/source.mp4", "quarantine/hls/vid123/source.mp4");
     }
 
+    @Test
+    void moderateStory_imageSendsTheImageAsOneFrame() throws Exception {
+        doAnswer(invocation -> {
+            DownloadObjectArgs args = invocation.getArgument(0);
+            Files.write(Path.of(args.filename()), new byte[]{1, 2, 3});
+            return null;
+        }).when(minioClient).downloadObject(any(DownloadObjectArgs.class));
+        when(moderationClient.moderate(any())).thenReturn(new ModerationResponse(
+                "APPROVED", "nsfw", 0.01, 0, 1, 40L, "m", "v1"));
+
+        ModerationService.StoryVerdict verdict = service(ENABLED).moderateStory("s1", "stories/7/1.png", true);
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<List<String>> frames = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(moderationClient).moderate(frames.capture());
+        assertThat(frames.getValue()).containsExactly(java.util.Base64.getEncoder().encodeToString(new byte[]{1, 2, 3}));
+        assertThat(verdict.frames().verdict()).isEqualTo(ModerationVerdict.APPROVED);
+        assertThat(verdict.durationSeconds()).isNull();
+        verify(ffmpeg, never()).sampleFrames(any(), any(), anyInt(), anyInt());
+        verify(videoProbe, never()).probe(any());
+    }
+
+    @Test
+    void moderateStory_videoLongerThan60sIsRejectedWithoutClassifier() throws Exception {
+        givenTheFileDownloads();
+        when(videoProbe.probe(any())).thenReturn(new ProbedVideo(61, "h264", "aac", 720, 1280));
+
+        ModerationService.StoryVerdict verdict = service(ENABLED).moderateStory("s1", "stories/7/1.mp4", false);
+
+        assertThat(verdict.frames().verdict()).isEqualTo(ModerationVerdict.REJECTED);
+        assertThat(verdict.frames().reason()).isEqualTo("Story video is longer than 60 seconds");
+        assertThat(verdict.durationSeconds()).isEqualTo(61);
+        verify(moderationClient, never()).moderate(any());
+    }
+
+    @Test
+    void moderateStory_videoSamplesFramesAcrossItsLength() throws Exception {
+        givenTheFileDownloads();
+        when(videoProbe.probe(any())).thenReturn(new ProbedVideo(42, "h264", "aac", 720, 1280));
+        givenFramesAreSampled(3);
+        when(moderationClient.moderate(any())).thenReturn(new ModerationResponse(
+                "APPROVED", "nsfw", 0.01, 0, 3, 40L, "m", "v1"));
+
+        ModerationService.StoryVerdict verdict = service(ENABLED).moderateStory("s1", "stories/7/1.mp4", false);
+
+        verify(ffmpeg).sampleFrames(any(), any(), org.mockito.ArgumentMatchers.eq(10), org.mockito.ArgumentMatchers.eq(42));
+        assertThat(verdict.frames().verdict()).isEqualTo(ModerationVerdict.APPROVED);
+        assertThat(verdict.durationSeconds()).isEqualTo(42);
+    }
+
+    @Test
+    void moderateStory_classifierDownEndsInReview() throws Exception {
+        givenTheFileDownloads();
+        when(moderationClient.moderate(any())).thenThrow(new ModerationUnavailableException("connection refused"));
+
+        ModerationService.StoryVerdict verdict = service(ENABLED).moderateStory("s1", "stories/7/1.jpg", true);
+
+        verify(moderationClient, times(3)).moderate(any());
+        assertThat(verdict.frames().verdict()).isEqualTo(ModerationVerdict.REVIEW);
+        assertThat(verdict.frames().reason()).contains("3 attempts");
+    }
+
     private ModerationServiceImpl service(ModerationProperties properties) {
-        return new ModerationServiceImpl(minioClient, MINIO, properties, moderationClient, ffmpeg);
+        return new ModerationServiceImpl(minioClient, MINIO, properties, moderationClient, ffmpeg, videoProbe);
     }
 
     private void givenTheFileDownloads() throws Exception {

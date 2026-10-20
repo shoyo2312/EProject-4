@@ -20,6 +20,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -47,6 +49,10 @@ public class ModerationServiceImpl implements ModerationService {
     private final ModerationProperties moderationProperties;
     private final ModerationClient moderationClient;
     private final Ffmpeg ffmpeg;
+    private final VideoProbe videoProbe;
+
+    /** A story is a short clip; anything longer is refused rather than screened. */
+    static final int MAX_STORY_SECONDS = 60;
 
     @Override
     public VideoModerationCompletedEvent moderate(String videoId, Integer durationSeconds) {
@@ -57,25 +63,100 @@ public class ModerationServiceImpl implements ModerationService {
                     0L, null, null, "Automatic moderation is disabled");
         }
 
+        return withRetries("video " + videoId, videoId, () -> score(videoId, durationSeconds));
+    }
+
+    @Override
+    public StoryVerdict moderateStory(String storyId, String mediaKey, boolean image) {
+        AtomicReference<Integer> duration = new AtomicReference<>();
+        if (!moderationProperties.enabled()) {
+            return new StoryVerdict(VideoModerationCompletedEvent.of(storyId, ModerationVerdict.APPROVED, null,
+                    0.0, 0, 0, 0L, null, null, "Automatic moderation is disabled"),
+                    image ? null : probedLength(storyId, mediaKey));
+        }
+        VideoModerationCompletedEvent frames = withRetries("story " + storyId, storyId,
+                () -> scoreStory(storyId, mediaKey, image, duration));
+        return new StoryVerdict(frames, duration.get());
+    }
+
+    /**
+     * The retry wraps the download and the sampling as well as the call: all of it is
+     * infrastructure that has nothing to say about the content.
+     */
+    private VideoModerationCompletedEvent withRetries(String subject, String id,
+                                                      Supplier<VideoModerationCompletedEvent> attempt) {
         int attempts = Math.max(1, moderationProperties.attempts());
         String lastFailure = null;
 
-        for (int attempt = 1; attempt <= attempts; attempt++) {
+        for (int attemptNo = 1; attemptNo <= attempts; attemptNo++) {
             try {
-                return score(videoId, durationSeconds);
+                return attempt.get();
             } catch (ModerationUnavailableException e) {
                 lastFailure = e.getMessage();
-                log.warn("Moderation of video {} failed on attempt {}/{}: {}",
-                        videoId, attempt, attempts, e.getMessage());
-                if (attempt < attempts) {
+                log.warn("Moderation of {} failed on attempt {}/{}: {}", subject, attemptNo, attempts, e.getMessage());
+                if (attemptNo < attempts) {
                     pause();
                 }
             }
         }
 
-        log.error("Moderation of video {} failed {} times, sending it to the review queue", videoId, attempts);
-        return VideoModerationCompletedEvent.unavailable(videoId,
+        log.error("Moderation of {} failed {} times, holding it for review", subject, attempts);
+        return VideoModerationCompletedEvent.unavailable(id,
                 "Automatic moderation could not be completed after %d attempts (%s)".formatted(attempts, lastFailure));
+    }
+
+    private VideoModerationCompletedEvent scoreStory(String storyId, String mediaKey, boolean image,
+                                                     AtomicReference<Integer> duration) {
+        Path work = createWorkDirectory(storyId);
+        try {
+            Path source = work.resolve("story" + mediaKey.substring(mediaKey.lastIndexOf('.')));
+            download(mediaKey, source);
+
+            List<String> frames;
+            if (image) {
+                frames = encode(List.of(source));
+            } else {
+                int seconds = videoProbe.probe(source.toUri().toString()).durationSeconds();
+                duration.set(seconds);
+                if (seconds > MAX_STORY_SECONDS) {
+                    return VideoModerationCompletedEvent.of(storyId, ModerationVerdict.REJECTED, null, 0.0, 0, 0, 0L,
+                            null, null, "Story video is longer than %d seconds".formatted(MAX_STORY_SECONDS));
+                }
+                List<Path> sampled = ffmpeg.sampleFrames(source, Files.createDirectory(work.resolve("frames")),
+                        moderationProperties.frameCount(), seconds);
+                if (sampled.isEmpty()) {
+                    return VideoModerationCompletedEvent.unavailable(storyId, "No frames could be sampled from the story");
+                }
+                frames = encode(sampled);
+            }
+
+            ModerationResponse response = moderationClient.moderate(frames);
+            log.info("Story {} moderated as {} ({} {} over {} frames) in {}ms", storyId, response.verdict(),
+                    response.label(), response.maxScore(), response.totalFrames(), response.processingTimeMs());
+            return VideoModerationCompletedEvent.of(storyId, verdictOf(response), response.label(),
+                    response.maxScore(), response.suspiciousFrames(), response.totalFrames(),
+                    response.processingTimeMs(), response.model(), response.modelVersion(), null);
+        } catch (Exception e) {
+            throw new ModerationUnavailableException(
+                    "Could not moderate story %s: %s".formatted(storyId, e.getMessage()), e);
+        } finally {
+            deleteRecursively(work);
+        }
+    }
+
+    /** Only for the duration while moderation is off; the story is approved either way. */
+    private Integer probedLength(String storyId, String mediaKey) {
+        Path work = createWorkDirectory(storyId);
+        try {
+            Path source = work.resolve("story" + mediaKey.substring(mediaKey.lastIndexOf('.')));
+            download(mediaKey, source);
+            return videoProbe.probe(source.toUri().toString()).durationSeconds();
+        } catch (Exception e) {
+            log.warn("Could not read the length of story {}", storyId, e);
+            return null;
+        } finally {
+            deleteRecursively(work);
+        }
     }
 
     private VideoModerationCompletedEvent score(String videoId, Integer durationSeconds) {
