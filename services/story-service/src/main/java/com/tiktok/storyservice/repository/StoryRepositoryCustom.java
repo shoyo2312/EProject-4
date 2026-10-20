@@ -29,4 +29,7 @@ public interface StoryRepositoryCustom {
     void markEventPublished(String storyId, Instant at);
 
     void updateVisibility(String storyId, StoryVisibility visibility);
+
+    /** Soft delete; the TTL removes the document once it expires either way. */
+    void markDeleted(String storyId, Instant at);
 }

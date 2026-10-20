@@ -1,47 +1,56 @@
 package com.tiktok.storyservice.service;
 
+import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
+import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
-import com.tiktok.storyservice.dto.response.StoryViewerResponse;
 import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.entity.StoryStatus;
+import com.tiktok.storyservice.entity.StoryView;
 import com.tiktok.storyservice.entity.StoryVisibility;
 import com.tiktok.storyservice.exception.ForeignUploadException;
-import com.tiktok.storyservice.exception.StoryCaptionRejectedException;
-import com.tiktok.storyservice.exception.UploadNotFoundException;
-import com.tiktok.event.video.ModerationVerdict;
-import com.tiktok.storyservice.entity.StoryView;
 import com.tiktok.storyservice.exception.NotStoryOwnerException;
+import com.tiktok.storyservice.exception.StoryCaptionRejectedException;
 import com.tiktok.storyservice.exception.StoryNotFoundException;
+import com.tiktok.storyservice.exception.TooManyFollowedUsersException;
+import com.tiktok.storyservice.exception.UploadNotFoundException;
 import com.tiktok.storyservice.mapper.StoryMapper;
 import com.tiktok.storyservice.repository.StoryRepository;
 import com.tiktok.storyservice.repository.StoryViewRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mapstruct.factory.Mappers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class StoryServiceImplTest {
 
-    private static final long TTL_HOURS = 24L;
+    private static final String UPLOAD = "s3://bucket/stories/100/1.jpg";
+    private static final String KEY = "stories/100/1.jpg";
+    private static final Set<StoryVisibility> PUBLIC_ONLY = EnumSet.of(StoryVisibility.PUBLIC);
 
     @Mock
     private StoryRepository storyRepository;
@@ -50,59 +59,53 @@ class StoryServiceImplTest {
     private StoryViewRepository storyViewRepository;
 
     @Mock
-    private StoryMapper storyMapper;
-
-    @Mock
     private StoryMedia storyMedia;
 
     @Mock
     private StoryCaptionModeration captionModeration;
 
+    @Mock
+    private StoryAudience storyAudience;
+
+    private final StoryMapper storyMapper = Mappers.getMapper(StoryMapper.class);
+
     private StoryServiceImpl storyService;
 
     @BeforeEach
     void setUp() {
-        storyService = new StoryServiceImpl(storyRepository, storyViewRepository, storyMapper, storyMedia, captionModeration);
-        ReflectionTestUtils.setField(storyService, "ttlHours", TTL_HOURS);
+        storyService = new StoryServiceImpl(storyRepository, storyViewRepository, storyMapper, storyMedia,
+                captionModeration, storyAudience);
     }
 
-    private Story visibleStory(String id, Long userId) {
+    private static Story story(String id, Long userId, StoryStatus status, StoryVisibility visibility, Instant createdAt) {
         return Story.builder()
                 .id(id)
                 .userId(userId)
-                .mediaKey("stories/1/1.jpg")
+                .mediaKey("stories/" + userId + "/" + id + ".jpg")
                 .mediaType(StoryMediaType.IMAGE)
-                .viewCount(0)
-                .createdAt(Instant.now().minus(1, ChronoUnit.HOURS))
+                .status(status)
+                .visibility(visibility)
+                .viewCount(3)
+                .createdAt(createdAt)
                 .expiresAt(Instant.now().plus(1, ChronoUnit.HOURS))
                 .build();
     }
 
-    private Story expiredStory(String id, Long userId) {
-        return Story.builder()
-                .id(id)
-                .userId(userId)
-                .mediaKey("stories/1/1.jpg")
-                .mediaType(StoryMediaType.IMAGE)
-                .viewCount(0)
-                .createdAt(Instant.now().minus(30, ChronoUnit.HOURS))
-                .expiresAt(Instant.now().minus(1, ChronoUnit.HOURS))
-                .build();
+    private static Story active(String id, Long userId) {
+        return story(id, userId, StoryStatus.ACTIVE, StoryVisibility.PUBLIC, Instant.now().minus(1, ChronoUnit.HOURS));
     }
 
-    private static final String UPLOAD = "s3://bucket/stories/100/1.jpg";
-    private static final String KEY = "stories/100/1.jpg";
+    // --- create -------------------------------------------------------------------------------
 
     @Test
     void createSavesPendingWithTextVerdict() {
-        CreateStoryRequest request = new CreateStoryRequest(UPLOAD, "hello", StoryVisibility.FRIENDS);
         when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
         when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
         when(storyMedia.exists(KEY)).thenReturn(true);
         when(captionModeration.screen("hello")).thenReturn(ModerationVerdict.REVIEW);
         when(storyRepository.insert(any(Story.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        storyService.create(100L, request);
+        StoryResponse response = storyService.create(100L, new CreateStoryRequest(UPLOAD, "hello", StoryVisibility.FRIENDS));
 
         ArgumentCaptor<Story> captor = ArgumentCaptor.forClass(Story.class);
         verify(storyRepository).insert(captor.capture());
@@ -115,6 +118,7 @@ class StoryServiceImplTest {
         assertThat(saved.getVisibility()).isEqualTo(StoryVisibility.FRIENDS);
         assertThat(saved.getTextVerdict()).isEqualTo(ModerationVerdict.REVIEW);
         assertThat(saved.getExpiresAt()).isCloseTo(Instant.now().plus(48, ChronoUnit.HOURS), within(2, ChronoUnit.SECONDS));
+        assertThat(response.status()).as("the owner's own view").isEqualTo(StoryStatus.PENDING_MODERATION);
     }
 
     @Test
@@ -151,108 +155,155 @@ class StoryServiceImplTest {
                 .isInstanceOf(ForeignUploadException.class);
     }
 
+    // --- single reads -------------------------------------------------------------------------
+
     @Test
-    void getById_visibleStory_returnsMappedResponse() {
-        Story story = visibleStory("s1", 1L);
-        StoryResponse expected = new StoryResponse("s1", 1L, story.getMediaKey(), story.getMediaType(), null, 0, story.getCreatedAt(), story.getExpiresAt());
+    void getByIdHidesFriendsStoryFromStranger() {
+        Story story = story("s1", 1L, StoryStatus.ACTIVE, StoryVisibility.FRIENDS, Instant.now());
         when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
-        when(storyMapper.toResponse(story)).thenReturn(expected);
+        when(storyAudience.resolve(2L, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
 
-        StoryResponse response = storyService.getById("s1");
-
-        assertThat(response).isEqualTo(expected);
+        assertThatThrownBy(() -> storyService.getById(2L, "s1")).isInstanceOf(StoryNotFoundException.class);
+        verify(storyMedia, never()).signedGet(anyString());
     }
 
     @Test
-    void getById_missingStory_throwsStoryNotFound() {
-        when(storyRepository.findByIdAndDeletedAtIsNull("missing")).thenReturn(Optional.empty());
+    void getByIdShowsAPublicStoryWithoutTheOwnersFields() {
+        Story story = active("s1", 1L);
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
+        when(storyAudience.resolve(null, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
+        when(storyMedia.signedGet(story.getMediaKey())).thenReturn("https://media/signed");
 
-        assertThatThrownBy(() -> storyService.getById("missing"))
-                .isInstanceOf(StoryNotFoundException.class);
+        StoryResponse response = storyService.getById(null, "s1");
+
+        assertThat(response.mediaUrl()).isEqualTo("https://media/signed");
+        assertThat(response.status()).isNull();
+        assertThat(response.viewCount()).isNull();
     }
 
     @Test
-    void getById_expiredStory_throwsStoryNotFound() {
-        Story story = expiredStory("s1", 1L);
+    void getByIdHidesAHeldStoryFromEveryoneButItsOwner() {
+        Story story = story("s1", 1L, StoryStatus.HELD, StoryVisibility.PUBLIC, Instant.now());
         when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
 
-        assertThatThrownBy(() -> storyService.getById("s1"))
-                .isInstanceOf(StoryNotFoundException.class);
+        assertThatThrownBy(() -> storyService.getById(2L, "s1")).isInstanceOf(StoryNotFoundException.class);
+        assertThat(storyService.getById(1L, "s1").status()).isEqualTo(StoryStatus.HELD);
     }
 
     @Test
-    void listByUser_mapsAllVisibleStories() {
-        Story story1 = visibleStory("s1", 1L);
-        Story story2 = visibleStory("s2", 1L);
-        StoryResponse response1 = new StoryResponse("s1", 1L, story1.getMediaKey(), story1.getMediaType(), null, 0, story1.getCreatedAt(), story1.getExpiresAt());
-        StoryResponse response2 = new StoryResponse("s2", 1L, story2.getMediaKey(), story2.getMediaType(), null, 0, story2.getCreatedAt(), story2.getExpiresAt());
-        when(storyRepository.findByUserIdAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtDesc(eq(1L), any(Instant.class)))
-                .thenReturn(List.of(story1, story2));
-        when(storyMapper.toResponse(story1)).thenReturn(response1);
-        when(storyMapper.toResponse(story2)).thenReturn(response2);
+    void getByIdOfAnExpiredStoryIsNotFound() {
+        Story story = Story.builder().id("s1").userId(1L).status(StoryStatus.ACTIVE).visibility(StoryVisibility.PUBLIC)
+                .expiresAt(Instant.now().minusSeconds(1)).build();
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
 
-        List<StoryResponse> responses = storyService.listByUser(1L);
-
-        assertThat(responses).containsExactly(response1, response2);
+        assertThatThrownBy(() -> storyService.getById(1L, "s1")).isInstanceOf(StoryNotFoundException.class);
     }
 
     @Test
-    void listFeed_emptyFollowedUserIds_returnsEmptyListWithoutQuerying() {
-        List<StoryResponse> responses = storyService.listFeed(List.of());
+    void ownerSeesPendingWithStatus() {
+        Story pending = story("p", 1L, StoryStatus.PENDING_MODERATION, StoryVisibility.PUBLIC, Instant.now());
+        when(storyRepository.findByUserIdAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(eq(1L), any()))
+                .thenReturn(List.of(pending));
 
-        assertThat(responses).isEmpty();
+        List<StoryResponse> own = storyService.listByUser(1L, 1L);
+
+        assertThat(own).extracting(StoryResponse::status).containsExactly(StoryStatus.PENDING_MODERATION);
+        assertThat(own.getFirst().viewCount()).isEqualTo(3L);
+        verifyNoInteractions(storyAudience);
+    }
+
+    @Test
+    void strangerSeesOnlyTheActiveStoriesTheirAudienceAllows() {
+        Story publicStory = active("a", 1L);
+        Story friendsStory = story("b", 1L, StoryStatus.ACTIVE, StoryVisibility.FRIENDS, Instant.now());
+        when(storyRepository.findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
+                eq(List.of(1L)), eq(StoryStatus.ACTIVE), any())).thenReturn(List.of(publicStory, friendsStory));
+        when(storyAudience.resolve(eq(2L), any())).thenReturn(Map.of(1L, PUBLIC_ONLY));
+
+        assertThat(storyService.listByUser(2L, 1L)).extracting(StoryResponse::id).containsExactly("a");
+    }
+
+    // --- feed ---------------------------------------------------------------------------------
+
+    @Test
+    void feedPutsOwnGroupFirstThenUnseen() {
+        Instant now = Instant.now();
+        Story own = story("o", 9L, StoryStatus.PENDING_MODERATION, StoryVisibility.PUBLIC, now);
+        Story seenByViewer = story("a1", 1L, StoryStatus.ACTIVE, StoryVisibility.PUBLIC, now.minusSeconds(10));
+        Story unseen = story("b1", 2L, StoryStatus.ACTIVE, StoryVisibility.PUBLIC, now.minusSeconds(600));
+        when(storyRepository.findByUserIdAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(eq(9L), any()))
+                .thenReturn(List.of(own));
+        when(storyRepository.findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
+                eq(List.of(1L, 2L)), eq(StoryStatus.ACTIVE), any())).thenReturn(List.of(seenByViewer, unseen));
+        when(storyAudience.resolve(eq(9L), any())).thenReturn(Map.of(1L, PUBLIC_ONLY, 2L, PUBLIC_ONLY));
+        when(storyViewRepository.findByViewerIdAndStoryIdIn(eq(9L), any()))
+                .thenReturn(List.of(StoryView.builder().storyId("a1").viewerId(9L).build()));
+
+        List<StoryGroupResponse> feed = storyService.feed(9L, List.of(1L, 2L, 9L));
+
+        assertThat(feed).extracting(StoryGroupResponse::userId).containsExactly(9L, 2L, 1L);
+        assertThat(feed.get(0).hasUnseen()).isFalse();
+        assertThat(feed.get(1).hasUnseen()).isTrue();
+        assertThat(feed.get(2).hasUnseen()).isFalse();
+        assertThat(feed.get(2).stories().getFirst().viewedByMe()).isTrue();
+    }
+
+    @Test
+    void feedDropsOwnersTheViewerMayNotSee() {
+        when(storyRepository.findByUserIdAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(eq(9L), any()))
+                .thenReturn(List.of());
+        when(storyRepository.findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
+                eq(List.of(1L)), eq(StoryStatus.ACTIVE), any())).thenReturn(List.of(active("a", 1L)));
+        when(storyAudience.resolve(eq(9L), any())).thenReturn(Map.of(1L, EnumSet.noneOf(StoryVisibility.class)));
+
+        assertThat(storyService.feed(9L, List.of(1L))).isEmpty();
+    }
+
+    @Test
+    void feedRejectsMoreThan500Ids() {
+        List<Long> ids = LongStream.rangeClosed(1, 501).boxed().toList();
+
+        assertThatThrownBy(() -> storyService.feed(9L, ids)).isInstanceOf(TooManyFollowedUsersException.class);
         verifyNoInteractions(storyRepository);
     }
 
-    @Test
-    void listFeed_nullFollowedUserIds_returnsEmptyListWithoutQuerying() {
-        List<StoryResponse> responses = storyService.listFeed(null);
-
-        assertThat(responses).isEmpty();
-        verifyNoInteractions(storyRepository);
-    }
-
-    @Test
-    void listFeed_withFollowedUsers_mapsVisibleStories() {
-        Story story = visibleStory("s1", 2L);
-        List<Long> followedIds = List.of(2L, 3L);
-        StoryResponse response = new StoryResponse("s1", 2L, story.getMediaKey(), story.getMediaType(), null, 0, story.getCreatedAt(), story.getExpiresAt());
-        when(storyRepository.findByUserIdInAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtDesc(eq(followedIds), any(Instant.class)))
-                .thenReturn(List.of(story));
-        when(storyMapper.toResponse(story)).thenReturn(response);
-
-        List<StoryResponse> responses = storyService.listFeed(followedIds);
-
-        assertThat(responses).containsExactly(response);
-    }
+    // --- views --------------------------------------------------------------------------------
 
     @Test
     void recordView_ownerViewingOwnStory_isNoOp() {
-        Story story = visibleStory("s1", 1L);
-        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
 
         storyService.recordView(1L, "s1");
 
         verifyNoInteractions(storyViewRepository);
-        verify(storyRepository, never()).save(any());
+    }
+
+    @Test
+    void recordViewOfAStoryTheViewerMayNotSeeIsNotFound() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1"))
+                .thenReturn(Optional.of(story("s1", 1L, StoryStatus.ACTIVE, StoryVisibility.PRIVATE, Instant.now())));
+        when(storyAudience.resolve(2L, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
+
+        assertThatThrownBy(() -> storyService.recordView(2L, "s1")).isInstanceOf(StoryNotFoundException.class);
+        verifyNoInteractions(storyViewRepository);
     }
 
     @Test
     void duplicateViewIsNoOp() {
-        Story story = visibleStory("s1", 1L);
-        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
+        when(storyAudience.resolve(2L, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
         when(storyViewRepository.insert(any(StoryView.class))).thenThrow(new DuplicateKeyException("dup"));
 
         storyService.recordView(2L, "s1");
 
         verify(storyRepository, never()).incrementViewCount(any());
-        verify(storyRepository, never()).save(any());
     }
 
     @Test
     void firstViewIncrementsAtomically() {
-        Story story = visibleStory("s1", 1L);
+        Story story = active("s1", 1L);
         when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
+        when(storyAudience.resolve(2L, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
 
         storyService.recordView(2L, "s1");
 
@@ -266,72 +317,72 @@ class StoryServiceImplTest {
     }
 
     @Test
-    void recordView_missingStory_throwsStoryNotFound() {
-        when(storyRepository.findByIdAndDeletedAtIsNull("missing")).thenReturn(Optional.empty());
+    void listViewersPagesBeforeACursorAndClampsTheSize() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
+        Instant before = Instant.parse("2026-10-20T10:00:00Z");
+        StoryView view = StoryView.builder().storyId("s1").viewerId(2L).viewedAt(before.minusSeconds(5)).build();
+        when(storyViewRepository.findByStoryIdAndViewedAtBeforeOrderByViewedAtDesc(eq("s1"), eq(before), any()))
+                .thenReturn(List.of(view));
 
-        assertThatThrownBy(() -> storyService.recordView(2L, "missing"))
-                .isInstanceOf(StoryNotFoundException.class);
-    }
+        assertThat(storyService.listViewers(1L, "s1", before, 500)).singleElement()
+                .satisfies(viewer -> assertThat(viewer.viewerId()).isEqualTo(2L));
 
-    @Test
-    void listViewers_calledByOwner_returnsMappedViewers() {
-        Story story = visibleStory("s1", 1L);
-        StoryView view = StoryView.builder().storyId("s1").viewerId(2L).build();
-        StoryViewerResponse expected = new StoryViewerResponse(2L, Instant.now());
-        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
-        when(storyViewRepository.findByStoryIdAndViewedAtBeforeOrderByViewedAtDesc(eq("s1"), any(Instant.class), any())).thenReturn(List.of(view));
-        when(storyMapper.toViewerResponse(view)).thenReturn(expected);
-
-        List<StoryViewerResponse> viewers = storyService.listViewers(1L, "s1");
-
-        assertThat(viewers).containsExactly(expected);
+        ArgumentCaptor<Pageable> page = ArgumentCaptor.forClass(Pageable.class);
+        verify(storyViewRepository).findByStoryIdAndViewedAtBeforeOrderByViewedAtDesc(eq("s1"), eq(before), page.capture());
+        assertThat(page.getValue().getPageSize()).isEqualTo(50);
     }
 
     @Test
     void listViewers_calledByNonOwner_throwsNotStoryOwner() {
-        Story story = visibleStory("s1", 1L);
-        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
 
-        assertThatThrownBy(() -> storyService.listViewers(2L, "s1"))
+        assertThatThrownBy(() -> storyService.listViewers(2L, "s1", null, null))
                 .isInstanceOf(NotStoryOwnerException.class);
         verifyNoInteractions(storyViewRepository);
     }
 
-    @Test
-    void listViewers_missingStory_throwsStoryNotFound() {
-        when(storyRepository.findByIdAndDeletedAtIsNull("missing")).thenReturn(Optional.empty());
+    // --- owner changes ------------------------------------------------------------------------
 
-        assertThatThrownBy(() -> storyService.listViewers(1L, "missing"))
-                .isInstanceOf(StoryNotFoundException.class);
+    @Test
+    void ownerChangesVisibility() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
+
+        StoryResponse response = storyService.updateVisibility(1L, "s1", StoryVisibility.PRIVATE);
+
+        verify(storyRepository).updateVisibility("s1", StoryVisibility.PRIVATE);
+        assertThat(response.visibility()).isEqualTo(StoryVisibility.PRIVATE);
+    }
+
+    @Test
+    void strangerCannotChangeVisibility() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
+
+        assertThatThrownBy(() -> storyService.updateVisibility(2L, "s1", StoryVisibility.PUBLIC))
+                .isInstanceOf(NotStoryOwnerException.class);
+        verify(storyRepository, never()).updateVisibility(anyString(), any());
     }
 
     @Test
     void delete_calledByOwner_marksStoryDeleted() {
-        Story story = visibleStory("s1", 1L);
-        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
 
         storyService.delete(1L, "s1");
 
-        ArgumentCaptor<Story> captor = ArgumentCaptor.forClass(Story.class);
-        verify(storyRepository).save(captor.capture());
-        assertThat(captor.getValue().isDeleted()).isTrue();
+        verify(storyRepository).markDeleted(eq("s1"), any(Instant.class));
     }
 
     @Test
     void delete_calledByNonOwner_throwsNotStoryOwnerAndDoesNotSave() {
-        Story story = visibleStory("s1", 1L);
-        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
 
-        assertThatThrownBy(() -> storyService.delete(2L, "s1"))
-                .isInstanceOf(NotStoryOwnerException.class);
-        verify(storyRepository, never()).save(any());
+        assertThatThrownBy(() -> storyService.delete(2L, "s1")).isInstanceOf(NotStoryOwnerException.class);
+        verify(storyRepository, never()).markDeleted(anyString(), any());
     }
 
     @Test
     void delete_missingStory_throwsStoryNotFound() {
         when(storyRepository.findByIdAndDeletedAtIsNull("missing")).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> storyService.delete(1L, "missing"))
-                .isInstanceOf(StoryNotFoundException.class);
+        assertThatThrownBy(() -> storyService.delete(1L, "missing")).isInstanceOf(StoryNotFoundException.class);
     }
 }

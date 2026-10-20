@@ -51,4 +51,10 @@ public class StoryRepositoryImpl implements StoryRepositoryCustom {
         mongoTemplate.updateFirst(Query.query(where("_id").is(storyId)),
                 new Update().set("visibility", visibility), Story.class);
     }
+
+    @Override
+    public void markDeleted(String storyId, Instant at) {
+        mongoTemplate.updateFirst(Query.query(where("_id").is(storyId)),
+                new Update().set("deletedAt", at), Story.class);
+    }
 }

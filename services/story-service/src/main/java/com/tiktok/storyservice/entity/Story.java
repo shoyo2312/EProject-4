@@ -21,7 +21,7 @@ import java.time.Instant;
  * {@code expiresAt} carries a Mongo TTL index (expireAfterSeconds = 0) so MongoDB physically
  * removes the document once it passes, regardless of {@code deletedAt} — this hard removal is the
  * intended ephemeral-content behavior for stories, not a violation of the soft-delete rule, which
- * still governs manual deletes before expiry via {@link #markDeleted()}.
+ * still governs manual deletes before expiry ({@code StoryRepositoryCustom.markDeleted}).
  *
  * <p>A new story gets a {@link #PENDING_CEILING} rather than the 24h display window: the window
  * starts when moderation approves it ({@code StoryRepositoryCustom.decide}), so screening time does
@@ -114,11 +114,4 @@ public class Story {
         return expiresAt != null && expiresAt.isBefore(Instant.now());
     }
 
-    public boolean isVisible() {
-        return !isDeleted() && !isExpired();
-    }
-
-    public void markDeleted() {
-        this.deletedAt = Instant.now();
-    }
 }
