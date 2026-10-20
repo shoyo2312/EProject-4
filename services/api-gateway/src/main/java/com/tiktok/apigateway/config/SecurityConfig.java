@@ -87,6 +87,11 @@ public class SecurityConfig {
                                 "/api/v1/interactions/videos/*/counts",
                                 "/api/v1/interactions/videos/counts/batch",
                                 "/api/v1/interactions/videos/*/like-status").permitAll()
+                        // A profile's stories and a single story, like the videos beside them:
+                        // story-service shows a signed-out viewer only PUBLIC stories of public
+                        // accounts. The feed is matched first because /stories/* would cover it.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/stories/feed").authenticated()
+                        .pathMatchers(HttpMethod.GET, "/api/v1/stories/users/*", "/api/v1/stories/*").permitAll()
                         // The chat handshake carries its token as a query parameter, not a
                         // header: a browser cannot set one on a WebSocket/SockJS handshake.
                         // chat-service validates it itself in JwtHandshakeInterceptor and

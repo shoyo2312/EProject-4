@@ -1,8 +1,7 @@
 # =====================================================================
 # Production stack for Coolify (Docker Compose build pack).
 #
-# Every service the two frontends reach through the gateway. Not here: story-service — the gateway
-# has no route to it and its Mongo URI is a hard-coded localhost one.
+# Every service the two frontends reach through the gateway.
 #
 # Nothing publishes a port. Coolify's proxy is the only way in, and only two services get a
 # domain in its UI:
@@ -304,6 +303,7 @@ services:
       SEARCH_SERVICE_URI: http://search-service:8095
       ADMIN_SERVICE_URI: http://admin-service:8096
       ANALYTICS_SERVICE_URI: http://analytics-service:8097
+      STORY_SERVICE_URI: http://story-service:8086
 
   auth-service:
     <<: *java
@@ -400,6 +400,32 @@ services:
       MEDIA_UPLOAD_URL: ${MEDIA_UPLOAD_URL:-${MEDIA_PUBLIC_URL:?}}
       # Cloudflare Free rejects request bodies over 100 MB, and the browser's upload is one POST.
       VIDEO_MAX_BYTES: ${VIDEO_MAX_BYTES:-94371840}
+
+  story-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: story-service }
+    depends_on:
+      mongodb: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    environment:
+      SNOWFLAKE_NODE_ID: 13
+      <<: *java-env
+      MONGO_HOST: mongodb
+      MONGO_USERNAME: ${MONGO_USERNAME:?}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      USER_SERVICE_URI: http://user-service:8082
+      MODERATION_SERVICE_URL: http://moderation-service:8099
+      ADMIN_SERVICE_URL: http://admin-service:8096
+      # The public address, as for video-service: story media is read through presigned GETs, and
+      # SigV4 signs the host the browser will ask.
+      MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+      MEDIA_UPLOAD_URL: ${MEDIA_UPLOAD_URL:-${MEDIA_PUBLIC_URL:?}}
 
   media-worker:
     <<: *java

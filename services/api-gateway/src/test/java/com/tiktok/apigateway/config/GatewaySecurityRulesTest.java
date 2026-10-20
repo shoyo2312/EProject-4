@@ -180,6 +180,24 @@ class GatewaySecurityRulesTest {
         }
     }
 
+    /**
+     * A profile's stories and a single story open signed out — story-service shows an anonymous
+     * viewer only PUBLIC stories of public accounts. The tray and a story's viewers need a viewer.
+     */
+    @Test
+    void storyReads_passWithoutAToken_butTheFeedAndViewersDoNot() {
+        for (String uri : List.of("/api/v1/stories/users/42", "/api/v1/stories/s1")) {
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isOk();
+        }
+        for (String uri : List.of("/api/v1/stories/feed?followedUserIds=1", "/api/v1/stories/s1/viewers")) {
+            client.get().uri(uri)
+                    .exchange()
+                    .expectStatus().isUnauthorized();
+        }
+    }
+
     @RestController
     static class Stub {
 
@@ -192,7 +210,9 @@ class GatewaySecurityRulesTest {
                 "/api/v1/interactions/videos/123/comments",
                 "/api/v1/interactions/videos/123/comments/456/replies",
                 "/api/v1/interactions/videos/123/counts",
-                "/api/v1/interactions/videos/counts/batch", "/api/v1/interactions/videos/123/like-status"})
+                "/api/v1/interactions/videos/counts/batch", "/api/v1/interactions/videos/123/like-status",
+                "/api/v1/stories/users/42", "/api/v1/stories/s1", "/api/v1/stories/feed",
+                "/api/v1/stories/s1/viewers"})
         Mono<String> ok() {
             return Mono.just("ok");
         }
