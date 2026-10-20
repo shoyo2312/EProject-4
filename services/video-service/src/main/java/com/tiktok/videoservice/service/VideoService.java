@@ -63,6 +63,13 @@ public interface VideoService {
 
     Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable);
 
+    /**
+     * Every video the owner has not deleted, whatever its status or visibility, newest first — for
+     * user-service's "Download your data" archive. {@code nextCursor} is the next page number, or
+     * null on the last page.
+     */
+    CursorPage<VideoResponse> listForExport(Long userId, int page, int size);
+
     UserVideoStatsResponse getUserStats(Long requesterId, Long userId);
 
     /**

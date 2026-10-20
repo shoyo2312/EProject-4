@@ -1,10 +1,13 @@
 package com.tiktok.chatservice.config;
 
+import com.tiktok.common.http.InternalApiToken;
+import com.tiktok.security.internal.InternalCallerAuthorization;
 import com.tiktok.security.jwt.JwtAuthenticationFilter;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -17,6 +20,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final InternalApiToken internalApiToken;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -28,6 +32,10 @@ public class SecurityConfig {
                         // WebSocket handshake authenticates itself via JwtHandshakeInterceptor
                         // (browsers can't attach an Authorization header to this request)
                         .requestMatchers("/ws/**").permitAll()
+                        // Service-to-service only. api-gateway denies this prefix, and the token keeps
+                        // out whatever reaches this port without going through the gateway.
+                        .requestMatchers(HttpMethod.GET, "/api/v1/conversations/internal/**")
+                        .access(new InternalCallerAuthorization(internalApiToken))
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

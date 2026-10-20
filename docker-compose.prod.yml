@@ -205,7 +205,7 @@ services:
         set -e
         mc alias set tt http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
         mc mb --ignore-existing "tt/$$MINIO_BUCKET"
-        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}}]}' \
+        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}},{"ID":"expire-data-exports","Status":"Enabled","Filter":{"Prefix":"exports/"},"Expiration":{"Days":7}}]}' \
           | mc ilm import "tt/$$MINIO_BUCKET"
     restart: "no"
 
@@ -367,6 +367,10 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
       MEDIA_ALLOWED_HOSTS: ${MEDIA_HOST:?}
+      # "Download your data" reads these through their internal prefix.
+      VIDEO_SERVICE_URI: http://video-service:8083
+      INTERACTION_SERVICE_URI: http://interaction-service:8085
+      CHAT_SERVICE_URI: http://chat-service:8088
 
   video-service:
     <<: *java

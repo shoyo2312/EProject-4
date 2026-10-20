@@ -46,7 +46,8 @@ public class SecurityConfig {
                         // Service-to-service endpoints the owning service leaves open because only
                         // other services should reach them. First, so no later rule can open them.
                         .pathMatchers("/api/v1/users/internal/**", "/api/v1/interactions/internal/**",
-                                "/api/v1/admin/internal/**").denyAll()
+                                "/api/v1/admin/internal/**", "/api/v1/videos/internal/**",
+                                "/api/v1/conversations/internal/**").denyAll()
                         // Unfiltered by visibility on purpose (interaction-service needs the owner
                         // of PRIVATE videos too), so from outside it would name the owner of any
                         // private video id.

@@ -69,7 +69,15 @@ public class MessageServiceImpl implements MessageService {
     @Override
     public MessagePageResponse listMessages(String conversationId, Long currentUserId, String cursor, int size) {
         conversationService.requireParticipant(currentUserId, conversationId);
+        return page(conversationId, cursor, size);
+    }
 
+    @Override
+    public MessagePageResponse exportMessages(String conversationId, String cursor, int size) {
+        return page(conversationId, cursor, size);
+    }
+
+    private MessagePageResponse page(String conversationId, String cursor, int size) {
         MessageCursor before = MessageCursor.decode(cursor);
         List<Message> fetched = before == null
                 ? messageRepository.findPage(conversationId, null, null, size + 1)

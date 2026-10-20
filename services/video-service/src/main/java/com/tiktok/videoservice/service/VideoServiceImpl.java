@@ -41,6 +41,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -532,6 +533,17 @@ public class VideoServiceImpl implements VideoService {
      * Asked of owner_privacy rather than of the videos, so an account with nothing on its grid
      * answers the same way.
      */
+    @Override
+    public CursorPage<VideoResponse> listForExport(Long userId, int page, int size) {
+        Page<Video> videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+                userId, PageRequest.of(page, size));
+        List<VideoResponse> items = videos.getContent().stream()
+                .map(videoMapper::toResponse)
+                .map(quarantinedMediaUrls::forOwner)
+                .toList();
+        return new CursorPage<>(items, videos.hasNext() ? String.valueOf(page + 1) : null);
+    }
+
     @Override
     public Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable) {
         if (isSelf(requesterId, userId)) {
