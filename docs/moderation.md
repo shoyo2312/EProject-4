@@ -1,12 +1,14 @@
 # Automatic Video Moderation
 
-Every uploaded video is screened for NSFW imagery before anyone can see it. The check runs after
-transcoding and before publication, so a video that fails it was never on a feed at any point.
-Its title, description and tags are read too, at publish, and so is every comment before it is
-posted — see [Text: captions and comments](#text-captions-and-comments).
+Every uploaded video is screened for NSFW imagery, and for violence, gore, drugs, accidents and
+gambling, before anyone can see it. The check runs after transcoding and before publication, so a
+video that fails it was never on a feed at any point. Its title, description and tags are read
+too, at publish, and so is every comment before it is posted — see
+[Text: captions and comments](#text-captions-and-comments).
 
-Nothing here costs money: both classifiers — frames and text — are open-weight models running on
-CPU inside a container this repo builds, and the text rules are a word list read in process.
+Nothing here costs money: all three classifiers — two for frames, one for text — are open-weight
+models running on CPU inside a container this repo builds, and the text rules are a word list read
+in process.
 
 ## The pipeline
 
@@ -74,15 +76,75 @@ to agree costs almost nothing on genuinely explicit content, which is rarely exp
 one sampled frame out of ten.
 
 These are opening numbers, not settled ones. Tune them against `video.moderation.maxScore` on
-real uploads, which is why the scores are stored on the video document rather than only logged:
+real uploads, which is why the scores are stored on the video document rather than only logged.
+`maxScore` belongs to `moderation.label`, which since harm-v1 is not always `nsfw` — filter on it,
+or an NSFW threshold gets tuned against CLIP's numbers:
 
 ```javascript
-// videos the model was unsure about, worst first
-db.videos.find({ status: "PENDING_REVIEW" }).sort({ "moderation.maxScore": -1 })
+// videos the NSFW model was unsure about, worst first
+db.videos.find({ status: "PENDING_REVIEW", "moderation.label": "nsfw" }).sort({ "moderation.maxScore": -1 })
 
 // how confident was the model about videos an admin later restored?
 db.videos.find({ statusBeforeTakedown: "REJECTED" }, { "moderation.maxScore": 1 })
 ```
+
+## Violence, gore, drugs, accidents, gambling
+
+The NSFW model answers one question, and a fight is not explicit: ten test uploads of fights, drug
+use, blood, a burning car and a betting app all scored under 0.12 on it and were published. No
+open-weight classifier for these runs on CPU, so `harm_classifier.py` asks CLIP
+(`openai/clip-vit-base-patch16`) zero-shot: every frame is compared with a list of written
+descriptions — five harmful categories, plus a longer list of ordinary scenes — and the share of the
+match landing on a category's descriptions is that category's score.
+
+| Label | Described as (abridged) |
+|---|---|
+| `violence` | people fighting, punching, assault, a gun pointed at someone, a knife attack |
+| `gore` | a bloody wound, a person covered in blood, a dead body |
+| `drugs` | snorting cocaine, lines of powder, a syringe, a crack pipe |
+| `accident` | a car crash, a car on fire, a burning wreck |
+| `gambling` | a betting app on a phone, odds, a casino table, a slot machine |
+
+**It only ever holds a video.** One frame at or over `HARM_REVIEW_THRESHOLD` (0.55) sends it to
+`PENDING_REVIEW`; nothing it scores is `REJECTED` (`verdict.review_only`). An action film, a boxing
+match and a kitchen knife are each a description away from "violence", and a model that cannot
+tell them apart does not get to take a video down by itself. NSFW still rejects on its own lines,
+and a rejection outranks a harm hold.
+
+**Cigarettes and vapes are not drugs.** They have descriptions of their own in the ordinary list,
+so a vaping clip lands there instead of drifting into `drugs`. `test_harm.py` pins this.
+
+**Azure is only asked about NSFW holds.** Azure has no drug or gambling category: asked about a
+held drugs video it answers severity 0, and that would publish it. A REVIEW is escalated only when
+`nsfw` is the only label holding the video.
+
+**The descriptions are the model.** The ordinary list matters as much as the harmful one — a
+softmax over "a car on fire" alone would give every frame 1.0 for it. Adding, removing or
+rewording any line moves every score: bump `HARM_MODERATION_MODEL_VERSION` and score a judged set
+(`score_samples.py`) before it ships.
+
+What it cannot see, by construction: a drug deal that only looks like a person holding money, a
+horror clip that is only dark and red, anything in the audio.
+
+### The first judged set
+
+Twenty-one production uploads, ten frames each, sampled the way media-worker samples them
+(2026-10-19, harm-v1 as shipped):
+
+| | Highest harm score | Verdict |
+|---|---|---|
+| burning car / bloody shirt / betting app | 0.99 / 0.99 / 1.00 | REVIEW |
+| fight in a club / armed robbery | 0.97 / 0.89 | REVIEW |
+| lines of powder / bleeding driver | 0.71 / 0.64 | REVIEW |
+| horror face in red light | 0.49 (gore) | APPROVED — not gore |
+| hooded man holding cash, titled "ma tuy" | 0.01 | APPROVED — no drug in frame |
+| vaping in the street | 0.37 | APPROVED, as intended |
+| 11 ordinary videos (anime, landscapes, a desk, city aerials) | 0.44 at most | APPROVED |
+
+0.55 sits between the highest ordinary video and the lowest harmful one caught, which is a thin
+margin on a small set with no hard negatives — cooking, sport, action films, games. Expect the
+first weeks of real uploads to move it; the log line `scores=nsfw:…,violence:…,…` carries every
+label's worst frame, including the labels that did not win.
 
 ## Failure is never a pass
 
@@ -104,13 +166,16 @@ sitting there is a bug, and worth alerting on.
 ## Running it
 
 ```bash
-make moderation-up      # build + start (first build downloads both models' weights, ~2 GB image)
+make moderation-up      # build + start (first build downloads all three models' weights, ~3 GB image)
 make moderation-test    # the decision rules' tests — no model needed
 make moderation-score-texts FILE=comments.txt   # the text classifier's precision on judged comments
 ```
 
 The text model can be left out of an image with `--build-arg TEXT_MODERATION_MODEL=`;
-`/moderate/text` then answers 503 and the services screen text with the rules alone.
+`/moderate/text` then answers 503 and the services screen text with the rules alone. The harm
+model likewise with `--build-arg HARM_MODERATION_MODEL=`; frames are then screened for NSFW alone.
+CLIP's weights are a pickle (`pytorch_model.bin`, openai never published safetensors): pinned to a
+commit, checked against their SHA-256 at build, and read with `torch.load(weights_only=True)`.
 
 The container publishes `127.0.0.1:8099` only. That differs from rank-service, which publishes
 nothing: media-worker runs on the host via `make run-media` rather than in compose, and with no
@@ -130,16 +195,20 @@ restart of one container rather than a rebuild of a Java service:
 | `MODERATION_REVIEW_THRESHOLD` | `0.60` |
 | `MODERATION_REJECT_THRESHOLD` | `0.90` |
 | `MODERATION_MIN_REJECT_FRAMES` | `2` |
+| `HARM_REVIEW_THRESHOLD` | `0.55` — the harm labels only; there is no harm reject line |
 
-Bump `MODERATION_MODEL_VERSION` whenever either the weights or the thresholds change. It travels
-on every verdict and onto the video document, and without it a decision made months ago cannot be
-attributed to the setup that made it.
+Bump `MODERATION_MODEL_VERSION` whenever either the weights or the thresholds change, and
+`HARM_MODERATION_MODEL_VERSION` (`harm-v1`) for the harm threshold or any description. Both travel
+on every verdict and onto the video document (`nsfw-v1+harm-v1`), and without them a decision made
+months ago cannot be attributed to the setup that made it.
 
 ## Second opinion: Azure AI Content Safety
 
 The local classifier settles both ends on its own — an ordinary video scores about `0.01`, explicit
 content about `0.99`. The `0.60`–`0.90` band is the part it is genuinely bad at, and the part that
-costs a moderator their afternoon. That band, and only that band, is sent to Azure.
+costs a moderator their afternoon. That band, and only that band, is sent to Azure — and only when
+`nsfw` is the only label holding the video (see
+[Violence, gore, drugs, accidents, gambling](#violence-gore-drugs-accidents-gambling)).
 
 ```
 local verdict REVIEW ──▶ top 3 frames by local score ──▶ Azure image:analyze
