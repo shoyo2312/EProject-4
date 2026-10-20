@@ -305,7 +305,7 @@ services:
       - tiktok-network
 
   # ─────────────────────────────────────────────────────────────────
-  # moderation-service (NSFW frame classifier — Python)
+  # moderation-service (frame + caption/comment classifiers — Python)
   # ─────────────────────────────────────────────────────────────────
 
   # No auth and no gateway route, like rank-service: it holds no user data and is only ever
@@ -314,7 +314,7 @@ services:
   # so with no mapping at all every upload would fail its check and land in the admin queue.
   #
   # The image bakes the model in at build time and runs with HF_HUB_OFFLINE=1, so the first build
-  # downloads a few hundred MB and every start after that is offline. Budget ~1.5 GB of RAM.
+  # downloads a couple of GB and every start after that is offline. Budget ~2 GB of RAM.
   #
   # The thresholds live here rather than in media-worker: they belong to the model, and tuning
   # them should be a restart of this container, not a rebuild of a Java service.
@@ -340,6 +340,11 @@ services:
       # build — see the Dockerfile.
       TEXT_HATE_HOLD_THRESHOLD: ${TEXT_HATE_HOLD_THRESHOLD:-0.90}
       TEXT_MODERATION_MODEL_VERSION: ${TEXT_MODERATION_MODEL_VERSION:-hsd-v1}
+      # Violence, gore, drugs, accidents, gambling (CLIP, zero-shot). One frame at or over this
+      # holds the video for a person; it never rejects. Bump HARM_MODERATION_MODEL_VERSION whenever
+      # it or a description in harm_classifier.py changes.
+      HARM_REVIEW_THRESHOLD: ${HARM_REVIEW_THRESHOLD:-0.55}
+      HARM_MODERATION_MODEL_VERSION: ${HARM_MODERATION_MODEL_VERSION:-harm-v1}
     healthcheck:
       # Unhealthy until the weights are in memory, which takes a few seconds on a cold start.
       test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health')\"" ]
