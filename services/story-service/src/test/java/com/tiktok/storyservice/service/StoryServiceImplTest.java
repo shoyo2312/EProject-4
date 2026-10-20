@@ -6,6 +6,11 @@ import com.tiktok.storyservice.dto.response.StoryViewerResponse;
 import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.entity.StoryStatus;
+import com.tiktok.storyservice.entity.StoryVisibility;
+import com.tiktok.storyservice.exception.ForeignUploadException;
+import com.tiktok.storyservice.exception.StoryCaptionRejectedException;
+import com.tiktok.storyservice.exception.UploadNotFoundException;
+import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.storyservice.entity.StoryView;
 import com.tiktok.storyservice.exception.NotStoryOwnerException;
 import com.tiktok.storyservice.exception.StoryNotFoundException;
@@ -47,11 +52,17 @@ class StoryServiceImplTest {
     @Mock
     private StoryMapper storyMapper;
 
+    @Mock
+    private StoryMedia storyMedia;
+
+    @Mock
+    private StoryCaptionModeration captionModeration;
+
     private StoryServiceImpl storyService;
 
     @BeforeEach
     void setUp() {
-        storyService = new StoryServiceImpl(storyRepository, storyViewRepository, storyMapper);
+        storyService = new StoryServiceImpl(storyRepository, storyViewRepository, storyMapper, storyMedia, captionModeration);
         ReflectionTestUtils.setField(storyService, "ttlHours", TTL_HOURS);
     }
 
@@ -79,28 +90,65 @@ class StoryServiceImplTest {
                 .build();
     }
 
-    @Test
-    void create_buildsStoryWithTtlExpiryAndReturnsMappedResponse() {
-        CreateStoryRequest request = new CreateStoryRequest("http://media/1.jpg", StoryMediaType.IMAGE, "hello");
-        when(storyRepository.save(any(Story.class))).thenAnswer(invocation -> invocation.getArgument(0));
-        StoryResponse expected = new StoryResponse("1", 100L, "http://media/1.jpg", StoryMediaType.IMAGE, "hello", 0, Instant.now(), Instant.now());
-        when(storyMapper.toResponse(any(Story.class))).thenReturn(expected);
+    private static final String UPLOAD = "s3://bucket/stories/100/1.jpg";
+    private static final String KEY = "stories/100/1.jpg";
 
-        StoryResponse response = storyService.create(100L, request);
+    @Test
+    void createSavesPendingWithTextVerdict() {
+        CreateStoryRequest request = new CreateStoryRequest(UPLOAD, "hello", StoryVisibility.FRIENDS);
+        when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
+        when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
+        when(storyMedia.exists(KEY)).thenReturn(true);
+        when(captionModeration.screen("hello")).thenReturn(ModerationVerdict.REVIEW);
+        when(storyRepository.insert(any(Story.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        storyService.create(100L, request);
 
         ArgumentCaptor<Story> captor = ArgumentCaptor.forClass(Story.class);
-        verify(storyRepository).save(captor.capture());
+        verify(storyRepository).insert(captor.capture());
         Story saved = captor.getValue();
-
         assertThat(saved.getUserId()).isEqualTo(100L);
-        assertThat(saved.getMediaKey()).isEqualTo("http://media/1.jpg");
+        assertThat(saved.getMediaKey()).isEqualTo(KEY);
         assertThat(saved.getMediaType()).isEqualTo(StoryMediaType.IMAGE);
         assertThat(saved.getCaption()).isEqualTo("hello");
-        assertThat(saved.getViewCount()).isZero();
-        assertThat(saved.getId()).isNotBlank();
-        assertThat(saved.getExpiresAt()).isCloseTo(Instant.now().plus(48, ChronoUnit.HOURS), within(2, ChronoUnit.SECONDS));
         assertThat(saved.getStatus()).isEqualTo(StoryStatus.PENDING_MODERATION);
-        assertThat(response).isEqualTo(expected);
+        assertThat(saved.getVisibility()).isEqualTo(StoryVisibility.FRIENDS);
+        assertThat(saved.getTextVerdict()).isEqualTo(ModerationVerdict.REVIEW);
+        assertThat(saved.getExpiresAt()).isCloseTo(Instant.now().plus(48, ChronoUnit.HOURS), within(2, ChronoUnit.SECONDS));
+    }
+
+    @Test
+    void missingObjectIsRejected() {
+        when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
+        when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
+        when(storyMedia.exists(KEY)).thenReturn(false);
+
+        assertThatThrownBy(() -> storyService.create(100L, new CreateStoryRequest(UPLOAD, null, StoryVisibility.PUBLIC)))
+                .isInstanceOf(UploadNotFoundException.class);
+        verifyNoInteractions(storyRepository);
+    }
+
+    @Test
+    void rejectedCaptionSavesNothing() {
+        when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
+        when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
+        when(storyMedia.exists(KEY)).thenReturn(true);
+        when(captionModeration.screen("bad")).thenThrow(new StoryCaptionRejectedException());
+
+        assertThatThrownBy(() -> storyService.create(100L, new CreateStoryRequest(UPLOAD, "bad", StoryVisibility.PUBLIC)))
+                .isInstanceOf(StoryCaptionRejectedException.class);
+        verifyNoInteractions(storyRepository);
+    }
+
+    @Test
+    void secondStoryFromTheSameUploadIsRefused() {
+        when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
+        when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
+        when(storyMedia.exists(KEY)).thenReturn(true);
+        when(storyRepository.insert(any(Story.class))).thenThrow(new DuplicateKeyException("mediaKey"));
+
+        assertThatThrownBy(() -> storyService.create(100L, new CreateStoryRequest(UPLOAD, null, StoryVisibility.PUBLIC)))
+                .isInstanceOf(ForeignUploadException.class);
     }
 
     @Test

@@ -2,6 +2,8 @@ package com.tiktok.storyservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
+import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
+import com.tiktok.storyservice.dto.response.StoryUploadUrlResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryViewerResponse;
 import com.tiktok.storyservice.service.StoryService;
@@ -19,6 +21,13 @@ import java.util.List;
 public class StoryController {
 
     private final StoryService storyService;
+
+    @PostMapping("/upload-url")
+    public ApiResponse<StoryUploadUrlResponse> createUploadUrl(
+            @AuthenticationPrincipal Long currentUserId,
+            @Valid @RequestBody StoryUploadUrlRequest request) {
+        return ApiResponse.success(storyService.createUploadUrl(currentUserId, request));
+    }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
