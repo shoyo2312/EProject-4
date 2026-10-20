@@ -28,7 +28,7 @@ import java.time.Instant;
  * not eat into it, and the ceiling removes a story whose verdict never arrives instead of keeping
  * it forever. HELD and REJECTED stories keep the ceiling.
  *
- * <p>The outbox is two flags on the document, as on video-service's Video: this Mongo deployment
+ * <p>The outbox is a flag on the document, as on video-service's Video: this Mongo deployment
  * has no replica set, so there is no transaction to put a separate outbox row in.
  */
 @Getter
@@ -79,9 +79,8 @@ public class Story {
 
     private Instant deletedAt;
 
+    /** Set once the broker acknowledged StoryCreatedEvent — the outbox flag. */
     private Instant eventPublishedAt;
-
-    private Instant eventFailedAt;
 
     @Version
     private Long version;

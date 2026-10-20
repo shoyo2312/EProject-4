@@ -11,6 +11,8 @@ public interface StoryRepository extends MongoRepository<Story, String>, StoryRe
 
     Optional<Story> findByIdAndDeletedAtIsNull(String id);
 
+    List<Story> findTop100ByEventPublishedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc();
+
     List<Story> findByUserIdAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtDesc(Long userId, Instant now);
 
     List<Story> findByUserIdInAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtDesc(List<Long> userIds, Instant now);
