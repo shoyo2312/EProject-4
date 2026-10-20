@@ -7,7 +7,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
-public interface StoryRepository extends MongoRepository<Story, String> {
+public interface StoryRepository extends MongoRepository<Story, String>, StoryRepositoryCustom {
 
     Optional<Story> findByIdAndDeletedAtIsNull(String id);
 

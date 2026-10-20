@@ -5,6 +5,7 @@ import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryViewerResponse;
 import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryView;
+import com.tiktok.storyservice.entity.StoryVisibility;
 import com.tiktok.storyservice.exception.NotStoryOwnerException;
 import com.tiktok.storyservice.exception.StoryNotFoundException;
 import com.tiktok.storyservice.mapper.StoryMapper;
@@ -12,9 +13,10 @@ import com.tiktok.storyservice.repository.StoryRepository;
 import com.tiktok.storyservice.repository.StoryViewRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 
@@ -31,16 +33,8 @@ public class StoryServiceImpl implements StoryService {
 
     @Override
     public StoryResponse create(Long userId, CreateStoryRequest request) {
-        Instant now = Instant.now();
-        Story story = Story.builder()
-                .id(Story.newId())
-                .userId(userId)
-                .mediaUrl(request.mediaUrl())
-                .mediaType(request.mediaType())
-                .caption(request.caption())
-                .viewCount(0)
-                .expiresAt(now.plus(Duration.ofHours(ttlHours)))
-                .build();
+        Story story = Story.pending(Story.newId(), userId, request.mediaUrl(), request.mediaType(),
+                request.caption(), StoryVisibility.PUBLIC, null, Instant.now());
 
         return storyMapper.toResponse(storyRepository.save(story));
     }
@@ -80,18 +74,18 @@ public class StoryServiceImpl implements StoryService {
             return;
         }
 
-        if (storyViewRepository.existsByStoryIdAndViewerId(storyId, viewerId)) {
+        // The unique (storyId, viewerId) index decides who counted first; checking before inserting
+        // let two concurrent views through the check, and one of them then failed on the index.
+        try {
+            storyViewRepository.insert(StoryView.builder()
+                    .storyId(storyId)
+                    .viewerId(viewerId)
+                    .expiresAt(story.getExpiresAt())
+                    .build());
+        } catch (DuplicateKeyException e) {
             return;
         }
-
-        storyViewRepository.save(StoryView.builder()
-                .storyId(storyId)
-                .viewerId(viewerId)
-                .expiresAt(story.getExpiresAt())
-                .build());
-
-        story.incrementViewCount();
-        storyRepository.save(story);
+        storyRepository.incrementViewCount(storyId);
     }
 
     @Override
@@ -102,7 +96,7 @@ public class StoryServiceImpl implements StoryService {
             throw new NotStoryOwnerException(storyId);
         }
 
-        return storyViewRepository.findByStoryIdOrderByViewedAtDesc(storyId).stream()
+        return storyViewRepository.findByStoryIdAndViewedAtBeforeOrderByViewedAtDesc(storyId, Instant.now(), PageRequest.of(0, 50)).stream()
                 .map(storyMapper::toViewerResponse)
                 .toList();
     }

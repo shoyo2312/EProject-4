@@ -23,7 +23,10 @@ import java.time.Instant;
 @AllArgsConstructor
 @Document(collection = "story_views")
 @CompoundIndexes({
-        @CompoundIndex(name = "story_viewer_idx", def = "{'storyId': 1, 'viewerId': 1}", unique = true)
+        @CompoundIndex(name = "story_viewer_idx", def = "{'storyId': 1, 'viewerId': 1}", unique = true),
+        // "Which of these stories has this viewer seen" — one query per tray.
+        @CompoundIndex(name = "viewer_story_idx", def = "{'viewerId': 1, 'storyId': 1}"),
+        @CompoundIndex(name = "story_viewed_idx", def = "{'storyId': 1, 'viewedAt': -1}")
 })
 public class StoryView {
 

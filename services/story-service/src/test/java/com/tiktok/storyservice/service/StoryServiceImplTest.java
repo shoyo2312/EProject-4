@@ -5,6 +5,7 @@ import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryViewerResponse;
 import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryMediaType;
+import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.entity.StoryView;
 import com.tiktok.storyservice.exception.NotStoryOwnerException;
 import com.tiktok.storyservice.exception.StoryNotFoundException;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
@@ -57,7 +59,7 @@ class StoryServiceImplTest {
         return Story.builder()
                 .id(id)
                 .userId(userId)
-                .mediaUrl("http://media/1.jpg")
+                .mediaKey("stories/1/1.jpg")
                 .mediaType(StoryMediaType.IMAGE)
                 .viewCount(0)
                 .createdAt(Instant.now().minus(1, ChronoUnit.HOURS))
@@ -69,7 +71,7 @@ class StoryServiceImplTest {
         return Story.builder()
                 .id(id)
                 .userId(userId)
-                .mediaUrl("http://media/1.jpg")
+                .mediaKey("stories/1/1.jpg")
                 .mediaType(StoryMediaType.IMAGE)
                 .viewCount(0)
                 .createdAt(Instant.now().minus(30, ChronoUnit.HOURS))
@@ -91,19 +93,20 @@ class StoryServiceImplTest {
         Story saved = captor.getValue();
 
         assertThat(saved.getUserId()).isEqualTo(100L);
-        assertThat(saved.getMediaUrl()).isEqualTo("http://media/1.jpg");
+        assertThat(saved.getMediaKey()).isEqualTo("http://media/1.jpg");
         assertThat(saved.getMediaType()).isEqualTo(StoryMediaType.IMAGE);
         assertThat(saved.getCaption()).isEqualTo("hello");
         assertThat(saved.getViewCount()).isZero();
         assertThat(saved.getId()).isNotBlank();
-        assertThat(saved.getExpiresAt()).isCloseTo(Instant.now().plus(TTL_HOURS, ChronoUnit.HOURS), within(2, ChronoUnit.SECONDS));
+        assertThat(saved.getExpiresAt()).isCloseTo(Instant.now().plus(48, ChronoUnit.HOURS), within(2, ChronoUnit.SECONDS));
+        assertThat(saved.getStatus()).isEqualTo(StoryStatus.PENDING_MODERATION);
         assertThat(response).isEqualTo(expected);
     }
 
     @Test
     void getById_visibleStory_returnsMappedResponse() {
         Story story = visibleStory("s1", 1L);
-        StoryResponse expected = new StoryResponse("s1", 1L, story.getMediaUrl(), story.getMediaType(), null, 0, story.getCreatedAt(), story.getExpiresAt());
+        StoryResponse expected = new StoryResponse("s1", 1L, story.getMediaKey(), story.getMediaType(), null, 0, story.getCreatedAt(), story.getExpiresAt());
         when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
         when(storyMapper.toResponse(story)).thenReturn(expected);
 
@@ -133,8 +136,8 @@ class StoryServiceImplTest {
     void listByUser_mapsAllVisibleStories() {
         Story story1 = visibleStory("s1", 1L);
         Story story2 = visibleStory("s2", 1L);
-        StoryResponse response1 = new StoryResponse("s1", 1L, story1.getMediaUrl(), story1.getMediaType(), null, 0, story1.getCreatedAt(), story1.getExpiresAt());
-        StoryResponse response2 = new StoryResponse("s2", 1L, story2.getMediaUrl(), story2.getMediaType(), null, 0, story2.getCreatedAt(), story2.getExpiresAt());
+        StoryResponse response1 = new StoryResponse("s1", 1L, story1.getMediaKey(), story1.getMediaType(), null, 0, story1.getCreatedAt(), story1.getExpiresAt());
+        StoryResponse response2 = new StoryResponse("s2", 1L, story2.getMediaKey(), story2.getMediaType(), null, 0, story2.getCreatedAt(), story2.getExpiresAt());
         when(storyRepository.findByUserIdAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtDesc(eq(1L), any(Instant.class)))
                 .thenReturn(List.of(story1, story2));
         when(storyMapper.toResponse(story1)).thenReturn(response1);
@@ -165,7 +168,7 @@ class StoryServiceImplTest {
     void listFeed_withFollowedUsers_mapsVisibleStories() {
         Story story = visibleStory("s1", 2L);
         List<Long> followedIds = List.of(2L, 3L);
-        StoryResponse response = new StoryResponse("s1", 2L, story.getMediaUrl(), story.getMediaType(), null, 0, story.getCreatedAt(), story.getExpiresAt());
+        StoryResponse response = new StoryResponse("s1", 2L, story.getMediaKey(), story.getMediaType(), null, 0, story.getCreatedAt(), story.getExpiresAt());
         when(storyRepository.findByUserIdInAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtDesc(eq(followedIds), any(Instant.class)))
                 .thenReturn(List.of(story));
         when(storyMapper.toResponse(story)).thenReturn(response);
@@ -187,34 +190,31 @@ class StoryServiceImplTest {
     }
 
     @Test
-    void recordView_alreadyViewedByViewer_isNoOpAndDoesNotDuplicateOrIncrement() {
+    void duplicateViewIsNoOp() {
         Story story = visibleStory("s1", 1L);
         when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
-        when(storyViewRepository.existsByStoryIdAndViewerId("s1", 2L)).thenReturn(true);
+        when(storyViewRepository.insert(any(StoryView.class))).thenThrow(new DuplicateKeyException("dup"));
 
         storyService.recordView(2L, "s1");
 
-        verify(storyViewRepository, never()).save(any());
+        verify(storyRepository, never()).incrementViewCount(any());
         verify(storyRepository, never()).save(any());
     }
 
     @Test
-    void recordView_newViewer_savesViewAndIncrementsStoryViewCount() {
+    void firstViewIncrementsAtomically() {
         Story story = visibleStory("s1", 1L);
         when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
-        when(storyViewRepository.existsByStoryIdAndViewerId("s1", 2L)).thenReturn(false);
 
         storyService.recordView(2L, "s1");
 
         ArgumentCaptor<StoryView> viewCaptor = ArgumentCaptor.forClass(StoryView.class);
-        verify(storyViewRepository).save(viewCaptor.capture());
+        verify(storyViewRepository).insert(viewCaptor.capture());
         assertThat(viewCaptor.getValue().getStoryId()).isEqualTo("s1");
         assertThat(viewCaptor.getValue().getViewerId()).isEqualTo(2L);
         assertThat(viewCaptor.getValue().getExpiresAt()).isEqualTo(story.getExpiresAt());
-
-        ArgumentCaptor<Story> storyCaptor = ArgumentCaptor.forClass(Story.class);
-        verify(storyRepository).save(storyCaptor.capture());
-        assertThat(storyCaptor.getValue().getViewCount()).isEqualTo(1L);
+        verify(storyRepository).incrementViewCount("s1");
+        verify(storyRepository, never()).save(any());
     }
 
     @Test
@@ -231,7 +231,7 @@ class StoryServiceImplTest {
         StoryView view = StoryView.builder().storyId("s1").viewerId(2L).build();
         StoryViewerResponse expected = new StoryViewerResponse(2L, Instant.now());
         when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
-        when(storyViewRepository.findByStoryIdOrderByViewedAtDesc("s1")).thenReturn(List.of(view));
+        when(storyViewRepository.findByStoryIdAndViewedAtBeforeOrderByViewedAtDesc(eq("s1"), any(Instant.class), any())).thenReturn(List.of(view));
         when(storyMapper.toViewerResponse(view)).thenReturn(expected);
 
         List<StoryViewerResponse> viewers = storyService.listViewers(1L, "s1");
