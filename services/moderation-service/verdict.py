@@ -4,6 +4,7 @@ Everything here is pure arithmetic over per-frame scores. The model, the HTTP la
 thresholds live elsewhere; this module only answers "given these numbers, what do we do".
 """
 
+import math
 from dataclasses import dataclass
 
 APPROVED = "APPROVED"
@@ -25,6 +26,17 @@ class Thresholds:
     review_at: float = 0.60
     reject_at: float = 0.90
     min_reject_frames: int = 2
+
+
+def review_only(review_at: float) -> Thresholds:
+    """Thresholds that can send a video to a person but never remove it.
+
+    For the zero-shot categories (harm_classifier): an action film, a boxing match and a kitchen
+    knife are all a description away from "violence", and a model that cannot tell them apart
+    does not get to take a video down on its own. No score reaches infinity, so the reject branch
+    in decide() is unreachable — a sum of probabilities can land a hair over 1.0, so 1.0 cannot.
+    """
+    return Thresholds(review_at=review_at, reject_at=math.inf, min_reject_frames=1)
 
 
 @dataclass(frozen=True)
