@@ -10,10 +10,9 @@ import org.springframework.web.client.RestClient;
 import java.time.Duration;
 
 /**
- * story-service's outbound calls, all to user-service: who the viewer follows among private owners,
- * whether viewer and owner are mutual followers, and whether either blocked the other. The
- * internal ones check the internal API token this client carries; the friendship call forwards the
- * viewer's own JWT besides. Mirrors video-service's DownstreamRestClientConfig.
+ * story-service's outbound calls, all to user-service's internal endpoints: how the viewer relates
+ * to an owner (private account, follow, mutual follow) and whether either blocked the other. Both
+ * check the internal API token this client carries. Mirrors video-service's DownstreamRestClientConfig.
  */
 @Configuration
 public class DownstreamRestClientConfig {

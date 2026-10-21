@@ -4,10 +4,8 @@ import com.tiktok.event.admin.UserBannedEvent;
 import com.tiktok.event.admin.UserUnbannedEvent;
 import com.tiktok.event.user.AccountState;
 import com.tiktok.event.user.AccountStateChangedEvent;
-import com.tiktok.event.user.UserPrivacyChangedEvent;
 import com.tiktok.storyservice.entity.OwnerBan;
 import com.tiktok.storyservice.repository.OwnerBanRepository;
-import com.tiktok.storyservice.repository.OwnerPrivacyRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,13 +49,7 @@ class OwnerStateConsumersTest {
     private AccountStateEventConsumer accountConsumer;
 
     @Autowired
-    private UserPrivacyEventConsumer privacyConsumer;
-
-    @Autowired
     private OwnerBanRepository ownerBanRepository;
-
-    @Autowired
-    private OwnerPrivacyRepository ownerPrivacyRepository;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -65,7 +57,6 @@ class OwnerStateConsumersTest {
     @BeforeEach
     void cleanUp() {
         ownerBanRepository.deleteAll();
-        ownerPrivacyRepository.deleteAll();
     }
 
     @Test
@@ -110,17 +101,6 @@ class OwnerStateConsumersTest {
     }
 
     @Test
-    void privacyIsRecordedAndAnOlderChangeIsIgnored() {
-        Instant now = Instant.now();
-        privacy(true, now);
-        privacy(false, now.minusSeconds(60));
-        assertThat(ownerPrivacyRepository.findByUserIdInAndPrivateAccountTrue(List.of(OWNER))).hasSize(1);
-
-        privacy(false, now.plusSeconds(1));
-        assertThat(ownerPrivacyRepository.findByUserIdInAndPrivateAccountTrue(List.of(OWNER))).isEmpty();
-    }
-
-    @Test
     void otherModerationEventTypesAreIgnored() {
         moderationConsumer.onMessage("{\"eventId\":\"x\"}", "VideoTakenDownEvent".getBytes());
         moderationConsumer.onMessage("{\"eventId\":\"x\"}", null);
@@ -147,8 +127,4 @@ class OwnerStateConsumersTest {
                 new AccountStateChangedEvent("a" + at.toEpochMilli(), at, OWNER, state, null)));
     }
 
-    private void privacy(boolean privateAccount, Instant at) {
-        privacyConsumer.onMessage(objectMapper.writeValueAsString(
-                new UserPrivacyChangedEvent("p" + at.toEpochMilli(), at, OWNER, privateAccount)));
-    }
 }

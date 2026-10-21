@@ -1,12 +1,11 @@
 package com.tiktok.storyservice.service;
 
 import com.tiktok.storyservice.client.BlockClient;
-import com.tiktok.storyservice.client.FollowClient;
 import com.tiktok.storyservice.client.FriendshipClient;
+import com.tiktok.storyservice.client.FriendshipClient.Relationship;
 import com.tiktok.storyservice.entity.OwnerBan;
-import com.tiktok.storyservice.entity.OwnerPrivacy;
+import com.tiktok.storyservice.entity.StoryVisibility;
 import com.tiktok.storyservice.repository.OwnerBanRepository;
-import com.tiktok.storyservice.repository.OwnerPrivacyRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -19,8 +18,6 @@ import static com.tiktok.storyservice.entity.StoryVisibility.PRIVATE;
 import static com.tiktok.storyservice.entity.StoryVisibility.PUBLIC;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class StoryAudienceTest {
@@ -63,37 +60,47 @@ class StoryAudienceTest {
     }
 
     private final OwnerBanRepository bans = mock(OwnerBanRepository.class);
-    private final OwnerPrivacyRepository privacy = mock(OwnerPrivacyRepository.class);
-    private final FollowClient followClient = mock(FollowClient.class);
     private final FriendshipClient friendshipClient = mock(FriendshipClient.class);
     private final BlockClient blockClient = mock(BlockClient.class);
-    private final StoryAudience audience = new StoryAudience(bans, privacy, followClient, friendshipClient, blockClient);
+    private final StoryAudience audience = new StoryAudience(bans, friendshipClient, blockClient);
+
+    private static final Relationship STRANGER = new Relationship(false, false, false);
 
     @Test
-    void anonymousViewerAsksUserServiceNothing() {
-        when(privacy.findByUserIdInAndPrivateAccountTrue(any())).thenReturn(List.of(new OwnerPrivacy(2L, true, Instant.now())));
+    void anonymousViewerIsAskedOnlyWhetherTheOwnerIsPrivate() {
+        when(friendshipClient.relationship(null, 1L)).thenReturn(STRANGER);
+        when(friendshipClient.relationship(null, 2L)).thenReturn(new Relationship(false, false, true));
 
-        Map<Long, Set<com.tiktok.storyservice.entity.StoryVisibility>> resolved = audience.resolve(null, List.of(1L, 2L));
+        Map<Long, Set<StoryVisibility>> resolved = audience.resolve(null, List.of(1L, 2L));
 
         assertThat(resolved.get(1L)).containsExactly(PUBLIC);
         assertThat(resolved.get(2L)).isEmpty();
-        verifyNoInteractions(followClient, friendshipClient, blockClient);
+        verifyNoInteractions(blockClient);
     }
 
     @Test
-    void followIsAskedOnceForThePrivateOwnersOnly() {
+    void privacyFollowAndFriendshipComeFromUserServicePerOwner() {
         when(bans.findHiddenAmong(any(), any())).thenReturn(List.of(new OwnerBan(3L, OwnerBan.PERMANENT, Instant.now())));
-        when(privacy.findByUserIdInAndPrivateAccountTrue(any())).thenReturn(List.of(new OwnerPrivacy(2L, true, Instant.now())));
-        when(followClient.followedAmong(eq(9L), any())).thenReturn(Set.of(2L));
+        when(friendshipClient.relationship(9L, 1L)).thenReturn(STRANGER);
+        when(friendshipClient.relationship(9L, 2L)).thenReturn(new Relationship(false, true, true));
+        when(friendshipClient.relationship(9L, 4L)).thenReturn(new Relationship(true, true, false));
 
-        Map<Long, Set<com.tiktok.storyservice.entity.StoryVisibility>> resolved = audience.resolve(9L, List.of(1L, 2L, 3L, 9L));
+        Map<Long, Set<StoryVisibility>> resolved = audience.resolve(9L, List.of(1L, 2L, 3L, 4L, 9L));
 
         assertThat(resolved.get(1L)).containsExactly(PUBLIC);
         assertThat(resolved.get(2L)).containsExactly(PUBLIC);
         assertThat(resolved.get(3L)).isEmpty();
+        assertThat(resolved.get(4L)).containsExactlyInAnyOrder(PUBLIC, FRIENDS);
         assertThat(resolved.get(9L)).containsExactlyInAnyOrder(PUBLIC, FRIENDS, PRIVATE);
-        verify(followClient).followedAmong(9L, Set.of(2L));
-        verify(friendshipClient, never()).areFriends(eq(3L), anyLong());
-        verify(friendshipClient, never()).areFriends(eq(9L), anyLong());
+        verify(friendshipClient, never()).relationship(9L, 3L);
+        verify(friendshipClient, never()).relationship(9L, 9L);
+    }
+
+    @Test
+    void aBlockedOwnerIsNotAskedAboutFurther() {
+        when(blockClient.isBlockedBetween(9L, 1L)).thenReturn(true);
+
+        assertThat(audience.resolve(9L, List.of(1L)).get(1L)).isEmpty();
+        verifyNoInteractions(friendshipClient);
     }
 }

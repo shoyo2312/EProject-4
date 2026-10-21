@@ -1,13 +1,11 @@
 package com.tiktok.storyservice.service;
 
 import com.tiktok.storyservice.client.BlockClient;
-import com.tiktok.storyservice.client.FollowClient;
 import com.tiktok.storyservice.client.FriendshipClient;
+import com.tiktok.storyservice.client.FriendshipClient.Relationship;
 import com.tiktok.storyservice.entity.OwnerBan;
-import com.tiktok.storyservice.entity.OwnerPrivacy;
 import com.tiktok.storyservice.entity.StoryVisibility;
 import com.tiktok.storyservice.repository.OwnerBanRepository;
-import com.tiktok.storyservice.repository.OwnerPrivacyRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -32,8 +30,6 @@ import java.util.stream.Collectors;
 public class StoryAudience {
 
     private final OwnerBanRepository ownerBanRepository;
-    private final OwnerPrivacyRepository ownerPrivacyRepository;
-    private final FollowClient followClient;
     private final FriendshipClient friendshipClient;
     private final BlockClient blockClient;
 
@@ -60,37 +56,28 @@ public class StoryAudience {
     }
 
     /**
-     * One ban query and one privacy query for every owner, and one follow lookup for the private
-     * ones. An anonymous viewer is never anyone's follower or friend and cannot be blocked, so it
-     * asks user-service nothing.
+     * One ban query for every owner, then per owner a block check (signed-in viewers only) and one
+     * relationship lookup — privacy, follow and friendship together. Hidden and blocked owners are
+     * not asked about further.
      *
-     * <p>ponytail: friendship and block are one user-service call each per owner — fine for a tray
-     * of followed accounts with live stories; a batch endpoint is the upgrade if trays get large.
+     * <p>ponytail: one or two user-service calls per owner, in sequence — fine for a tray of
+     * followed accounts with live stories; a batch relationship endpoint is the upgrade.
      */
     public Map<Long, Set<StoryVisibility>> resolve(Long viewerId, Collection<Long> ownerIds) {
         Set<Long> owners = new LinkedHashSet<>(ownerIds);
         Map<Long, Set<StoryVisibility>> result = new HashMap<>();
-        if (owners.isEmpty()) {
-            return result;
-        }
-
         List<Long> others = owners.stream().filter(owner -> !owner.equals(viewerId)).toList();
         Set<Long> hidden = others.isEmpty() ? Set.of() : ownerBanRepository.findHiddenAmong(others, Instant.now()).stream()
                 .map(OwnerBan::getUserId).collect(Collectors.toSet());
-        Set<Long> privateOwners = others.isEmpty() ? Set.of() : ownerPrivacyRepository.findByUserIdInAndPrivateAccountTrue(others)
-                .stream().map(OwnerPrivacy::getUserId).collect(Collectors.toSet());
-        Set<Long> privateToAsk = privateOwners.stream().filter(owner -> !hidden.contains(owner)).collect(Collectors.toSet());
-        Set<Long> followed = viewerId == null || privateToAsk.isEmpty()
-                ? Set.of() : followClient.followedAmong(viewerId, privateToAsk);
 
         for (Long owner : owners) {
             boolean self = owner.equals(viewerId);
             boolean isHidden = hidden.contains(owner);
-            boolean ask = viewerId != null && !self && !isHidden;
-            boolean blocked = ask && blockClient.isBlockedBetween(viewerId, owner);
-            boolean friends = ask && !blocked && friendshipClient.areFriends(owner, viewerId);
-            result.put(owner, visibilitiesFor(self, isHidden, blocked, privateOwners.contains(owner),
-                    followed.contains(owner), friends));
+            boolean blocked = !self && !isHidden && viewerId != null && blockClient.isBlockedBetween(viewerId, owner);
+            Relationship relationship = self || isHidden || blocked
+                    ? Relationship.UNKNOWN : friendshipClient.relationship(viewerId, owner);
+            result.put(owner, visibilitiesFor(self, isHidden, blocked, relationship.privateAccount(),
+                    relationship.following(), relationship.friends()));
         }
         return result;
     }

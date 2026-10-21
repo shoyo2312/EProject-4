@@ -5,24 +5,21 @@ import com.tiktok.common.response.ApiResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
-import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
+
+import java.util.Optional;
 
 /**
- * "Are these two accounts mutual followers" — the one thing FRIENDS visibility needs and only
- * user-service knows. Fail-closed: a missing token, an unreachable user-service or any non-200
- * answers false, so a lookup failure hides a FRIENDS story rather than leaking it.
+ * Everything a story's audience needs to know about viewer and owner, in one internal call:
+ * whether the owner is private, whether the viewer follows them, and whether they are mutual
+ * followers. Asked of user-service rather than kept in a local copy fed by user.privacy-events:
+ * a copy only knows what changed while story-service was listening, so an account made private
+ * before then would read as public and its stories would reach strangers.
  *
- * <p>user-service's API requires a JWT (unlike story-service's own GET endpoints), so the
- * viewer's inbound bearer token is forwarded — the question is asked as the viewer. With no
- * request-bound token (anonymous viewer, or a non-request thread) the call is skipped.
- *
- * <p>ponytail: reads the token off the thread-bound request context rather than threading it
- * through every service signature. Fine for synchronous MVC; revisit if a caller goes async.
+ * <p>Fails closed: an unanswered lookup is {@link Relationship#UNKNOWN}, which hides the owner's
+ * stories from this viewer until user-service answers again.
  */
 @Slf4j
 @Component
@@ -31,39 +28,32 @@ public class FriendshipClient {
 
     private final RestClient userServiceRestClient;
 
+    /** The owner as the viewer sees them; an anonymous viewer is never a follower or a friend. */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    private record FriendshipView(boolean friends) {
+    public record Relationship(boolean friends, boolean following, boolean privateAccount) {
+
+        public static final Relationship UNKNOWN = new Relationship(false, false, true);
     }
 
-    public boolean areFriends(Long ownerId, Long viewerId) {
-        if (ownerId == null || viewerId == null || ownerId.equals(viewerId)) {
-            return false;
-        }
-
-        String token = currentBearerToken();
-        if (token == null) {
-            return false;
-        }
-
+    /** @param viewerId null for an anonymous viewer */
+    public Relationship relationship(Long viewerId, Long ownerId) {
         try {
-            ApiResponse<FriendshipView> response = userServiceRestClient.get()
-                    .uri("/api/v1/users/{userId}/friendship", ownerId)
-                    .header(HttpHeaders.AUTHORIZATION, token)
+            ApiResponse<Relationship> response = userServiceRestClient.get()
+                    .uri(uri -> uri.path("/api/v1/users/internal/friendship")
+                            .queryParamIfPresent("userA", Optional.ofNullable(viewerId))
+                            .queryParam("userB", ownerId)
+                            .build())
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {
                     });
-            return response != null && response.data() != null && response.data().friends();
+            if (response == null || response.data() == null) {
+                return Relationship.UNKNOWN;
+            }
+            return response.data();
         } catch (RestClientException e) {
-            log.warn("Could not confirm friendship with owner {} against user-service; hiding the FRIENDS story",
-                    ownerId, e);
-            return false;
+            log.warn("Could not ask user-service how {} relates to owner {}; hiding the owner's stories",
+                    viewerId, ownerId, e);
+            return Relationship.UNKNOWN;
         }
-    }
-
-    private String currentBearerToken() {
-        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs)) {
-            return null;
-        }
-        return attrs.getRequest().getHeader(HttpHeaders.AUTHORIZATION);
     }
 }
