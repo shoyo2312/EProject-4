@@ -76,7 +76,7 @@ help:
 	@echo "    make rank-up            Start rank-service :8098 (internal)"
 	@echo "    make rank-train         Train the feed ranking model from ClickHouse"
 	@echo "    make rank-test          Run rank-service tests"
-	@echo "    make moderation-up      Start moderation-service :8099 (NSFW screening)"
+	@echo "    make moderation-up      Start moderation-service :8099 (frame + text screening)"
 	@echo "    make moderation-test    Run moderation-service tests"
 	@echo "    make moderation-score-texts FILE=x  Precision of the text classifier on judged comments"
 	@echo ""

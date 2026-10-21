@@ -11,6 +11,7 @@ spring:
     port: ${CASSANDRA_PORT:9042}
     local-datacenter: ${CASSANDRA_LOCAL_DC:dc1}
     schema-action: CREATE_IF_NOT_EXISTS
+    config: classpath:cassandra-driver.conf
 
   data:
     redis:
