@@ -27,6 +27,11 @@ x-java-env: &java-env
   INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?}
   SPRINGDOC_API_DOCS_ENABLED: "false"
   SPRINGDOC_SWAGGER_UI_ENABLED: "false"
+  # Kafka wants a password (see the kafka service). spring.kafka.properties reaches every producer,
+  # consumer and admin client Boot builds; api-gateway has no Kafka and ignores it.
+  SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL: SASL_PLAINTEXT
+  SPRING_KAFKA_PROPERTIES_SASL_MECHANISM: PLAIN
+  SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="app" password="${KAFKA_PASSWORD:?}";'
 
 services:
 
@@ -152,7 +157,13 @@ services:
       - zookeeper-data:/var/lib/zookeeper/data
       - zookeeper-log:/var/lib/zookeeper/log
 
-  # One listener: every client is on this network, nothing on the host needs it.
+  # Two listeners. CLIENT is the only one other containers can reach, and it wants a password:
+  # without one, anything on this network could publish a ban or a takedown on
+  # admin.moderation-events as if admin-service had. LOCAL is plaintext on 127.0.0.1 inside this
+  # container only, for the broker's own controller connection and the healthcheck.
+  # KAFKA_PASSWORD: letters and digits only, it is spliced into a JAAS string.
+  # ponytail: one shared account and no ACLs, so any service can still write any topic, and
+  # ZooKeeper takes no password; per-service users + an authorizer if that matters.
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     restart: unless-stopped
@@ -161,7 +172,13 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
+      KAFKA_LISTENERS: CLIENT://0.0.0.0:29092,LOCAL://127.0.0.1:9092
+      KAFKA_ADVERTISED_LISTENERS: CLIENT://kafka:29092,LOCAL://127.0.0.1:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CLIENT:SASL_PLAINTEXT,LOCAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: LOCAL
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_NAME_CLIENT_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_NAME_CLIENT_PLAIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required user_app="${KAFKA_PASSWORD:?}";'
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
@@ -171,7 +188,7 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
-      test: [ "CMD", "kafka-topics", "--bootstrap-server", "kafka:29092", "--list" ]
+      test: [ "CMD", "kafka-topics", "--bootstrap-server", "127.0.0.1:9092", "--list" ]
       interval: 30s
       timeout: 10s
       retries: 5
