@@ -1,7 +1,9 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.userservice.dto.request.StoryAudienceScope;
 import com.tiktok.userservice.dto.response.FollowResponse;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
+import com.tiktok.userservice.dto.response.StoryAudienceResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.entity.FollowRequest;
 import com.tiktok.userservice.entity.UserFollow;
@@ -23,6 +25,7 @@ import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +37,9 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class FollowServiceImpl implements FollowService {
+
+    /** What {@link #storyAudience} returns without a {@code size}, and the most it will return. */
+    private static final int MAX_STORY_AUDIENCE_PAGE = 500;
 
     private final UserFollowRepository userFollowRepository;
     private final UserProfileRepository userProfileRepository;
@@ -130,6 +136,19 @@ public class FollowServiceImpl implements FollowService {
         return distinctIds.isEmpty()
                 ? List.of()
                 : userFollowRepository.findFollowingIdsAmong(followerId, distinctIds);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public StoryAudienceResponse storyAudience(Long ownerId, StoryAudienceScope scope, Long after, Integer size) {
+        int limit = size == null ? MAX_STORY_AUDIENCE_PAGE : Math.clamp(size, 1, MAX_STORY_AUDIENCE_PAGE);
+
+        List<Long> userIds = userFollowRepository.findStoryAudience(ownerId, scope == StoryAudienceScope.FRIENDS,
+                after == null ? 0L : after, PageRequest.ofSize(limit));
+
+        // A full page may be the last one, which the caller finds out from the empty page after it.
+        // Reading a row past the limit would save that call at the price of a second path to get wrong.
+        return new StoryAudienceResponse(userIds, userIds.size() == limit ? userIds.getLast() : null);
     }
 
     @Override

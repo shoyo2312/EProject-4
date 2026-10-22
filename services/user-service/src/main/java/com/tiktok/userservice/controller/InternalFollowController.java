@@ -1,7 +1,9 @@
 package com.tiktok.userservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
+import com.tiktok.userservice.dto.request.StoryAudienceScope;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
+import com.tiktok.userservice.dto.response.StoryAudienceResponse;
 import com.tiktok.userservice.service.FollowService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -58,5 +60,23 @@ public class InternalFollowController {
     public ApiResponse<List<Long>> followingAmong(@RequestParam Long followerId,
                                                   @RequestParam List<Long> ids) {
         return ApiResponse.success(followService.followingAmong(followerId, ids));
+    }
+
+    /**
+     * notification-service pages through this when a story goes live: FOLLOWERS for a PUBLIC
+     * story, FRIENDS for a FRIENDS one. An account nobody follows is an empty page, not a 404.
+     */
+    @Operation(summary = "Internal: who a new story is announced to",
+            description = "A page of userId's followers (FOLLOWERS) or of the followers userId follows "
+                    + "back (FRIENDS), ascending by id, leaving out blocks in either direction, closed "
+                    + "accounts and followers who muted userId. next is the last id when the page is "
+                    + "full - pass it as after for the following page - else null. size defaults to, "
+                    + "and is capped at, 500.")
+    @GetMapping("/api/v1/users/internal/story-audience")
+    public ApiResponse<StoryAudienceResponse> storyAudience(@RequestParam Long userId,
+                                                            @RequestParam StoryAudienceScope scope,
+                                                            @RequestParam(required = false) Long after,
+                                                            @RequestParam(required = false) Integer size) {
+        return ApiResponse.success(followService.storyAudience(userId, scope, after, size));
     }
 }

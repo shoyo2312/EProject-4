@@ -205,6 +205,8 @@ Lỗi: `CANNOT_MUTE_SELF` (400), `USER_PROFILE_NOT_FOUND` (404 — người bị
 
 > **Mute KHÔNG kiểm tra block, hoàn toàn độc lập với follow/block** (khác với `follow`, vốn bị chặn nếu có block). Có thể mute 1 người đang block mình (hoặc mình đang block họ) mà không lỗi — đây là thiết kế có chủ đích: (1) không dùng lỗi mute để dò xem ai đã block ai, (2) cho phép "hạ cấp" từ block xuống mute sau khi unblock. Flutter không nên giả định mute/block đồng bộ trạng thái với nhau — hiển thị UI 2 toggle độc lập.
 
+> **notification-service giờ là một nơi dùng mute: follower đã mute một tài khoản thì KHÔNG nhận thông báo story của tài khoản đó.** notification-service hỏi endpoint nội bộ `GET /api/v1/users/internal/story-audience?userId=&scope=FOLLOWERS|FRIENDS&after=&size=` (header `X-Internal-Token`, không phải JWT; gateway `denyAll` nên client không gọi được) và nhận `data` → `{ "userIds": [...], "next": ... }`: người theo dõi `userId` (`FOLLOWERS`, cho story PUBLIC) hoặc người theo dõi mà `userId` cũng theo dõi lại (`FRIENDS`, cho story FRIENDS), tăng dần theo id, đã loại block hai chiều, tài khoản đã đóng và người đã mute `userId`. `size` mặc định và tối đa 500; `next` là id cuối khi trang đầy — truyền làm `after` để lấy trang kế — còn trang không đầy thì `null` (trang cuối đúng bằng `size` thì trang kế rỗng). **Vòng story quanh avatar vẫn hiện** dù đã mute: mute chỉ tắt thông báo.
+
 ### 3.12 `DELETE /{userId}/mute`
 Bỏ mute. Trả `200 OK`, `data` rỗng/null.
 
