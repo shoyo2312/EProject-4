@@ -13,9 +13,10 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
- * A profile's stories and a single story are readable signed out — the service decides per story
- * what an anonymous viewer may see, which is PUBLIC stories of public accounts. The feed needs a
- * viewer, and {@code /stories/*} would otherwise match {@code /stories/feed}, so it is matched first.
+ * A profile's stories, a single story and the avatar rings are readable signed out — the service
+ * decides per story what an anonymous viewer may see, which is PUBLIC stories of public accounts.
+ * The feed needs a viewer, and {@code /stories/*} would otherwise match {@code /stories/feed}, so it
+ * is matched first. {@code /stories/*} covers the rings too; they are named so the intent shows.
  */
 @Configuration
 @EnableWebSecurity
@@ -32,7 +33,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/stories/feed").authenticated()
-                        .requestMatchers(HttpMethod.GET, "/api/v1/stories/users/*", "/api/v1/stories/*").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/stories/rings", "/api/v1/stories/users/*",
+                                "/api/v1/stories/*").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

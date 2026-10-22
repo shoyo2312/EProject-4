@@ -4,6 +4,7 @@ import com.tiktok.storyservice.dto.request.CreateStoryRequest;
 import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
+import com.tiktok.storyservice.dto.response.StoryRingResponse;
 import com.tiktok.storyservice.dto.response.StoryUploadUrlResponse;
 import com.tiktok.storyservice.dto.response.StoryViewerResponse;
 import com.tiktok.storyservice.entity.StoryVisibility;
@@ -23,6 +24,8 @@ public interface StoryService {
     List<StoryResponse> listByUser(Long requesterId, Long userId);
 
     List<StoryGroupResponse> feed(Long requesterId, List<Long> followedUserIds);
+
+    List<StoryRingResponse> rings(Long requesterId, List<Long> userIds);
 
     StoryResponse updateVisibility(Long requesterId, String storyId, StoryVisibility visibility);
 

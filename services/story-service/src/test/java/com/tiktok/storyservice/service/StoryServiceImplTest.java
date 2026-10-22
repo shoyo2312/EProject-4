@@ -4,6 +4,7 @@ import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
+import com.tiktok.storyservice.dto.response.StoryRingResponse;
 import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.entity.StoryStatus;
@@ -14,6 +15,7 @@ import com.tiktok.storyservice.exception.NotStoryOwnerException;
 import com.tiktok.storyservice.exception.StoryCaptionRejectedException;
 import com.tiktok.storyservice.exception.StoryNotFoundException;
 import com.tiktok.storyservice.exception.TooManyFollowedUsersException;
+import com.tiktok.storyservice.exception.TooManyRingUsersException;
 import com.tiktok.storyservice.exception.UploadNotFoundException;
 import com.tiktok.storyservice.mapper.StoryMapper;
 import com.tiktok.storyservice.repository.StoryRepository;
@@ -93,6 +95,10 @@ class StoryServiceImplTest {
 
     private static Story active(String id, Long userId) {
         return story(id, userId, StoryStatus.ACTIVE, StoryVisibility.PUBLIC, Instant.now().minus(1, ChronoUnit.HOURS));
+    }
+
+    private static StoryView view(String storyId, Long viewerId) {
+        return StoryView.builder().storyId(storyId).viewerId(viewerId).build();
     }
 
     // --- create -------------------------------------------------------------------------------
@@ -265,6 +271,100 @@ class StoryServiceImplTest {
 
         assertThatThrownBy(() -> storyService.feed(9L, ids)).isInstanceOf(TooManyFollowedUsersException.class);
         verifyNoInteractions(storyRepository);
+    }
+
+    // --- rings --------------------------------------------------------------------------------
+
+    @Test
+    void ringsMarkOwnRedOnlyWhileAStoryIsActive() {
+        Story pending = story("p", 100L, StoryStatus.PENDING_MODERATION, StoryVisibility.PUBLIC, Instant.now());
+        Story held = story("h", 100L, StoryStatus.HELD, StoryVisibility.PUBLIC, Instant.now());
+        when(storyRepository.findByUserIdAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(eq(100L), any()))
+                .thenReturn(List.of(pending))
+                .thenReturn(List.of(held, active("a", 100L)))
+                .thenReturn(List.of());
+
+        assertThat(storyService.rings(100L, List.of(100L))).containsExactly(new StoryRingResponse(100L, false));
+        assertThat(storyService.rings(100L, List.of(100L))).containsExactly(new StoryRingResponse(100L, true));
+        assertThat(storyService.rings(100L, List.of(100L))).isEmpty();
+        verifyNoInteractions(storyAudience, storyMedia);
+    }
+
+    @Test
+    void ringsOfOthersFollowWhatTheViewerHasSeen() {
+        when(storyRepository.findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
+                eq(List.of(7L)), eq(StoryStatus.ACTIVE), any())).thenReturn(List.of(active("s1", 7L), active("s2", 7L)));
+        when(storyAudience.resolve(eq(100L), any())).thenReturn(Map.of(7L, PUBLIC_ONLY));
+        when(storyViewRepository.findByViewerIdAndStoryIdIn(eq(100L), any()))
+                .thenReturn(List.of(view("s1", 100L)))
+                .thenReturn(List.of(view("s1", 100L), view("s2", 100L)));
+
+        assertThat(storyService.rings(100L, List.of(7L))).containsExactly(new StoryRingResponse(7L, true));
+        assertThat(storyService.rings(100L, List.of(7L))).containsExactly(new StoryRingResponse(7L, false));
+    }
+
+    @Test
+    void ringsLeaveOutOwnersTheViewerMayNotSee() {
+        when(storyRepository.findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
+                eq(List.of(7L, 8L)), eq(StoryStatus.ACTIVE), any())).thenReturn(List.of(active("s1", 7L), active("s2", 8L)));
+        when(storyAudience.resolve(eq(100L), any()))
+                .thenReturn(Map.of(7L, PUBLIC_ONLY, 8L, EnumSet.noneOf(StoryVisibility.class)));
+
+        assertThat(storyService.rings(100L, List.of(7L, 8L))).containsExactly(new StoryRingResponse(7L, true));
+        verifyNoInteractions(storyMedia);
+    }
+
+    @Test
+    void ringsForAGuestAreAllUnseen() {
+        when(storyRepository.findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
+                eq(List.of(7L)), eq(StoryStatus.ACTIVE), any())).thenReturn(List.of(active("s1", 7L)));
+        when(storyAudience.resolve(null, List.of(7L))).thenReturn(Map.of(7L, PUBLIC_ONLY));
+
+        assertThat(storyService.rings(null, List.of(7L))).containsExactly(new StoryRingResponse(7L, true));
+        verifyNoInteractions(storyViewRepository);
+    }
+
+    @Test
+    void ringsRejectMoreThan100Ids() {
+        List<Long> ids = LongStream.rangeClosed(1, 101).boxed().toList();
+
+        assertThatThrownBy(() -> storyService.rings(100L, ids)).isInstanceOf(TooManyRingUsersException.class);
+        verifyNoInteractions(storyRepository);
+    }
+
+    @Test
+    void ringsOfNobodyAskNothing() {
+        assertThat(storyService.rings(100L, null)).isEmpty();
+        assertThat(storyService.rings(100L, List.of())).isEmpty();
+        verifyNoInteractions(storyRepository);
+    }
+
+    /** What the viewer may not see cannot keep a ring red: it would promise a story that is not there. */
+    @Test
+    void ringsCountOnlyTheStoriesTheViewerMaySee() {
+        Story friendsOnly = story("s2", 7L, StoryStatus.ACTIVE, StoryVisibility.FRIENDS, Instant.now());
+        when(storyRepository.findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
+                eq(List.of(7L)), eq(StoryStatus.ACTIVE), any())).thenReturn(List.of(active("s1", 7L), friendsOnly));
+        when(storyAudience.resolve(eq(100L), any())).thenReturn(Map.of(7L, PUBLIC_ONLY));
+        when(storyViewRepository.findByViewerIdAndStoryIdIn(100L, List.of("s1"))).thenReturn(List.of(view("s1", 100L)));
+
+        assertThat(storyService.rings(100L, List.of(7L))).containsExactly(new StoryRingResponse(7L, false));
+    }
+
+    /**
+     * The own ring comes from its own query, so it must be slotted back where the caller put it; a
+     * repeated id and one with no story drop out.
+     */
+    @Test
+    void ringsComeBackInTheOrderAsked() {
+        when(storyRepository.findByUserIdAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(eq(100L), any()))
+                .thenReturn(List.of(active("o", 100L)));
+        when(storyRepository.findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
+                eq(List.of(8L, 7L, 9L)), eq(StoryStatus.ACTIVE), any())).thenReturn(List.of(active("s1", 7L), active("s2", 8L)));
+        when(storyAudience.resolve(eq(100L), any())).thenReturn(Map.of(7L, PUBLIC_ONLY, 8L, PUBLIC_ONLY));
+
+        assertThat(storyService.rings(100L, List.of(8L, 100L, 7L, 8L, 9L)))
+                .extracting(StoryRingResponse::userId).containsExactly(8L, 100L, 7L);
     }
 
     // --- views --------------------------------------------------------------------------------

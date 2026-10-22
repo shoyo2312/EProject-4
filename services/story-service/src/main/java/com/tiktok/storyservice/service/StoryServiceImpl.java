@@ -5,6 +5,7 @@ import com.tiktok.storyservice.dto.request.CreateStoryRequest;
 import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
+import com.tiktok.storyservice.dto.response.StoryRingResponse;
 import com.tiktok.storyservice.dto.response.StoryUploadUrlResponse;
 import com.tiktok.storyservice.dto.response.StoryViewerResponse;
 import com.tiktok.storyservice.entity.Story;
@@ -16,6 +17,7 @@ import com.tiktok.storyservice.exception.ForeignUploadException;
 import com.tiktok.storyservice.exception.NotStoryOwnerException;
 import com.tiktok.storyservice.exception.StoryNotFoundException;
 import com.tiktok.storyservice.exception.TooManyFollowedUsersException;
+import com.tiktok.storyservice.exception.TooManyRingUsersException;
 import com.tiktok.storyservice.exception.UploadNotFoundException;
 import com.tiktok.storyservice.mapper.StoryMapper;
 import com.tiktok.storyservice.repository.StoryRepository;
@@ -28,6 +30,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -48,6 +51,9 @@ public class StoryServiceImpl implements StoryService {
 
     /** video-service's MAX_FOLLOWED_USERS: the same follow list feeds both. */
     static final int MAX_FOLLOWED_USERS = 500;
+
+    /** user-service's MAX_BATCH_IDS: the cap its batch endpoints put on ids in one request. */
+    static final int MAX_RING_USERS = 100;
 
     private static final int DEFAULT_VIEWERS_PAGE = 20;
     private static final int MAX_VIEWERS_PAGE = 50;
@@ -151,6 +157,48 @@ public class StoryServiceImpl implements StoryService {
                                 Comparator.nullsLast(Comparator.reverseOrder())))
                 .forEach(groups::add);
         return groups;
+    }
+
+    /**
+     * Which of these accounts get a ring on their avatar, and whether it is still unseen: the
+     * tray's rules (see {@link #feed}) without the media, so no URL is signed. Accounts with
+     * nothing to show are absent; the rest come back in the order asked, duplicates ignored.
+     *
+     * <p>The requester's own ring is red only while a story is ACTIVE, as a story in review is
+     * visible to nobody else.
+     */
+    @Override
+    public List<StoryRingResponse> rings(Long requesterId, List<Long> userIds) {
+        List<Long> asked = userIds == null ? List.of() : userIds;
+        // Against the raw list, before the distinct below, like user-service's followingAmong:
+        // what the cap guards is the query string being parsed and bound.
+        if (asked.size() > MAX_RING_USERS) {
+            throw new TooManyRingUsersException(MAX_RING_USERS);
+        }
+        List<Long> ids = asked.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Instant now = Instant.now();
+        Map<Long, Boolean> unseenByOwner = new HashMap<>();
+
+        if (requesterId != null && ids.contains(requesterId)) {
+            List<Story> own = storyRepository.findByUserIdAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(requesterId, now);
+            if (!own.isEmpty()) {
+                unseenByOwner.put(requesterId, own.stream().anyMatch(story -> story.getStatus() == StoryStatus.ACTIVE));
+            }
+        }
+
+        List<Long> others = ids.stream().filter(id -> !id.equals(requesterId)).toList();
+        if (!others.isEmpty()) {
+            List<Story> visible = visibleOf(requesterId, storyRepository
+                    .findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(others, StoryStatus.ACTIVE, now));
+            Set<String> seen = seenAmong(requesterId, visible);
+            visible.forEach(story -> unseenByOwner.merge(story.getUserId(), !seen.contains(story.getId()), Boolean::logicalOr));
+        }
+
+        return ids.stream().filter(unseenByOwner::containsKey)
+                .map(id -> new StoryRingResponse(id, unseenByOwner.get(id))).toList();
     }
 
     @Override

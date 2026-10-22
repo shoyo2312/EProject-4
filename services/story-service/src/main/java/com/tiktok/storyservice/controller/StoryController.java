@@ -6,6 +6,7 @@ import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
 import com.tiktok.storyservice.dto.request.UpdateStoryVisibilityRequest;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
+import com.tiktok.storyservice.dto.response.StoryRingResponse;
 import com.tiktok.storyservice.dto.response.StoryUploadUrlResponse;
 import com.tiktok.storyservice.dto.response.StoryViewerResponse;
 import com.tiktok.storyservice.service.StoryService;
@@ -46,6 +47,13 @@ public class StoryController {
             @AuthenticationPrincipal Long currentUserId,
             @RequestParam(required = false) List<Long> followedUserIds) {
         return ApiResponse.success(storyService.feed(currentUserId, followedUserIds));
+    }
+
+    @GetMapping("/rings")
+    public ApiResponse<List<StoryRingResponse>> rings(
+            @AuthenticationPrincipal Long currentUserId,
+            @RequestParam(required = false) List<Long> userIds) {
+        return ApiResponse.success(storyService.rings(currentUserId, userIds));
     }
 
     @GetMapping("/users/{userId}")

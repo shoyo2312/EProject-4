@@ -5,9 +5,9 @@ story của người mình follow, xem ai đã xem story của mình. Thiết k�
 
 Base URL (qua gateway): `/api/v1/stories`. Mọi response bọc trong `ApiResponse<T>`. Không gọi thẳng `story-service:8086`.
 
-Quy tắc token: `GET /users/{userId}` và `GET /{storyId}` không cần token (người chưa đăng nhập chỉ
-thấy story PUBLIC của tài khoản công khai). Mọi endpoint khác cần access token; thiếu token thì
-service trả 403, gateway trả 401.
+Quy tắc token: `GET /users/{userId}`, `GET /{storyId}` và `GET /rings` không cần token (người chưa
+đăng nhập chỉ thấy story PUBLIC của tài khoản công khai). Mọi endpoint khác cần access token;
+thiếu token thì service trả 403, gateway trả 401.
 
 ## 1. Vòng đời một story
 
@@ -61,6 +61,7 @@ từ chối file lớn hơn.
 | POST | `/upload-url` | cần | `{contentType}` | `{uploadUrl, formFields, fileUrl, expiresInSeconds}` — giống `POST /videos/upload-url` |
 | POST | `/` | cần | `{mediaUrl: fileUrl, caption?: ≤300, visibility}` | `201` + `StoryResponse` (của chủ) |
 | GET | `/feed` | cần | `followedUserIds` (≤ 500, như Following feed của video) | `StoryGroupResponse[]` |
+| GET | `/rings` | không | `userIds` (≤ 100) | `StoryRingResponse[]` — chỉ những id có vòng, theo thứ tự gửi lên |
 | GET | `/users/{userId}` | không | — | `StoryResponse[]`, cũ trước |
 | GET | `/{storyId}` | không | — | `StoryResponse` |
 | PATCH | `/{storyId}/visibility` | chủ story | `{visibility}` | `StoryResponse` |
@@ -74,6 +75,13 @@ từ chối file lớn hơn.
 `hasUnseen=false`), sau đó các nhóm còn story chưa xem, rồi theo story mới nhất. Trong một nhóm, story
 xếp cũ trước — đúng thứ tự phát. Profile (avatar, tên) hydrate qua `GET /api/v1/users?ids=`.
 
+`StoryRingResponse`: `{userId, hasUnseen}` — vòng quanh một avatar, không kèm media (không ký URL).
+Id của người khác có mặt khi họ còn ít nhất một story `ACTIVE` mà người gọi được xem (§2);
+`hasUnseen` khi trong số đó còn story người gọi chưa mở, và luôn `true` với người chưa đăng nhập.
+Id của chính người gọi có mặt khi họ còn bất kỳ story nào chưa hết hạn, nhưng `hasUnseen` chỉ khi
+một trong số đó là `ACTIVE` — story đang chờ duyệt hay bị giữ thì vòng xám. Id không có vòng thì
+vắng mặt trong kết quả; id trùng chỉ tính một lần.
+
 ## 5. Mã lỗi
 
 | Code | HTTP | Khi nào |
@@ -83,6 +91,7 @@ xếp cũ trước — đúng thứ tự phát. Profile (avatar, tên) hydrate q
 | `FOREIGN_UPLOAD` | 403 | `mediaUrl` không phải upload của mình, hoặc đã dùng cho story khác |
 | `STORY_CAPTION_REJECTED` | 422 | caption chứa từ bị cấm — không lưu gì, sửa caption rồi đăng lại cùng file |
 | `TOO_MANY_FOLLOWED_USERS` | 400 | `followedUserIds` quá 500 |
+| `TOO_MANY_RING_USERS` | 400 | `userIds` quá 100 |
 | `STORY_NOT_FOUND` | 404 | không tồn tại, đã xoá, đã hết hạn, hoặc người gọi không được xem |
 | `NOT_STORY_OWNER` | 403 | sửa/xoá/xem người xem story của người khác |
 | `UPLOAD_URL_UNAVAILABLE` | 503 | MinIO không ký được URL |

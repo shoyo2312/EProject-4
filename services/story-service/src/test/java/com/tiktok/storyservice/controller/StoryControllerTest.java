@@ -70,6 +70,26 @@ class StoryControllerTest {
     }
 
     @Test
+    void anonymousMayReadRings() throws Exception {
+        when(storyService.rings(isNull(), any())).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/stories/rings").param("userIds", "1", "2")).andExpect(status().isOk());
+
+        verify(storyService).rings(null, List.of(1L, 2L));
+    }
+
+    @Test
+    void signedInViewerReadsRingsAsThemselves() throws Exception {
+        when(storyService.rings(any(), any())).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/stories/rings").param("userIds", "1", "2")
+                        .header("Authorization", bearer(9L)))
+                .andExpect(status().isOk());
+
+        verify(storyService).rings(9L, List.of(1L, 2L));
+    }
+
+    @Test
     void anonymousMayNotChangeVisibility() throws Exception {
         mockMvc.perform(patch("/api/v1/stories/s1/visibility").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"visibility\":\"PRIVATE\"}"))
