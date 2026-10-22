@@ -156,3 +156,7 @@ ssh -L 9090:<ip>:9090 <server>     # rồi mở http://localhost:9090; Alertmana
   Muốn chạy nhiều bản thì mỗi bản cần một node id riêng. Lần deploy đầu tiên có thông báo story (`StoryActivatedEvent`)
   còn phải dừng hết bản cũ trước khi chạy bản mới. Lý do: bản cũ không ghi `activatedAt`, nên story nó duyệt trong lúc
   hai bản chạy song song sẽ không bao giờ được báo cho follower.
+- **Thứ tự deploy: user-service trước story-service, hoặc cùng lúc**: story-service giờ hỏi
+  `GET /api/v1/users/internal/relationships`. user-service bản cũ trả 404, story-service fail-closed, nên story của mọi
+  chủ khác biến mất khỏi feed, vòng avatar và profile (`/api/v1/stories/feed`, `/rings`, `/users/{userId}`) cho tới khi
+  user-service bản mới chạy.

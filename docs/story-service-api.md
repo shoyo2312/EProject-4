@@ -28,7 +28,7 @@ ra mắt thì không bao giờ được thông báo.
 là id chủ story) vào inbox của người nhận và push tới thiết bị của họ, theo `visibility` **tại lúc gửi** chứ không phải
 lúc đăng: `PUBLIC` → mọi người theo dõi chủ story, `FRIENDS` → người theo dõi mà chủ story cũng theo dõi lại,
 `PRIVATE` → không ai. Không bao giờ gửi qua một lệnh block (cả hai chiều), cho người đã mute chủ story, hay cho một
-story không còn thông báo được (đã xoá, hết hạn, chưa `ACTIVE`, chủ story bị ban / đã đóng tài khoản): ngay trước khi
+story không còn thông báo được (đã xoá, hết hạn, không ở trạng thái `ACTIVE`, chủ story bị ban / đã đóng tài khoản): ngay trước khi
 gửi, notification-service hỏi lại endpoint nội bộ ở §6. Mỗi người nhận có tối đa một mục `STORY` cho mỗi chủ story
 trong 24h — chủ story đăng tiếp, event bị giao lại, hay lần gửi hỏng giữa chừng rồi được thử lại đều không thêm mục thứ hai.
 
@@ -87,7 +87,7 @@ xếp cũ trước — đúng thứ tự phát. Profile (avatar, tên) hydrate q
 `StoryRingResponse`: `{userId, hasUnseen}` — vòng quanh một avatar, không kèm media (không ký URL).
 Id của người khác có mặt khi họ còn ít nhất một story `ACTIVE` mà người gọi được xem (§2);
 `hasUnseen` khi trong số đó còn story người gọi chưa mở, và luôn `true` với người chưa đăng nhập.
-Id của chính người gọi có mặt khi họ còn bất kỳ story nào chưa hết hạn, nhưng `hasUnseen` chỉ khi
+Id của chính người gọi có mặt khi họ còn bất kỳ story nào chưa hết hạn, chưa xoá, nhưng `hasUnseen` chỉ khi
 một trong số đó là `ACTIVE` — story đang chờ duyệt hay bị giữ thì vòng xám. Id không có vòng thì
 vắng mặt trong kết quả; id trùng chỉ tính một lần.
 
@@ -117,8 +117,8 @@ Người gọi là notification-service, ngay trước khi báo cho người the
 `story.activation-events` chỉ mang `storyId` và `userId`, còn từ lúc event được phát story có thể đã bị xoá,
 hết hạn, đổi `visibility`, hoặc chủ story bị ban / đóng tài khoản.
 
-`404 STORY_NOT_FOUND` khi story không còn gì để thông báo: không tồn tại hoặc đã xoá, đã hết hạn, chưa
-`ACTIVE` (`PENDING_MODERATION`, `HELD`, `REJECTED`), hoặc chủ story đang bị ban / đã đóng tài khoản. Story
+`404 STORY_NOT_FOUND` khi story không còn gì để thông báo: không tồn tại hoặc đã xoá, đã hết hạn,
+không ở trạng thái `ACTIVE` (`PENDING_MODERATION`, `HELD`, `REJECTED`), hoặc chủ story đang bị ban / đã đóng tài khoản. Story
 `PRIVATE` vẫn trả `200` với `visibility: "PRIVATE"`; có báo cho ai hay không là việc của người gọi.
 
 Chỉ nhận header `X-Internal-Token` (= `INTERNAL_API_TOKEN`, cùng giá trị ở mọi service). Không có token, hoặc

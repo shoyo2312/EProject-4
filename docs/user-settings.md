@@ -266,8 +266,9 @@ page in at most four queries, however many ids it carries — none of them per i
 
 `viewerId` is optional: without it the viewer is anonymous, and a guest reads stories too. Same
 prefix, same guard as 3.1 — denied at the gateway, internal token at user-service — so there is
-nothing to add to either `SecurityConfig`. `/internal/blocks` and `/internal/friendship` stay: chat-,
-interaction- and video-service still call them.
+nothing to add to either `SecurityConfig`. `/internal/blocks` and `/internal/friendship` stay:
+`/internal/blocks` is called by chat-, interaction-, notification- and video-service, `/internal/friendship`
+by chat- and interaction-service.
 
 `200 OK`, `data` → one entry per distinct non-null id, in no promised order:
 
