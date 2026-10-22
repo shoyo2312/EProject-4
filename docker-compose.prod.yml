@@ -209,7 +209,9 @@ services:
       timeout: 5s
       retries: 5
 
-  # The bucket and its lifecycle: scripts/minio/init.sh, the same script as docker-compose.yml.
+  # The bucket, its lifecycle and one MinIO account per service, each reaching only its own
+  # prefixes: scripts/minio/init.sh and scripts/minio/policies/. The root account above is left to
+  # this container; no service holds it. Secrets of at least 8 characters.
   minio-init:
     build:
       context: ./scripts/minio
@@ -224,6 +226,10 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+      MINIO_VIDEO_SECRET_KEY: ${MINIO_VIDEO_SECRET_KEY:?}
+      MINIO_STORY_SECRET_KEY: ${MINIO_STORY_SECRET_KEY:?}
+      MINIO_USER_SECRET_KEY: ${MINIO_USER_SECRET_KEY:?}
+      MINIO_WORKER_SECRET_KEY: ${MINIO_WORKER_SECRET_KEY:?}
     restart: "no"
 
   # Security on: otherwise any container on this network can rewrite the index, or delete it — and
@@ -382,6 +388,7 @@ services:
     depends_on:
       postgres-user: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
     environment:
       SNOWFLAKE_NODE_ID: 3
       <<: *java-env
@@ -391,8 +398,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      # Its own account (avatars/, exports/), made by minio-init.
+      MINIO_ACCESS_KEY: user-service
+      MINIO_SECRET_KEY: ${MINIO_USER_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
       MEDIA_ALLOWED_HOSTS: ${MEDIA_HOST:?}
       # "Download your data" reads these through their internal prefix.
@@ -409,6 +417,7 @@ services:
       mongodb: { condition: service_healthy }
       app-redis: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
     environment:
       SNOWFLAKE_NODE_ID: 4
       <<: *java-env
@@ -422,8 +431,9 @@ services:
       MODERATION_SERVICE_URL: http://moderation-service:8099
       ADMIN_SERVICE_URL: http://admin-service:8096
       MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      # Its own account (raw/, read on quarantine/), made by minio-init.
+      MINIO_ACCESS_KEY: video-service
+      MINIO_SECRET_KEY: ${MINIO_VIDEO_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
       MEDIA_ALLOWED_HOSTS: ${MEDIA_HOST:?}
       # Where browsers POST raw uploads. Unset, the same public address as everything else. Set
@@ -441,6 +451,7 @@ services:
     depends_on:
       mongodb: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
     environment:
       SNOWFLAKE_NODE_ID: 13
       <<: *java-env
@@ -454,8 +465,9 @@ services:
       # The public address, as for video-service: story media is read through presigned GETs, and
       # SigV4 signs the host the browser will ask.
       MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      # Its own account (stories/), made by minio-init.
+      MINIO_ACCESS_KEY: story-service
+      MINIO_SECRET_KEY: ${MINIO_STORY_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
       MEDIA_UPLOAD_URL: ${MEDIA_UPLOAD_URL:-${MEDIA_PUBLIC_URL:?}}
 
@@ -467,7 +479,7 @@ services:
     mem_limit: 2g
     depends_on:
       kafka: { condition: service_healthy }
-      minio: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
     environment:
       <<: *java-env
       SNOWFLAKE_NODE_ID: 5
@@ -475,8 +487,10 @@ services:
       MODERATION_SERVICE_URL: http://moderation-service:8099
       MINIO_ENDPOINT: http://minio:9000
       MEDIA_PUBLIC_URL: ${MEDIA_PUBLIC_URL:?}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      # Its own account: the whole bucket, nothing else on the server. ffmpeg runs here on every
+      # upload, so this is the account a malicious file would get.
+      MINIO_ACCESS_KEY: media-worker
+      MINIO_SECRET_KEY: ${MINIO_WORKER_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
       VIDEO_MAX_BYTES: ${VIDEO_MAX_BYTES:-94371840}
 

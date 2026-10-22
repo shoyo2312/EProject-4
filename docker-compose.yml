@@ -379,8 +379,10 @@ services:
     networks:
       - tiktok-network
 
-  # The media bucket and its lifecycle rules: scripts/minio/init.sh says why each exists. The same
-  # script as docker-compose.prod.yml, so the lifecycle is written down once.
+  # The media bucket, its lifecycle rules and, in production, one MinIO account per service:
+  # scripts/minio/init.sh says why each exists. The same script as docker-compose.prod.yml, so the
+  # lifecycle is written down once. No per-service secrets here, so local services keep the root
+  # account they are configured with.
   minio-init:
     build:
       context: ./scripts/minio
