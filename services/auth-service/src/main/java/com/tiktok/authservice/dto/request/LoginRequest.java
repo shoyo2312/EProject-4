@@ -1,8 +1,11 @@
 package com.tiktok.authservice.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 /**
+ * @param usernameOrEmail bounded like every email field: an unknown one becomes part of a Redis key
+ *                        (LoginRateLimiter), and unbounded ones could fill the shared Redis.
  * @param turnstileToken required only when the resolved account is an ADMIN — admin-console login
  *                       is gated on Cloudflare Turnstile. Ignored for everyone else, so the user
  *                       app keeps sending just the two credentials.
@@ -13,7 +16,7 @@ import jakarta.validation.constraints.NotBlank;
  *                       credential, so nothing has to be carried between the two requests.
  */
 public record LoginRequest(
-        @NotBlank String usernameOrEmail,
+        @NotBlank @Size(max = 255) String usernameOrEmail,
         @NotBlank String password,
         String turnstileToken,
         String deviceToken,
