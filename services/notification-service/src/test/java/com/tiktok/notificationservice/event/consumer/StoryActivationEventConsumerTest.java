@@ -12,13 +12,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.web.client.ResourceAccessException;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.net.ConnectException;
 import java.util.List;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -27,7 +31,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({MockitoExtension.class, OutputCaptureExtension.class})
 class StoryActivationEventConsumerTest {
 
     private static final StoryActivatedEvent EVENT = StoryActivatedEvent.of("s-1", 7L);
@@ -81,6 +85,21 @@ class StoryActivationEventConsumerTest {
         verifyNoMoreInteractions(notificationService);
     }
 
+    /** The event names an owner too, but the re-check is the current word on whose story this is. */
+    @Test
+    void theOwnerIsTheOneTheRecheckNames() {
+        claimed(); // the event is for owner 7
+        when(storyAnnouncementClient.announcement("s-1")).thenReturn(Optional.of(new Announcement(8L, "PUBLIC")));
+        when(storyAudienceClient.page(8L, "FOLLOWERS", null)).thenReturn(new Page(List.of(11L), null));
+
+        deliver();
+
+        verify(storyAudienceClient).page(8L, "FOLLOWERS", null);
+        verify(notificationService).create(
+                11L, 8L, NotificationType.STORY, "New story", "Someone posted a new story.", "8");
+        verifyNoMoreInteractions(notificationService, storyAudienceClient);
+    }
+
     @Test
     void friendsStoryAsksForFriends() {
         claimed();
@@ -96,24 +115,27 @@ class StoryActivationEventConsumerTest {
 
     /** The event does not carry visibility: the owner may have narrowed the story since it was published. */
     @Test
-    void privateStoryNotifiesNobody() {
+    void privateStoryNotifiesNobody(CapturedOutput output) {
         claimed();
         announcedAs("PRIVATE");
 
         deliver();
 
         verifyNoInteractions(storyAudienceClient, notificationService);
+        // What someone reads when asking why nobody heard about a story they posted.
+        assertThat(output.getOut() + output.getErr()).containsOnlyOnce("s-1").contains("PRIVATE");
     }
 
     /** Deleted, expired, never went live, or its owner hidden since the event was published. */
     @Test
-    void storyThatIsGoneNotifiesNobody() {
+    void storyThatIsGoneNotifiesNobody(CapturedOutput output) {
         claimed();
         when(storyAnnouncementClient.announcement("s-1")).thenReturn(Optional.empty());
 
         deliver();
 
         verifyNoInteractions(storyAudienceClient, notificationService);
+        assertThat(output.getOut() + output.getErr()).containsOnlyOnce("s-1");
     }
 
     /** story-service publishes the same story twice when an ack times out; the eventId is the same. */
@@ -133,7 +155,9 @@ class StoryActivationEventConsumerTest {
      */
     @Test
     void failureOnALaterPageRethrowsAndReleasesTheClaim() {
-        ResourceAccessException outage = new ResourceAccessException("user-service is down");
+        ResourceAccessException outage = new ResourceAccessException(
+                "I/O error on GET request for \"http://user-service/api/v1/users/internal/story-audience\"",
+                new ConnectException("Connection refused"));
         claimed();
         announcedAs("PUBLIC");
         when(storyAudienceClient.page(7L, "FOLLOWERS", null)).thenReturn(new Page(List.of(11L, 12L), 12L));

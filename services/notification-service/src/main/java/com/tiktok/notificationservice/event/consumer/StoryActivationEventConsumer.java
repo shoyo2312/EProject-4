@@ -8,6 +8,7 @@ import com.tiktok.notificationservice.client.StoryAudienceClient.Page;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.service.NotificationService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
@@ -26,6 +27,7 @@ import tools.jackson.databind.ObjectMapper;
  * {@link NotificationService#create} collapses — one entry per follower per owner per day — so a
  * fan-out that failed halfway never doubles.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class StoryActivationEventConsumer {
@@ -41,23 +43,28 @@ public class StoryActivationEventConsumer {
         StoryActivatedEvent event = objectMapper.readValue(payload, StoryActivatedEvent.class);
 
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
-                storyAnnouncementClient.announcement(event.storyId()).ifPresent(this::announce));
+                storyAnnouncementClient.announcement(event.storyId()).ifPresentOrElse(
+                        story -> announce(event.storyId(), story),
+                        () -> log.info("Story {} is gone (deleted, expired, not live or its owner hidden): nobody is told",
+                                event.storyId())));
     }
 
     /**
      * No block check per recipient: the audience endpoint already leaves out blocks in either
      * direction, closed accounts and followers who muted the owner.
      *
-     * <p>ponytail: one lookup + insert + {@code notification.created} + push per recipient, in
-     * sequence. Fine for thousands of followers; a bulk insert is the upgrade.
+     * <p>ponytail: recipients go one by one and FCM sends synchronously per device, so a poll's fan-outs must fit in max.poll.interval.ms
+     * (5 min); a page slower than downstream.timeout-millis reads as an outage and stalls the partition until DOWNSTREAM_TIMEOUT_MILLIS is
+     * raised or UserFollowRepository's (following_id, follower_id) index exists; a bulk insert is the upgrade for the fan-out itself.
      */
-    private void announce(Announcement story) {
+    private void announce(String storyId, Announcement story) {
         String scope = switch (story.visibility()) {
             case "PUBLIC" -> "FOLLOWERS";
             case "FRIENDS" -> "FRIENDS";
             default -> null; // PRIVATE: nobody but the owner may watch it
         };
         if (scope == null) {
+            log.info("Story {} is {} now: nobody is told", storyId, story.visibility());
             return;
         }
 

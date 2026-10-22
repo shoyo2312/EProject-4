@@ -16,13 +16,19 @@ import java.util.Optional;
  * story's state, and by the time the fan-out runs the story may be deleted, expired, narrowed to
  * PRIVATE, or its owner banned.
  *
- * <p>Not {@link BlockClient}'s fail-open: an empty answer ends the event as handled, so only a 404
- * may produce one. Anything else — story-service down, a timeout, a 5xx — propagates, the claim is
- * released and kafka-lib redelivers until the story is confirmed.
+ * <p>Not {@link BlockClient}'s fail-open: an empty answer ends the event as handled, so only
+ * story-service's own "not found" may produce one — a 404 carrying its {@code STORY_NOT_FOUND}
+ * code. A 404 from anywhere else (a {@code STORY_SERVICE_URI} that lands on another service
+ * answers {@code NOT_FOUND}) says nothing about the story and fails like everything else. When
+ * story-service gives no answer at all (refused, unreachable, timed out) kafka-lib treats it as an
+ * outage and retries until it does; a 5xx, or a 404 without that code, gets three retries and then
+ * the DLT.
  */
 @Component
 @RequiredArgsConstructor
 public class StoryAnnouncementClient {
+
+    private static final String STORY_NOT_FOUND = "STORY_NOT_FOUND";
 
     private final RestClient storyServiceRestClient;
 
@@ -34,7 +40,7 @@ public class StoryAnnouncementClient {
     public record Announcement(Long userId, String visibility) {
     }
 
-    /** Empty when story-service says the story is gone (404). */
+    /** Empty when story-service says the story is gone (404 STORY_NOT_FOUND). */
     public Optional<Announcement> announcement(String storyId) {
         ApiResponse<Announcement> response;
         try {
@@ -43,12 +49,25 @@ public class StoryAnnouncementClient {
                     .retrieve()
                     .body(new ParameterizedTypeReference<>() {
                     });
-        } catch (HttpClientErrorException.NotFound gone) {
-            return Optional.empty();
+        } catch (HttpClientErrorException.NotFound notFound) {
+            if (isStoryNotFound(notFound)) {
+                return Optional.empty();
+            }
+            throw notFound;
         }
         if (response == null || response.data() == null) {
             throw new IllegalStateException("story-service answered storyId=" + storyId + " without an announcement");
         }
         return Optional.of(response.data());
+    }
+
+    /** A body that cannot be read is not story-service's own answer. */
+    private static boolean isStoryNotFound(HttpClientErrorException notFound) {
+        try {
+            ApiResponse<?> body = notFound.getResponseBodyAs(ApiResponse.class);
+            return body != null && STORY_NOT_FOUND.equals(body.code());
+        } catch (RuntimeException unreadable) {
+            return false;
+        }
     }
 }
