@@ -52,7 +52,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.testcontainers.containers.GenericContainer;
@@ -61,11 +63,14 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.sql.Timestamp;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -139,6 +144,9 @@ class AuthServiceImplTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @Autowired
     private AuthSecurityEventRepository securityEventRepository;
@@ -1071,6 +1079,105 @@ class AuthServiceImplTest {
         assertThat(refreshTokenRepository.findAll().stream().filter(RefreshToken::isActive))
                 .as("the successor and the untouched device — not two successors")
                 .hasSize(2);
+    }
+
+    /**
+     * A password reset that commits after /refresh has read the row. Everything refresh checked
+     * was true when it read it, so only the claim can notice — and it looked at rotated_at alone,
+     * rotated the revoked token anyway and handed out a chain that outlived the reset.
+     *
+     * <p>The reset holds its row lock until the refresh is parked on it, so the interleaving is
+     * forced rather than hoped for.
+     */
+    @Test
+    void refresh_racingAPasswordReset_doesNotMintAChainThatOutlivesIt() throws Exception {
+        UserResponse user = registerVerified();
+        TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Future<?> reset = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+                refreshTokenRepository.revokeAllByUserId(user.id(), Instant.now());
+                locked.countDown();
+                hold(release);
+            }));
+            assertThat(locked.await(30, TimeUnit.SECONDS)).isTrue();
+
+            Future<TokenResponse> refresh = pool.submit(
+                    () -> authService.refresh(new RefreshTokenRequest(session.refreshToken())));
+            awaitBlockedOnRowLock();
+            release.countDown();
+            reset.get(30, TimeUnit.SECONDS);
+
+            assertThatThrownBy(() -> refresh.get(30, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(InvalidRefreshTokenException.class);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(refreshTokenRepository.findAll().stream().filter(RefreshToken::isActive))
+                .as("a session minted from a token the reset had already revoked")
+                .isEmpty();
+    }
+
+    /**
+     * A logout that read the row before a concurrent refresh committed its rotation. Saving the
+     * entity wrote every column back, rotated_at included, so the rotation it never saw was erased
+     * — and with it the only trace that lets a later replay of this token be caught.
+     */
+    @Test
+    void logout_racingARefresh_keepsTheRotationOnRecord() throws Exception {
+        registerVerified();
+        TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
+        String tokenHash = HashUtils.sha256(session.refreshToken());
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Future<?> rotation = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+                refreshTokenRepository.claimForRotation(tokenHash, Instant.now());
+                locked.countDown();
+                hold(release);
+            }));
+            assertThat(locked.await(30, TimeUnit.SECONDS)).isTrue();
+
+            Future<?> logout = pool.submit(() -> authService.logout(session.refreshToken(), null));
+            awaitBlockedOnRowLock();
+            release.countDown();
+            rotation.get(30, TimeUnit.SECONDS);
+            logout.get(30, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT rotated_at FROM refresh_tokens WHERE token_hash = ?", Timestamp.class, tokenHash))
+                .as("without rotated_at a replay of this token reads as a stale logout, not a theft")
+                .isNotNull();
+    }
+
+    private static void hold(CountDownLatch release) {
+        try {
+            assertThat(release.await(30, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Waits until some statement is parked on a lock another transaction holds. */
+    private void awaitBlockedOnRowLock() throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (jdbcTemplate.queryForObject("SELECT count(*) FROM pg_stat_activity "
+                + "WHERE wait_event_type = 'Lock' AND datname = current_database()", Integer.class) == 0) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("the racing request never reached the row lock");
+            }
+            Thread.sleep(20);
+        }
     }
 
     /**
