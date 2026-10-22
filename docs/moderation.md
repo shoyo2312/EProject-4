@@ -276,6 +276,13 @@ letters, and the second of each pair is an everyday word. Matching is by whole s
 look-alike letters, leetspeak, long repeats and spelled-out letters (`đ.m`) are undone. The file's
 header has the rest; read it before adding a term, and run `ShippedListRegressionTest` after.
 
+`TextNormalizer.prepare` reads look-alikes on the **decomposed** text and composes afterwards. The
+other order dropped the marks a Cyrillic `о` carried as loose — it has no composed form with a
+circumflex — so `lồn` written with one read `lon` and passed every accented term, severity 3
+included. Zero-width and other format characters (Cf) are dropped in the same pass; left in, they
+split a syllable in two. A change to the normalizer changes what matches, so it bumps the list's
+`version:` like a change to the list does.
+
 In code rather than the list, each severity 2: links (`SPAM`; in a caption, links to YouTube,
 Facebook, Instagram, TikTok, X and Threads pass — `moderation.text.caption-link-allowlist`),
 Vietnamese mobile numbers and e-mail addresses (`PERSONAL_INFO`), betting brands like `fb88` or
