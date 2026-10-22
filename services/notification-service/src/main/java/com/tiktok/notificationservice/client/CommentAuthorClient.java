@@ -18,13 +18,21 @@ import org.springframework.web.client.RestClient;
  * <p>Unlike {@link VideoOwnerClient}, an unreachable interaction-service is thrown rather than
  * swallowed. That client sits on every like and comment, where dropping one notice beats stalling
  * the partition; a warning is rare, and this notice is the only way the decision reaches the
- * person it is about, so it is worth kafka-lib's retries and, past them, the dead-letter topic. A
- * comment interaction-service never stored is a 404 no retry can fix, and answers null.
+ * person it is about, so it is worth kafka-lib's retries and, past them, the dead-letter topic.
+ *
+ * <p>Only interaction-service's own "not found" answers null: a 404 carrying its {@code
+ * COMMENT_NOT_FOUND} code, for a comment it never stored, which no retry can fix. A 404 from
+ * anywhere else (an {@code INTERACTION_SERVICE_URI} that lands on another service answers {@code
+ * NOT_FOUND}, as does a path that moved in a deploy), or one whose body cannot be read, says
+ * nothing about the comment and is thrown like a 5xx: three retries and then the DLT, instead of
+ * the warning vanishing.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class CommentAuthorClient {
+
+    private static final String COMMENT_NOT_FOUND = "COMMENT_NOT_FOUND";
 
     private final RestClient interactionServiceRestClient;
 
@@ -51,9 +59,12 @@ public class CommentAuthorClient {
                     .body(new ParameterizedTypeReference<ApiResponse<CommentAuthorView>>() {
                     });
             return response == null || response.data() == null ? null : response.data().userId();
-        } catch (HttpClientErrorException.NotFound e) {
-            log.warn("interaction-service has no comment {}, dropping the notification", target);
-            return null;
+        } catch (HttpClientErrorException.NotFound notFound) {
+            if (ApiErrors.carriesCode(notFound, COMMENT_NOT_FOUND)) {
+                log.warn("interaction-service has no comment {}, dropping the notification", target);
+                return null;
+            }
+            throw notFound;
         }
     }
 

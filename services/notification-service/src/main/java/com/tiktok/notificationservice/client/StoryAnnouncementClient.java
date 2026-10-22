@@ -50,7 +50,7 @@ public class StoryAnnouncementClient {
                     .body(new ParameterizedTypeReference<>() {
                     });
         } catch (HttpClientErrorException.NotFound notFound) {
-            if (isStoryNotFound(notFound)) {
+            if (ApiErrors.carriesCode(notFound, STORY_NOT_FOUND)) {
                 return Optional.empty();
             }
             throw notFound;
@@ -59,15 +59,5 @@ public class StoryAnnouncementClient {
             throw new IllegalStateException("story-service answered storyId=" + storyId + " without an announcement");
         }
         return Optional.of(response.data());
-    }
-
-    /** A body that cannot be read is not story-service's own answer. */
-    private static boolean isStoryNotFound(HttpClientErrorException notFound) {
-        try {
-            ApiResponse<?> body = notFound.getResponseBodyAs(ApiResponse.class);
-            return body != null && STORY_NOT_FOUND.equals(body.code());
-        } catch (RuntimeException unreadable) {
-            return false;
-        }
     }
 }
