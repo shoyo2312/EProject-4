@@ -91,6 +91,12 @@
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
     "dismissed" : 3
   },
+  "StoryActivatedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "storyId" : "storyId-3",
+    "userId" : 1004
+  },
   "StoryCreatedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
