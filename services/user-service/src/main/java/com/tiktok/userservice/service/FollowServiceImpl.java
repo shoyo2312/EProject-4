@@ -3,6 +3,7 @@ package com.tiktok.userservice.service;
 import com.tiktok.userservice.dto.request.StoryAudienceScope;
 import com.tiktok.userservice.dto.response.FollowResponse;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
+import com.tiktok.userservice.dto.response.RelationshipResponse;
 import com.tiktok.userservice.dto.response.StoryAudienceResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.entity.FollowRequest;
@@ -33,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -136,6 +138,39 @@ public class FollowServiceImpl implements FollowService {
         return distinctIds.isEmpty()
                 ? List.of()
                 : userFollowRepository.findFollowingIdsAmong(followerId, distinctIds);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<RelationshipResponse> relationships(Long viewerId, List<Long> userIds) {
+        // Against the raw list, before the distinct below, as followingAmong does.
+        if (userIds.size() > UserProfileService.MAX_BATCH_IDS) {
+            throw new TooManyProfileIdsException(UserProfileService.MAX_BATCH_IDS);
+        }
+
+        List<Long> ids = userIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        // Edge-only, like friendship(): each fact is read off its own rows, none of them gated on
+        // another. The viewer is left out of the edge queries so no row can make them their own
+        // blocker or follower, and a guest has no edges to ask about.
+        List<Long> others = viewerId == null ? List.of() : ids.stream().filter(id -> !id.equals(viewerId)).toList();
+        Set<Long> blocked = others.isEmpty() ? Set.of()
+                : Set.copyOf(userBlockRepository.findBlockedIdsAmong(viewerId, others));
+        Set<Long> following = others.isEmpty() ? Set.of()
+                : Set.copyOf(userFollowRepository.findFollowingIdsAmong(viewerId, others));
+        // Only someone the viewer follows can be a friend, so only they are asked about.
+        Set<Long> friends = following.isEmpty() ? Set.of()
+                : Set.copyOf(userFollowRepository.findFollowerIdsAmong(viewerId, following));
+        // The viewer's own id included: whether an account is private is not about who is asking.
+        Set<Long> privateAccounts = Set.copyOf(userProfileRepository.findPrivateUserIdsAmong(ids));
+
+        return ids.stream()
+                .map(id -> new RelationshipResponse(id, blocked.contains(id), privateAccounts.contains(id),
+                        following.contains(id), friends.contains(id)))
+                .toList();
     }
 
     @Override

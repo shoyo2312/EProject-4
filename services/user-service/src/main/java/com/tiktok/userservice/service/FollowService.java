@@ -3,6 +3,7 @@ package com.tiktok.userservice.service;
 import com.tiktok.userservice.dto.request.StoryAudienceScope;
 import com.tiktok.userservice.dto.response.FollowResponse;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
+import com.tiktok.userservice.dto.response.RelationshipResponse;
 import com.tiktok.userservice.dto.response.StoryAudienceResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import org.springframework.data.domain.Page;
@@ -23,6 +24,14 @@ public interface FollowService {
 
     /** The subset of {@code userIds} that {@code followerId} follows. At most 100 ids. */
     List<Long> followingAmong(Long followerId, List<Long> userIds);
+
+    /**
+     * How {@code viewerId} relates to each of {@code userIds}, for story-service's audience check on
+     * a whole page of owners: one entry per distinct non-null id, in at most four queries however many
+     * ids there are. {@code viewerId} is null for an anonymous viewer. More than 100 ids, counted before
+     * the distinct, is a {@link com.tiktok.userservice.exception.TooManyProfileIdsException}.
+     */
+    List<RelationshipResponse> relationships(Long viewerId, List<Long> userIds);
 
     /**
      * One page of who a new story of {@code ownerId} is announced to, for notification-service: the

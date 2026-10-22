@@ -95,6 +95,17 @@ public interface UserFollowRepository extends JpaRepository<UserFollow, Long> {
     List<Long> findFollowingIdsAmong(@Param("followerId") Long followerId,
                                      @Param("userIds") Collection<Long> userIds);
 
+    /**
+     * {@link #findFollowingIdsAmong} from the other side of the edge: the subset of {@code userIds}
+     * that follow {@code followingId}. With the viewer as {@code followingId} and the ids the viewer
+     * follows, what comes back is the mutual followers. Served by
+     * {@code uq_user_follows_follower_following}, one probe per id.
+     */
+    @Query("select f.followerId from UserFollow f where f.followingId = :followingId "
+            + "and f.followerId in :userIds and f.deletedAt is null")
+    List<Long> findFollowerIdsAmong(@Param("followingId") Long followingId,
+                                    @Param("userIds") Collection<Long> userIds);
+
     /** Everyone {@code userId} follows — for unwinding an account that is being deleted. */
     @Query("select f.followingId from UserFollow f where f.followerId = :userId and f.deletedAt is null")
     List<Long> findAllFollowingIds(@Param("userId") Long userId);

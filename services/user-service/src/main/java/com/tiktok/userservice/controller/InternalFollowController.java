@@ -3,6 +3,7 @@ package com.tiktok.userservice.controller;
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.userservice.dto.request.StoryAudienceScope;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
+import com.tiktok.userservice.dto.response.RelationshipResponse;
 import com.tiktok.userservice.dto.response.StoryAudienceResponse;
 import com.tiktok.userservice.service.FollowService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -60,6 +61,22 @@ public class InternalFollowController {
     public ApiResponse<List<Long>> followingAmong(@RequestParam Long followerId,
                                                   @RequestParam List<Long> ids) {
         return ApiResponse.success(followService.followingAmong(followerId, ids));
+    }
+
+    /**
+     * story-service asks this once per page of story owners instead of a block check and a
+     * friendship check for each of them. The viewer is optional for the same reason as in
+     * {@link #friendship}: a guest reads stories too.
+     */
+    @Operation(summary = "Internal: how a viewer relates to each of these accounts",
+            description = "One entry per distinct id: blocked (either direction), privateAccount, following "
+                    + "(the viewer follows it) and friends (mutual). Edge-only, like friendship: an id with "
+                    + "no account is all false. Without viewerId the viewer is anonymous, and only "
+                    + "privateAccount can be true. More than 100 ids is 400 TOO_MANY_PROFILE_IDS.")
+    @GetMapping("/api/v1/users/internal/relationships")
+    public ApiResponse<List<RelationshipResponse>> relationships(@RequestParam(required = false) Long viewerId,
+                                                                 @RequestParam List<Long> userIds) {
+        return ApiResponse.success(followService.relationships(viewerId, userIds));
     }
 
     /**

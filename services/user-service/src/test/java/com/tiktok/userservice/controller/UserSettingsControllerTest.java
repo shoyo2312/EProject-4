@@ -7,9 +7,11 @@ import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.userservice.config.SecurityConfig;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
+import com.tiktok.userservice.dto.response.RelationshipResponse;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
 import com.tiktok.userservice.entity.SettingsAudience;
+import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.service.FollowService;
 import com.tiktok.userservice.service.UserSettingsService;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +28,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -291,5 +295,67 @@ class UserSettingsControllerTest {
                         .param("ids", "7", "8"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0]").value(8));
+    }
+
+    /** story-service asks for a page of owners at once, with the viewer's id and the ids as a list. */
+    @Test
+    void internalRelationships_answerWithTheWrappedListAndNoUserToken() throws Exception {
+        when(followService.relationships(1L, List.of(2L, 3L))).thenReturn(List.of(
+                new RelationshipResponse(2L, false, true, true, false),
+                new RelationshipResponse(3L, true, false, false, false)));
+
+        mockMvc.perform(get("/api/v1/users/internal/relationships")
+                        .header(InternalApiToken.HEADER, internalApiToken.value())
+                        .param("viewerId", "1")
+                        .param("userIds", "2,3"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0].userId").value(2))
+                .andExpect(jsonPath("$.data[0].blocked").value(false))
+                .andExpect(jsonPath("$.data[0].privateAccount").value(true))
+                .andExpect(jsonPath("$.data[0].following").value(true))
+                .andExpect(jsonPath("$.data[0].friends").value(false))
+                .andExpect(jsonPath("$.data[1].userId").value(3))
+                .andExpect(jsonPath("$.data[1].blocked").value(true));
+    }
+
+    /** A guest reads stories too, so the viewer is optional; whether an account is private still comes back. */
+    @Test
+    void internalRelationships_withoutAViewer_isTheAnonymousQuestion() throws Exception {
+        when(followService.relationships(null, List.of(2L))).thenReturn(List.of(
+                new RelationshipResponse(2L, false, true, false, false)));
+
+        mockMvc.perform(get("/api/v1/users/internal/relationships")
+                        .header(InternalApiToken.HEADER, internalApiToken.value())
+                        .param("userIds", "2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].privateAccount").value(true));
+    }
+
+    /** Who blocked whom is not for a user to ask: their own JWT does not stand in for the token. */
+    @Test
+    void internalRelationships_refuseACallerWithoutTheInternalToken() throws Exception {
+        mockMvc.perform(get("/api/v1/users/internal/relationships")
+                        .param("viewerId", "1").param("userIds", "2"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/users/internal/relationships")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .param("viewerId", "1").param("userIds", "2"))
+                .andExpect(status().isForbidden());
+
+        verify(followService, never()).relationships(any(), any());
+    }
+
+    @Test
+    void internalRelationships_moreThanAHundredIds_is400() throws Exception {
+        when(followService.relationships(any(), any())).thenThrow(new TooManyProfileIdsException(100));
+        String ids = IntStream.rangeClosed(1, 101).mapToObj(String::valueOf).collect(Collectors.joining(","));
+
+        mockMvc.perform(get("/api/v1/users/internal/relationships")
+                        .header(InternalApiToken.HEADER, internalApiToken.value())
+                        .param("viewerId", "1")
+                        .param("userIds", ids))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("TOO_MANY_PROFILE_IDS"));
     }
 }

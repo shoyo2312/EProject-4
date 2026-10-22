@@ -257,6 +257,42 @@ ranking a literal segment above a path variable sends it to the tokenless mappin
 stopped holding, chat-service would get 401s instead of answers — `UserSettingsControllerTest`
 pins it.
 
+### 3.3 `GET /api/v1/users/internal/relationships?viewerId=1&userIds=2,3,4`
+
+story-service decides which of an owner's stories a viewer may see from four facts about the pair:
+blocked, private account, follows, mutual follows. `/internal/blocks` and `/internal/friendship`
+answer one pair each, so one screen of 100 avatars cost 200 sequential calls. This answers a whole
+page in at most four queries, however many ids it carries — none of them per id.
+
+`viewerId` is optional: without it the viewer is anonymous, and a guest reads stories too. Same
+prefix, same guard as 3.1 — denied at the gateway, internal token at user-service — so there is
+nothing to add to either `SecurityConfig`. `/internal/blocks` and `/internal/friendship` stay: chat-,
+interaction- and video-service still call them.
+
+`200 OK`, `data` → one entry per distinct non-null id, in no promised order:
+
+```json
+{ "userId": 2, "blocked": false, "privateAccount": true, "following": true, "friends": false }
+```
+
+- `blocked` — a live block in either direction (`findBlockedIdsAmong`).
+- `privateAccount` — the live profile is private, as `friendship()` reads it. A closed account is not
+  singled out: story-service hides closed owners from its own record of closures.
+- `following` — the viewer follows the id (`findFollowingIdsAmong`).
+- `friends` — the viewer follows the id **and** the id follows the viewer. Only the ids the viewer
+  follows are asked about, so `friends` implies `following`; someone who follows the viewer without
+  being followed back is neither.
+
+Edge-only, like 3.2: an id with no account is all false and still present in the answer, and the
+viewer's own id is false for `blocked`, `following` and `friends` (`privateAccount` is still
+reported). An anonymous viewer skips the block and follow queries altogether; an empty list skips
+every query.
+
+More than 100 ids is `400 TOO_MANY_PROFILE_IDS`, counted on the list as sent, before the distinct
+(`UserProfileService.MAX_BATCH_IDS`, as in `followingAmong`). story-service's `FriendshipClient`
+chunks to that size and treats a chunk it cannot get an answer for as private and not followed,
+which shows the viewer none of those owners' stories.
+
 ## 4. Enforcement
 
 Storing the values is the easy half. These are the two that actually change behaviour.
