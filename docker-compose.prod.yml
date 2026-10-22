@@ -226,18 +226,26 @@ services:
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
     restart: "no"
 
+  # Security on: otherwise any container on this network can rewrite the index, or delete it — and
+  # no job rebuilds it from the services that own the documents. One node, so transport TLS is not
+  # required; HTTP stays plain on this network like every other store here.
+  # ELASTIC_PASSWORD seeds the elastic user. Once the password has been changed through the security
+  # API, the API's value wins and this one is ignored (docs/operations.md).
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:9.4.5
     restart: unless-stopped
     mem_limit: 4g
     environment:
       - discovery.type=single-node
-      - xpack.security.enabled=false
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:?}
       - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
     healthcheck:
-      test: [ "CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1" ]
+      test: [ "CMD-SHELL", "curl -sf -u \"elastic:$$ELASTIC_PASSWORD\" http://localhost:9200/_cluster/health || exit 1" ]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -567,6 +575,9 @@ services:
       SNOWFLAKE_NODE_ID: 10
       <<: *java-env
       ELASTICSEARCH_URIS: http://elasticsearch:9200
+      # ponytail: the superuser; a role limited to this service's indices if it ever runs untrusted code.
+      SPRING_ELASTICSEARCH_USERNAME: elastic
+      SPRING_ELASTICSEARCH_PASSWORD: ${ELASTIC_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
 
