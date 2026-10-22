@@ -111,6 +111,14 @@ match and a kitchen knife are each a description away from "violence", and a mod
 tell them apart does not get to take a video down by itself. NSFW still rejects on its own lines,
 and a rejection outranks a harm hold.
 
+**An animated image is not one frame.** A story image reaches `/moderate` as the uploaded file
+itself, and a GIF, APNG or animated WebP opened as one image is its first frame — so a clean first
+frame cleared whatever came after it. The upload pins a content type, not the bytes, so a GIF sent
+as `image/png` is the same case. `app._decode` spreads up to `ANIMATION_FRAMES` (16) across the
+animation, first to last, shrinks each to 512px, and the rules above judge them as a video's frames.
+Spread by index: a flash shorter than the gap between two samples can still slip, as between a
+video's sampled frames.
+
 **Cigarettes and vapes are not drugs.** They have descriptions of their own in the ordinary list,
 so a vaping clip lands there instead of drifting into `drugs`. `test_harm.py` pins this.
 

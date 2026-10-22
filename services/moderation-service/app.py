@@ -184,17 +184,55 @@ def score_nsfw(images: list[Image.Image]) -> list[float]:
 SCORERS = {"nsfw": score_nsfw}
 
 
-def _decode(frames: list[str]) -> list[Image.Image]:
-    images = []
+# An animated image (GIF, APNG, animated WebP — a story image is the uploaded file itself) is scored
+# like a short video: frames spread from first to last. Read as one image it was its first frame,
+# so a clean frame 0 in front of anything at all was all that got looked at.
+# ponytail: spread by index, so a flash shorter than the gap between samples can slip, as it can
+# between a video's sampled frames; weigh by frame duration if that turns up.
+ANIMATION_FRAMES = 16
+# A still image's one frame is used as it is; sampled frames are kept, so each is shrunk on the spot
+# — sixteen full-size frames of a large canvas is gigabytes. Both models look at 224 pixels.
+ANIMATION_FRAME_SIDE = 512
+
+
+def _decode(frames: list[str]) -> tuple[list[Image.Image], list[str]]:
+    """The images to score and, beside each, the base64 JPEG escalation would send for it.
+
+    The two lists stay aligned because escalation picks its frames by local score, index by index.
+    """
+    images, sources = [], []
     for index, encoded in enumerate(frames):
         try:
             raw = base64.b64decode(encoded, validate=True)
             image = Image.open(io.BytesIO(raw))
-            image.load()
-            images.append(image.convert("RGB"))
-        except (binascii.Error, ValueError, UnidentifiedImageError, OSError) as error:
+            count = getattr(image, "n_frames", 1)
+            if count <= 1:
+                image.load()
+                images.append(image.convert("RGB"))
+                sources.append(encoded)
+                continue
+            for position in _spread(count, ANIMATION_FRAMES):
+                image.seek(position)
+                frame = image.convert("RGB")
+                frame.thumbnail((ANIMATION_FRAME_SIDE, ANIMATION_FRAME_SIDE))
+                images.append(frame)
+                sources.append(_jpeg(frame))
+        except (binascii.Error, ValueError, UnidentifiedImageError, OSError, EOFError) as error:
             raise HTTPException(status_code=400, detail=f"frame {index} is not a decodable image: {error}")
-    return images
+    return images, sources
+
+
+def _spread(count: int, wanted: int) -> list[int]:
+    """Up to ``wanted`` frame positions, evenly from the first to the last."""
+    if count <= wanted:
+        return list(range(count))
+    return [round(i * (count - 1) / (wanted - 1)) for i in range(wanted)]
+
+
+def _jpeg(image: Image.Image) -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=90)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 @app.post("/moderate", response_model=ModerateResponse)
@@ -209,7 +247,9 @@ def moderate(request: ModerateRequest) -> ModerateResponse:
         frames = frames[:MAX_FRAMES]
 
     started = time.monotonic()
-    images = _decode(frames)
+    images, frames = _decode(frames)
+    # Again after decoding: every animated image is up to ANIMATION_FRAMES of them.
+    images, frames = images[:MAX_FRAMES], frames[:MAX_FRAMES]
     scored = {label: scorer(images) for label, scorer in SCORERS.items()}
     decisions: dict[str, Decision] = {
         label: decide(scores, THRESHOLDS) for label, scores in scored.items()
