@@ -149,15 +149,15 @@ recommendation-service, story-service, user-service, video-service
 
 ```
 auth, user, video, recommendation, media-worker, search,
-interaction, analytics, chat, notification                  ← consumer error handling (outage vs poison) → <topic>.DLT
-auth-service, admin-service, video-service, user-service    ← OutboxDispatcher (mark sau ack)
+interaction, analytics, chat, notification, story           ← consumer error handling (outage vs poison) → <topic>.DLT
+auth-service, admin-service, video-service, user-service,
+story-service                                               ← OutboxDispatcher (mark sau ack)
 ```
-
-**Không cần `kafka-lib`** — không có consumer lẫn outbox: `story-service`.
 
 **Chính sách lỗi consumer**: `KafkaConsumerAutoConfiguration.isOutage` đọc cả chuỗi cause. Lỗi dịch
 sang `TransientDataAccessException` / `DataAccessResourceFailureException`, không lấy được connection
-lúc mở transaction, socket/DNS, hay `RetriableException` của Kafka đều là **dependency chết**: partition
+lúc mở transaction, socket/DNS, timeout của HTTP client (`HttpTimeoutException`), hay `RetriableException`
+của Kafka đều là **dependency chết**: partition
 đứng chờ (thấy được qua consumer lag + WARN mỗi lần thử), không mất event. Mọi lỗi khác là của chính
 record → DLT sau 3 lần. Client báo "unavailable" theo kiểu khác thì service tự dịch sang transient chỗ
 nó bắt lỗi — search-service làm vậy với 429/502/503/504 của Elasticsearch (`ElasticsearchStatus.classify`),

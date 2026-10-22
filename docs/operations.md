@@ -152,3 +152,7 @@ ssh -L 9090:<ip>:9090 <server>     # rồi mở http://localhost:9090; Alertmana
   các index của nó.
 - **Cassandra**: backup bằng `COPY TO`, ổn ở quy mô hiện tại. Khi lên tới hàng trăm triệu row thì cần
   `nodetool snapshot` và `sstableloader`.
+- **story-service chạy đúng một container**: `SNOWFLAKE_NODE_ID` cố định, và compose dừng bản cũ rồi mới chạy bản mới.
+  Muốn chạy nhiều bản thì mỗi bản cần một node id riêng. Lần deploy đầu tiên có thông báo story (`StoryActivatedEvent`)
+  còn phải dừng hết bản cũ trước khi chạy bản mới. Lý do: bản cũ không ghi `activatedAt`, nên story nó duyệt trong lúc
+  hai bản chạy song song sẽ không bao giờ được báo cho follower.
