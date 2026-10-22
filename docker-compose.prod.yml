@@ -93,14 +93,19 @@ services:
 
   # noeviction: Redis holds token revocations and rate-limit counters, not only cache.
   # See docker-compose.yml for the full reasoning.
+  # A password because every container on this network reaches it: one that can DEL auth:blacklist:*
+  # un-revokes every stolen token, and one that can FLUSHALL lifts every ban and rate limit.
   app-redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+    command: [ "sh", "-c", "exec redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction --requirepass \"$$REDIS_PASSWORD\"" ]
     volumes:
       - redis-data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      # The reply, not the exit code: redis-cli exits 0 on NOAUTH too.
+      test: [ "CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -292,6 +297,7 @@ services:
       SNOWFLAKE_NODE_ID: 1
       <<: *java-env
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       AUTH_SERVICE_URI: http://auth-service:8081
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
@@ -321,6 +327,7 @@ services:
       DB_USERNAME: ${DB_USERNAME:?}
       DB_PASSWORD: ${DB_PASSWORD:?}
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MAIL_HOST: smtp.resend.com
       MAIL_USERNAME: resend
@@ -384,6 +391,7 @@ services:
       MONGO_USERNAME: ${MONGO_USERNAME:?}
       MONGO_PASSWORD: ${MONGO_PASSWORD:?}
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       MODERATION_SERVICE_URL: http://moderation-service:8099
@@ -461,6 +469,7 @@ services:
       <<: *java-env
       CASSANDRA_CONTACT_POINTS: cassandra
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
@@ -480,6 +489,7 @@ services:
       SNOWFLAKE_NODE_ID: 7
       <<: *java-env
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       RANK_SERVICE_URL: http://rank-service:8098
@@ -500,6 +510,7 @@ services:
       MONGO_USERNAME: ${MONGO_USERNAME:?}
       MONGO_PASSWORD: ${MONGO_PASSWORD:?}
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
