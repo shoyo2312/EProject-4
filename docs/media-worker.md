@@ -154,8 +154,11 @@ Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown c
 | Thumbnail | `thumbnails/{videoId}.jpg` | media-worker transcode | cleanup |
 | Hover preview | `previews/{videoId}.webp` | media-worker transcode | cleanup |
 | Avatar | `avatars/{userId}` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; upload ghi đè, mirror bỏ qua key đã có) |
+| Story media | `stories/{userId}/{storyId}.{ext}` | client (presigned POST từ story-service) | lifecycle 3 ngày |
 | Bản quarantine | `quarantine/` + key gốc | quarantine (§3.1) | restore khi hết hold (dời về key gốc), hoặc cleanup |
 | Hold marker | `quarantine/holds/{videoId}/{HOLD}` | quarantine (§3.1) | restore, hoặc cleanup |
+
+Mọi lifecycle rule (`raw/`, `exports/`, `stories/`) khai ở **một chỗ duy nhất**: `scripts/minio/lifecycle.json`, do `minio-init` (`scripts/minio/init.sh`) áp, dùng chung cho compose dev và prod. Ghi lifecycle là thay cả config của bucket, nên rule đặt ở nơi khác (trước đây media-worker tự đặt `stories/` lúc khởi động) sẽ xoá các rule kia, hoặc bị chúng xoá, tuỳ bên nào chạy sau.
 
 ## 7. kafka-lib
 

@@ -187,9 +187,14 @@ services:
       timeout: 5s
       retries: 5
 
-  # Bucket + the rule expiring abandoned raw uploads. See docker-compose.yml.
+  # The bucket and its lifecycle: scripts/minio/init.sh, the same script as docker-compose.yml.
   minio-init:
-    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    build:
+      context: ./scripts/minio
+      dockerfile_inline: |
+        FROM pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+        COPY . /minio/
+        ENTRYPOINT ["bash", "/minio/init.sh"]
     depends_on:
       minio:
         condition: service_healthy
@@ -197,15 +202,6 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -e
-        mc alias set tt http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
-        mc mb --ignore-existing "tt/$$MINIO_BUCKET"
-        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}},{"ID":"expire-data-exports","Status":"Enabled","Filter":{"Prefix":"exports/"},"Expiration":{"Days":7}}]}' \
-          | mc ilm import "tt/$$MINIO_BUCKET"
     restart: "no"
 
   elasticsearch:

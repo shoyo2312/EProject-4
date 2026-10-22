@@ -3,21 +3,12 @@ package com.tiktok.mediaworker.config;
 import io.minio.BucketExistsArgs;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
-import io.minio.SetBucketLifecycleArgs;
 import io.minio.SetBucketPolicyArgs;
-import io.minio.messages.Expiration;
-import io.minio.messages.LifecycleConfiguration;
-import io.minio.messages.LifecycleRule;
-import io.minio.messages.RuleFilter;
-import io.minio.messages.Status;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
-
-import java.time.ZonedDateTime;
-import java.util.List;
 
 /**
  * Creates the media bucket on startup so a fresh MinIO container (no manual setup) works
@@ -70,8 +61,6 @@ public class BucketInitializer implements ApplicationRunner {
               }]
             }""";
 
-    static final int STORY_RETENTION_DAYS = 3;
-
     private final MinioClient minioClient;
     private final MinioProperties properties;
 
@@ -97,18 +86,7 @@ public class BucketInitializer implements ApplicationRunner {
                     + "players until it is applied", properties.bucket(), e);
         }
 
-        // Story media is never deleted by anything else: story-service's TTL removes the documents,
-        // and the objects behind them go here, a day after the longest a story can live (48h).
-        try {
-            minioClient.setBucketLifecycle(SetBucketLifecycleArgs.builder()
-                    .bucket(properties.bucket())
-                    .config(new LifecycleConfiguration(List.of(new LifecycleRule(Status.ENABLED, null,
-                            new Expiration((ZonedDateTime) null, STORY_RETENTION_DAYS, null),
-                            new RuleFilter("stories/"), "expire-stories", null, null, null))))
-                    .build());
-        } catch (Exception e) {
-            log.error("Could not set the stories/ lifecycle rule on bucket {} — story media will "
-                    + "accumulate until it is applied", properties.bucket(), e);
-        }
+        // No lifecycle rules here: minio-init (docker-compose) owns all of them. Setting a lifecycle
+        // replaces the bucket's whole config, so a second writer silently wipes the first's rules.
     }
 }
