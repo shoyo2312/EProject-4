@@ -18,7 +18,9 @@ import org.springframework.web.client.RestClient;
  * <p>Unlike {@link VideoOwnerClient}, an unreachable interaction-service is thrown rather than
  * swallowed. That client sits on every like and comment, where dropping one notice beats stalling
  * the partition; a warning is rare, and this notice is the only way the decision reaches the
- * person it is about, so it is worth kafka-lib's retries and, past them, the dead-letter topic.
+ * person it is about, so it is worth waiting for. When interaction-service gives no answer at all
+ * (refused, unreachable, timed out) kafka-lib treats it as an outage and retries until it does; a
+ * 5xx gets three retries and then the dead-letter topic.
  *
  * <p>Only interaction-service's own "not found" answers null: a 404 carrying its {@code
  * COMMENT_NOT_FOUND} code, for a comment it never stored, which no retry can fix. A 404 from
