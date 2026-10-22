@@ -47,5 +47,7 @@ grant video-service "${MINIO_VIDEO_SECRET_KEY:-}"
 grant story-service "${MINIO_STORY_SECRET_KEY:-}"
 grant user-service "${MINIO_USER_SECRET_KEY:-}"
 grant media-worker "${MINIO_WORKER_SECRET_KEY:-}"
+# Read-only, for the backup container's off-site mirror of the media.
+grant backup "${MINIO_BACKUP_SECRET_KEY:-}"
 
 echo "minio-init: bucket $MINIO_BUCKET ready"

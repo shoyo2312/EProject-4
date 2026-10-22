@@ -230,6 +230,7 @@ services:
       MINIO_STORY_SECRET_KEY: ${MINIO_STORY_SECRET_KEY:?}
       MINIO_USER_SECRET_KEY: ${MINIO_USER_SECRET_KEY:?}
       MINIO_WORKER_SECRET_KEY: ${MINIO_WORKER_SECRET_KEY:?}
+      MINIO_BACKUP_SECRET_KEY: ${MINIO_BACKUP_SECRET_KEY:?}
     restart: "no"
 
   # Security on: otherwise any container on this network can rewrite the index, or delete it — and
@@ -237,8 +238,14 @@ services:
   # required; HTTP stays plain on this network like every other store here.
   # ELASTIC_PASSWORD seeds the elastic user. Once the password has been changed through the security
   # API, the API's value wins and this one is ignored (docs/operations.md).
+  # path.repo is where the nightly snapshots go (SLM, policy kept by the backup service). The
+  # directory is made in the image so the volume mounted on it is owned by elasticsearch, not root.
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.5
+    build:
+      context: ./scripts
+      dockerfile_inline: |
+        FROM docker.elastic.co/elasticsearch/elasticsearch:9.4.5
+        RUN mkdir /usr/share/elasticsearch/snapshots
     restart: unless-stopped
     mem_limit: 4g
     environment:
@@ -247,9 +254,11 @@ services:
       - xpack.security.http.ssl.enabled=false
       - xpack.security.transport.ssl.enabled=false
       - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:?}
+      - path.repo=/usr/share/elasticsearch/snapshots
       - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
+      - es-snapshots:/usr/share/elasticsearch/snapshots
     healthcheck:
       test: [ "CMD-SHELL", "curl -sf -u \"elastic:$$ELASTIC_PASSWORD\" http://localhost:9200/_cluster/health || exit 1" ]
       interval: 15s
@@ -664,6 +673,47 @@ services:
     volumes:
       - alertmanager-data:/alertmanager
 
+  # Daily dumps of every store nothing else can rebuild, then the off-site copy: scripts/backup/
+  # backup.sh, restore steps in docs/operations.md. Without BACKUP_S3_URL the copies sit on this
+  # disk, next to what they are copies of, and a lost disk takes both.
+  backup:
+    build: ./scripts/backup
+    restart: unless-stopped
+    mem_limit: 512m
+    depends_on:
+      postgres-auth: { condition: service_healthy }
+      postgres-user: { condition: service_healthy }
+      postgres-admin: { condition: service_healthy }
+      mongodb: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
+      elasticsearch: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    environment:
+      DB_USERNAME: ${DB_USERNAME:?}
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      MONGO_USERNAME: ${MONGO_USERNAME:?}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?}
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:?}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+      MINIO_BACKUP_SECRET_KEY: ${MINIO_BACKUP_SECRET_KEY:?}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      # Any S3-compatible bucket off this machine (R2, B2, S3). Give it a lifecycle rule of its own:
+      # nothing here deletes old copies there.
+      BACKUP_S3_URL: ${BACKUP_S3_URL:-}
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-tiktok-backups}
+    volumes:
+      - backups:/backups
+      - es-snapshots:/es-snapshots:ro
+    healthcheck:
+      # Unhealthy once 26 hours pass without a run in which every step succeeded.
+      test: [ "CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /tmp/last-success 2>/dev/null || echo 0) )) -lt 93600" ]
+      interval: 10m
+      timeout: 10s
+      retries: 1
+      start_period: 2h
+
 volumes:
   postgres-auth-data:
   postgres-user-data:
@@ -678,5 +728,7 @@ volumes:
   zookeeper-log:
   kafka-data:
   minio-data:
+  es-snapshots:
+  backups:
   prometheus-data:
   alertmanager-data:
