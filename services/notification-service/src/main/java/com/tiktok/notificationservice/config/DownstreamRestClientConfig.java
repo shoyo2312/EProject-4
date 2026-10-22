@@ -49,6 +49,18 @@ public class DownstreamRestClientConfig {
         return client(userServiceUri, timeoutMillis, internalApiToken);
     }
 
+    /**
+     * For {@code StoryAnnouncementClient}: story-service's internal check that a story is still
+     * live, on a prefix the gateway denies and story-service guards with the internal API token —
+     * same reasoning as above.
+     */
+    @Bean
+    public RestClient storyServiceRestClient(@Value("${downstream.story-service-uri}") String storyServiceUri,
+                                             @Value("${downstream.timeout-millis:1000}") long timeoutMillis,
+                                             InternalApiToken internalApiToken) {
+        return client(storyServiceUri, timeoutMillis, internalApiToken);
+    }
+
     private static RestClient client(String baseUrl, long timeoutMillis, InternalApiToken internalApiToken) {
         Duration timeout = Duration.ofMillis(timeoutMillis);
         return RestClient.builder().baseUrl(baseUrl)

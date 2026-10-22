@@ -529,6 +529,7 @@ services:
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
       INTERACTION_SERVICE_URI: http://interaction-service:8085
+      STORY_SERVICE_URI: http://story-service:8086
 
   search-service:
     <<: *java

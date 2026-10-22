@@ -12,4 +12,10 @@ class NotificationTypeTest {
         assertThat(NotificationType.FOLLOW_REQUEST.collapsesRepeats()).isTrue();
         assertThat(NotificationType.FOLLOW_REQUEST_ACCEPTED.collapsesRepeats()).isTrue();
     }
+
+    /** Two stories from one owner in a day are one nudge to a follower, not two inbox entries. */
+    @Test
+    void storiesCollapseRepeats() {
+        assertThat(NotificationType.STORY.collapsesRepeats()).isTrue();
+    }
 }

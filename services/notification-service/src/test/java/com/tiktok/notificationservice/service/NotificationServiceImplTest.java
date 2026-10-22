@@ -97,6 +97,25 @@ class NotificationServiceImplTest {
         verify(pushNotificationService, never()).send(any(), any(), any());
     }
 
+    /**
+     * The owner's second story within a day lands on the same (recipient, owner) pair, and so does
+     * a fan-out retried after a failure halfway through: neither may add a second entry, a push or
+     * a realtime event for a follower who was already told.
+     */
+    @Test
+    void create_collapsesARepeatStoryFromTheSameOwnerWithinTheWindow() {
+        notificationService = new NotificationServiceImpl(notificationRepository, notificationMapper, deviceTokenRepository, pushNotificationService, notificationEventPublisher);
+        when(notificationRepository.findFirstByRecipientIdAndActorIdAndTypeAndReferenceIdAndCreatedAtAfter(
+                eq(100L), eq(7L), eq(NotificationType.STORY), eq("7"), any(Instant.class)))
+                .thenReturn(Optional.of(unreadNotification("1", 100L)));
+
+        notificationService.create(100L, 7L, NotificationType.STORY, "New story", "Someone posted a new story.", "7");
+
+        verify(notificationRepository, never()).save(any(Notification.class));
+        verify(notificationEventPublisher, never()).publishCreated(any());
+        verify(pushNotificationService, never()).send(any(), any(), any());
+    }
+
     /** A comment is content, not a flag: two by the same person are two real things to hear about. */
     @Test
     void create_doesNotCollapseComments() {

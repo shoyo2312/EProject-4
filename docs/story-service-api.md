@@ -24,6 +24,14 @@ Một story chỉ được thông báo một lần — khi nó thành `ACTIVE`, 
 chủ story mở rộng sang `PUBLIC`/`FRIENDS` trong 24h hiệu lực; story đã sống từ trước khi tính năng này
 ra mắt thì không bao giờ được thông báo.
 
+**Thông báo.** notification-service ghi một mục `STORY` ("New story" / "Someone posted a new story.", `referenceId`
+là id chủ story) vào inbox của người nhận và push tới thiết bị của họ, theo `visibility` **tại lúc gửi** chứ không phải
+lúc đăng: `PUBLIC` → mọi người theo dõi chủ story, `FRIENDS` → người theo dõi mà chủ story cũng theo dõi lại,
+`PRIVATE` → không ai. Không bao giờ gửi qua một lệnh block (cả hai chiều), cho người đã mute chủ story, hay cho một
+story không còn thông báo được (đã xoá, hết hạn, chưa `ACTIVE`, chủ story bị ban / đã đóng tài khoản): ngay trước khi
+gửi, notification-service hỏi lại endpoint nội bộ ở §6. Mỗi người nhận có tối đa một mục `STORY` cho mỗi chủ story
+trong 24h — chủ story đăng tiếp, event bị giao lại, hay lần gửi hỏng giữa chừng rồi được thử lại đều không thêm mục thứ hai.
+
 | Status | Ai thấy | Hết hạn |
 |---|---|---|
 | `PENDING_MODERATION` | chỉ chủ story | 48h sau khi đăng nếu verdict không bao giờ tới |
