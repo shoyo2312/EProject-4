@@ -334,6 +334,17 @@ class StoryServiceImplTest {
         verifyNoInteractions(storyRepository);
     }
 
+    /** The web asks in chunks of exactly 100: the cap refuses the 101st id, not the 100th. */
+    @Test
+    void ringsAcceptExactly100Ids() {
+        List<Long> ids = LongStream.rangeClosed(1, 100).boxed().toList();
+        when(storyRepository.findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
+                eq(ids), eq(StoryStatus.ACTIVE), any())).thenReturn(List.of(active("s1", 7L)));
+        when(storyAudience.resolve(null, List.of(7L))).thenReturn(Map.of(7L, PUBLIC_ONLY));
+
+        assertThat(storyService.rings(null, ids)).containsExactly(new StoryRingResponse(7L, true));
+    }
+
     @Test
     void ringsOfNobodyAskNothing() {
         assertThat(storyService.rings(100L, null)).isEmpty();

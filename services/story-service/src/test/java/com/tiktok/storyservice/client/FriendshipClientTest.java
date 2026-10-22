@@ -13,6 +13,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.client.RequestMatcher;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.List;
@@ -30,7 +31,8 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 class FriendshipClientTest {
 
     private static final Relationship STRANGER = new Relationship(false, false, false, false);
-    private static final String ENDPOINT = "http://users/api/v1/users/internal/relationships";
+    private static final String PATH = "/api/v1/users/internal/relationships";
+    private static final String ENDPOINT = "http://users" + PATH;
 
     private final ListAppender<ILoggingEvent> logs = new ListAppender<>();
     private final Logger clientLogger = (Logger) LoggerFactory.getLogger(FriendshipClient.class);
@@ -107,9 +109,9 @@ class FriendshipClientTest {
     @Test
     void moreThanAHundredOwnersAreAskedInChunksOfAHundred() {
         List<Long> owners = LongStream.rangeClosed(1, 150).boxed().toList();
-        server.expect(idsAre(owners.subList(0, 100)))
+        server.expect(askedAs(9L, owners.subList(0, 100)))
                 .andRespond(withSuccess(answer(owners.subList(0, 100)), MediaType.APPLICATION_JSON));
-        server.expect(idsAre(owners.subList(100, 150)))
+        server.expect(askedAs(9L, owners.subList(100, 150)))
                 .andRespond(withSuccess(answer(owners.subList(100, 150)), MediaType.APPLICATION_JSON));
 
         Map<Long, Relationship> relationships = client.relationships(9L, owners);
@@ -122,9 +124,9 @@ class FriendshipClientTest {
     @Test
     void aFailedCallHidesEveryOwnerOfThatChunkAndNoOtherAndWarnsOnce() {
         List<Long> owners = LongStream.rangeClosed(1, 150).boxed().toList();
-        server.expect(idsAre(owners.subList(0, 100)))
+        server.expect(askedAs(9L, owners.subList(0, 100)))
                 .andRespond(withSuccess(answer(owners.subList(0, 100)), MediaType.APPLICATION_JSON));
-        server.expect(idsAre(owners.subList(100, 150))).andRespond(withServerError());
+        server.expect(askedAs(9L, owners.subList(100, 150))).andRespond(withServerError());
 
         Map<Long, Relationship> relationships = client.relationships(9L, owners);
 
@@ -172,11 +174,18 @@ class FriendshipClientTest {
         assertThat(Relationship.UNKNOWN).isEqualTo(new Relationship(false, true, false, false));
     }
 
-    /** The request carries exactly these ids, in this order, whatever else is on the query string. */
-    private static RequestMatcher idsAre(List<Long> expected) {
+    /**
+     * The request goes to the relationships endpoint as this viewer (none for a guest) and carries
+     * exactly these ids, in this order. Checked on every chunk: one that lost the viewer would be
+     * answered as for a guest, with nobody blocked.
+     */
+    private static RequestMatcher askedAs(Long viewerId, List<Long> expected) {
         return request -> {
-            String ids = UriComponentsBuilder.fromUri(request.getURI()).build().getQueryParams().getFirst("userIds");
-            assertThat(ids).isEqualTo(expected.stream().map(String::valueOf).collect(Collectors.joining(",")));
+            UriComponents uri = UriComponentsBuilder.fromUri(request.getURI()).build();
+            assertThat(uri.getPath()).isEqualTo(PATH);
+            assertThat(uri.getQueryParams().getFirst("viewerId")).isEqualTo(viewerId == null ? null : viewerId.toString());
+            assertThat(uri.getQueryParams().getFirst("userIds"))
+                    .isEqualTo(expected.stream().map(String::valueOf).collect(Collectors.joining(",")));
         };
     }
 

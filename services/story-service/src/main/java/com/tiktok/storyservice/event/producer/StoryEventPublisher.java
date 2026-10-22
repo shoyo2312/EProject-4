@@ -83,7 +83,11 @@ public class StoryEventPublisher {
         return new ProducerRecord<>(TOPIC, story.getId(), objectMapper.writeValueAsString(event));
     }
 
-    /** Keyed by the owner, so one account's announcements reach the consumer in the order they were made. */
+    /**
+     * Keyed by the owner, so all of one account's announcements land on one partition, which is all
+     * the 24h collapse needs. It does not keep them in the order they were made: an announcement
+     * whose ack failed is re-sent by a later poll, behind ones made after it.
+     */
     private ProducerRecord<String, String> toActivationRecord(Story story) {
         StoryActivatedEvent event = StoryActivatedEvent.of(story.getId(), story.getUserId());
         return new ProducerRecord<>(ACTIVATION_TOPIC, String.valueOf(story.getUserId()),
