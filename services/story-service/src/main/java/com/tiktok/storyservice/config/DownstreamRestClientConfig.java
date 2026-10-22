@@ -11,7 +11,7 @@ import java.time.Duration;
 
 /**
  * story-service's outbound calls, all to user-service's internal endpoints: how the viewer relates
- * to an owner (private account, follow, mutual follow) and whether either blocked the other. Both
+ * to a page of owners (blocked, private account, follow, mutual follow), in one call per 100. They
  * check the internal API token this client carries. Mirrors video-service's DownstreamRestClientConfig.
  */
 @Configuration

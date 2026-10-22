@@ -1,6 +1,5 @@
 package com.tiktok.storyservice.service;
 
-import com.tiktok.storyservice.client.BlockClient;
 import com.tiktok.storyservice.client.FriendshipClient;
 import com.tiktok.storyservice.client.FriendshipClient.Relationship;
 import com.tiktok.storyservice.entity.OwnerBan;
@@ -12,6 +11,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 import static com.tiktok.storyservice.entity.StoryVisibility.FRIENDS;
 import static com.tiktok.storyservice.entity.StoryVisibility.PRIVATE;
@@ -61,29 +63,43 @@ class StoryAudienceTest {
 
     private final OwnerBanRepository bans = mock(OwnerBanRepository.class);
     private final FriendshipClient friendshipClient = mock(FriendshipClient.class);
-    private final BlockClient blockClient = mock(BlockClient.class);
-    private final StoryAudience audience = new StoryAudience(bans, friendshipClient, blockClient);
+    private final StoryAudience audience = new StoryAudience(bans, friendshipClient);
 
-    private static final Relationship STRANGER = new Relationship(false, false, false);
+    private static final Relationship STRANGER = new Relationship(false, false, false, false);
+    private static final Relationship PRIVATE_STRANGER = new Relationship(false, true, false, false);
+    private static final Relationship PRIVATE_FOLLOWED = new Relationship(false, true, true, false);
+    private static final Relationship FRIEND = new Relationship(false, false, true, true);
 
     @Test
-    void anonymousViewerIsAskedOnlyWhetherTheOwnerIsPrivate() {
-        when(friendshipClient.relationship(null, 1L)).thenReturn(STRANGER);
-        when(friendshipClient.relationship(null, 2L)).thenReturn(new Relationship(false, false, true));
+    void anonymousViewerIsStillAskedWhetherTheOwnerIsPrivate() {
+        when(friendshipClient.relationships(null, List.of(1L, 2L))).thenReturn(Map.of(1L, STRANGER, 2L, PRIVATE_STRANGER));
 
         Map<Long, Set<StoryVisibility>> resolved = audience.resolve(null, List.of(1L, 2L));
 
         assertThat(resolved.get(1L)).containsExactly(PUBLIC);
         assertThat(resolved.get(2L)).isEmpty();
-        verifyNoInteractions(blockClient);
     }
 
     @Test
-    void privacyFollowAndFriendshipComeFromUserServicePerOwner() {
+    void manyOwnersCostOneRelationshipsCall() {
+        List<Long> owners = LongStream.rangeClosed(1, 40).boxed().toList();
+        when(friendshipClient.relationships(eq(99L), any()))
+                .thenReturn(owners.stream().collect(Collectors.toMap(Function.identity(), owner -> STRANGER)));
+
+        Map<Long, Set<StoryVisibility>> resolved = audience.resolve(99L, owners);
+
+        assertThat(resolved).hasSize(40);
+        assertThat(resolved.values()).allSatisfy(visible -> assertThat(visible).containsExactly(PUBLIC));
+        verify(friendshipClient, times(1)).relationships(99L, owners);
+        verifyNoMoreInteractions(friendshipClient);
+        verify(bans, times(1)).findHiddenAmong(any(), any());
+    }
+
+    @Test
+    void privacyFollowAndFriendshipComeFromOneCallForTheOwnersNotAlreadyRuledOut() {
         when(bans.findHiddenAmong(any(), any())).thenReturn(List.of(new OwnerBan(3L, OwnerBan.PERMANENT, Instant.now())));
-        when(friendshipClient.relationship(9L, 1L)).thenReturn(STRANGER);
-        when(friendshipClient.relationship(9L, 2L)).thenReturn(new Relationship(false, true, true));
-        when(friendshipClient.relationship(9L, 4L)).thenReturn(new Relationship(true, true, false));
+        when(friendshipClient.relationships(9L, List.of(1L, 2L, 4L)))
+                .thenReturn(Map.of(1L, STRANGER, 2L, PRIVATE_FOLLOWED, 4L, FRIEND));
 
         Map<Long, Set<StoryVisibility>> resolved = audience.resolve(9L, List.of(1L, 2L, 3L, 4L, 9L));
 
@@ -92,16 +108,53 @@ class StoryAudienceTest {
         assertThat(resolved.get(3L)).isEmpty();
         assertThat(resolved.get(4L)).containsExactlyInAnyOrder(PUBLIC, FRIENDS);
         assertThat(resolved.get(9L)).containsExactlyInAnyOrder(PUBLIC, FRIENDS, PRIVATE);
-        verify(friendshipClient, never()).relationship(9L, 3L);
-        verify(friendshipClient, never()).relationship(9L, 9L);
+        // The viewer and the banned owner are not asked about: exactly the other three, in one call.
+        verify(friendshipClient).relationships(9L, List.of(1L, 2L, 4L));
+        verifyNoMoreInteractions(friendshipClient);
     }
 
     @Test
-    void aBlockedOwnerIsNotAskedAboutFurther() {
-        when(blockClient.isBlockedBetween(9L, 1L)).thenReturn(true);
+    void aStrangerToAPrivateOwnerSeesNothing() {
+        when(friendshipClient.relationships(9L, List.of(1L))).thenReturn(Map.of(1L, PRIVATE_STRANGER));
 
         assertThat(audience.resolve(9L, List.of(1L)).get(1L)).isEmpty();
+    }
+
+    @Test
+    void aBlockedOwnerSeesNothingWhateverElseIsTrueOfThem() {
+        when(friendshipClient.relationships(9L, List.of(1L, 2L)))
+                .thenReturn(Map.of(1L, new Relationship(true, false, true, true), 2L, STRANGER));
+
+        Map<Long, Set<StoryVisibility>> resolved = audience.resolve(9L, List.of(1L, 2L));
+
+        assertThat(resolved.get(1L)).isEmpty();
+        assertThat(resolved.get(2L)).containsExactly(PUBLIC);
+    }
+
+    /** The client answers for every owner it is asked about; if it ever did not, the owner is hidden. */
+    @Test
+    void anOwnerNobodyAnsweredForSeesNothing() {
+        when(friendshipClient.relationships(9L, List.of(1L))).thenReturn(Map.of());
+
+        assertThat(audience.resolve(9L, List.of(1L)).get(1L)).isEmpty();
+    }
+
+    @Test
+    void noCallWhenEveryOwnerIsHiddenOrTheViewer() {
+        when(bans.findHiddenAmong(any(), any())).thenReturn(List.of(new OwnerBan(3L, OwnerBan.PERMANENT, Instant.now())));
+
+        Map<Long, Set<StoryVisibility>> resolved = audience.resolve(9L, List.of(3L, 9L));
+
+        assertThat(resolved.get(3L)).isEmpty();
+        assertThat(resolved.get(9L)).containsExactlyInAnyOrder(PUBLIC, FRIENDS, PRIVATE);
         verifyNoInteractions(friendshipClient);
+    }
+
+    @Test
+    void noOwnersAsksNobodyAnything() {
+        assertThat(audience.resolve(9L, List.of())).isEmpty();
+
+        verifyNoInteractions(bans, friendshipClient);
     }
 
     @Test
@@ -110,6 +163,6 @@ class StoryAudienceTest {
 
         assertThat(audience.isHidden(3L)).isTrue();
         assertThat(audience.isHidden(4L)).isFalse();
-        verifyNoInteractions(friendshipClient, blockClient);
+        verifyNoInteractions(friendshipClient);
     }
 }

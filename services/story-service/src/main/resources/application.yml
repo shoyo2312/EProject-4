@@ -47,8 +47,8 @@ moderation:
       base-url: ${ADMIN_SERVICE_URL:http://localhost:8096}
 
 downstream:
-  # user-service: whether an owner is private, followed or a friend of the viewer, and blocks.
-  # Both are internal calls and carry INTERNAL_API_TOKEN.
+  # user-service: how the viewer relates to a page of owners (blocked, private, followed, friend),
+  # one internal call per 100 owners. It carries INTERNAL_API_TOKEN.
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
   timeout-millis: ${USER_SERVICE_TIMEOUT_MILLIS:1000}
 

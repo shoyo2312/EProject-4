@@ -1,6 +1,5 @@
 package com.tiktok.storyservice.service;
 
-import com.tiktok.storyservice.client.BlockClient;
 import com.tiktok.storyservice.client.FriendshipClient;
 import com.tiktok.storyservice.client.FriendshipClient.Relationship;
 import com.tiktok.storyservice.entity.OwnerBan;
@@ -31,7 +30,6 @@ public class StoryAudience {
 
     private final OwnerBanRepository ownerBanRepository;
     private final FriendshipClient friendshipClient;
-    private final BlockClient blockClient;
 
     /**
      * @param hidden       the owner is banned or closed their account
@@ -61,28 +59,25 @@ public class StoryAudience {
     }
 
     /**
-     * One ban query for every owner, then per owner a block check (signed-in viewers only) and one
-     * relationship lookup — privacy, follow and friendship together. Hidden and blocked owners are
-     * not asked about further.
-     *
-     * <p>ponytail: one or two user-service calls per owner, in sequence — fine for a tray of
-     * followed accounts with live stories; a batch relationship endpoint is the upgrade.
+     * One ban query for every owner, then the relationships of the owners that are neither the
+     * viewer nor hidden, one call per 100 of them — block, privacy, follow and friendship together,
+     * not two calls per owner. A guest is asked too: whether an account is private matters most to
+     * them. An owner nobody answered for shows nothing.
      */
     public Map<Long, Set<StoryVisibility>> resolve(Long viewerId, Collection<Long> ownerIds) {
         Set<Long> owners = new LinkedHashSet<>(ownerIds);
-        Map<Long, Set<StoryVisibility>> result = new HashMap<>();
         List<Long> others = owners.stream().filter(owner -> !owner.equals(viewerId)).toList();
         Set<Long> hidden = others.isEmpty() ? Set.of() : ownerBanRepository.findHiddenAmong(others, Instant.now()).stream()
                 .map(OwnerBan::getUserId).collect(Collectors.toSet());
+        List<Long> toAsk = others.stream().filter(owner -> !hidden.contains(owner)).toList();
+        Map<Long, Relationship> relationships = toAsk.isEmpty() ? Map.of() : friendshipClient.relationships(viewerId, toAsk);
 
+        Map<Long, Set<StoryVisibility>> result = new HashMap<>();
         for (Long owner : owners) {
-            boolean self = owner.equals(viewerId);
-            boolean isHidden = hidden.contains(owner);
-            boolean blocked = !self && !isHidden && viewerId != null && blockClient.isBlockedBetween(viewerId, owner);
-            Relationship relationship = self || isHidden || blocked
-                    ? Relationship.UNKNOWN : friendshipClient.relationship(viewerId, owner);
-            result.put(owner, visibilitiesFor(self, isHidden, blocked, relationship.privateAccount(),
-                    relationship.following(), relationship.friends()));
+            // The viewer and hidden owners were not asked about: visibilitiesFor settles them before it looks at this.
+            Relationship relationship = relationships.getOrDefault(owner, Relationship.UNKNOWN);
+            result.put(owner, visibilitiesFor(owner.equals(viewerId), hidden.contains(owner), relationship.blocked(),
+                    relationship.privateAccount(), relationship.following(), relationship.friends()));
         }
         return result;
     }
