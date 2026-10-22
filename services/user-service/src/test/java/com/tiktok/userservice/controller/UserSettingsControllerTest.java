@@ -5,9 +5,11 @@ import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.userservice.config.SecurityConfig;
+import com.tiktok.userservice.dto.request.StoryAudienceScope;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
 import com.tiktok.userservice.dto.response.RelationshipResponse;
+import com.tiktok.userservice.dto.response.StoryAudienceResponse;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
 import com.tiktok.userservice.entity.SettingsAudience;
@@ -32,6 +34,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -357,5 +360,68 @@ class UserSettingsControllerTest {
                         .param("userIds", ids))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("TOO_MANY_PROFILE_IDS"));
+    }
+
+    /** notification-service pages through this: all four parameters in, the wrapped page out. */
+    @Test
+    void internalStoryAudience_answerWithTheWrappedPageAndNoUserToken() throws Exception {
+        when(followService.storyAudience(7L, StoryAudienceScope.FRIENDS, 3L, 500))
+                .thenReturn(new StoryAudienceResponse(List.of(11L, 12L), 12L));
+
+        mockMvc.perform(get("/api/v1/users/internal/story-audience")
+                        .header(InternalApiToken.HEADER, internalApiToken.value())
+                        .param("userId", "7")
+                        .param("scope", "FRIENDS")
+                        .param("after", "3")
+                        .param("size", "500"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.userIds[0]").value(11))
+                .andExpect(jsonPath("$.data.userIds[1]").value(12))
+                .andExpect(jsonPath("$.data.next").value(12));
+    }
+
+    /**
+     * The first page asks with no cursor and no size; the last has no cursor to give, and {@code next}
+     * goes out as an explicit null rather than being left out. Pins today's shape, which
+     * notification-service reads as "no more pages".
+     */
+    @Test
+    void internalStoryAudience_firstAndLastPage_haveNoCursorAndCarryANullNext() throws Exception {
+        when(followService.storyAudience(7L, StoryAudienceScope.FOLLOWERS, null, null))
+                .thenReturn(new StoryAudienceResponse(List.of(13L), null));
+
+        mockMvc.perform(get("/api/v1/users/internal/story-audience")
+                        .header(InternalApiToken.HEADER, internalApiToken.value())
+                        .param("userId", "7")
+                        .param("scope", "FOLLOWERS"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.userIds[0]").value(13))
+                .andExpect(jsonPath("$.data.next").value(nullValue()));
+    }
+
+    @Test
+    void internalStoryAudience_unknownScope_is400() throws Exception {
+        mockMvc.perform(get("/api/v1/users/internal/story-audience")
+                        .header(InternalApiToken.HEADER, internalApiToken.value())
+                        .param("userId", "7")
+                        .param("scope", "EVERYONE"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(followService);
+    }
+
+    /** Who follows whom is not for a user to ask: their own JWT does not stand in for the token. */
+    @Test
+    void internalStoryAudience_refuseACallerWithoutTheInternalToken() throws Exception {
+        mockMvc.perform(get("/api/v1/users/internal/story-audience")
+                        .param("userId", "7").param("scope", "FOLLOWERS"))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/users/internal/story-audience")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .param("userId", "7").param("scope", "FOLLOWERS"))
+                .andExpect(status().isForbidden());
+
+        verify(followService, never()).storyAudience(any(), any(), any(), any());
     }
 }
