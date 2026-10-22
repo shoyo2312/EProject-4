@@ -22,10 +22,15 @@ import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.PrivateAccountException;
 import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
+import com.tiktok.videoservice.exception.UploadNotFoundException;
+import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.repository.OwnerBanRepository;
 import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
 import com.tiktok.videoservice.repository.VideoRepository;
+import io.minio.MinioClient;
+import io.minio.messages.ErrorResponse;
+import io.minio.errors.ErrorResponseException;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -57,6 +62,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -107,8 +113,14 @@ class VideoServiceImplTest {
     @Autowired
     private AdminVideoDirectory adminVideoDirectory;
 
+    // Spied, not mocked: presigning stays real (it is local), and publish's existence check is
+    // answered here instead of by a MinIO this test does not run. Every upload exists by default.
+    @MockitoSpyBean
+    private MinioClient minioClient;
+
     @BeforeEach
-    void cleanUp() {
+    void cleanUp() throws Exception {
+        doReturn(null).when(minioClient).statObject(any());
         videoRepository.deleteAll();
         ownerPrivacyRepository.deleteAll();
         ownerBanRepository.deleteAll();
@@ -161,6 +173,32 @@ class VideoServiceImplTest {
      * keys are namespaced by uploader, so without this check publishing someone else's raw key
      * republishes their video under the caller's name — the pipeline does the rest of the work.
      */
+    /**
+     * The key's shape says whose upload it would be, not that one happened. A made-up key used to
+     * reach media-worker, which retried the missing file for seconds on its one listener thread.
+     */
+    @Test
+    void publish_aKeyNothingWasUploadedTo_isRejected() throws Exception {
+        doThrow(new ErrorResponseException(
+                new ErrorResponse("NoSuchKey", "not found", "video-media", "k", "k", "r", "h"), null, null))
+                .when(minioClient).statObject(any());
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Never uploaded", null, "s3://video-media/raw/1/never.mp4", VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(UploadNotFoundException.class);
+        assertThat(videoRepository.count()).isZero();
+    }
+
+    @Test
+    void publish_whileStorageIsDown_isUnavailableRatherThanTheCallersFault() throws Exception {
+        doThrow(new java.net.ConnectException("refused")).when(minioClient).statObject(any());
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Storage down", null, "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(UploadUrlUnavailableException.class);
+        assertThat(videoRepository.count()).isZero();
+    }
+
     @Test
     void publish_someoneElsesUploadKey_isRejected() {
         assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(

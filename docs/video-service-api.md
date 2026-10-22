@@ -162,7 +162,7 @@ Response `data` → `VideoResponse`:
 
 **Giới hạn đăng video theo tài khoản:** tối đa 10 video trong một giờ và 30 video trong một ngày. Vượt thì nhận `429 UPLOAD_RATE_LIMITED` kèm header `Retry-After` (số giây). Lượt đăng được tính **trước mọi kiểm tra khác**, nên lần bị từ chối vì caption (`VIDEO_*_REJECTED`), `FOREIGN_UPLOAD` hay `RAW_FILE_ALREADY_PUBLISHED` vẫn tốn một lượt. Như vậy không ai dò được blocklist bằng cách gửi caption liên tục. Sửa caption rồi gửi lại cũng tốn thêm một lượt.
 
-Lỗi: `VALIDATION_ERROR` (400), `FOREIGN_UPLOAD` (400), `RAW_FILE_ALREADY_PUBLISHED` (400), `VIDEO_TITLE_REJECTED` / `VIDEO_DESCRIPTION_REJECTED` / `VIDEO_TAGS_REJECTED` (422), `UPLOAD_RATE_LIMITED` (429), `401` (thiếu/hết hạn token).
+Lỗi: `VALIDATION_ERROR` (400), `FOREIGN_UPLOAD` (400), `UPLOAD_NOT_FOUND` (400), `RAW_FILE_ALREADY_PUBLISHED` (400), `VIDEO_TITLE_REJECTED` / `VIDEO_DESCRIPTION_REJECTED` / `VIDEO_TAGS_REJECTED` (422), `UPLOAD_RATE_LIMITED` (429), `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không kiểm được file trong storage.
 
 ### 3.3 `GET /feed`
 Không cần token. **Phân trang bằng cursor, không phải `page`** — khác mục 3.5. Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CursorPage<VideoResponse>`:
@@ -309,6 +309,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `VALIDATION_ERROR` | 400 | `title` rỗng sau khi làm sạch/quá 150 ký tự, `description` quá 2000, tag quá 50, `visibility` thiếu hoặc sai giá trị enum, `rawFileUrl` sai scheme/host/bucket (mục 3.2) |
 | `UNSUPPORTED_UPLOAD_TYPE` | 400 | `contentType` ở mục 3.1 không phải `video/mp4`, `video/quicktime` hoặc `video/webm` |
 | `FOREIGN_UPLOAD` | 400 | `rawFileUrl` trỏ vào file của tài khoản khác, hoặc vào key không do mục 3.1 cấp. Chỉ publish được đúng `fileUrl` mà chính token này vừa nhận |
+| `UPLOAD_NOT_FOUND` | 400 | Chưa POST file lên `uploadUrl` (mục 3.1), hoặc file đã hết hạn sau 7 ngày. Upload lại rồi mới gọi `POST /` |
 | `RAW_FILE_ALREADY_PUBLISHED` | 400 | `rawFileUrl` này đã có video rồi. Thường là retry sau timeout — lần trước đã thành công |
 | `INVALID_FEED_CURSOR` | 400 | `cursor` ở mục 3.3 không phải do server cấp. Bỏ cursor đang giữ, tải lại feed từ đầu |
 | `TOO_MANY_FOLLOWED_USERS` | 400 | `followedUserIds` ở mục 3.3b quá 500 id. Cắt danh sách following theo trang thay vì gửi hết một lần |

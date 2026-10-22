@@ -27,6 +27,7 @@ import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.PrivateAccountException;
 import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
+import com.tiktok.videoservice.exception.UploadNotFoundException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
@@ -36,6 +37,8 @@ import com.tiktok.videoservice.repository.UserVideoStats;
 import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
 import io.minio.PostPolicy;
+import io.minio.StatObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
@@ -177,7 +180,9 @@ public class VideoServiceImpl implements VideoService {
         // First: a publish refused for anything after this — a foreign upload, its caption — still
         // spends budget, so neither can be probed at speed.
         uploadRateLimiter.requirePublish(userId);
-        String rawFileUrl = storedUrl(requireOwnUpload(userId, request.rawFileUrl()));
+        String key = requireOwnUpload(userId, request.rawFileUrl());
+        requireUploaded(key);
+        String rawFileUrl = storedUrl(key);
         List<String> tags = normalizeTags(request.tags(), request.description());
         // Before the insert: a caption refused here leaves nothing behind, so the same upload can
         // be published again once the text is fixed.
@@ -293,6 +298,25 @@ public class VideoServiceImpl implements VideoService {
             throw new ForeignUploadException();
         }
         return key;
+    }
+
+    /**
+     * The key's shape says whose upload it would be, not that one happened. Unchecked, a made-up
+     * key reached media-worker, which retried the missing file for seconds on its one listener
+     * thread, so a loop of them stalled every transcode.
+     */
+    private void requireUploaded(String key) {
+        try {
+            minioClient.statObject(StatObjectArgs.builder().bucket(minioProperties.bucket()).object(key).build());
+        } catch (ErrorResponseException e) {
+            if ("NoSuchKey".equals(e.errorResponse().code())) {
+                throw new UploadNotFoundException();
+            }
+            throw new UploadUrlUnavailableException(e);
+        } catch (Exception e) {
+            log.error("Could not check upload {} in bucket {}", key, minioProperties.bucket(), e);
+            throw new UploadUrlUnavailableException(e);
+        }
     }
 
     /**
