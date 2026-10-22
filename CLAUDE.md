@@ -176,6 +176,29 @@ Test thủ công (Postman) cần đọc OTP mà không có mailbox thật. Trư�
 
 **Trước mỗi lần deploy thật**: `grep -rn "DEV ONLY" services/` phải trả về rỗng, và `OTP_LOG_TO_CONSOLE` không được set ở bất kỳ env nào.
 
+### Production (`docker-compose.prod.yml`) — chi tiết ở `docs/operations.md`
+- **Store nào cũng đòi mật khẩu**:
+  - Redis: `REDIS_PASSWORD`, service đọc qua `SPRING_DATA_REDIS_PASSWORD`.
+  - Kafka SASL/PLAIN: `KAFKA_PASSWORD`, client nhận qua `SPRING_KAFKA_PROPERTIES_*` trong anchor `x-java-env`.
+  - Elasticsearch: `ELASTIC_PASSWORD`.
+  - Service mới dùng một trong các store trên phải thêm đúng env đó. Thiếu thì service vẫn khởi động, chỉ lỗi auth ở lần gọi đầu tiên.
+  - Không cần sửa `application.yml`, vì mọi client đều do Boot dựng. Riêng client tự `new KafkaProducer(...)` (như `DltReplay`) thì KHÔNG nhận cấu hình này.
+- **Kafka có hai listener**:
+  - `CLIENT` (SASL, `kafka:29092`) cho mọi container khác.
+  - `LOCAL` (plaintext, `127.0.0.1` trong container broker) cho controller connection và healthcheck.
+  - Đừng đổi healthcheck về `kafka:29092`: không có mật khẩu thì nó treo.
+- **MinIO**:
+  - Root chỉ `minio-init` giữ. Mỗi service có một account theo `scripts/minio/policies/`; service chạm prefix mới thì phải sửa policy của nó, không thì 403.
+  - Đọc được prefix là điều kiện để key thiếu trả `NoSuchKey`. Thiếu quyền đọc thì key thiếu trả 403, và `requireUploaded` báo 503 thay vì 400.
+  - Lifecycle và account đều ở `scripts/minio/` (`init.sh`), dùng chung cho compose dev và prod.
+- **Backup**: container `backup` (`scripts/backup/backup.sh`).
+  - Thêm store mới chứa dữ liệu không dựng lại được thì thêm bước dump vào `backup.sh` và lệnh restore vào `docs/operations.md`.
+  - KHÔNG BAO GIỜ `mc mirror --remove` sang off-site: sau khi mất ổ, volume trống sẽ xoá luôn bản sao duy nhất còn lại.
+- **Monitoring**:
+  - Prometheus scrape theo danh sách cứng trong `scripts/monitoring/prometheus.yml`. Service Java mới phải được thêm vào đó.
+  - media-worker có `spring-boot-starter-webmvc` chỉ để actuator có chỗ phục vụ `/actuator/prometheus`.
+- **CI** chạy cả test Python (job `python-tests`). Version torch được đọc từ `services/moderation-service/Dockerfile`, nên đổi pin ở đó là CI đổi theo.
+
 ## 5. Common Commands
 ```bash
 # Build
