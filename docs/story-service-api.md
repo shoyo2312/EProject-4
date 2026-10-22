@@ -7,7 +7,8 @@ Base URL (qua gateway): `/api/v1/stories`. Mọi response bọc trong `ApiRespon
 
 Quy tắc token: `GET /users/{userId}`, `GET /{storyId}` và `GET /rings` không cần token (người chưa
 đăng nhập chỉ thấy story PUBLIC của tài khoản công khai). Mọi endpoint khác cần access token;
-thiếu token thì service trả 403, gateway trả 401.
+thiếu token thì service trả 403, gateway trả 401. Ngoại lệ duy nhất là endpoint nội bộ (§6): dành cho
+service khác, gateway chặn hẳn.
 
 ## 1. Vòng đời một story
 
@@ -95,3 +96,24 @@ vắng mặt trong kết quả; id trùng chỉ tính một lần.
 | `STORY_NOT_FOUND` | 404 | không tồn tại, đã xoá, đã hết hạn, hoặc người gọi không được xem |
 | `NOT_STORY_OWNER` | 403 | sửa/xoá/xem người xem story của người khác |
 | `UPLOAD_URL_UNAVAILABLE` | 503 | MinIO không ký được URL |
+
+## 6. Endpoint nội bộ
+
+Dành cho service khác, không phải client.
+
+| Method | Path | Trả về |
+|---|---|---|
+| GET | `/api/v1/stories/internal/{storyId}/announcement` | `{userId, visibility}` — chủ story và `visibility` (`PUBLIC` \| `FRIENDS` \| `PRIVATE`) **hiện tại** |
+
+Người gọi là notification-service, ngay trước khi báo cho người theo dõi một story mới: event
+`story.activation-events` chỉ mang `storyId` và `userId`, còn từ lúc event được phát story có thể đã bị xoá,
+hết hạn, đổi `visibility`, hoặc chủ story bị ban / đóng tài khoản.
+
+`404 STORY_NOT_FOUND` khi story không còn gì để thông báo: không tồn tại hoặc đã xoá, đã hết hạn, chưa
+`ACTIVE` (`PENDING_MODERATION`, `HELD`, `REJECTED`), hoặc chủ story đang bị ban / đã đóng tài khoản. Story
+`PRIVATE` vẫn trả `200` với `visibility: "PRIVATE"`; có báo cho ai hay không là việc của người gọi.
+
+Chỉ nhận header `X-Internal-Token` (= `INTERNAL_API_TOKEN`, cùng giá trị ở mọi service). Không có token, hoặc
+chỉ có access token của user, đều bị `403` với mọi method. Gateway `denyAll` cả prefix
+`/api/v1/stories/internal/**` (`403` khi có token, `401` khi không), nên từ ngoài không với tới được; token
+là lớp còn lại cho request đi thẳng vào `story-service:8086`.

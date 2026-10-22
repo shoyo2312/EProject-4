@@ -108,6 +108,23 @@ class GatewaySecurityRulesTest {
                 .expectStatus().isUnauthorized();
     }
 
+    /**
+     * story-service's internal prefix tells notification-service whether a story is still live and
+     * who it is for. Nothing before the catch-all names it, so without the deny rule any signed-in
+     * user would reach it.
+     */
+    @Test
+    void internalStoryEndpoints_areRefusedWithAndWithoutAToken() {
+        String uri = "/api/v1/stories/internal/s1/announcement";
+        client.get().uri(uri)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token")
+                .exchange()
+                .expectStatus().isForbidden();
+        client.get().uri(uri)
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
     @Test
     void ordinaryUserEndpoints_stillPassForASignedInCaller() {
         client.get().uri("/api/v1/users/42")
@@ -214,7 +231,8 @@ class GatewaySecurityRulesTest {
                 "/api/v1/interactions/videos/123/counts",
                 "/api/v1/interactions/videos/counts/batch", "/api/v1/interactions/videos/123/like-status",
                 "/api/v1/stories/users/42", "/api/v1/stories/s1", "/api/v1/stories/feed",
-                "/api/v1/stories/rings", "/api/v1/stories/s1/viewers"})
+                "/api/v1/stories/rings", "/api/v1/stories/s1/viewers",
+                "/api/v1/stories/internal/s1/announcement"})
         Mono<String> ok() {
             return Mono.just("ok");
         }

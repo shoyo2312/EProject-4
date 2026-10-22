@@ -3,6 +3,7 @@ package com.tiktok.storyservice.service;
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
 import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
+import com.tiktok.storyservice.dto.response.StoryAnnouncementResponse;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryRingResponse;
@@ -249,6 +250,23 @@ public class StoryServiceImpl implements StoryService {
             throw new NotStoryOwnerException(storyId);
         }
         storyRepository.markDeleted(storyId, Instant.now());
+    }
+
+    /**
+     * notification-service's check right before it notifies followers: the event only names the
+     * story, which may since have been deleted, expired, or lost its owner to a ban or a closure.
+     * Whatever only the owner could see (PENDING_MODERATION, HELD, REJECTED) has nothing to
+     * announce either.
+     *
+     * <p>No audience check: whom to tell follows from the visibility, and is the caller's to decide.
+     */
+    @Override
+    public StoryAnnouncementResponse announcement(String storyId) {
+        Story story = storyRepository.findByIdAndDeletedAtIsNull(storyId)
+                .filter(found -> !found.isExpired() && found.getStatus() == StoryStatus.ACTIVE)
+                .filter(found -> !storyAudience.isHidden(found.getUserId()))
+                .orElseThrow(() -> new StoryNotFoundException(storyId));
+        return new StoryAnnouncementResponse(story.getUserId(), story.getVisibility());
     }
 
     /** Not deleted, not expired, and either the requester's own or ACTIVE and in their audience. */

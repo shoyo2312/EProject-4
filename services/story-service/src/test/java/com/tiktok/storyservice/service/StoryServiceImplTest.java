@@ -2,6 +2,7 @@ package com.tiktok.storyservice.service;
 
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
+import com.tiktok.storyservice.dto.response.StoryAnnouncementResponse;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryRingResponse;
@@ -43,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -484,5 +486,37 @@ class StoryServiceImplTest {
         when(storyRepository.findByIdAndDeletedAtIsNull("missing")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> storyService.delete(1L, "missing")).isInstanceOf(StoryNotFoundException.class);
+    }
+
+    // --- announcement -------------------------------------------------------------------------
+
+    @Test
+    void announcementOfALiveStoryNamesOwnerAndVisibility() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1"))
+                .thenReturn(Optional.of(story("s1", 7L, StoryStatus.ACTIVE, StoryVisibility.FRIENDS, Instant.now())));
+        when(storyAudience.isHidden(7L)).thenReturn(false);
+
+        assertThat(storyService.announcement("s1")).isEqualTo(new StoryAnnouncementResponse(7L, StoryVisibility.FRIENDS));
+    }
+
+    /**
+     * Owner 7 is the hidden one and their story is otherwise live; the other stories are owner 8's
+     * and each is wrong in one way, so no missing check can hide behind the ban.
+     */
+    @Test
+    void announcementOfAStoryThatCannotBeAnnouncedIsNotFound() {
+        Story expired = Story.builder().id("expired").userId(8L).status(StoryStatus.ACTIVE)
+                .visibility(StoryVisibility.PUBLIC).expiresAt(Instant.now().minusSeconds(1)).build();
+        Story held = story("held", 8L, StoryStatus.HELD, StoryVisibility.PUBLIC, Instant.now());
+        when(storyRepository.findByIdAndDeletedAtIsNull("gone")).thenReturn(Optional.empty());
+        when(storyRepository.findByIdAndDeletedAtIsNull("expired")).thenReturn(Optional.of(expired));
+        when(storyRepository.findByIdAndDeletedAtIsNull("held")).thenReturn(Optional.of(held));
+        when(storyRepository.findByIdAndDeletedAtIsNull("banned")).thenReturn(Optional.of(active("banned", 7L)));
+        when(storyAudience.isHidden(anyLong())).thenAnswer(call -> call.<Long>getArgument(0) == 7L);
+
+        for (String storyId : List.of("gone", "expired", "held", "banned")) {
+            assertThatThrownBy(() -> storyService.announcement(storyId))
+                    .as(storyId).isInstanceOf(StoryNotFoundException.class);
+        }
     }
 }

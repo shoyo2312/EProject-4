@@ -2,6 +2,7 @@ package com.tiktok.storyservice.service;
 
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
 import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
+import com.tiktok.storyservice.dto.response.StoryAnnouncementResponse;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryRingResponse;
@@ -34,4 +35,10 @@ public interface StoryService {
     List<StoryViewerResponse> listViewers(Long requesterId, String storyId, Instant before, Integer size);
 
     void delete(Long requesterId, String storyId);
+
+    /**
+     * Service-to-service, so there is no requester: the story's owner and current visibility, or
+     * not found unless the story is live and its owner is not hidden.
+     */
+    StoryAnnouncementResponse announcement(String storyId);
 }

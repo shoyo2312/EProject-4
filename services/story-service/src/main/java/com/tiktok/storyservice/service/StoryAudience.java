@@ -55,6 +55,11 @@ public class StoryAudience {
         return EnumSet.of(StoryVisibility.PUBLIC);
     }
 
+    /** Whether this owner is banned or has closed their account — {@link #resolve}'s first check, for one owner. */
+    public boolean isHidden(Long ownerId) {
+        return !ownerBanRepository.findHiddenAmong(List.of(ownerId), Instant.now()).isEmpty();
+    }
+
     /**
      * One ban query for every owner, then per owner a block check (signed-in viewers only) and one
      * relationship lookup — privacy, follow and friendship together. Hidden and blocked owners are

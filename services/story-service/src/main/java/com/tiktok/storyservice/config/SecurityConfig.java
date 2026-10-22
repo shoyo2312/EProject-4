@@ -1,5 +1,7 @@
 package com.tiktok.storyservice.config;
 
+import com.tiktok.common.http.InternalApiToken;
+import com.tiktok.security.internal.InternalCallerAuthorization;
 import com.tiktok.security.jwt.JwtAuthenticationFilter;
 
 import lombok.RequiredArgsConstructor;
@@ -24,6 +26,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final InternalApiToken internalApiToken;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -32,6 +35,13 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                        // Service-to-service only, ahead of every stories rule: api-gateway denies this
+                        // prefix, and the token keeps out whatever reaches this port without going
+                        // through the gateway. Left to anyRequest(), a signed-in user would get in.
+                        // Any method, not just GET: a HEAD is answered by the GET handler, so a rule
+                        // for GET alone lets a user's JWT ask it.
+                        .requestMatchers("/api/v1/stories/internal/**")
+                        .access(new InternalCallerAuthorization(internalApiToken))
                         .requestMatchers(HttpMethod.GET, "/api/v1/stories/feed").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/stories/rings", "/api/v1/stories/users/*",
                                 "/api/v1/stories/*").permitAll()

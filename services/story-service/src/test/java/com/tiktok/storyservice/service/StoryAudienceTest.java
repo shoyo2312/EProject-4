@@ -103,4 +103,13 @@ class StoryAudienceTest {
         assertThat(audience.resolve(9L, List.of(1L)).get(1L)).isEmpty();
         verifyNoInteractions(friendshipClient);
     }
+
+    @Test
+    void anOwnerIsHiddenWhileBannedOrClosed() {
+        when(bans.findHiddenAmong(eq(List.of(3L)), any())).thenReturn(List.of(new OwnerBan(3L, OwnerBan.PERMANENT, Instant.now())));
+
+        assertThat(audience.isHidden(3L)).isTrue();
+        assertThat(audience.isHidden(4L)).isFalse();
+        verifyNoInteractions(friendshipClient, blockClient);
+    }
 }
