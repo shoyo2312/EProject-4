@@ -1,6 +1,6 @@
 # Media Worker — Transcode, Avatar Mirror & Media Cleanup
 
-Tài liệu cho người **vận hành**, không phải client. `media-worker` (`:8084`) **không có REST API** và không có route ở gateway — nó chỉ là Kafka consumer + producer, thao tác trên MinIO. Client không bao giờ gọi thẳng; nó thấy kết quả gián tiếp qua `video-service` (`status` chuyển `PUBLISHED`/`FAILED`, `hlsUrl`) và `user-service` (`avatarUrl` đổi sang bản MinIO).
+Tài liệu cho người **vận hành**, không phải client. `media-worker` (`:8084`) **không có REST API** và không có route ở gateway — nó chỉ là Kafka consumer + producer, thao tác trên MinIO. Cổng 8084 chỉ phục vụ `/actuator/health|info|prometheus` cho Prometheus; web server có mặt chỉ vì thế. Client không bao giờ gọi thẳng; nó thấy kết quả gián tiếp qua `video-service` (`status` chuyển `PUBLISHED`/`FAILED`, `hlsUrl`) và `user-service` (`avatarUrl` đổi sang bản MinIO).
 
 ## 1. media-worker làm 3 việc
 
