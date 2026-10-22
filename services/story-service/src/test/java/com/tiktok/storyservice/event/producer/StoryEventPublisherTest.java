@@ -1,10 +1,12 @@
 package com.tiktok.storyservice.event.producer;
 
+import com.tiktok.event.story.StoryActivatedEvent;
 import com.tiktok.event.story.StoryCreatedEvent;
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryMediaType;
+import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.entity.StoryVisibility;
 import com.tiktok.storyservice.repository.StoryRepository;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -54,6 +56,11 @@ class StoryEventPublisherTest {
                 StoryVisibility.PUBLIC, ModerationVerdict.REVIEW, Instant.now());
     }
 
+    private static Story activated(String id) {
+        return Story.builder().id(id).userId(7L).status(StoryStatus.ACTIVE).visibility(StoryVisibility.PUBLIC)
+                .activatedAt(Instant.now()).build();
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void marksOnlyAcknowledged() {
@@ -91,6 +98,40 @@ class StoryEventPublisherTest {
                 .thenReturn(List.of());
 
         publisher.publishPending();
+
+        verifyNoInteractions(kafkaOperations);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void publishesActivationsKeyedByOwnerAndMarksOnlyAcknowledged() {
+        when(storyRepository.findAnnounceable(any(), eq(100))).thenReturn(List.of(activated("1"), activated("2")));
+        CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
+        failed.completeExceptionally(new RuntimeException("broker unreachable"));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null))
+                .thenReturn(failed);
+
+        publisher.publishActivated();
+
+        ArgumentCaptor<ProducerRecord<String, String>> captor = ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaOperations, times(2)).send(captor.capture());
+        ProducerRecord<String, String> first = captor.getAllValues().getFirst();
+        assertThat(first.topic()).isEqualTo("story.activation-events");
+        assertThat(first.key()).isEqualTo("7");
+        StoryActivatedEvent event = objectMapper.readValue(first.value(), StoryActivatedEvent.class);
+        assertThat(event.storyId()).isEqualTo("1");
+        assertThat(event.userId()).isEqualTo(7L);
+
+        verify(storyRepository).markAnnounced(eq("1"), any(Instant.class));
+        verify(storyRepository, never()).markAnnounced(eq("2"), any(Instant.class));
+    }
+
+    @Test
+    void noActivationsTouchesNoBroker() {
+        when(storyRepository.findAnnounceable(any(), eq(100))).thenReturn(List.of());
+
+        publisher.publishActivated();
 
         verifyNoInteractions(kafkaOperations);
     }

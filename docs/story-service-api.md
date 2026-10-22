@@ -16,7 +16,12 @@ POST /upload-url → trình duyệt POST file thẳng lên MinIO (presigned, sto
 POST /           → caption được chấm (moderation-lib); story lưu ở PENDING_MODERATION
                  → story.story-events → media-worker chấm ảnh/video
                  → media.story-moderation-events → ACTIVE | HELD | REJECTED
+                 → ACTIVE + PUBLIC/FRIENDS → story.activation-events (StoryActivatedEvent, key userId) → notification-service
 ```
+
+Một story chỉ được thông báo một lần — khi nó thành `ACTIVE`, hoặc, nếu đăng ở chế độ `PRIVATE`, khi
+chủ story mở rộng sang `PUBLIC`/`FRIENDS` trong 24h hiệu lực; story đã sống từ trước khi tính năng này
+ra mắt thì không bao giờ được thông báo.
 
 | Status | Ai thấy | Hết hạn |
 |---|---|---|

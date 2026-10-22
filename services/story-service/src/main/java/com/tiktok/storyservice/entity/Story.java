@@ -82,6 +82,15 @@ public class Story {
     /** Set once the broker acknowledged StoryCreatedEvent — the outbox flag. */
     private Instant eventPublishedAt;
 
+    /**
+     * When moderation made the story ACTIVE. Null until then, and on stories that went live before
+     * this field existed — which is what keeps them from being announced.
+     */
+    private Instant activatedAt;
+
+    /** Set once the broker acknowledged StoryActivatedEvent — that event's outbox flag. */
+    private Instant announcedAt;
+
     @Version
     private Long version;
 

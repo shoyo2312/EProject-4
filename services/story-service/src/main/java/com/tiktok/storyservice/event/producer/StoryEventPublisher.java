@@ -1,5 +1,6 @@
 package com.tiktok.storyservice.event.producer;
 
+import com.tiktok.event.story.StoryActivatedEvent;
 import com.tiktok.event.story.StoryCreatedEvent;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.storyservice.entity.Story;
@@ -23,8 +24,13 @@ import java.util.List;
  * <p>A story whose event never leaves stays PENDING_MODERATION and invisible to everyone but its
  * owner, until the 48h ceiling removes it — never shown unscreened.
  *
- * <p>No parking flag for a record that cannot be built: every field of StoryCreatedEvent is an id,
- * a key or an enum this service generated, so Jackson has nothing user-supplied to refuse.
+ * <p>The second poll announces stories that are live to the people who may watch them
+ * ({@code StoryActivatedEvent}, for notification-service), flagged by {@code announcedAt}. Never on
+ * {@code story.story-events}: media-worker reads that topic without routing on a header, so it
+ * would parse this event as a StoryCreatedEvent full of nulls and carry on without an error.
+ *
+ * <p>No parking flag for a record that cannot be built: every field of these events is an id, a
+ * key or an enum this service generated, so Jackson has nothing user-supplied to refuse.
  */
 @Slf4j
 @Component
@@ -32,6 +38,8 @@ import java.util.List;
 public class StoryEventPublisher {
 
     static final String TOPIC = "story.story-events";
+    static final String ACTIVATION_TOPIC = "story.activation-events";
+    private static final int ACTIVATION_BATCH = 100;
 
     private final StoryRepository storyRepository;
     private final OutboxDispatcher outboxDispatcher;
@@ -53,9 +61,32 @@ public class StoryEventPublisher {
         }
     }
 
+    @Scheduled(fixedDelay = 5000)
+    public void publishActivated() {
+        List<Story> due = storyRepository.findAnnounceable(Instant.now(), ACTIVATION_BATCH);
+        if (due.isEmpty()) {
+            return;
+        }
+
+        int published = outboxDispatcher.dispatch(due, this::toActivationRecord,
+                story -> storyRepository.markAnnounced(story.getId(), Instant.now()));
+
+        if (published < due.size()) {
+            log.warn("Published {}/{} story activations, the rest stay pending for the next poll",
+                    published, due.size());
+        }
+    }
+
     private ProducerRecord<String, String> toRecord(Story story) {
         StoryCreatedEvent event = StoryCreatedEvent.of(story.getId(), story.getUserId(), story.getMediaKey(),
                 story.getMediaType().name(), story.getTextVerdict());
         return new ProducerRecord<>(TOPIC, story.getId(), objectMapper.writeValueAsString(event));
+    }
+
+    /** Keyed by the owner, so one account's announcements reach the consumer in the order they were made. */
+    private ProducerRecord<String, String> toActivationRecord(Story story) {
+        StoryActivatedEvent event = StoryActivatedEvent.of(story.getId(), story.getUserId());
+        return new ProducerRecord<>(ACTIVATION_TOPIC, String.valueOf(story.getUserId()),
+                objectMapper.writeValueAsString(event));
     }
 }

@@ -1,10 +1,12 @@
 package com.tiktok.storyservice.repository;
 
+import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryModeration;
 import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.entity.StoryVisibility;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Field-scoped updates. {@code save()} writes the whole document under {@code @Version}, so two
@@ -20,6 +22,8 @@ public interface StoryRepositoryCustom {
      * claim for the verdict consumer: a redelivered verdict, or one for a story that is gone,
      * matches nothing.
      *
+     * <p>Going ACTIVE also stamps {@code activatedAt}, the moment the story becomes announceable.
+     *
      * @param expiresAt null leaves the expiry as it is
      * @return whether this call made the transition
      */
@@ -27,6 +31,14 @@ public interface StoryRepositoryCustom {
                    StoryModeration moderation);
 
     void markEventPublished(String storyId, Instant at);
+
+    /**
+     * ACTIVE stories visible beyond their owner that nobody has been told about yet, oldest
+     * activation first — the poll behind StoryActivatedEvent.
+     */
+    List<Story> findAnnounceable(Instant now, int limit);
+
+    void markAnnounced(String storyId, Instant at);
 
     void updateVisibility(String storyId, StoryVisibility visibility);
 
