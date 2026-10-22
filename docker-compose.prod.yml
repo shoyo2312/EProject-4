@@ -630,6 +630,40 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
 
+  # ─────────────────────────────── operations ───────────────────────────────
+
+  # Scrapes every Java service and evaluates scripts/monitoring/alerts.yml. No domain: it has no
+  # login, so it stays on this network (docs/operations.md says how to reach it).
+  prometheus:
+    build:
+      context: ./scripts/monitoring
+      dockerfile_inline: |
+        FROM prom/prometheus:v3.5.0
+        COPY prometheus.yml alerts.yml /etc/prometheus/
+    restart: unless-stopped
+    mem_limit: 512m
+    command: [ "--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--storage.tsdb.retention.time=15d" ]
+    volumes:
+      - prometheus-data:/prometheus
+
+  # Mails the alerts through the Resend account auth-service already uses. ALERT_EMAIL defaults to
+  # the admin account's address.
+  alertmanager:
+    build:
+      context: ./scripts/monitoring
+      dockerfile_inline: |
+        FROM prom/alertmanager:v0.28.1
+        COPY alertmanager.yml alertmanager-entrypoint.sh /etc/alertmanager/
+        ENTRYPOINT ["sh", "/etc/alertmanager/alertmanager-entrypoint.sh"]
+    restart: unless-stopped
+    mem_limit: 128m
+    environment:
+      ALERT_EMAIL: ${ALERT_EMAIL:-${ADMIN_EMAIL:?}}
+      MAIL_FROM: ${MAIL_FROM:?}
+      SMTP_PASSWORD: ${RESEND_API_KEY:?}
+    volumes:
+      - alertmanager-data:/alertmanager
+
 volumes:
   postgres-auth-data:
   postgres-user-data:
@@ -644,3 +678,5 @@ volumes:
   zookeeper-log:
   kafka-data:
   minio-data:
+  prometheus-data:
+  alertmanager-data:

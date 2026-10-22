@@ -1,0 +1,18 @@
+# Mail through the Resend account auth-service already sends codes with. Alertmanager reads no
+# environment variables, so the __placeholders__ are filled in at start by alertmanager-entrypoint.sh.
+route:
+  receiver: email
+  group_by: [ alertname, application ]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: email
+    email_configs:
+      - to: '__ALERT_EMAIL__'
+        from: '__MAIL_FROM__'
+        smarthost: smtp.resend.com:587
+        auth_username: resend
+        auth_password_file: /tmp/smtp-password
+        send_resolved: true
