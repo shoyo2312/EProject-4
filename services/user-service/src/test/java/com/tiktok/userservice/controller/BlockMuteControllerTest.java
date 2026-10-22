@@ -39,6 +39,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -222,6 +223,19 @@ class BlockMuteControllerTest {
                         .header(InternalApiToken.HEADER, "a-guess")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
                 .andExpect(status().isForbidden());
+    }
+
+    /**
+     * Spring MVC answers a HEAD with the GET handler, so an internal rule for GET alone lets a HEAD
+     * fall through to anyRequest().authenticated(): a user's JWT would ask who blocked whom.
+     */
+    @Test
+    void internalPrefix_refusesAHeadWithAUsersJwt() throws Exception {
+        mockMvc.perform(head("/api/v1/users/internal/blocks").param("userA", "1").param("userB", "2")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+
+        verify(blockService, never()).isBlockedBetween(any(), any());
     }
 
     /**

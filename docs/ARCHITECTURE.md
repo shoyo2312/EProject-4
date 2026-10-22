@@ -236,11 +236,15 @@ chỉ route `/api/v1/**`). Riêng api-gateway — port public duy nhất — đ�
 `MANAGEMENT_PORT` (mặc định **8180**), không publish ra ngoài. Cấu hình chung nằm ở
 `common-lib/ManagementDefaults` (service vẫn override được trong `application.yml`).
 
-Endpoint nội bộ (`/api/v1/users/internal/**`, `/api/v1/interactions/internal/**`, `/api/v1/videos/*/policy`)
-bị gateway `denyAll` **và** chỉ nhận request mang `X-Internal-Token` = `INTERNAL_API_TOKEN`: gateway không
-phải ranh giới duy nhất, vì service nào cũng nghe trên port riêng. Gateway chỉ gửi token sang auth-service
-(nơi duy nhất đọc `X-Client-Ip`), không gửi lên route khác. Khi deploy chỉ publish port gateway; chạy
-local, `make run-*` cho mọi service trừ gateway bind `127.0.0.1` (`make run-user BIND=0.0.0.0` để mở).
+Endpoint nội bộ (`/api/v1/users/internal/**`, `/api/v1/interactions/internal/**`,
+`/api/v1/videos/internal/**`, `/api/v1/conversations/internal/**`, `/api/v1/stories/internal/**`,
+`/api/v1/admin/internal/**`, `/api/v1/videos/*/policy`) bị gateway `denyAll` **và** chỉ nhận request mang
+`X-Internal-Token` = `INTERNAL_API_TOKEN`: gateway không phải ranh giới duy nhất, vì service nào cũng nghe
+trên port riêng. Matcher ở `SecurityConfig` KHÔNG mang `HttpMethod`: Spring MVC trả lời HEAD bằng handler
+GET, nên rule chỉ cho GET để một HEAD mang JWT của user lọt xuống rule sau. Gateway chỉ gửi token sang
+auth-service (nơi duy nhất đọc `X-Client-Ip`), không gửi lên route khác. Khi deploy chỉ publish port
+gateway; chạy local, `make run-*` cho mọi service trừ gateway bind `127.0.0.1`
+(`make run-user BIND=0.0.0.0` để mở).
 
 ## 6b. Vận hành
 

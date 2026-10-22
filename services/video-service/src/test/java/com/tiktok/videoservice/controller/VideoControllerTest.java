@@ -46,6 +46,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -116,6 +117,18 @@ class VideoControllerTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(get("/api/v1/videos/v1/policy").header(InternalApiToken.HEADER, internalApiToken.value()))
                 .andExpect(status().isOk());
+    }
+
+    /**
+     * Spring MVC answers a HEAD with the GET handler, so an internal rule for GET alone lets a HEAD
+     * fall through to anyRequest().authenticated(): a user's JWT would ask any video's policy.
+     */
+    @Test
+    void policy_refusesAHeadWithAUsersJwt() throws Exception {
+        mockMvc.perform(head("/api/v1/videos/v1/policy").header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+
+        verify(videoService, never()).getPolicy(any());
     }
 
     @Test
