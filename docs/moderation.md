@@ -105,11 +105,20 @@ match landing on a category's descriptions is that category's score.
 | `accident` | a car crash, a car on fire, a burning wreck |
 | `gambling` | a betting app on a phone, odds, a casino table, a slot machine |
 
-**It only ever holds a video.** One frame at or over `HARM_REVIEW_THRESHOLD` (0.55) sends it to
-`PENDING_REVIEW`; nothing it scores is `REJECTED` (`verdict.review_only`). An action film, a boxing
-match and a kitchen knife are each a description away from "violence", and a model that cannot
-tell them apart does not get to take a video down by itself. NSFW still rejects on its own lines,
-and a rejection outranks a harm hold.
+**It only ever holds a video.** Nothing it scores is `REJECTED` (`verdict.review_only`). An action
+film, a boxing match and a kitchen knife are each a description away from "violence", and a model
+that cannot tell them apart does not get to take a video down by itself. NSFW still rejects on its
+own lines, and a rejection outranks a harm hold.
+
+**One odd frame is not enough to hold it.** The video goes to `PENDING_REVIEW` when two frames are
+at or over `HARM_REVIEW_THRESHOLD` (0.55), or one is at or over `HARM_REVIEW_ALONE_THRESHOLD` (0.80)
+— the same guard NSFW rejections have had from the start. Frames are counted across all five labels
+(`verdict.decide_together`), not within one: CLIP splits a scene between neighbouring labels, and the
+syringe video below scored gambling on one frame and drugs on the next. harm-v1 held on a single
+frame at 0.55, and five of the seven ordinary videos in its queue were held on one frame — see
+[the second judged set](#the-second-judged-set). An image story is a single frame, so it needs only
+that one at 0.55: the count is capped at the frames there are. Without the cap, every image under
+0.80 was approved, including the powder (0.71) and syringe (0.71) that harm-v1 held.
 
 **An animated image is not one frame.** A story image reaches `/moderate` as the uploaded file
 itself, and a GIF, APNG or animated WebP opened as one image is its first frame — so a clean first
@@ -153,6 +162,43 @@ Twenty-one production uploads, ten frames each, sampled the way media-worker sam
 margin on a small set with no hard negatives — cooking, sport, action films, games. Expect the
 first weeks of real uploads to move it; the log line `scores=nsfw:…,violence:…,…` carries every
 label's worst frame, including the labels that did not win.
+
+### The second judged set
+
+Forty-three uploads (2026-10-22): the fourteen harm-v1 held and every video it published, each
+judged by looking at its frames. harm-v1 held all seven harmful ones, and seven ordinary ones with
+them:
+
+| Ordinary, held by harm-v1 | harm-v1 | Read as | harm-v2 |
+|---|---|---|---|
+| a gym row on a T-bar machine | violence 0.75, 7 of 9 frames | "a person punching another person" | 0.33, APPROVED |
+| anime edit, a character making a peace sign | violence 0.74, 1 frame | "pointing a gun at someone" | 0.23, APPROVED |
+| anime fight edit | violence 0.66, 2 frames | "punching", "attacking with a knife" | 0.41, APPROVED |
+| horror clown face in red light | gore 0.64, 1 frame | "a person covered in blood" | 0.63, 1 frame — APPROVED |
+| anime edit over a tornado (uploaded twice) | violence 0.61, 1 frame | "punching" | 0.29, APPROVED |
+| a cat walking on a laptop keyboard | gambling 0.58, 1 frame | "online gambling odds" | 0.36, APPROVED |
+
+A cruise ship filmed from the air was published at gambling 0.54 — CLIP knows cruise ships for their
+casinos — and scores 0.03 now. The seven harmful videos are all still REVIEW: bloody shirt (gore
+1.00, 9 frames), burning car (accident 0.99, 10), betting app (gambling 1.00, 9), armed robbery
+(violence 0.86, 3), bleeding driver (gore 0.85, 5), an MMA cage fight (violence 0.79, 3), a syringe
+and drugs under purple light (gambling 0.71, 3 frames between gambling and drugs).
+
+Two causes, two fixes:
+
+- **Missing ordinary descriptions.** The softmax only chooses among the descriptions it has: a frame
+  that fits none of the ordinary ones puts its weight on whichever harmful one is least wrong. Five
+  near misses were added — a gym, an anime character, an anime action scene, a laptop, a ship at
+  sea — each kept only because taking it out brought a false hold back. Three more (a hand gesture,
+  a halloween costume, colourful decorations) changed nothing and stayed out. Broad ones are a trap:
+  "a photo lit by colorful neon lights" took the purple syringe video with it.
+- **A single frame decided.** With the five in, the clown still had one frame at 0.63. Requiring a
+  second frame clears it; every harmful video had three or more.
+
+Checked on the ten frames media-worker sends and on thirty per video at positions the ten never
+use: no false hold and no miss on either, at any alone line from 0.75 to 0.90. Still a small set — no
+anime gore, no street fight, one drugs scene. A drawn fight now counts as ordinary on purpose, so
+anime gore rests on the gore descriptions alone.
 
 ## Failure is never a pass
 
@@ -204,10 +250,12 @@ restart of one container rather than a rebuild of a Java service:
 | `MODERATION_REJECT_THRESHOLD` | `0.90` |
 | `MODERATION_MIN_REJECT_FRAMES` | `2` |
 | `HARM_REVIEW_THRESHOLD` | `0.55` — the harm labels only; there is no harm reject line |
+| `HARM_MIN_REVIEW_FRAMES` | `2` — frames at or over the harm line, counted across labels, to hold a video |
+| `HARM_REVIEW_ALONE_THRESHOLD` | `0.80` — one frame this high holds it without a second |
 
 Bump `MODERATION_MODEL_VERSION` whenever either the weights or the thresholds change, and
-`HARM_MODERATION_MODEL_VERSION` (`harm-v1`) for the harm threshold or any description. Both travel
-on every verdict and onto the video document (`nsfw-v1+harm-v1`), and without them a decision made
+`HARM_MODERATION_MODEL_VERSION` (`harm-v2`) for any harm threshold or description. Both travel
+on every verdict and onto the video document (`nsfw-v1+harm-v2`), and without them a decision made
 months ago cannot be attributed to the setup that made it.
 
 ## Second opinion: Azure AI Content Safety
