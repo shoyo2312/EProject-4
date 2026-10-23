@@ -112,7 +112,7 @@ Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file t�
 - Ghi `avatars/{userId}` — một key/user, profile trỏ vào URL này. Không có đuôi file: định dạng là thứ provider trả về, content type đi theo object. Key đã có thì **bỏ qua**, không tải lại — ảnh user tự upload qua `POST /me/avatar` nằm đúng key này nên không bị ảnh provider đè.
 - Phát `AvatarMirroredEvent(userId, sourceUrl, mirroredUrl)`. `user-service` chỉ ghi đè `avatarUrl` khi nó đang trống hoặc đúng bằng `sourceUrl` — ảnh user tự đặt không bị đụng. Profile chưa tồn tại thì user-service throw để event được retry.
 
-URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) → sau các lần thử của `kafka-lib` thì vào `auth.social-avatar-events.DLT`. Không sao: lần đăng nhập sau phát lại URL mới, profile giữ ảnh cũ trong lúc chờ.
+URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) → sau các lần thử của `kafka-lib` thì vào `auth.social-avatar-events.DLT`. Không sao: lần đăng nhập sau phát lại URL mới, profile giữ ảnh cũ trong lúc chờ. Provider không trả lời kịp (timeout) thì khác: `kafka-lib` coi đó là dependency chết và thử lại tới khi provider trả lời, nên một host avatar treo sẽ giữ partition đứng chờ thay vì vào DLT.
 
 `AvatarMirroredEventProducer` cũng chờ ack 30s, lý do y hệt transcode producer.
 
