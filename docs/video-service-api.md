@@ -90,7 +90,7 @@ Luồng đầy đủ phía client:
 
 Không có bước "báo upload xong": nếu client bỏ ngang giữa chừng thì chỉ còn một object mồ côi trong bucket, không có bản ghi Video nào được tạo. Object mồ côi tự hết hạn sau 7 ngày — bucket có lifecycle rule trên prefix `raw/` (khai ở `scripts/minio/lifecycle.json`, do `minio-init` áp). Nghĩa là **POST file xong thì gọi `POST /` (mục 3.2) trong vòng 7 ngày**, quá hạn file biến mất dù `fileUrl` vẫn còn trong tay client.
 
-Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token), `UPLOAD_RATE_LIMITED` (429) khi tài khoản đã xin quá 30 URL trong một giờ hoặc 100 URL trong một ngày (mục 7), `UPLOAD_URL_UNAVAILABLE` (503) khi server không ký được URL — lỗi phía server, không phải request sai.
+Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không ký được URL — lỗi phía server, không phải request sai.
 
 ### 3.2 `POST /` — đăng video
 **Bắt buộc token.** Trả `201 Created`.
@@ -160,9 +160,7 @@ Response `data` → `VideoResponse`:
 
 > **`FAILED` có `failureReason` — hiện thẳng cho user.** Khi `status = FAILED`, `failureReason` là chuỗi giải thích do media-worker sinh ra, ví dụ `"Video is 12m30s; the maximum is 10m00s."` (clip dài quá 10 phút) hoặc `"Video is 812 MB; the maximum is 500 MB."` (file lọt qua client nhưng media-worker vẫn từ chối vì vượt kích thước). Với mọi `status` khác, `failureReason` là `null`. Nếu `failureReason` là `null` mà vẫn `FAILED` (lỗi transcode không phân loại được), hiện thông điệp mặc định kiểu "Xử lý video thất bại, thử đăng lại".
 
-**Giới hạn đăng video theo tài khoản:** tối đa 10 video trong một giờ và 30 video trong một ngày. Vượt thì nhận `429 UPLOAD_RATE_LIMITED` kèm header `Retry-After` (số giây). Lượt đăng được tính **trước mọi kiểm tra khác**, nên lần bị từ chối vì caption (`VIDEO_*_REJECTED`), `FOREIGN_UPLOAD` hay `RAW_FILE_ALREADY_PUBLISHED` vẫn tốn một lượt. Như vậy không ai dò được blocklist bằng cách gửi caption liên tục. Sửa caption rồi gửi lại cũng tốn thêm một lượt.
-
-Lỗi: `VALIDATION_ERROR` (400), `FOREIGN_UPLOAD` (400), `UPLOAD_NOT_FOUND` (400), `RAW_FILE_ALREADY_PUBLISHED` (400), `VIDEO_TITLE_REJECTED` / `VIDEO_DESCRIPTION_REJECTED` / `VIDEO_TAGS_REJECTED` (422), `UPLOAD_RATE_LIMITED` (429), `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không kiểm được file trong storage.
+Lỗi: `VALIDATION_ERROR` (400), `FOREIGN_UPLOAD` (400), `UPLOAD_NOT_FOUND` (400), `RAW_FILE_ALREADY_PUBLISHED` (400), `VIDEO_TITLE_REJECTED` / `VIDEO_DESCRIPTION_REJECTED` / `VIDEO_TAGS_REJECTED` (422), `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không kiểm được file trong storage.
 
 ### 3.3 `GET /feed`
 Không cần token. **Phân trang bằng cursor, không phải `page`** — khác mục 3.5. Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CursorPage<VideoResponse>`:
@@ -319,7 +317,6 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `VIDEO_TAGS_REJECTED` | 422 | Như trên, cho tag (đọc liền nhau, nên một cụm bị cấm tách ra nhiều tag vẫn bị bắt) |
 | `PRIVATE_ACCOUNT` | 403 | Lưới video (mục 3.5) của tài khoản riêng tư mà người gọi không follow |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |
-| `UPLOAD_RATE_LIMITED` | 429 | Tài khoản đã xin quá nhiều URL upload (mục 3.1) hoặc đăng quá nhiều video (mục 3.2) trong giờ/ngày này. Đọc header `Retry-After` (số giây) rồi mới cho thử lại |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 | `UPLOAD_URL_UNAVAILABLE` | 503 | Không ký được presigned URL ở mục 3.1. Cấu hình storage sai hoặc storage chết — retry được, nhưng sửa request không giúp gì |
 
@@ -331,14 +328,7 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của video-service, đ�
 
 - Rate-limit **ở tầng gateway** (`:8080`, theo IP — 20 request/giây, burst 40, dùng chung toàn bộ API).
 - Giới hạn theo IP là lý do phải poll giãn dần ở mục 3.2: nhiều thiết bị sau cùng một NAT dùng chung hạn mức này.
-- **Theo tài khoản**, ở video-service, chỉ cho việc upload:
-
-| Endpoint | Mỗi giờ | Mỗi ngày |
-|---|---|---|
-| `POST /upload-url` (mục 3.1) | 30 | 100 |
-| `POST /` (mục 3.2) | 10 | 30 |
-
-Vượt thì nhận `429 UPLOAD_RATE_LIMITED`. Header `Retry-After` là số giây (ít nhất 1) tới khi mức đã chặn mở lại; server không nói đó là mức giờ hay mức ngày. Upload hỏng hoặc bỏ dở thì xin URL mới, nên mức cho URL cao hơn mức đăng video.
+- Không có giới hạn theo tài khoản cho việc upload: `POST /upload-url` và `POST /` không bao giờ trả `429` riêng của video-service.
 
 ## 8. Sự kiện Kafka (Events)
 
