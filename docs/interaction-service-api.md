@@ -416,6 +416,9 @@ Lỗi: `VIDEO_NOT_FOUND` (404), `REPOST_RATE_LIMITED` (429), `INTERACTION_CONFLI
 ### 3.15 `GET /users/me/likes`, `GET /users/me/saves` — video mình đã like / đã lưu
 **Bắt buộc token.** `?cursor=<nextCursor>&size=20` (1–50). Trả `data` → `VideoIdPageResponse` (cùng shape mục 3.11), **mới nhất trước**. Chỉ có id — đổi sang video qua `GET /api/v1/videos/batch` của video-service. Chỉ xem được của chính mình; không có endpoint xem like/lưu của người khác. Cursor hỏng → `INVALID_CURSOR` (400).
 
+### 3.16 `GET /users/me/comments` — hộp bình luận của TikTok Studio
+**Bắt buộc token.** `?cursor=<nextCursor>&size=20` (1–50). Trả `data` → `CommentPageResponse` (cùng shape mục 3.5): bình luận người khác để lại trên **mọi video của người gọi**, mới nhất trước. Comment đang chờ duyệt có trong danh sách với `status = "HELD"`; duyệt hoặc xoá qua mục 3.4c / 3.6 bằng `videoId` của từng item. Comment của chính chủ video, comment đã xoá và comment của tài khoản đang bị ban không có. `likedByMe` và `replyCount` luôn là `false` / `0` ở đây. Comment đăng trước khi có tính năng này **không** nằm trong hộp (không có backfill). Cursor hỏng → `INVALID_CURSOR` (400).
+
 ## 4. Counter đến từ hai nơi — đọc số nào, khi nào
 
 | Nguồn | Endpoint | Đặc điểm |
