@@ -96,6 +96,14 @@ BENIGN: tuple[str, ...] = (
     "a photo of a person wearing makeup",
     "a photo of a fire in a fireplace",
     "a photo of a person sleeping",
+    # Near misses found on real uploads (harm-v2). Without them a gym set and anime fight edits
+    # scored "a person punching another person" up to 0.75, an anime peace sign "pointing a gun",
+    # and a cat on a laptop and a cruise ship "online gambling odds".
+    "a photo of a person lifting weights at the gym",
+    "an anime character",
+    "an anime action scene",
+    "a photo of a laptop computer",
+    "a photo of a ship on the sea",
 )
 
 # What the image needs from the repository: no flax_model.msgpack, which is the same weights again
