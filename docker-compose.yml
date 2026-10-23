@@ -340,11 +340,14 @@ services:
       # build — see the Dockerfile.
       TEXT_HATE_HOLD_THRESHOLD: ${TEXT_HATE_HOLD_THRESHOLD:-0.90}
       TEXT_MODERATION_MODEL_VERSION: ${TEXT_MODERATION_MODEL_VERSION:-hsd-v1}
-      # Violence, gore, drugs, accidents, gambling (CLIP, zero-shot). One frame at or over this
-      # holds the video for a person; it never rejects. Bump HARM_MODERATION_MODEL_VERSION whenever
-      # it or a description in harm_classifier.py changes.
+      # Violence, gore, drugs, accidents, gambling (CLIP, zero-shot). Two frames at or over the
+      # review line, or one at or over the alone line, hold the video for a person; it never
+      # rejects. Bump HARM_MODERATION_MODEL_VERSION whenever one of these or a description in
+      # harm_classifier.py changes.
       HARM_REVIEW_THRESHOLD: ${HARM_REVIEW_THRESHOLD:-0.55}
-      HARM_MODERATION_MODEL_VERSION: ${HARM_MODERATION_MODEL_VERSION:-harm-v1}
+      HARM_MIN_REVIEW_FRAMES: ${HARM_MIN_REVIEW_FRAMES:-2}
+      HARM_REVIEW_ALONE_THRESHOLD: ${HARM_REVIEW_ALONE_THRESHOLD:-0.80}
+      HARM_MODERATION_MODEL_VERSION: ${HARM_MODERATION_MODEL_VERSION:-harm-v2}
     healthcheck:
       # Unhealthy until the weights are in memory, which takes a few seconds on a cold start.
       test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health')\"" ]

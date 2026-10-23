@@ -28,17 +28,17 @@ def nsfw_at(score):
     return classifier
 
 
-def harm_at(**worst):
-    """Every category at 0.01 on every frame, except the ones given, which hit that score on frame 0."""
+def harm_at(frames=1, **worst):
+    """Every category at 0.01 on every frame, except the ones given, which hit that score on the first `frames`."""
     def scorer(images):
-        return {category: [worst.get(category, 0.01)] + [0.01] * (len(images) - 1)
+        return {category: [worst.get(category, 0.01)] * frames + [0.01] * (len(images) - frames)
                 for category in harm_classifier.CATEGORIES}
     return scorer
 
 
-def moderate(monkeypatch, nsfw=0.01, escalate_to=None, **harm):
+def moderate(monkeypatch, nsfw=0.01, escalate_to=None, harm_frames=1, **harm):
     monkeypatch.setattr(app, "_classifier", nsfw_at(nsfw))
-    monkeypatch.setattr(app, "_harm_scorer", harm_at(**harm))
+    monkeypatch.setattr(app, "_harm_scorer", harm_at(harm_frames, **harm))
     asked = []
     monkeypatch.setattr(escalation, "enabled", lambda: escalate_to is not None)
 
@@ -56,13 +56,28 @@ def test_review_only_never_rejects_even_past_one():
     assert decide([0.54, 0.2], review_only(0.55)).verdict == APPROVED
 
 
-def test_one_harmful_frame_sends_the_video_to_a_person(monkeypatch):
+def test_one_confident_frame_sends_the_video_to_a_person(monkeypatch):
     response, _ = moderate(monkeypatch, violence=0.89)
 
     assert response.verdict == REVIEW
     assert response.label == "violence"
     assert response.maxScore == 0.89
     assert response.model == app.HARM_MODEL
+
+
+def test_one_borderline_frame_alone_publishes(monkeypatch):
+    # harm-v1 held a gym video on this: one frame of a row read as "punching" at 0.75.
+    response, _ = moderate(monkeypatch, violence=0.75)
+
+    assert response.verdict == APPROVED
+    assert response.suspiciousFrames == 1
+
+
+def test_two_borderline_frames_hold_the_video(monkeypatch):
+    response, _ = moderate(monkeypatch, harm_frames=2, violence=0.6)
+
+    assert response.verdict == REVIEW
+    assert response.suspiciousFrames == 2
 
 
 def test_certain_harm_is_still_only_review(monkeypatch):
@@ -88,7 +103,7 @@ def test_nsfw_rejection_outranks_a_harm_review(monkeypatch):
 
 def test_azure_never_overrules_a_label_it_cannot_judge(monkeypatch):
     # Azure has no drugs category: asked, it would answer severity 0 and publish the video.
-    response, asked = moderate(monkeypatch, escalate_to=APPROVED, drugs=0.71)
+    response, asked = moderate(monkeypatch, escalate_to=APPROVED, harm_frames=2, drugs=0.71)
 
     assert asked == []
     assert response.verdict == REVIEW
@@ -154,4 +169,6 @@ def test_config_shows_the_harm_scorer():
     assert config["harmEnabled"] is True
     assert config["harmModelVersion"] == app.HARM_MODEL_VERSION
     assert config["harmReviewAt"] == app.HARM_THRESHOLDS.review_at
+    assert config["harmMinReviewFrames"] == app.HARM_THRESHOLDS.min_review_frames
+    assert config["harmReviewAloneAt"] == app.HARM_THRESHOLDS.review_alone_at
     assert config["harmLabels"] == ["violence", "gore", "drugs", "accident", "gambling"]

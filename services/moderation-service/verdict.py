@@ -26,9 +26,13 @@ class Thresholds:
     review_at: float = 0.60
     reject_at: float = 0.90
     min_reject_frames: int = 2
+    # The same guard for REVIEW, off by default: one frame over review_at is enough. Above 1, fewer
+    # frames over review_at than this approve the video, unless one of them is at review_alone_at.
+    min_review_frames: int = 1
+    review_alone_at: float = 0.0
 
 
-def review_only(review_at: float) -> Thresholds:
+def review_only(review_at: float, min_frames: int = 1, alone_at: float = 0.0) -> Thresholds:
     """Thresholds that can send a video to a person but never remove it.
 
     For the zero-shot categories (harm_classifier): an action film, a boxing match and a kitchen
@@ -36,7 +40,8 @@ def review_only(review_at: float) -> Thresholds:
     does not get to take a video down on its own. No score reaches infinity, so the reject branch
     in decide() is unreachable — a sum of probabilities can land a hair over 1.0, so 1.0 cannot.
     """
-    return Thresholds(review_at=review_at, reject_at=math.inf, min_reject_frames=1)
+    return Thresholds(review_at=review_at, reject_at=math.inf, min_reject_frames=1,
+                      min_review_frames=min_frames, review_alone_at=alone_at)
 
 
 @dataclass(frozen=True)
@@ -59,12 +64,29 @@ def decide(scores: list[float], thresholds: Thresholds) -> Decision:
 
     max_score = max(scores)
     suspicious = sum(1 for score in scores if score >= thresholds.review_at)
+    # Capped at the frames there are: an image story is one frame, and waiting for a second that
+    # cannot exist approved everything under review_alone_at.
+    min_review_frames = min(thresholds.min_review_frames, len(scores))
 
     if max_score < thresholds.review_at:
         return Decision(APPROVED, max_score, suspicious)
     if max_score >= thresholds.reject_at and suspicious >= thresholds.min_reject_frames:
         return Decision(REJECTED, max_score, suspicious)
+    if suspicious < min_review_frames and max_score < thresholds.review_alone_at:
+        return Decision(APPROVED, max_score, suspicious)
     return Decision(REVIEW, max_score, suspicious)
+
+
+def decide_together(scores: dict[str, list[float]], thresholds: Thresholds) -> tuple[str, Decision]:
+    """Several labels from one model, decided as one detector: each frame counts by its worst label.
+
+    CLIP splits one scene between neighbouring labels — a syringe on a table scored gambling on one
+    frame and drugs on the next — so frames agreeing is counted across labels, not within one. The
+    label reported is the one that scored the worst frame.
+    """
+    worst_per_frame = [max(frame) for frame in zip(*scores.values())]
+    label = max(scores, key=lambda name: max(scores[name], default=0.0))
+    return label, decide(worst_per_frame, thresholds)
 
 
 def worst(decisions: dict[str, Decision]) -> tuple[str, Decision]:

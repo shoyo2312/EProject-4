@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 
 import escalation
 from text_verdict import TextThresholds, decide_text
-from verdict import REVIEW, Decision, Thresholds, decide, review_only, worst
+from verdict import REVIEW, Decision, Thresholds, decide, decide_together, review_only, worst
 
 log = logging.getLogger("moderation")
 logging.basicConfig(level=logging.INFO)
@@ -81,12 +81,18 @@ HARM_MODEL = os.getenv("HARM_MODERATION_MODEL", "openai/clip-vit-base-patch16")
 HARM_MODEL_REVISION = os.getenv("HARM_MODERATION_MODEL_REVISION", "57c216476eefef5ab752ec549e440a49ae4ae5f3")
 # Bumped by hand when the weights, the threshold or any description in harm_classifier changes:
 # the descriptions are the model, see that module.
-HARM_MODEL_VERSION = os.getenv("HARM_MODERATION_MODEL_VERSION", "harm-v1")
+HARM_MODEL_VERSION = os.getenv("HARM_MODERATION_MODEL_VERSION", "harm-v2")
 
-# One frame at or over this sends the video to a person; nothing here rejects (review_only). 0.55
-# sat between the highest ordinary video (0.44) and the lowest harmful one caught (0.64) on the
-# first judged set — see docs/moderation.md before moving it.
-HARM_THRESHOLDS = review_only(float(os.getenv("HARM_REVIEW_THRESHOLD", "0.55")))
+# Nothing here rejects (review_only). A frame at or over the review line sends the video to a person
+# once a second frame agrees, or on its own at the alone line. In harm-v1 one frame was enough, and
+# five of its seven false holds were one odd frame — a pose, a mid-cut — while every harmful video in
+# the judged set crossed the line in two frames or more. See docs/moderation.md before moving any of
+# the three.
+HARM_THRESHOLDS = review_only(
+    float(os.getenv("HARM_REVIEW_THRESHOLD", "0.55")),
+    min_frames=int(os.getenv("HARM_MIN_REVIEW_FRAMES", "2")),
+    alone_at=float(os.getenv("HARM_REVIEW_ALONE_THRESHOLD", "0.80")),
+)
 
 # The labels Azure has an opinion on. A REVIEW caused by anything else must not be escalated:
 # Azure has no drugs or gambling category, answers severity 0, and that would approve the very
@@ -257,7 +263,8 @@ def moderate(request: ModerateRequest) -> ModerateResponse:
     if _harm_scorer is not None:
         harm = _harm_scorer(images)
         scored |= harm
-        decisions |= {label: decide(scores, HARM_THRESHOLDS) for label, scores in harm.items()}
+        harm_label, harm_decision = decide_together(harm, HARM_THRESHOLDS)
+        decisions[harm_label] = harm_decision
     label, decision = worst(decisions)
 
     verdict = decision.verdict
@@ -399,6 +406,8 @@ def config() -> dict:
         "harmModelRevision": HARM_MODEL_REVISION,
         "harmModelVersion": HARM_MODEL_VERSION,
         "harmReviewAt": HARM_THRESHOLDS.review_at,
+        "harmMinReviewFrames": HARM_THRESHOLDS.min_review_frames,
+        "harmReviewAloneAt": HARM_THRESHOLDS.review_alone_at,
         "harmLabels": list(_harm_labels()),
     }
 
