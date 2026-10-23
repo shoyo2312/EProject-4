@@ -50,3 +50,14 @@ CREATE TABLE IF NOT EXISTS video_tags (
     published_at DateTime64(3)
 ) ENGINE = ReplacingMergeTree
 ORDER BY (video_id, tag);
+
+-- Follow edges, for a creator's follower growth in Studio. Ordered by the account followed first,
+-- because the one query that reads this table asks for one creator's gains and losses.
+CREATE TABLE IF NOT EXISTS follow_events (
+    event_id     String,
+    follower_id  Int64,
+    following_id Int64,
+    followed     UInt8,
+    occurred_at  DateTime64(3)
+) ENGINE = ReplacingMergeTree
+ORDER BY (following_id, event_id);
