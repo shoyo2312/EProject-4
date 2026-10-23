@@ -79,8 +79,7 @@ class VideoServiceImplCacheTest {
                 followClient,
                 mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class),
                 mock(com.tiktok.videoservice.repository.OwnerBanRepository.class),
-                mock(CaptionModeration.class),
-                mock(UploadRateLimiter.class));
+                mock(CaptionModeration.class));
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {

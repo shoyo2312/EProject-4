@@ -125,7 +125,6 @@ public class VideoServiceImpl implements VideoService {
     private final OwnerPrivacyRepository ownerPrivacyRepository;
     private final OwnerBanRepository ownerBanRepository;
     private final CaptionModeration captionModeration;
-    private final UploadRateLimiter uploadRateLimiter;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -142,7 +141,6 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
-        uploadRateLimiter.requireUploadUrl(userId);
         String contentType = mediaType(request.contentType());
         String extension = UPLOAD_EXTENSIONS.get(contentType);
         if (extension == null) {
@@ -177,9 +175,6 @@ public class VideoServiceImpl implements VideoService {
 
     @Override
     public VideoResponse publish(Long userId, CreateVideoRequest request) {
-        // First: a publish refused for anything after this — a foreign upload, its caption — still
-        // spends budget, so neither can be probed at speed.
-        uploadRateLimiter.requirePublish(userId);
         String key = requireOwnUpload(userId, request.rawFileUrl());
         requireUploaded(key);
         String rawFileUrl = storedUrl(key);

@@ -53,8 +53,7 @@ class VideoServiceImplUploadUrlFailureTest {
                 mock(com.tiktok.videoservice.client.FollowClient.class),
                 mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class),
                 mock(com.tiktok.videoservice.repository.OwnerBanRepository.class),
-                mock(CaptionModeration.class),
-                mock(UploadRateLimiter.class));
+                mock(CaptionModeration.class));
     }
 
     @Test
