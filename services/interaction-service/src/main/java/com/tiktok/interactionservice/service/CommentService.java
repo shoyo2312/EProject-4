@@ -69,6 +69,13 @@ public interface CommentService {
     CommentPageResponse listHeld(Long videoId, String cursor, int size, Long currentUserId);
 
     /**
+     * TikTok Studio's comment inbox: comments others left on any of the owner's videos, newest
+     * first, held ones included and marked HELD. Comments posted before the inbox existed are not
+     * in it.
+     */
+    CommentPageResponse listForOwner(Long ownerId, String cursor, int size);
+
+    /**
      * Publishes a held comment: indexed, counted and announced exactly as if it had just been
      * posted. Approving a comment that is already visible answers the same as approving it the
      * first time, so a second tap is not an error.

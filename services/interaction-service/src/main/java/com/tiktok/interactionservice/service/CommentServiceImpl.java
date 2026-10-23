@@ -11,6 +11,7 @@ import com.tiktok.interactionservice.dto.response.CommentPermissionResponse;
 import com.tiktok.interactionservice.dto.response.CommentPermissionResponse.Restriction;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
+import com.tiktok.interactionservice.entity.CommentByOwner;
 import com.tiktok.interactionservice.entity.CommentByVideo;
 import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.entity.CommentCounters;
@@ -30,6 +31,7 @@ import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.exception.NotVideoOwnerException;
 import com.tiktok.interactionservice.exception.ReplyNotAllowedException;
 import com.tiktok.interactionservice.mapper.CommentMapper;
+import com.tiktok.interactionservice.repository.CommentByOwnerRepository;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
 import com.tiktok.interactionservice.repository.CommentCountersRepository;
 import com.tiktok.interactionservice.repository.CommentIndexRepository;
@@ -48,7 +50,10 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -79,6 +84,7 @@ public class CommentServiceImpl implements CommentService {
     private final CounterCacheService counterCacheService;
     private final CommentMapper commentMapper;
     private final HeldCommentRepository heldCommentRepository;
+    private final CommentByOwnerRepository commentByOwnerRepository;
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
     private final CommentRateLimiter commentRateLimiter;
@@ -162,14 +168,38 @@ public class CommentServiceImpl implements CommentService {
         DuplicateCommentGuard.Claim claim = owner
                 ? DuplicateCommentGuard.Claim.NONE
                 : duplicateCommentGuard.claim(currentUserId, videoId, parentId, content);
+        CommentResponse stored;
         try {
-            return held
+            stored = held
                     ? storeHeld(videoId, currentUserId, content, resolvedParentId, replyToUserId, verdict)
                     : storeVisible(videoId, currentUserId, content, resolvedParentId, replyToUserId, parentAuthorId,
                             verdict);
         } catch (RuntimeException ex) {
             claim.release();
             throw ex;
+        }
+        if (!owner) {
+            fileForOwner(policy.ownerId(), stored);
+        }
+        return stored;
+    }
+
+    /**
+     * Puts a stored comment in its video owner's Studio inbox. After the comment is stored, and never
+     * failing it: a comment missing from the inbox is still on its video for the owner to read, while
+     * undoing a stored, counted and announced comment over it would cost far more than it saves. Not
+     * filed when video-service could not name the owner — the policy read fails open, see
+     * {@link #addComment} — nor for the owner's own comments, which they need no inbox to know about.
+     */
+    private void fileForOwner(Long ownerId, CommentResponse comment) {
+        if (ownerId == null) {
+            return;
+        }
+        try {
+            commentByOwnerRepository.save(CommentByOwner.of(ownerId, comment.videoId(), comment.commentId()));
+        } catch (RuntimeException ex) {
+            log.warn("Comment {} on video {} not filed in owner {}'s inbox", comment.commentId(), comment.videoId(),
+                    ownerId, ex);
         }
     }
 
@@ -419,9 +449,9 @@ public class CommentServiceImpl implements CommentService {
      * not hand the client an empty page it might stop on — see {@link #page}. Shared by the public
      * threads and the owner's queue of held comments.
      */
-    private CommentPageResponse scan(String cursor, int size,
-                                     Function<CassandraPageRequest, Slice<Long>> ids,
-                                     Function<List<Long>, List<CommentResponse>> hydrate) {
+    private <T> CommentPageResponse scan(String cursor, int size,
+                                         Function<CassandraPageRequest, Slice<T>> ids,
+                                         Function<List<T>, List<CommentResponse>> hydrate) {
         CassandraPageRequest pageRequest = CassandraCursors.decode(cursor, size, InvalidCommentCursorException::new);
 
         List<CommentResponse> items = List.of();
@@ -430,7 +460,7 @@ public class CommentServiceImpl implements CommentService {
             // Base64 that decodes into bytes Cassandra will not accept as paging state is only
             // refused here, by the coordinator, not by the decoder — and only the first page can
             // be carrying the client's value, every page after it uses one this method issued.
-            Slice<Long> slice;
+            Slice<T> slice;
             try {
                 slice = ids.apply(pageRequest);
             } catch (CassandraInvalidQueryException e) {
@@ -550,6 +580,37 @@ public class CommentServiceImpl implements CommentService {
                 .map(rows::get)
                 .filter(Objects::nonNull)
                 .filter(comment -> comment.getParentId() == null || liveParents.contains(comment.getParentId()))
+                .map(commentMapper::toResponse)
+                .toList();
+    }
+
+    @Override
+    public CommentPageResponse listForOwner(Long ownerId, String cursor, int size) {
+        return scan(cursor, size,
+                pageRequest -> commentByOwnerRepository.findNewestFirst(ownerId, pageRequest),
+                this::hydrateInbox);
+    }
+
+    /**
+     * The inbox spans videos, so the page is read one video at a time — at most one query per video
+     * on the page. Visible and held comments both stay, the held ones marked HELD for the owner to
+     * approve; deleted ones and those whose author is banned right now are left out, as on the video.
+     */
+    private List<CommentResponse> hydrateInbox(List<CommentByOwner> page) {
+        Map<Long, List<Long>> idsByVideo = new LinkedHashMap<>();
+        for (CommentByOwner row : page) {
+            idsByVideo.computeIfAbsent(row.getVideoId(), video -> new ArrayList<>())
+                    .add(row.getKey().getCommentId());
+        }
+        Map<Long, CommentByVideo> rows = new HashMap<>();
+        idsByVideo.forEach((videoId, ids) -> commentByVideoRepository.findAllByCommentIds(videoId, ids).stream()
+                .filter(comment -> !comment.isDeleted())
+                .forEach(comment -> rows.put(comment.getKey().getCommentId(), comment)));
+
+        Map<Long, CommentByVideo> shown = withoutBannedAuthors(rows);
+        return page.stream()
+                .map(row -> shown.get(row.getKey().getCommentId()))
+                .filter(Objects::nonNull)
                 .map(commentMapper::toResponse)
                 .toList();
     }

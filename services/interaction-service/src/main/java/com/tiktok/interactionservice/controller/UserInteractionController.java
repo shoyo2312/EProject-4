@@ -1,7 +1,9 @@
 package com.tiktok.interactionservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
+import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
+import com.tiktok.interactionservice.service.CommentService;
 import com.tiktok.interactionservice.service.LikeService;
 import com.tiktok.interactionservice.service.RepostService;
 import com.tiktok.interactionservice.service.SaveService;
@@ -31,6 +33,7 @@ public class UserInteractionController {
     private final LikeService likeService;
     private final SaveService saveService;
     private final RepostService repostService;
+    private final CommentService commentService;
 
     @GetMapping("/me/likes")
     public ApiResponse<VideoIdPageResponse> listLikedVideos(
@@ -48,6 +51,20 @@ public class UserInteractionController {
             @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success(
                 saveService.listSavedVideos(currentUserId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
+    }
+
+    /**
+     * TikTok Studio's comment inbox: what others said on any of the caller's videos, newest first,
+     * the comments held for review among them with {@code status = HELD}. Approve or delete one
+     * through the per-video endpoints, with the {@code videoId} each item carries.
+     */
+    @GetMapping("/me/comments")
+    public ApiResponse<CommentPageResponse> listCommentsOnMyVideos(
+            @AuthenticationPrincipal Long currentUserId,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int size) {
+        return ApiResponse.success(
+                commentService.listForOwner(currentUserId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
     }
 
     /**
