@@ -67,7 +67,8 @@ public class StoryServiceImpl implements StoryService {
     private final StoryAudience storyAudience;
 
     // ponytail: no per-account limit on how many upload URLs or stories one account may ask for;
-    // the signed byte limit bounds each upload. Reuse video-service's UploadRateLimiter if abused.
+    // the signed byte limit bounds each upload. video-service's UploadRateLimiter, removed but in
+    // git history, is the upgrade if abused.
     @Override
     public StoryUploadUrlResponse createUploadUrl(Long userId, StoryUploadUrlRequest request) {
         return storyMedia.presignUpload(userId, request.contentType());
