@@ -99,7 +99,7 @@ public class CreatorAnalyticsRepository {
                        countIf(event_type = 'COMMENTED') - countIf(event_type = 'UNCOMMENTED') AS comments,
                        countIf(event_type = 'SHARED') AS shares
                 FROM engagement_events FINAL
-                WHERE %s AND %s
+                WHERE %s AND %s AND event_type != 'PUBLISHED'
                 GROUP BY day
                 """.formatted(ZONE, IN_WINDOW, scope.filter()),
                 (rs, i) -> new DailyEngagement(LocalDate.parse(rs.getString("day")),
