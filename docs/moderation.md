@@ -457,10 +457,12 @@ can see while the ban lasts. The admin list shows everything.
 
 ### Upload limits
 
-Not text, but the same family: video-service limits `POST /videos/upload-url` (30/hour, 100/day) and
-`POST /videos` (10/hour, 30/day) per account — `app.upload.rate-limit`, `429 UPLOAD_RATE_LIMITED`
-with `Retry-After`. A publish refused for its caption spends budget too, so captions cannot be
-probed at speed.
+None. video-service used to cap upload URLs and publishes per account (`UploadRateLimiter`, removed
+on request). Without it a caption refused with 422 can be retried as fast as the gateway's per-IP
+limit allows (20/s), so the caption blocklist can be probed. Restore the class from git history if
+that starts to matter. What publish does check is that the raw file exists (`UPLOAD_NOT_FOUND`
+otherwise): a made-up key would otherwise cost media-worker's single listener thread seconds of
+retries each, and at 20/s that stalls every transcode.
 
 ### Measuring before enforcing
 
