@@ -96,7 +96,8 @@ HARM_THRESHOLDS = review_only(
 
 # The labels Azure has an opinion on. A REVIEW caused by anything else must not be escalated:
 # Azure has no drugs or gambling category, answers severity 0, and that would approve the very
-# video the local model held back.
+# video the local model held back. Violence and gore too, despite Azure's Violence category: it
+# scored a bloody shirt, an armed robbery and an MMA fight 0 (docs/moderation.md).
 ESCALATABLE = frozenset({"nsfw"})
 
 # Caps, for the same reason as MAX_FRAMES: a CPU shared by every caller. A request over the text

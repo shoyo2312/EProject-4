@@ -133,7 +133,14 @@ so a vaping clip lands there instead of drifting into `drugs`. `test_harm.py` pi
 
 **Azure is only asked about NSFW holds.** Azure has no drug or gambling category: asked about a
 held drugs video it answers severity 0, and that would publish it. A REVIEW is escalated only when
-`nsfw` is the only label holding the video.
+`nsfw` is the only label holding the video. Violence and gore stay out too, although Azure has a
+Violence category. For the 7 harmful videos of [the second judged set](#the-second-judged-set),
+Azure saw the 3 frames an escalation would send. It scored six of the videos 0 in every category,
+the bloody shirt, the armed robbery and the MMA fight among them; only the bleeding driver got 6.
+Azure's image policy counts wounds, combat sport, accidental injury and damaged objects as *safe*.
+Resolution is not the cause: sent at 1280×720 instead of the pipeline's 398×224, only the gun
+moved, to 2. Escalating violence and gore would have published three of their four holds and
+rejected the fourth.
 
 **The descriptions are the model.** The ordinary list matters as much as the harmful one — a
 softmax over "a car on fire" alone would give every frame 1.0 for it. Adding, removing or
