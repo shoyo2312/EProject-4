@@ -6,6 +6,8 @@ import com.tiktok.userservice.entity.UserSettings;
 import org.mapstruct.Mapper;
 import org.mapstruct.Mapping;
 
+import java.util.List;
+
 @Mapper(componentModel = "spring")
 public interface UserSettingsMapper {
 
@@ -14,6 +16,7 @@ public interface UserSettingsMapper {
     @Mapping(target = "hasScreenTimePasscode", expression = "java(settings.getScreenTimePasscodeHash() != null)")
     UserSettingsResponse toResponse(UserSettings settings, boolean privateAccount);
 
-    /** The fields other services enforce — see {@link UserSettingsPolicyResponse}. */
-    UserSettingsPolicyResponse toPolicy(UserSettings settings);
+    /** The fields other services enforce — see {@link UserSettingsPolicyResponse}. The keywords come from feed_keyword_filters. */
+    UserSettingsPolicyResponse toPolicy(UserSettings settings, List<String> forYouKeywords,
+                                        List<String> followingKeywords, List<String> friendsKeywords);
 }

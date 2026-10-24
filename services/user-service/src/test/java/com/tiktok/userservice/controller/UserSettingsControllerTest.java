@@ -271,7 +271,8 @@ class UserSettingsControllerTest {
         when(userSettingsService.getSettingsPolicies(List.of(7L))).thenReturn(List.of(
                 new UserSettingsPolicyResponse(7L, SettingsAudience.NO_ONE, SettingsAudience.FRIENDS,
                         false, true, List.of("spoiler"), true, false, true,
-                        LocalTime.of(22, 0), LocalTime.of(6, 0), "Asia/Ho_Chi_Minh")));
+                        LocalTime.of(22, 0), LocalTime.of(6, 0), "Asia/Ho_Chi_Minh",
+                        List.of("cat"), List.of("dog"), List.of())));
 
         mockMvc.perform(get("/api/v1/users/internal/settings").param("ids", "7")
                         .header(InternalApiToken.HEADER, internalApiToken.value()))
@@ -288,7 +289,11 @@ class UserSettingsControllerTest {
                 .andExpect(jsonPath("$.data[0].pushNewFollowers").value(true))
                 .andExpect(jsonPath("$.data[0].sleepHoursStart").value("22:00"))
                 .andExpect(jsonPath("$.data[0].sleepHoursEnd").value("06:00"))
-                .andExpect(jsonPath("$.data[0].timeZone").value("Asia/Ho_Chi_Minh"));
+                .andExpect(jsonPath("$.data[0].timeZone").value("Asia/Ho_Chi_Minh"))
+                // What video-service drops from each feed, by these names.
+                .andExpect(jsonPath("$.data[0].forYouKeywords[0]").value("cat"))
+                .andExpect(jsonPath("$.data[0].followingKeywords[0]").value("dog"))
+                .andExpect(jsonPath("$.data[0].friendsKeywords").isEmpty());
     }
 
     /**

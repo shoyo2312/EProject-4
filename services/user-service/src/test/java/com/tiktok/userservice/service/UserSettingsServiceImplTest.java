@@ -1,6 +1,7 @@
 package com.tiktok.userservice.service;
 
 import com.tiktok.crypto.hash.HashUtils;
+import com.tiktok.userservice.dto.request.SaveKeywordFilterRequest;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
@@ -9,6 +10,7 @@ import com.tiktok.userservice.entity.SettingsAudience;
 import com.tiktok.userservice.exception.InvalidUserSettingsException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
+import com.tiktok.userservice.repository.FeedKeywordFilterRepository;
 import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.OutboxEventRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
@@ -80,8 +82,15 @@ class UserSettingsServiceImplTest {
     @Autowired
     private OutboxEventRepository outboxEventRepository;
 
+    @Autowired
+    private FeedKeywordFilterService feedKeywordFilterService;
+
+    @Autowired
+    private FeedKeywordFilterRepository feedKeywordFilterRepository;
+
     @BeforeEach
     void setUp() {
+        feedKeywordFilterRepository.deleteAll();
         userSettingsRepository.deleteAll();
         outboxEventRepository.deleteAll();
         followRequestRepository.deleteAll();
@@ -330,6 +339,22 @@ class UserSettingsServiceImplTest {
         assertThat(stored.hasScreenTimePasscode()).isTrue();
         assertThat(userSettingsService.getOwnSettings(1L).screenTimeLimitsByDay())
                 .containsExactly(30, 40, 50, 60, 70, 80, 90);
+    }
+
+    /** What video-service drops from each feed. An account with no filters has three empty lists, never nulls. */
+    @Test
+    void settingsPolicies_carryKeywordsPerFeed() {
+        feedKeywordFilterService.create(1L, new SaveKeywordFilterRequest("cat", true, false, false));
+        feedKeywordFilterService.create(1L, new SaveKeywordFilterRequest("dog", false, true, true));
+
+        List<UserSettingsPolicyResponse> policies = userSettingsService.getSettingsPolicies(List.of(1L, 2L));
+
+        assertThat(policies.get(0).forYouKeywords()).containsExactly("cat");
+        assertThat(policies.get(0).followingKeywords()).containsExactly("dog");
+        assertThat(policies.get(0).friendsKeywords()).containsExactly("dog");
+        assertThat(policies.get(1).forYouKeywords()).isEmpty();
+        assertThat(policies.get(1).followingKeywords()).isEmpty();
+        assertThat(policies.get(1).friendsKeywords()).isEmpty();
     }
 
     /** What notification-service needs to decide on a phone push. The time zone stays null until a heartbeat sends one. */

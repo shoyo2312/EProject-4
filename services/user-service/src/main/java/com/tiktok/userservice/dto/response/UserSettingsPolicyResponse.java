@@ -15,7 +15,8 @@ import java.util.List;
  *   <li>the two audiences;</li>
  *   <li>the comment filters interaction-service applies (relayed by video-service's {@code /policy});</li>
  *   <li>what notification-service checks before a phone push: the three push switches, sleep hours
- *       and the time zone they are read in.</li>
+ *       and the time zone they are read in;</li>
+ *   <li>the keywords video-service drops from each of the account's feeds.</li>
  * </ul>
  * The daily limit, its passcode and the in-app switches stay in user-service: nobody else enforces
  * them, and an internal endpoint that hands them over anyway is a privacy leak waiting for its
@@ -34,6 +35,10 @@ public record UserSettingsPolicyResponse(
         @JsonFormat(pattern = UpdateUserSettingsRequest.TIME_FORMAT) LocalTime sleepHoursStart,
         @JsonFormat(pattern = UpdateUserSettingsRequest.TIME_FORMAT) LocalTime sleepHoursEnd,
         /** Null until a heartbeat has sent one; sleep hours mute nothing without it. */
-        String timeZone
+        String timeZone,
+        /** As typed; never null, empty when the account filters nothing from that feed. */
+        List<String> forYouKeywords,
+        List<String> followingKeywords,
+        List<String> friendsKeywords
 ) {
 }

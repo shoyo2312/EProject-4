@@ -5,6 +5,7 @@ import com.tiktok.moderation.rules.Blocklist;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
+import com.tiktok.userservice.entity.FeedKeywordFilter;
 import com.tiktok.userservice.entity.SettingsAudience;
 import com.tiktok.userservice.entity.UserSettings;
 import com.tiktok.userservice.event.producer.UserEventPublisher;
@@ -12,6 +13,7 @@ import com.tiktok.userservice.exception.InvalidUserSettingsException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.mapper.UserSettingsMapper;
+import com.tiktok.userservice.repository.FeedKeywordFilterRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import com.tiktok.userservice.repository.UserSettingsRepository;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +30,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 @Service
@@ -35,6 +38,7 @@ import java.util.stream.Collectors;
 public class UserSettingsServiceImpl implements UserSettingsService {
 
     private final UserSettingsRepository userSettingsRepository;
+    private final FeedKeywordFilterRepository feedKeywordFilterRepository;
     private final UserSettingsMapper userSettingsMapper;
     private final UserProfileRepository userProfileRepository;
     private final UserEventPublisher userEventPublisher;
@@ -171,12 +175,27 @@ public class UserSettingsServiceImpl implements UserSettingsService {
                 .stream()
                 .collect(Collectors.toMap(UserSettings::getUserId, Function.identity()));
 
+        // The whole batch's keyword filters in one query too, never one per id.
+        Map<Long, List<FeedKeywordFilter>> filters = feedKeywordFilterRepository
+                .findByUserIdInAndDeletedAtIsNull(distinctIds)
+                .stream()
+                .collect(Collectors.groupingBy(FeedKeywordFilter::getUserId));
+
         // Every id asked for is answered, with the defaults where there is no row — see the
         // interface for why absence is not an option here.
         return distinctIds.stream()
-                .map(id -> stored.getOrDefault(id, UserSettings.defaultsFor(id)))
-                .map(userSettingsMapper::toPolicy)
+                .map(id -> {
+                    List<FeedKeywordFilter> own = filters.getOrDefault(id, List.of());
+                    return userSettingsMapper.toPolicy(stored.getOrDefault(id, UserSettings.defaultsFor(id)),
+                            keywordsFor(own, FeedKeywordFilter::isForYou),
+                            keywordsFor(own, FeedKeywordFilter::isFollowing),
+                            keywordsFor(own, FeedKeywordFilter::isFriends));
+                })
                 .toList();
+    }
+
+    private static List<String> keywordsFor(List<FeedKeywordFilter> filters, Predicate<FeedKeywordFilter> feed) {
+        return filters.stream().filter(feed).map(FeedKeywordFilter::getKeyword).toList();
     }
 
     /**
