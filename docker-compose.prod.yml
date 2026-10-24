@@ -147,6 +147,21 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Baked into an image rather than bind-mounted (see cassandra-init). Fetches DB-IP's City Lite
+  # into geoip-data once the copy there is a month old. A failed download still exits 0, so a
+  # deploy never waits on db-ip.com; auth-service then runs without places and logs a WARN.
+  geoip-init:
+    build:
+      context: ./scripts/geoip
+      dockerfile_inline: |
+        FROM alpine:3.22
+        RUN apk add --no-cache curl
+        COPY download.sh /download.sh
+        ENTRYPOINT ["sh", "/download.sh", "/data"]
+    volumes:
+      - geoip-data:/data
+    restart: "no"
+
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.0
     restart: unless-stopped
@@ -361,6 +376,7 @@ services:
       postgres-auth: { condition: service_healthy }
       app-redis: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      geoip-init: { condition: service_completed_successfully }
     environment:
       SNOWFLAKE_NODE_ID: 2
       <<: *java-env
@@ -384,6 +400,10 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:?}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      # Filled by geoip-init. Missing or unreadable, auth-service logs a WARN and records no places.
+      GEOIP_DATABASE: /geoip/dbip-city-lite.mmdb
+    volumes:
+      - geoip-data:/geoip:ro
 
   # MINIO_ENDPOINT, here and below, is the PUBLIC address: the services build the media URLs they
   # store and hand to browsers from it, and presigned uploads are signed for that host. Server-side
@@ -734,3 +754,4 @@ volumes:
   backups:
   prometheus-data:
   alertmanager-data:
+  geoip-data:

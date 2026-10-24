@@ -160,3 +160,34 @@ ssh -L 9090:<ip>:9090 <server>     # rồi mở http://localhost:9090; Alertmana
   `GET /api/v1/users/internal/relationships`. user-service bản cũ trả 404, story-service fail-closed, nên story của mọi
   chủ khác biến mất khỏi feed, vòng avatar và profile (`/api/v1/stories/feed`, `/rings`, `/users/{userId}`) cho tới khi
   user-service bản mới chạy.
+
+## 6. Vị trí đăng nhập (GeoIP)
+
+auth-service đổi địa chỉ IP của mỗi lần đăng nhập thành nơi gần đúng ("Ho Chi Minh City, Vietnam") bằng file DB-IP
+**IP to City Lite** (giấy phép CC BY 4.0), tra ngay trong process, không gửi địa chỉ ra ngoài. Nơi này hiện trên
+timeline của admin và trong thông báo "Your account logged in from a new device" gửi cho chủ tài khoản.
+
+- **File đến từ `geoip-init`**: container một lần, chạy mỗi lần deploy, tải file vào volume `geoip-data`;
+  auth-service mount volume đó read-only (`GEOIP_DATABASE=/geoip/dbip-city-lite.mmdb`). File còn mới hơn một tháng
+  thì giữ nguyên, nên **làm mới = deploy lại** khi file đã quá một tháng. Tải lỗi (db-ip.com chết) vẫn exit 0, để
+  deploy không bị chặn; khi đó auth-service chạy như cũ, chỉ là không có vị trí.
+- **Kiểm tra sau deploy**: log khởi động của auth-service phải có một dòng `GeoIP lookup enabled from … (built …)`.
+  Thấy `GeoIP lookup disabled: …` nghĩa là volume trống hoặc file hỏng; xem log của `geoip-init`.
+- **Ghi nguồn là bắt buộc** (CC BY): "IP Geolocation by DB-IP", link `https://db-ip.com`, đã đặt ở trang activity của
+  admin và trang privacy của web. Trang nào khác hiện vị trí thì cũng phải có.
+- **Local**: `make geoip` tải file vào `data/geoip/` (git-ignore), `make run-auth` tự tìm thấy.
+
+### Địa chỉ của trình duyệt phải tới được gateway
+
+Vị trí chỉ đúng khi gateway thấy địa chỉ thật của trình duyệt. Web gọi API qua rewrite `/api/*` của Next, nên:
+
+- **Build image web với `API_GATEWAY_URL` trỏ tới gateway qua mạng nội bộ của Coolify**, không qua
+  `https://api.nowaa.site`. Đi qua domain public thì hop đầu tiên gateway không tin là IP public của chính server: mọi
+  người dùng web chung một bucket rate-limit, và mọi cảnh báo ghi thành phố của data centre. Bắt buộc phải đi domain
+  public thì thêm IP đó vào `RATE_LIMIT_TRUSTED_PROXIES`.
+- **Traefik phải tin tunnel connector** (`forwardedHeaders.trustedIPs`). Không tin thì Traefik bỏ `X-Forwarded-For`
+  mà Cloudflare ghi, và thay bằng địa chỉ của connector.
+- **Kiểm tra sau deploy**: đăng nhập web bằng điện thoại dùng 4G. Timeline admin phải hiện IP của nhà mạng kèm một nơi,
+  không phải IP private hay IP của server.
+- **Deploy notification-service cùng đợt với auth-service**: cảnh báo nằm chờ trên `auth.new-device-events` (giữ 7 ngày)
+  cho tới khi consumer chạy.

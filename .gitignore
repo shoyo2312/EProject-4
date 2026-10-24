@@ -66,3 +66,5 @@ $RECYCLE.BIN/
 .directory
 *~
 .fuse_hidden*
+# GeoIP database (make geoip) — ~120 MB, never committed
+data/geoip/

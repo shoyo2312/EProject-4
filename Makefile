@@ -17,7 +17,7 @@ endif
 	build-admin \
 	clean \
 	test test-auth test-user \
-	infra-up infra-down infra-reset infra-logs infra-status infra-check \
+	infra-up infra-down infra-reset infra-logs infra-status infra-check geoip \
 	run-gateway run-auth run-user run-video run-interaction run-story \
 	run-recommendation run-chat run-media run-notification \
 	run-admin run-analytics run-search \
@@ -58,6 +58,7 @@ help:
 	@echo "    make infra-reset        Stop containers + xoá data (volumes)"
 	@echo "    make infra-logs         Xem logs tất cả containers"
 	@echo "    make infra-status       Xem trạng thái containers"
+	@echo "    make geoip              Tải DB-IP City Lite vào data/geoip (bỏ qua nếu mới hơn 1 tháng)"
 	@echo ""
 	@echo "  Run services (local; trừ gateway, chỉ nghe 127.0.0.1 — BIND=0.0.0.0 để mở):"
 	@echo "    make run-gateway        Run api-gateway :8080"
@@ -178,6 +179,11 @@ infra-logs:
 
 infra-status:
 	docker-compose ps
+
+# The file auth-service turns a sign-in's address into a place with (GeoIpLocator). ~120 MB and
+# git-ignored; production fetches it through the geoip-init container instead.
+geoip:
+	sh scripts/geoip/download.sh data/geoip
 
 # ──────────────────────────────────────────────
 # Run services locally
