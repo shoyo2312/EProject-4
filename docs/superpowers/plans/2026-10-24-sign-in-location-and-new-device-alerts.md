@@ -65,7 +65,8 @@ Backend paths are relative to the worktree. Two short forms:
   - the OS version only when it matches `\d+(\.\d+)*`;
   - never the model.
 - Neither the lookup nor the alert can fail or delay a sign-in.
-- Web cookie `nowa_device`: HttpOnly, SameSite=Lax, `Path=/api/v1/auth`, max-age 31536000, Secure
+- Web cookie `nowa_device`: HttpOnly, SameSite=Lax, `Path=/` (corrected in the final review: the
+  page reads it too, and `/api/v1/auth` never reaches a page), max-age 31536000, Secure
   when `NODE_ENV === "production"`. Its value is a lowercase UUID; anything else gets replaced.
 - Attribution, wherever a place is shown or explained: `<a href="https://db-ip.com">IP Geolocation by DB-IP</a>`.
 - Commits:

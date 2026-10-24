@@ -86,8 +86,9 @@ Builder's calls (made in this draft, flagged so they can be checked):
   is (§8.3).
 - **The GeoIP file reaches production through a one-shot container** that downloads it into a
   volume on deploy (§5.1). Coolify does not mount files from the repo checkout.
-- **Attribution** "IP Geolocation by DB-IP" (required by CC BY) on the admin activity page and on
-  the web privacy page.
+- **Attribution** "IP Geolocation by DB-IP" (required by CC BY) on the admin activity page, on
+  the web privacy page, and on the web inbox's new-device notice: DB-IP's terms ask a web page
+  that shows a looked-up place for a link back.
 
 Correction to the conversation: the alert was described as "pushed to the phone". The mobile app
 has no push support at all (no Firebase in it, no token registration), so nothing reaches a phone.
@@ -390,15 +391,19 @@ account's registered tokens.
   `/api/v1/auth/*`:
   - On a page, when the cookie (`nowa_device`) is absent or malformed, it generates a UUID
     (`crypto.randomUUID()`) and sets the cookie on the response: HttpOnly, SameSite=Lax,
-    `Path=/api/v1/auth`, one year, Secure in production.
+    `Path=/`, one year, Secure in production.
   - On an auth call, it adds `X-Device-Id` with the cookie's value to the request it passes on,
     replacing any the browser sent; with no valid cookie, it sends none.
   - Built as such after checking (implementation note): Next 16.4 returns a rewritten `/api/*`
     call's response exactly as the gateway wrote it, so a cookie set on the auth response is
     dropped (as is next.config's `Accept-CH`). The request header does reach the gateway. A page
     always loads before a sign-in can be sent.
-- **The cookie goes only to `/api/v1/auth/*`.** That means sign-in, sign-up, social sign-in,
-  refresh and logout, never the feed or anything else a guest browses.
+- **Only `/api/v1/auth/*` turns the cookie into `X-Device-Id`.** That means sign-in, sign-up,
+  social sign-in, refresh and logout. The cookie itself is `Path=/`, because the page reads it
+  too, to decide whether to mint one. A browser never sends a cookie outside its Path: scoped to
+  `/api/v1/auth`, it never reached a page, so every page minted a fresh id and nearly every
+  sign-in alerted (found in the final review, before any deploy). The rest of the API never runs
+  the proxy. The cookie is HttpOnly and not a credential.
 - **Nothing in `src/lib/api/` changes.** The sign-in calls and the refresh (`client.ts`
   `performRefresh`, a plain same-origin `fetch`) already go to `/api/v1/auth/*`.
 - **Logout, password reset and closing the account leave the cookie.** The quiet re-sign-in
@@ -521,8 +526,9 @@ For production (`docs/operations.md`):
   three shapes (full, no label, no place); a redelivered event writes nothing.
 - **Web** (Vitest, `npm run check` clean):
   - `proxy.ts`:
-    - a request without the cookie gets one (HttpOnly, `Path=/api/v1/auth`) and passes
-      `X-Device-Id` with its value on;
+    - a page without the cookie gets one (HttpOnly, `Path=/`), and that Path covers every page
+      and every auth call, so the browser sends it back and keeps one id;
+    - an auth call with the cookie passes `X-Device-Id` with its value on;
     - a request with the cookie passes the same value on and sets nothing;
     - a browser-sent `X-Device-Id` is overwritten;
     - a path outside `/api/v1/auth` is untouched.

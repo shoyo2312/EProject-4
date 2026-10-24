@@ -176,7 +176,9 @@ timeline của admin và trong thông báo "Your account logged in from a new de
 - **Kiểm tra sau deploy**: log khởi động của auth-service phải có một dòng `GeoIP lookup enabled from … (built …)`.
   Thấy `GeoIP lookup disabled: …` nghĩa là volume trống hoặc file hỏng; xem log của `geoip-init`.
 - **Ghi nguồn là bắt buộc** (CC BY): "IP Geolocation by DB-IP", link `https://db-ip.com`, đã đặt ở trang activity của
-  admin và trang privacy của web. Trang nào khác hiện vị trí thì cũng phải có.
+  admin, trang privacy của web và thông báo "thiết bị mới" trong inbox web. Trang nào khác hiện vị trí thì cũng phải có.
+  App mobile cũng hiện nội dung thông báo này (có vị trí) nhưng chưa ghi nguồn; cần một dòng ghi công ở màn hình
+  giới thiệu/quyền riêng tư của app.
 - **Local**: `make geoip` tải file vào `data/geoip/` (git-ignore), `make run-auth` tự tìm thấy.
 
 ### Địa chỉ của trình duyệt phải tới được gateway
