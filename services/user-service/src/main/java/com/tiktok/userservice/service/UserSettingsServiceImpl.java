@@ -71,11 +71,31 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         LocalTime sleepHoursStart = request.isSleepHoursStartSet()
                 ? request.getSleepHoursStart()
                 : settings.getSleepHoursStart();
-        LocalTime sleepHoursEnd = request.isSleepHoursEndSet()
-                ? request.getSleepHoursEnd()
-                : settings.getSleepHoursEnd();
+        // As on TikTok, sleep hours always last 8 hours. Derived here so no client can store
+        // anything else; clearing the start clears both.
+        LocalTime sleepHoursEnd = sleepHoursStart == null ? null : sleepHoursStart.plusHours(8);
 
-        requireValidSleepWindow(sleepHoursStart, sleepHoursEnd);
+        boolean pushLikes = request.isPushLikesSet()
+                ? required("pushLikes", request.getPushLikes())
+                : settings.isPushLikes();
+        boolean pushComments = request.isPushCommentsSet()
+                ? required("pushComments", request.getPushComments())
+                : settings.isPushComments();
+        boolean pushNewFollowers = request.isPushNewFollowersSet()
+                ? required("pushNewFollowers", request.getPushNewFollowers())
+                : settings.isPushNewFollowers();
+        boolean inAppLikes = request.isInAppLikesSet()
+                ? required("inAppLikes", request.getInAppLikes())
+                : settings.isInAppLikes();
+        boolean inAppComments = request.isInAppCommentsSet()
+                ? required("inAppComments", request.getInAppComments())
+                : settings.isInAppComments();
+        boolean inAppNewFollowers = request.isInAppNewFollowersSet()
+                ? required("inAppNewFollowers", request.getInAppNewFollowers())
+                : settings.isInAppNewFollowers();
+        boolean inAppReposts = request.isInAppRepostsSet()
+                ? required("inAppReposts", request.getInAppReposts())
+                : settings.isInAppReposts();
 
         boolean filterSpamOffensive = request.isFilterSpamOffensiveSet()
                 ? required("filterSpamOffensive", request.getFilterSpamOffensive())
@@ -90,6 +110,8 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         settings.replaceWith(commentAudience, dmAudience, screenTimeLimitMinutes,
                 sleepHoursStart, sleepHoursEnd, weeklyDigest);
         settings.replaceCommentFilters(filterSpamOffensive, filterAllComments, commentKeywords);
+        settings.replaceNotificationSwitches(pushLikes, pushComments, pushNewFollowers,
+                inAppLikes, inAppComments, inAppNewFollowers, inAppReposts);
 
         // Insert on the first write, update on the rest: currentOrDefaults hands back either a
         // managed row or a transient one, and save covers both.
@@ -213,19 +235,5 @@ public class UserSettingsServiceImpl implements UserSettingsService {
             throw new InvalidUserSettingsException(field + ": cannot be null");
         }
         return value;
-    }
-
-    /**
-     * Both ends or neither, and not the same minute twice. A start later than the end is left
-     * alone on purpose: a window that crosses midnight is the normal case for sleep hours.
-     */
-    private static void requireValidSleepWindow(LocalTime start, LocalTime end) {
-        if ((start == null) != (end == null)) {
-            throw new InvalidUserSettingsException(
-                    "sleepHoursStart and sleepHoursEnd must be set together or cleared together");
-        }
-        if (start != null && start.equals(end)) {
-            throw new InvalidUserSettingsException("sleepHoursStart and sleepHoursEnd must differ");
-        }
     }
 }

@@ -69,6 +69,37 @@ public class UserSettings extends BaseEntity {
     @Column(name = "comment_keywords", nullable = false, columnDefinition = "text[]")
     private List<String> commentKeywords;
 
+    /** Push (phone and desktop) for likes on a video or a comment. See V18. */
+    @Column(name = "push_likes", nullable = false)
+    private boolean pushLikes;
+
+    @Column(name = "push_comments", nullable = false)
+    private boolean pushComments;
+
+    /** New followers, follow requests and accepted requests. */
+    @Column(name = "push_new_followers", nullable = false)
+    private boolean pushNewFollowers;
+
+    /** In-app banner switches, same grouping as the push ones plus reposts. */
+    @Column(name = "in_app_likes", nullable = false)
+    private boolean inAppLikes;
+
+    @Column(name = "in_app_comments", nullable = false)
+    private boolean inAppComments;
+
+    @Column(name = "in_app_new_followers", nullable = false)
+    private boolean inAppNewFollowers;
+
+    @Column(name = "in_app_reposts", nullable = false)
+    private boolean inAppReposts;
+
+    /**
+     * The browser's IANA zone. Read-only here: only the heartbeat's native upsert writes it, so an
+     * entity read before that upsert can never save the old value back over it.
+     */
+    @Column(name = "time_zone", insertable = false, updatable = false)
+    private String timeZone;
+
     /**
      * What an account with no row has. Transient — a read maps this without persisting it, so
      * reading somebody's settings never writes.
@@ -85,6 +116,13 @@ public class UserSettings extends BaseEntity {
                 .filterSpamOffensive(true)
                 .filterAllComments(false)
                 .commentKeywords(List.of())
+                .pushLikes(true)
+                .pushComments(true)
+                .pushNewFollowers(true)
+                .inAppLikes(true)
+                .inAppComments(true)
+                .inAppNewFollowers(true)
+                .inAppReposts(true)
                 .build();
     }
 
@@ -107,6 +145,19 @@ public class UserSettings extends BaseEntity {
         this.sleepHoursStart = sleepHoursStart;
         this.sleepHoursEnd = sleepHoursEnd;
         this.weeklyScreenTimeDigest = weeklyScreenTimeDigest;
+    }
+
+    /** The notification switches, assigned whole like {@link #replaceWith} — merged by the service. */
+    public void replaceNotificationSwitches(boolean pushLikes, boolean pushComments, boolean pushNewFollowers,
+                                            boolean inAppLikes, boolean inAppComments,
+                                            boolean inAppNewFollowers, boolean inAppReposts) {
+        this.pushLikes = pushLikes;
+        this.pushComments = pushComments;
+        this.pushNewFollowers = pushNewFollowers;
+        this.inAppLikes = inAppLikes;
+        this.inAppComments = inAppComments;
+        this.inAppNewFollowers = inAppNewFollowers;
+        this.inAppReposts = inAppReposts;
     }
 
     /** The comment filters, assigned whole like {@link #replaceWith} — merged and validated by the service. */

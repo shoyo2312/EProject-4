@@ -4,7 +4,7 @@ import com.tiktok.common.exception.BadRequestException;
 
 /**
  * A settings patch that is well-formed JSON but cannot be applied — an explicit null on a field
- * that has no null, or a sleep window with only one end.
+ * that has no null, or a comment keyword with nothing in it to match.
  *
  * <p>Carries {@code VALIDATION_ERROR} rather than a code of its own: to a client this is the same
  * class of mistake as a field failing its annotation, and the wording already says which field.

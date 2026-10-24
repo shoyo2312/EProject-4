@@ -34,6 +34,17 @@ public record UserSettingsResponse(
         /** Every comment from someone else waits for approval. */
         boolean filterAllComments,
         /** A comment containing one of these waits for approval. */
-        List<String> commentKeywords
+        List<String> commentKeywords,
+        /** Push notifications → Interactions: phone push and desktop notifications. */
+        boolean pushLikes,
+        boolean pushComments,
+        boolean pushNewFollowers,
+        /** Push notifications → In-app notifications: the banner. */
+        boolean inAppLikes,
+        boolean inAppComments,
+        boolean inAppNewFollowers,
+        boolean inAppReposts,
+        /** The IANA zone the last screen-time heartbeat came from. Null until there has been one. */
+        String timeZone
 ) {
 }

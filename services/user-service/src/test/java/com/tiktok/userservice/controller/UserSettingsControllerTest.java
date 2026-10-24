@@ -58,7 +58,7 @@ class UserSettingsControllerTest {
 
     private static final UserSettingsResponse DEFAULTS = new UserSettingsResponse(
             SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, false,
-            true, false, List.of());
+            true, false, List.of(), true, true, true, true, true, true, true, null);
 
     @Autowired
     private MockMvc mockMvc;
@@ -88,8 +88,9 @@ class UserSettingsControllerTest {
     void getOwnSettings_answersTheFlatKeyedObject() throws Exception {
         when(userSettingsService.getOwnSettings(1L)).thenReturn(new UserSettingsResponse(
                 SettingsAudience.FRIENDS, SettingsAudience.NO_ONE, 60,
-                LocalTime.of(22, 30), LocalTime.of(7, 0), false, false,
-                false, true, List.of("spoiler")));
+                LocalTime.of(22, 30), LocalTime.of(6, 30), false, false,
+                false, true, List.of("spoiler"), true, false, true, true, true, true, false,
+                "Asia/Ho_Chi_Minh"));
 
         mockMvc.perform(get("/api/v1/users/me/settings")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
@@ -99,11 +100,39 @@ class UserSettingsControllerTest {
                 .andExpect(jsonPath("$.data.screenTimeLimitMinutes").value(60))
                 // Minute precision both ways, so a client can PATCH back what it read.
                 .andExpect(jsonPath("$.data.sleepHoursStart").value("22:30"))
-                .andExpect(jsonPath("$.data.sleepHoursEnd").value("07:00"))
+                .andExpect(jsonPath("$.data.sleepHoursEnd").value("06:30"))
                 .andExpect(jsonPath("$.data.weeklyScreenTimeDigest").value(false))
                 .andExpect(jsonPath("$.data.filterSpamOffensive").value(false))
                 .andExpect(jsonPath("$.data.filterAllComments").value(true))
-                .andExpect(jsonPath("$.data.commentKeywords[0]").value("spoiler"));
+                .andExpect(jsonPath("$.data.commentKeywords[0]").value("spoiler"))
+                // The names the web reads the switches by.
+                .andExpect(jsonPath("$.data.pushLikes").value(true))
+                .andExpect(jsonPath("$.data.pushComments").value(false))
+                .andExpect(jsonPath("$.data.inAppReposts").value(false))
+                .andExpect(jsonPath("$.data.timeZone").value("Asia/Ho_Chi_Minh"));
+    }
+
+    /**
+     * The end is derived now, and a client from before that still sends it. Ignored rather than a
+     * 400, so the old settings page keeps saving until it is reloaded.
+     */
+    @Test
+    void patch_aStaleSleepHoursEndKey_isIgnored() throws Exception {
+        when(userSettingsService.updateOwnSettings(eq(1L), any())).thenReturn(DEFAULTS);
+
+        mockMvc.perform(patch("/api/v1/users/me/settings")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"sleepHoursStart": "22:00", "sleepHoursEnd": "12:00"}
+                                """))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<UpdateUserSettingsRequest> captor =
+                ArgumentCaptor.forClass(UpdateUserSettingsRequest.class);
+        verify(userSettingsService).updateOwnSettings(eq(1L), captor.capture());
+        assertThat(captor.getValue().isSleepHoursStartSet()).isTrue();
+        assertThat(captor.getValue().getSleepHoursStart()).isEqualTo(LocalTime.of(22, 0));
     }
 
     /** Sanitized in the setter, so the 30-character limit counts what would be stored. */
@@ -215,7 +244,8 @@ class UserSettingsControllerTest {
     void internalSettings_answerWithoutAToken() throws Exception {
         when(userSettingsService.getSettingsPolicies(List.of(7L))).thenReturn(List.of(
                 new UserSettingsPolicyResponse(7L, SettingsAudience.NO_ONE, SettingsAudience.FRIENDS,
-                        false, true, List.of("spoiler"))));
+                        false, true, List.of("spoiler"), true, false, true,
+                        LocalTime.of(22, 0), LocalTime.of(6, 0), "Asia/Ho_Chi_Minh")));
 
         mockMvc.perform(get("/api/v1/users/internal/settings").param("ids", "7")
                         .header(InternalApiToken.HEADER, internalApiToken.value()))
@@ -225,7 +255,14 @@ class UserSettingsControllerTest {
                 .andExpect(jsonPath("$.data[0].dmAudience").value("FRIENDS"))
                 .andExpect(jsonPath("$.data[0].filterSpamOffensive").value(false))
                 .andExpect(jsonPath("$.data[0].filterAllComments").value(true))
-                .andExpect(jsonPath("$.data[0].commentKeywords[0]").value("spoiler"));
+                .andExpect(jsonPath("$.data[0].commentKeywords[0]").value("spoiler"))
+                // What notification-service gates a phone push on, by these names and in HH:mm.
+                .andExpect(jsonPath("$.data[0].pushLikes").value(true))
+                .andExpect(jsonPath("$.data[0].pushComments").value(false))
+                .andExpect(jsonPath("$.data[0].pushNewFollowers").value(true))
+                .andExpect(jsonPath("$.data[0].sleepHoursStart").value("22:00"))
+                .andExpect(jsonPath("$.data[0].sleepHoursEnd").value("06:00"))
+                .andExpect(jsonPath("$.data[0].timeZone").value("Asia/Ho_Chi_Minh"));
     }
 
     /**
@@ -255,7 +292,7 @@ class UserSettingsControllerTest {
     void patch_privateAccount_reachesTheServiceAndComesBack() throws Exception {
         when(userSettingsService.updateOwnSettings(eq(1L), any())).thenReturn(new UserSettingsResponse(
                 SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, true,
-                true, false, List.of()));
+                true, false, List.of(), true, true, true, true, true, true, true, null));
 
         mockMvc.perform(patch("/api/v1/users/me/settings")
                         .header("Authorization", "Bearer " + tokenFor(1L))
