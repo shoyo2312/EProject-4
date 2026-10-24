@@ -386,25 +386,26 @@ account's registered tokens.
   - The refresh token also lasts seven days. A Safari user back after a week would have lost
     both, and their sign-in would alert about their own browser.
   - A cookie set in an HTTP response from the site's own server is not under that limit.
-- **`src/proxy.ts`** (Next 16's middleware; the web has none today), matcher
-  `/api/v1/auth/:path*`:
-  - It reads the cookie (name builder's). When the cookie is absent or malformed, it generates a
-    UUID (`crypto.randomUUID()`) and sets the cookie on the response: HttpOnly, SameSite=Lax,
+- **`src/proxy.ts`** (Next 16's middleware; the web had none), on pages and on
+  `/api/v1/auth/*`:
+  - On a page, when the cookie (`nowa_device`) is absent or malformed, it generates a UUID
+    (`crypto.randomUUID()`) and sets the cookie on the response: HttpOnly, SameSite=Lax,
     `Path=/api/v1/auth`, one year, Secure in production.
-  - It adds `X-Device-Id` with the cookie's value to the request it passes on, overwriting any
-    the browser sent.
+  - On an auth call, it adds `X-Device-Id` with the cookie's value to the request it passes on,
+    replacing any the browser sent; with no valid cookie, it sends none.
+  - Built as such after checking (implementation note): Next 16.4 returns a rewritten `/api/*`
+    call's response exactly as the gateway wrote it, so a cookie set on the auth response is
+    dropped (as is next.config's `Accept-CH`). The request header does reach the gateway. A page
+    always loads before a sign-in can be sent.
 - **The cookie goes only to `/api/v1/auth/*`.** That means sign-in, sign-up, social sign-in,
   refresh and logout, never the feed or anything else a guest browses.
 - **Nothing in `src/lib/api/` changes.** The sign-in calls and the refresh (`client.ts`
   `performRefresh`, a plain same-origin `fetch`) already go to `/api/v1/auth/*`.
 - **Logout, password reset and closing the account leave the cookie.** The quiet re-sign-in
   after a password change (`PasswordModal.tsx:110`) therefore raises no alert.
-- **The builder verifies the mechanism before relying on it**, using `next start` and curl to a
-  local echo server. Two things must make it through the external rewrite
-  (`next.config.ts:118-125`): the added request header reaching the gateway, and the
-  `Set-Cookie` reaching the browser. If either does not, `proxy.ts` rewrites these paths itself
-  (`NextResponse.rewrite` with the modified request headers) instead of leaving them to
-  `next.config.ts`.
+- **Verified** with `next start` and curl to a local echo server: a page sets the cookie, and an
+  auth call carries it to the gateway as `X-Device-Id`. A running `next dev` does not pick up a
+  newly added `proxy.ts`; it needs a restart.
 
 ### 8.2 The browser's address — no change, two deployment requirements
 
