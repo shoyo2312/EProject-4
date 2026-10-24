@@ -15,15 +15,20 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Component;
 
+import java.time.DayOfWeek;
 import java.time.Instant;
+import java.time.format.TextStyle;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static com.tiktok.userservice.service.DataExportWriter.date;
 
@@ -83,12 +88,22 @@ public class DataExportArchiver {
         return record;
     }
 
+    private static String dailyLimit(UserSettings settings) {
+        List<Integer> byDay = settings.getScreenTimeLimitsByDay();
+        if (byDay != null) {
+            return IntStream.range(0, byDay.size())
+                    .mapToObj(i -> DayOfWeek.of(i + 1).getDisplayName(TextStyle.FULL, Locale.ENGLISH)
+                            + " " + byDay.get(i) + " minutes")
+                    .collect(Collectors.joining(", "));
+        }
+        return settings.getScreenTimeLimitMinutes() == null ? "Off" : settings.getScreenTimeLimitMinutes() + " minutes";
+    }
+
     private static Map<String, String> settingsRecord(UserSettings settings) {
         Map<String, String> record = new LinkedHashMap<>();
         record.put("Who can comment", audience(settings.getCommentAudience()));
         record.put("Who can send you direct messages", audience(settings.getDmAudience()));
-        record.put("Daily screen time limit", settings.getScreenTimeLimitMinutes() == null
-                ? "Off" : settings.getScreenTimeLimitMinutes() + " minutes");
+        record.put("Daily screen time limit", dailyLimit(settings));
         record.put("Sleep reminder", settings.getSleepHoursStart() == null || settings.getSleepHoursEnd() == null
                 ? "Off" : settings.getSleepHoursStart() + " – " + settings.getSleepHoursEnd());
         record.put("Weekly screen time updates", yesNo(settings.isWeeklyScreenTimeDigest()));

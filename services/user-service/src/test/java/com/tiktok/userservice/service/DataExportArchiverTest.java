@@ -2,7 +2,9 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.client.DataExportSources;
 import com.tiktok.userservice.entity.DataExportCategory;
+import com.tiktok.userservice.entity.SettingsAudience;
 import com.tiktok.userservice.entity.UserProfile;
+import com.tiktok.userservice.entity.UserSettings;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserMuteRepository;
@@ -17,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -77,6 +80,27 @@ class DataExportArchiverTest {
         assertThat(sections).extracting(DataExportSection::title).containsExactly("Likes and Favorites", "Posts");
         assertThat(sections.getFirst().files()).extracting(DataExportSection.File::title)
                 .containsExactly("Like List", "Favorite Videos");
+    }
+
+    /** A per-day limit is a limit too: the export must not call it "Off". */
+    @Test
+    void settingsSpellOutAPerDayLimit() {
+        when(userSettingsRepository.findByUserIdAndDeletedAtIsNull(ALICE)).thenReturn(Optional.of(UserSettings.builder()
+                .userId(ALICE)
+                .commentAudience(SettingsAudience.EVERYONE)
+                .dmAudience(SettingsAudience.EVERYONE)
+                .commentKeywords(List.of())
+                .screenTimeLimitsByDay(List.of(30, 40, 50, 60, 70, 80, 90))
+                .build()));
+
+        Map<String, String> settings = archiver.collect(ALICE, List.of(DataExportCategory.PROFILE_AND_SETTINGS))
+                .getFirst().files().stream()
+                .filter(file -> file.title().equals("Settings"))
+                .findFirst().orElseThrow()
+                .records().getFirst();
+
+        assertThat(settings.get("Daily screen time limit")).isEqualTo("Monday 30 minutes, Tuesday 40 minutes, "
+                + "Wednesday 50 minutes, Thursday 60 minutes, Friday 70 minutes, Saturday 80 minutes, Sunday 90 minutes");
     }
 
     private static UserProfile profile(Long userId, String username) {

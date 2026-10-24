@@ -1,5 +1,6 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.moderation.rules.Blocklist;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
@@ -68,6 +69,10 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         Integer screenTimeLimitMinutes = request.isScreenTimeLimitMinutesSet()
                 ? request.getScreenTimeLimitMinutes()
                 : settings.getScreenTimeLimitMinutes();
+        List<Integer> screenTimeLimitsByDay = request.isScreenTimeLimitsByDaySet()
+                ? request.getScreenTimeLimitsByDay()
+                : settings.getScreenTimeLimitsByDay();
+        String passcodeHash = screenTimePasscodeHash(settings, screenTimeLimitMinutes, screenTimeLimitsByDay, request);
         LocalTime sleepHoursStart = request.isSleepHoursStartSet()
                 ? request.getSleepHoursStart()
                 : settings.getSleepHoursStart();
@@ -107,8 +112,12 @@ public class UserSettingsServiceImpl implements UserSettingsService {
                 ? commentKeywords(request.getCommentKeywords())
                 : settings.getCommentKeywords();
 
-        settings.replaceWith(commentAudience, dmAudience, screenTimeLimitMinutes,
-                sleepHoursStart, sleepHoursEnd, weeklyDigest);
+        settings.replaceWith(commentAudience, dmAudience, sleepHoursStart, sleepHoursEnd, weeklyDigest);
+        if (!Objects.equals(passcodeHash, settings.getScreenTimePasscodeHash())) {
+            // A new passcode, or none: wrong guesses at the old one no longer count.
+            settings.replacePasscodeAttempts(0, null);
+        }
+        settings.replaceScreenTimeLimit(screenTimeLimitMinutes, screenTimeLimitsByDay, passcodeHash);
         settings.replaceCommentFilters(filterSpamOffensive, filterAllComments, commentKeywords);
         settings.replaceNotificationSwitches(pushLikes, pushComments, pushNewFollowers,
                 inAppLikes, inAppComments, inAppNewFollowers, inAppReposts);
@@ -228,6 +237,33 @@ public class UserSettingsServiceImpl implements UserSettingsService {
             byKey.putIfAbsent(Blocklist.keyOf(keyword), keyword);
         }
         return List.copyOf(byKey.values());
+    }
+
+    /**
+     * The passcode only guards continuing past the daily limit, so it lives exactly as long as the
+     * limit: turning the limit on needs one, changing the limit keeps it, turning the limit off
+     * forgets it — which is also how a forgotten one is replaced. Changing or turning off the limit
+     * never asks for it.
+     *
+     * @return the hash to store, null when the limit is off
+     */
+    private static String screenTimePasscodeHash(UserSettings settings, Integer minutes, List<Integer> byDay,
+                                                 UpdateUserSettingsRequest request) {
+        if (minutes != null && byDay != null) {
+            throw new InvalidUserSettingsException(
+                    "screenTimeLimitMinutes and screenTimeLimitsByDay: set one daily limit, not both");
+        }
+        if (minutes == null && byDay == null) {
+            return null;
+        }
+        String passcode = request.isScreenTimePasscodeSet() ? request.getScreenTimePasscode() : null;
+        if (passcode != null) {
+            return HashUtils.bcryptHash(passcode);
+        }
+        if (settings.getScreenTimePasscodeHash() == null) {
+            throw new InvalidUserSettingsException("screenTimePasscode: required to turn on the daily limit");
+        }
+        return settings.getScreenTimePasscodeHash();
     }
 
     private static <T> T required(String field, T value) {

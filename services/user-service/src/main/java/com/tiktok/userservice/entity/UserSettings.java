@@ -13,6 +13,7 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import java.time.Instant;
 import java.time.LocalTime;
 import java.util.List;
 
@@ -43,9 +44,25 @@ public class UserSettings extends BaseEntity {
     @Column(name = "dm_audience", nullable = false, length = 16)
     private SettingsAudience dmAudience;
 
-    /** Null is off; see V10. */
+    /** The same limit every day. Null when off or per day; see V10 and V20. */
     @Column(name = "screen_time_limit_minutes")
     private Integer screenTimeLimitMinutes;
+
+    /** One limit per weekday, Monday first. Null when off or the same every day; see V20. */
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    @Column(name = "screen_time_limits_by_day", columnDefinition = "integer[]")
+    private List<Integer> screenTimeLimitsByDay;
+
+    /** bcrypt of the 4-digit passcode that lets the owner past the limit. Never leaves the service. */
+    @Column(name = "screen_time_passcode_hash", length = 60)
+    private String screenTimePasscodeHash;
+
+    /** Wrong passcodes since the last right one or the last lock. */
+    @Column(name = "screen_time_passcode_failures", nullable = false)
+    private int screenTimePasscodeFailures;
+
+    @Column(name = "screen_time_passcode_locked_until")
+    private Instant screenTimePasscodeLockedUntil;
 
     @Column(name = "sleep_hours_start")
     private LocalTime sleepHoursStart;
@@ -129,22 +146,33 @@ public class UserSettings extends BaseEntity {
     /**
      * Total assignment, not a partial update: every argument is the final value of its field.
      * Unlike {@link UserProfile#updateProfile} there is no "null leaves it alone" rule here —
-     * three of these fields are nullable and clearing one is a thing a client can ask for, so the
+     * the sleep hours are nullable and clearing them is a thing a client can ask for, so the
      * merge of patch over current state happens in the service, where it can be validated, and
      * this method only stores the result.
      */
     public void replaceWith(SettingsAudience commentAudience,
                             SettingsAudience dmAudience,
-                            Integer screenTimeLimitMinutes,
                             LocalTime sleepHoursStart,
                             LocalTime sleepHoursEnd,
                             boolean weeklyScreenTimeDigest) {
         this.commentAudience = commentAudience;
         this.dmAudience = dmAudience;
-        this.screenTimeLimitMinutes = screenTimeLimitMinutes;
         this.sleepHoursStart = sleepHoursStart;
         this.sleepHoursEnd = sleepHoursEnd;
         this.weeklyScreenTimeDigest = weeklyScreenTimeDigest;
+    }
+
+    /** The daily limit and its passcode, assigned whole like {@link #replaceWith} — merged and validated by the service. */
+    public void replaceScreenTimeLimit(Integer minutes, List<Integer> byDay, String passcodeHash) {
+        this.screenTimeLimitMinutes = minutes;
+        this.screenTimeLimitsByDay = byDay == null ? null : List.copyOf(byDay);
+        this.screenTimePasscodeHash = passcodeHash;
+    }
+
+    /** The wrong-passcode count and lock, as the service decided them. */
+    public void replacePasscodeAttempts(int failures, Instant lockedUntil) {
+        this.screenTimePasscodeFailures = failures;
+        this.screenTimePasscodeLockedUntil = lockedUntil;
     }
 
     /** The notification switches, assigned whole like {@link #replaceWith} — merged by the service. */

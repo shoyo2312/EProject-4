@@ -7,6 +7,7 @@ import com.tiktok.userservice.dto.response.UserSettingsResponse;
 import com.tiktok.userservice.entity.SettingsAudience;
 import com.tiktok.userservice.entity.UserSettings;
 import com.tiktok.userservice.exception.InvalidUserSettingsException;
+import com.tiktok.userservice.exception.TooManyPasscodeAttemptsException;
 import com.tiktok.userservice.repository.ScreenTimeDayRepository;
 import com.tiktok.userservice.repository.UserSettingsRepository;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -15,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -24,6 +27,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -32,6 +36,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -234,6 +239,111 @@ class ScreenTimeServiceImplTest {
         assertThat(jdbcTemplate.queryForObject(
                 "select time_zone from user_settings where user_id = ? and deleted_at is null", String.class, USER))
                 .isEqualTo(HCM);
+    }
+
+    private static final Instant NOW = Instant.parse("2026-10-20T03:00:00Z");
+
+    private void limitWithPasscode(String passcode) {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        request.setScreenTimeLimitMinutes(60);
+        request.setScreenTimePasscode(passcode);
+        userSettingsService.updateOwnSettings(USER, request);
+    }
+
+    private boolean verify(String passcode, Instant at) {
+        return screenTimeService.verifyPasscode(USER, passcode, at);
+    }
+
+    @Test
+    void verify_rightAndWrong() {
+        limitWithPasscode("1234");
+
+        assertThat(verify("1234", NOW)).isTrue();
+        assertThat(verify("0000", NOW)).isFalse();
+    }
+
+    @Test
+    void verify_withNoPasscodeSetIsWrong() {
+        assertThat(verify("1234", NOW)).isFalse();
+    }
+
+    @Test
+    void verify_locksAfterFiveWrongForFifteenMinutes() {
+        limitWithPasscode("1234");
+        for (int i = 0; i < 5; i++) {
+            assertThat(verify("0000", NOW)).isFalse();
+        }
+
+        assertThatThrownBy(() -> verify("1234", NOW.plus(Duration.ofMinutes(1))))
+                .isInstanceOf(TooManyPasscodeAttemptsException.class)
+                .satisfies(ex -> assertThat(((TooManyPasscodeAttemptsException) ex).getHeaders()
+                        .getFirst(HttpHeaders.RETRY_AFTER)).isEqualTo("840"));
+        assertThat(verify("1234", NOW.plus(Duration.ofMinutes(16)))).isTrue();
+    }
+
+    @Test
+    void verify_successResetsTheCount() {
+        limitWithPasscode("1234");
+        for (int i = 0; i < 4; i++) {
+            verify("0000", NOW);
+        }
+        assertThat(verify("1234", NOW)).isTrue();
+        for (int i = 0; i < 4; i++) {
+            verify("0000", NOW);
+        }
+
+        assertThat(verify("1234", NOW)).isTrue();
+    }
+
+    /** The way out of a forgotten passcode starts from nothing: no lock, no count. */
+    @Test
+    void verify_turningTheLimitOffAndOnStartsOver() {
+        limitWithPasscode("1234");
+        for (int i = 0; i < 5; i++) {
+            verify("0000", NOW);
+        }
+        UpdateUserSettingsRequest off = new UpdateUserSettingsRequest();
+        off.setScreenTimeLimitMinutes(null);
+        userSettingsService.updateOwnSettings(USER, off);
+        limitWithPasscode("5678");
+
+        assertThat(verify("5678", NOW)).isTrue();
+    }
+
+    /**
+     * A burst must not buy more than five wrong answers before the lock. Losers of the version race
+     * are a 409 and never a verdict; once locked, the rest are 429s.
+     */
+    @Test
+    void verify_parallelWrongGuessesCannotExceedTheBudget() throws Exception {
+        limitWithPasscode("1234");
+        ExecutorService pool = Executors.newFixedThreadPool(20);
+        CountDownLatch start = new CountDownLatch(1);
+        List<Future<Boolean>> answers = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            answers.add(pool.submit(() -> {
+                start.await();
+                return verify("0000", NOW);
+            }));
+        }
+        start.countDown();
+
+        int wrong = 0;
+        int refused = 0;
+        for (Future<Boolean> answer : answers) {
+            try {
+                assertThat(answer.get()).as("a wrong passcode was accepted").isFalse();
+                wrong++;
+            } catch (ExecutionException ex) {
+                assertThat(ex.getCause()).isInstanceOfAny(OptimisticLockingFailureException.class,
+                        TooManyPasscodeAttemptsException.class);
+                refused++;
+            }
+        }
+        pool.shutdown();
+
+        assertThat(wrong).isBetween(1, 5);
+        assertThat(wrong + refused).isEqualTo(20);
     }
 
     @Test

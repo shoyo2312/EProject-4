@@ -58,7 +58,7 @@ class UserSettingsControllerTest {
 
     private static final UserSettingsResponse DEFAULTS = new UserSettingsResponse(
             SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, false,
-            true, false, List.of(), true, true, true, true, true, true, true, null);
+            true, false, List.of(), true, true, true, true, true, true, true, null, null, false);
 
     @Autowired
     private MockMvc mockMvc;
@@ -90,7 +90,7 @@ class UserSettingsControllerTest {
                 SettingsAudience.FRIENDS, SettingsAudience.NO_ONE, 60,
                 LocalTime.of(22, 30), LocalTime.of(6, 30), false, false,
                 false, true, List.of("spoiler"), true, false, true, true, true, true, false,
-                "Asia/Ho_Chi_Minh"));
+                "Asia/Ho_Chi_Minh", null, true));
 
         mockMvc.perform(get("/api/v1/users/me/settings")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
@@ -109,7 +109,10 @@ class UserSettingsControllerTest {
                 .andExpect(jsonPath("$.data.pushLikes").value(true))
                 .andExpect(jsonPath("$.data.pushComments").value(false))
                 .andExpect(jsonPath("$.data.inAppReposts").value(false))
-                .andExpect(jsonPath("$.data.timeZone").value("Asia/Ho_Chi_Minh"));
+                .andExpect(jsonPath("$.data.timeZone").value("Asia/Ho_Chi_Minh"))
+                .andExpect(jsonPath("$.data.hasScreenTimePasscode").value(true))
+                .andExpect(jsonPath("$.data.screenTimePasscode").doesNotExist())
+                .andExpect(jsonPath("$.data.screenTimePasscodeHash").doesNotExist());
     }
 
     /**
@@ -214,28 +217,51 @@ class UserSettingsControllerTest {
     }
 
     @Test
-    void patch_screenTimeLimit_isBoundedAtTenMinutesAndOneDay() throws Exception {
+    void patch_screenTimeLimit_isBoundedAtTenMinutesAndEightHours() throws Exception {
         when(userSettingsService.updateOwnSettings(eq(1L), any())).thenReturn(DEFAULTS);
 
-        assertLimitAccepted(10);
-        assertLimitAccepted(1440);
-        assertLimitRejected(9);
-        assertLimitRejected(1441);
+        assertPatchAccepted("{\"screenTimeLimitMinutes\": 10}");
+        assertPatchAccepted("{\"screenTimeLimitMinutes\": 480}");
+        assertPatchRejected("{\"screenTimeLimitMinutes\": 9}");
+        assertPatchRejected("{\"screenTimeLimitMinutes\": 481}");
     }
 
-    private void assertLimitAccepted(int minutes) throws Exception {
+    /** Monday first, one limit per weekday, each in the same range as the single limit. */
+    @Test
+    void dailyLimit_perDayNeedsSevenValuesInRange() throws Exception {
+        when(userSettingsService.updateOwnSettings(eq(1L), any())).thenReturn(DEFAULTS);
+
+        assertPatchAccepted("{\"screenTimeLimitsByDay\": [30, 40, 50, 60, 70, 80, 480]}");
+        assertPatchRejected("{\"screenTimeLimitsByDay\": [30, 40, 50, 60, 70, 80]}");
+        assertPatchRejected("{\"screenTimeLimitsByDay\": [30, 40, 50, 60, 70, 80, 90, 100]}");
+        assertPatchRejected("{\"screenTimeLimitsByDay\": [30, 40, 50, 60, 70, 80, 481]}");
+        assertPatchRejected("{\"screenTimeLimitsByDay\": [30, 40, 50, 60, 70, 80, 9]}");
+        assertPatchRejected("{\"screenTimeLimitsByDay\": [30, 40, 50, 60, 70, 80, null]}");
+    }
+
+    @Test
+    void patch_screenTimePasscode_isFourDigits() throws Exception {
+        when(userSettingsService.updateOwnSettings(eq(1L), any())).thenReturn(DEFAULTS);
+
+        assertPatchAccepted("{\"screenTimeLimitMinutes\": 60, \"screenTimePasscode\": \"0123\"}");
+        assertPatchRejected("{\"screenTimeLimitMinutes\": 60, \"screenTimePasscode\": \"123\"}");
+        assertPatchRejected("{\"screenTimeLimitMinutes\": 60, \"screenTimePasscode\": \"12a4\"}");
+        assertPatchRejected("{\"screenTimeLimitMinutes\": 60, \"screenTimePasscode\": \"12345\"}");
+    }
+
+    private void assertPatchAccepted(String body) throws Exception {
         mockMvc.perform(patch("/api/v1/users/me/settings")
                         .header("Authorization", "Bearer " + tokenFor(1L))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"screenTimeLimitMinutes\": " + minutes + "}"))
+                        .content(body))
                 .andExpect(status().isOk());
     }
 
-    private void assertLimitRejected(int minutes) throws Exception {
+    private void assertPatchRejected(String body) throws Exception {
         mockMvc.perform(patch("/api/v1/users/me/settings")
                         .header("Authorization", "Bearer " + tokenFor(1L))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"screenTimeLimitMinutes\": " + minutes + "}"))
+                        .content(body))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
     }
@@ -292,7 +318,7 @@ class UserSettingsControllerTest {
     void patch_privateAccount_reachesTheServiceAndComesBack() throws Exception {
         when(userSettingsService.updateOwnSettings(eq(1L), any())).thenReturn(new UserSettingsResponse(
                 SettingsAudience.EVERYONE, SettingsAudience.EVERYONE, null, null, null, true, true,
-                true, false, List.of(), true, true, true, true, true, true, true, null));
+                true, false, List.of(), true, true, true, true, true, true, true, null, null, false));
 
         mockMvc.perform(patch("/api/v1/users/me/settings")
                         .header("Authorization", "Bearer " + tokenFor(1L))

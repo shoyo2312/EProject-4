@@ -2,6 +2,8 @@ package com.tiktok.userservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.userservice.dto.request.ScreenTimeHeartbeatRequest;
+import com.tiktok.userservice.dto.request.VerifyPasscodeRequest;
+import com.tiktok.userservice.dto.response.PasscodeVerificationResponse;
 import com.tiktok.userservice.dto.response.ScreenTimeWeekResponse;
 import com.tiktok.userservice.service.ScreenTimeService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -37,6 +39,18 @@ public class ScreenTimeController {
                                        @Valid @RequestBody ScreenTimeHeartbeatRequest request) {
         screenTimeService.recordHeartbeat(currentUserId, request.seconds(), request.timeZone(), Instant.now());
         return ApiResponse.success(null);
+    }
+
+    @Operation(summary = "Check the daily-limit passcode",
+            description = "Answers {correct}; no passcode set reads as wrong. The fifth wrong answer in a row "
+                    + "locks checking for 15 minutes: 429 TOO_MANY_PASSCODE_ATTEMPTS with Retry-After. 400 "
+                    + "VALIDATION_ERROR when not 4 digits (not counted). 409 CONCURRENT_MODIFICATION when two "
+                    + "checks race.")
+    @PostMapping("/passcode/verify")
+    public ApiResponse<PasscodeVerificationResponse> verifyPasscode(@AuthenticationPrincipal Long currentUserId,
+                                                                    @Valid @RequestBody VerifyPasscodeRequest request) {
+        return ApiResponse.success(new PasscodeVerificationResponse(
+                screenTimeService.verifyPasscode(currentUserId, request.passcode(), Instant.now())));
     }
 
     @Operation(summary = "One week of time on the app",

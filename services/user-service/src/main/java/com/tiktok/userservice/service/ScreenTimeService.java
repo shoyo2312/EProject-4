@@ -2,6 +2,7 @@ package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.response.ScreenTimeWeekResponse;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -32,4 +33,18 @@ public interface ScreenTimeService {
 
     /** Seven days from {@code weekStart}, which must be a Monday. */
     ScreenTimeWeekResponse getWeek(Long userId, LocalDate weekStart);
+
+    /** Wrong passcodes in a row before checking is locked. */
+    int MAX_PASSCODE_FAILURES = 5;
+
+    Duration PASSCODE_LOCKOUT = Duration.ofMinutes(15);
+
+    /**
+     * Whether {@code passcode} is the daily-limit passcode; no passcode set reads as wrong. The
+     * fifth wrong one in a row locks checking for {@link #PASSCODE_LOCKOUT}, during which this
+     * throws {@code TooManyPasscodeAttemptsException}. Concurrent checks are serialized by the row's
+     * version: a loser is {@code CONCURRENT_MODIFICATION}, never an answer, so a burst cannot get
+     * more wrong answers than the count allows.
+     */
+    boolean verifyPasscode(Long userId, String passcode, Instant now);
 }

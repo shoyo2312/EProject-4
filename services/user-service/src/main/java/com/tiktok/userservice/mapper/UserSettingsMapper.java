@@ -9,8 +9,9 @@ import org.mapstruct.Mapping;
 @Mapper(componentModel = "spring")
 public interface UserSettingsMapper {
 
-    /** {@code privateAccount} comes off the profile, not the settings row. */
+    /** {@code privateAccount} comes off the profile, not the settings row. The passcode hash never leaves. */
     @Mapping(target = "privateAccount", source = "privateAccount")
+    @Mapping(target = "hasScreenTimePasscode", expression = "java(settings.getScreenTimePasscodeHash() != null)")
     UserSettingsResponse toResponse(UserSettings settings, boolean privateAccount);
 
     /** The fields other services enforce — see {@link UserSettingsPolicyResponse}. */

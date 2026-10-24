@@ -6,6 +6,7 @@ import com.tiktok.moderation.text.TextSanitizer;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
@@ -53,10 +54,25 @@ public class UpdateUserSettingsRequest {
     private String dmAudience;
     private boolean dmAudienceSet;
 
+    /** The same daily limit every day. Null turns it off; at most one of this and the per-day list is set. */
     @Min(value = 10, message = "must be at least 10 minutes")
-    @Max(value = 1440, message = "must be at most 1440 minutes")
+    @Max(value = 480, message = "must be at most 480 minutes")
     private Integer screenTimeLimitMinutes;
     private boolean screenTimeLimitMinutesSet;
+
+    /** A daily limit per weekday, Monday first. */
+    @Size(min = 7, max = 7, message = "must have one limit per weekday, Monday first")
+    private List<@NotNull @Min(value = 10, message = "must be at least 10 minutes")
+            @Max(value = 480, message = "must be at most 480 minutes") Integer> screenTimeLimitsByDay;
+    private boolean screenTimeLimitsByDaySet;
+
+    /**
+     * Write-only: stored as a bcrypt hash, never returned. Needed to turn the daily limit on when
+     * none is stored; sent while one is, it replaces it.
+     */
+    @Pattern(regexp = "\\d{4}", message = "must be 4 digits")
+    private String screenTimePasscode;
+    private boolean screenTimePasscodeSet;
 
     /**
      * The end is always this plus 8 hours, derived by the service. There is no {@code sleepHoursEnd}
@@ -121,6 +137,16 @@ public class UpdateUserSettingsRequest {
     public void setScreenTimeLimitMinutes(Integer screenTimeLimitMinutes) {
         this.screenTimeLimitMinutes = screenTimeLimitMinutes;
         this.screenTimeLimitMinutesSet = true;
+    }
+
+    public void setScreenTimeLimitsByDay(List<Integer> screenTimeLimitsByDay) {
+        this.screenTimeLimitsByDay = screenTimeLimitsByDay;
+        this.screenTimeLimitsByDaySet = true;
+    }
+
+    public void setScreenTimePasscode(String screenTimePasscode) {
+        this.screenTimePasscode = screenTimePasscode;
+        this.screenTimePasscodeSet = true;
     }
 
     public void setSleepHoursStart(LocalTime sleepHoursStart) {

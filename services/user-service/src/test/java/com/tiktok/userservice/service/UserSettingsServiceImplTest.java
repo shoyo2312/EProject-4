@@ -1,5 +1,6 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
@@ -128,6 +129,7 @@ class UserSettingsServiceImplTest {
     void write_absentKeyLeavesTheField_explicitNullClearsANullableOne() {
         UpdateUserSettingsRequest first = new UpdateUserSettingsRequest();
         first.setScreenTimeLimitMinutes(60);
+        first.setScreenTimePasscode("1234");
         first.setDmAudience("NO_ONE");
         userSettingsService.updateOwnSettings(1L, first);
 
@@ -246,6 +248,88 @@ class UserSettingsServiceImplTest {
         assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, request))
                 .isInstanceOf(InvalidUserSettingsException.class)
                 .hasMessageContaining("inAppReposts");
+    }
+
+    private static UpdateUserSettingsRequest dailyLimit(Integer minutes, String passcode) {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        request.setScreenTimeLimitMinutes(minutes);
+        if (passcode != null) {
+            request.setScreenTimePasscode(passcode);
+        }
+        return request;
+    }
+
+    private String storedPasscodeHash() {
+        return userSettingsRepository.findByUserIdAndDeletedAtIsNull(1L).orElseThrow().getScreenTimePasscodeHash();
+    }
+
+    /** The limit is only worth something with a passcode behind it — the overlay could never be dismissed. */
+    @Test
+    void dailyLimit_turningOnWithoutAPasscodeIs400() {
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, dailyLimit(60, null)))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("screenTimePasscode");
+    }
+
+    @Test
+    void dailyLimit_withPasscodeStoresAHashAndNeverReturnsIt() {
+        UserSettingsResponse stored = userSettingsService.updateOwnSettings(1L, dailyLimit(60, "1234"));
+
+        assertThat(stored.screenTimeLimitMinutes()).isEqualTo(60);
+        assertThat(stored.hasScreenTimePasscode()).isTrue();
+        assertThat(storedPasscodeHash()).isNotEqualTo("1234");
+        assertThat(HashUtils.bcryptMatches("1234", storedPasscodeHash())).isTrue();
+    }
+
+    /** A forgotten passcode is fixed this way: off, then on again with a new one. */
+    @Test
+    void dailyLimit_turningOffClearsThePasscode() {
+        userSettingsService.updateOwnSettings(1L, dailyLimit(60, "1234"));
+
+        UserSettingsResponse off = userSettingsService.updateOwnSettings(1L, dailyLimit(null, null));
+
+        assertThat(off.hasScreenTimePasscode()).isFalse();
+        assertThat(storedPasscodeHash()).isNull();
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, dailyLimit(60, null)))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("screenTimePasscode");
+    }
+
+    @Test
+    void dailyLimit_changingTheLimitKeepsThePasscode() {
+        userSettingsService.updateOwnSettings(1L, dailyLimit(60, "1234"));
+
+        UserSettingsResponse changed = userSettingsService.updateOwnSettings(1L, dailyLimit(90, null));
+
+        assertThat(changed.screenTimeLimitMinutes()).isEqualTo(90);
+        assertThat(changed.hasScreenTimePasscode()).isTrue();
+        assertThat(HashUtils.bcryptMatches("1234", storedPasscodeHash())).isTrue();
+    }
+
+    @Test
+    void dailyLimit_bothShapesAtOnceIs400() {
+        UpdateUserSettingsRequest request = dailyLimit(60, "1234");
+        request.setScreenTimeLimitsByDay(List.of(30, 40, 50, 60, 70, 80, 90));
+
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, request))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("screenTimeLimitsByDay");
+    }
+
+    /** Switching from one limit for every day to one per day, the way the page saves it: the other shape null. */
+    @Test
+    void dailyLimit_perDayIsStoredMondayFirstAndKeepsThePasscode() {
+        userSettingsService.updateOwnSettings(1L, dailyLimit(60, "1234"));
+        UpdateUserSettingsRequest perDay = dailyLimit(null, null);
+        perDay.setScreenTimeLimitsByDay(List.of(30, 40, 50, 60, 70, 80, 90));
+
+        UserSettingsResponse stored = userSettingsService.updateOwnSettings(1L, perDay);
+
+        assertThat(stored.screenTimeLimitMinutes()).isNull();
+        assertThat(stored.screenTimeLimitsByDay()).containsExactly(30, 40, 50, 60, 70, 80, 90);
+        assertThat(stored.hasScreenTimePasscode()).isTrue();
+        assertThat(userSettingsService.getOwnSettings(1L).screenTimeLimitsByDay())
+                .containsExactly(30, 40, 50, 60, 70, 80, 90);
     }
 
     /** What notification-service needs to decide on a phone push. The time zone stays null until a heartbeat sends one. */

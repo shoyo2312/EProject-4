@@ -1,10 +1,13 @@
 package com.tiktok.userservice.service;
 
 import com.tiktok.common.id.SnowflakeIdGenerator;
+import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.userservice.dto.response.ScreenTimeDayResponse;
 import com.tiktok.userservice.dto.response.ScreenTimeWeekResponse;
 import com.tiktok.userservice.entity.ScreenTimeDay;
+import com.tiktok.userservice.entity.UserSettings;
 import com.tiktok.userservice.exception.InvalidUserSettingsException;
+import com.tiktok.userservice.exception.TooManyPasscodeAttemptsException;
 import com.tiktok.userservice.repository.ScreenTimeDayRepository;
 import com.tiktok.userservice.repository.UserSettingsRepository;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.DateTimeException;
 import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -65,6 +69,38 @@ public class ScreenTimeServiceImpl implements ScreenTimeService {
                 })
                 .toList();
         return new ScreenTimeWeekResponse(weekStart, days);
+    }
+
+    @Override
+    @Transactional
+    public boolean verifyPasscode(Long userId, String passcode, Instant now) {
+        UserSettings settings = userSettingsRepository.findByUserIdAndDeletedAtIsNull(userId).orElse(null);
+        if (settings == null || settings.getScreenTimePasscodeHash() == null) {
+            return false;
+        }
+        Instant lockedUntil = settings.getScreenTimePasscodeLockedUntil();
+        if (lockedUntil != null && lockedUntil.isAfter(now)) {
+            throw new TooManyPasscodeAttemptsException(Duration.between(now, lockedUntil));
+        }
+
+        if (HashUtils.bcryptMatches(passcode, settings.getScreenTimePasscodeHash())) {
+            if (settings.getScreenTimePasscodeFailures() > 0 || lockedUntil != null) {
+                settings.replacePasscodeAttempts(0, null);
+                userSettingsRepository.saveAndFlush(settings);
+            }
+            return true;
+        }
+
+        // Written through the entity on purpose: the version check is what lets only one of a
+        // burst of wrong guesses be counted per row version, and the rest fail as 409.
+        int failures = settings.getScreenTimePasscodeFailures() + 1;
+        if (failures >= MAX_PASSCODE_FAILURES) {
+            settings.replacePasscodeAttempts(0, now.plus(PASSCODE_LOCKOUT));
+        } else {
+            settings.replacePasscodeAttempts(failures, null);
+        }
+        userSettingsRepository.saveAndFlush(settings);
+        return false;
     }
 
     private static ZoneId zoneOf(String timeZone) {

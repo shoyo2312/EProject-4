@@ -45,6 +45,10 @@ public record UserSettingsResponse(
         boolean inAppNewFollowers,
         boolean inAppReposts,
         /** The IANA zone the last screen-time heartbeat came from. Null until there has been one. */
-        String timeZone
+        String timeZone,
+        /** One daily limit per weekday, Monday first; null unless that is the shape chosen. */
+        List<Integer> screenTimeLimitsByDay,
+        /** The passcode itself is write-only; this says whether one is set. */
+        boolean hasScreenTimePasscode
 ) {
 }
