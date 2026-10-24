@@ -3,6 +3,7 @@ package com.tiktok.userservice.service;
 import com.tiktok.userservice.event.producer.UserEventPublisher;
 import com.tiktok.userservice.repository.DataExportRequestRepository;
 import com.tiktok.userservice.repository.FollowRequestRepository;
+import com.tiktok.userservice.repository.ScreenTimeDayRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
 import com.tiktok.userservice.repository.UserMuteRepository;
@@ -27,6 +28,7 @@ public class AccountStateServiceImpl implements AccountStateService {
     private final UserBlockRepository userBlockRepository;
     private final UserMuteRepository userMuteRepository;
     private final UserSettingsRepository userSettingsRepository;
+    private final ScreenTimeDayRepository screenTimeDayRepository;
     private final UserEventPublisher userEventPublisher;
     private final DataExportRequestRepository dataExportRequestRepository;
 
@@ -67,6 +69,7 @@ public class AccountStateServiceImpl implements AccountStateService {
         userBlockRepository.softDeleteAllOf(userId, now);
         userMuteRepository.softDeleteAllOf(userId, now);
         userSettingsRepository.softDeleteByUserId(userId, now);
+        screenTimeDayRepository.softDeleteAllOf(userId, now);
         // DataExportCleanup removes the files.
         dataExportRequestRepository.softDeleteAllOf(userId, now);
         // Hidden first, so a profile already gone stays hidden however the events were ordered.
