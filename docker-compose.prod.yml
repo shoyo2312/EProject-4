@@ -149,7 +149,9 @@ services:
 
   # Baked into an image rather than bind-mounted (see cassandra-init). Fetches DB-IP's City Lite
   # into geoip-data once the copy there is a month old. A failed download still exits 0, so a
-  # deploy never waits on db-ip.com; auth-service then runs without places and logs a WARN.
+  # deploy never stops on db-ip.com; auth-service then runs without places and logs a WARN.
+  # auth-service starts only after this finishes, so download.sh bounds every attempt: under
+  # five minutes at worst, about a minute when db-ip.com hangs, seconds normally.
   geoip-init:
     build:
       context: ./scripts/geoip

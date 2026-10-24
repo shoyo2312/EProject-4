@@ -10,7 +10,11 @@
 #   - it never leaves a half-written file where auth-service reads: it downloads beside the
 #     target and renames over it only once the whole file is there;
 #   - it never fails: a failed download prints a warning and exits 0. No file means no places,
-#     which auth-service survives, while a failed init container would stop the deploy.
+#     which auth-service survives, while a failed init container would stop the deploy;
+#   - it never waits long: auth-service starts only after it, so each attempt gives up on a
+#     connect after 15s, a stalled transfer after 20s and any transfer after 120s. Two attempts
+#     hold a deploy for under five minutes at worst, about a minute when db-ip.com hangs.
+#     A normal download (~60 MB) takes seconds.
 set -u
 
 dir=${1:?usage: download.sh <dir>}
@@ -37,7 +41,8 @@ fi
 # The current month's file appears a day or two into the month; until then, last month's is
 # the newest.
 for ym in "$year-$month" "$(printf '%d-%02d' "$previous_year" "$previous")"; do
-    if curl -fsSL --max-time 600 "https://download.db-ip.com/free/dbip-city-lite-$ym.mmdb.gz" \
+    if curl -fsSL --connect-timeout 15 --speed-limit 10240 --speed-time 20 --max-time 120 \
+            "https://download.db-ip.com/free/dbip-city-lite-$ym.mmdb.gz" \
             | gunzip > "$tmp" && [ -s "$tmp" ]; then
         mv "$tmp" "$target"
         echo "GeoIP: downloaded dbip-city-lite-$ym"

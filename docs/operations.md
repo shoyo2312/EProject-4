@@ -170,7 +170,9 @@ timeline của admin và trong thông báo "Your account logged in from a new de
 - **File đến từ `geoip-init`**: container một lần, chạy mỗi lần deploy, tải file vào volume `geoip-data`;
   auth-service mount volume đó read-only (`GEOIP_DATABASE=/geoip/dbip-city-lite.mmdb`). File còn mới hơn một tháng
   thì giữ nguyên, nên **làm mới = deploy lại** khi file đã quá một tháng. Tải lỗi (db-ip.com chết) vẫn exit 0, để
-  deploy không bị chặn; khi đó auth-service chạy như cũ, chỉ là không có vị trí.
+  deploy không bị chặn; khi đó auth-service chạy như cũ, chỉ là không có vị trí. auth-service chỉ khởi động sau khi
+  `geoip-init` xong, nên `download.sh` giới hạn mỗi lần thử (kết nối 15s, đứng yên 20s, tổng 120s): bình thường vài
+  giây, db-ip.com treo thì khoảng một phút, tệ nhất dưới năm phút. Kiểm tra giới hạn đó: `sh scripts/geoip/download_test.sh`.
 - **Kiểm tra sau deploy**: log khởi động của auth-service phải có một dòng `GeoIP lookup enabled from … (built …)`.
   Thấy `GeoIP lookup disabled: …` nghĩa là volume trống hoặc file hỏng; xem log của `geoip-init`.
 - **Ghi nguồn là bắt buộc** (CC BY): "IP Geolocation by DB-IP", link `https://db-ip.com`, đã đặt ở trang activity của
