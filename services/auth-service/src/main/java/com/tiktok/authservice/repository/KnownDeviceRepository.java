@@ -46,6 +46,17 @@ public interface KnownDeviceRepository extends JpaRepository<KnownDevice, Long> 
             + "ORDER BY last_seen_at DESC, id DESC OFFSET :keep)", nativeQuery = true)
     int evictBeyond(@Param("userId") Long userId, @Param("keep") int keep);
 
+    /**
+     * Deletes up to {@code batchSize} devices unused since {@code cutoff}. Same batched-native shape
+     * as {@link AuthSecurityEventRepository#deleteRecordedBefore}, driven by
+     * {@code ExpiredRecordCleanup}. The account's row in {@code known_device_accounts} stays.
+     */
+    @Modifying
+    @Query(value = "DELETE FROM known_devices WHERE id IN ("
+            + "SELECT id FROM known_devices WHERE last_seen_at < :cutoff ORDER BY last_seen_at LIMIT :batchSize)",
+            nativeQuery = true)
+    int deleteUnusedBefore(@Param("cutoff") Instant cutoff, @Param("batchSize") int batchSize);
+
     @Modifying
     @Query(value = "DELETE FROM known_devices WHERE user_id = :userId", nativeQuery = true)
     int deleteAllByUserId(@Param("userId") Long userId);
