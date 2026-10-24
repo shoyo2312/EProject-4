@@ -25,9 +25,12 @@ endpoint**. It deliberately stops short of:
   `docs/superpowers/specs/2026-09-26-private-account-design.md`. The switch is written through
   `PATCH /me/settings` like the rest, but the flag lives on `user_profiles` (V11) because every
   viewer reads it; follow requests are `user_follow_requests` (V12).
-- **Notification preferences** — belongs in notification-service (Mongo, `_id = userId`), gated in
-  `NotificationServiceImpl.create` where `BlockClient` is already consulted.
-- **Data export, business verification.**
+- **Data export** — built on its own (`user-service-api.md` §3.21). Business verification was
+  dropped from the page.
+
+**Notification switches, screen time and Filter keywords** arrived later
+(`docs/superpowers/specs/2026-10-24-settings-dead-rows-design.md`), all stored here: V18–V22 in §1,
+their endpoints in §2.3–2.4, and where each is enforced in §4.3.
 
 Those are listed so nobody reads this document as the whole of `/setting`.
 
@@ -100,6 +103,30 @@ ALTER TABLE user_settings
 The keywords are an array column, not a child table: at most fifty short strings, always read and
 replaced whole, never queried by element.
 
+The dead-rows work added, again with `DEFAULT`s mirroring `defaultsFor()`:
+
+- **V18** — seven notification switches, all `BOOLEAN NOT NULL DEFAULT TRUE`: `push_likes`,
+  `push_comments`, `push_new_followers` (Push notifications → Interactions) and `in_app_likes`,
+  `in_app_comments`, `in_app_new_followers`, `in_app_reposts` (In-app notifications). Plus
+  `time_zone VARCHAR(64)`, the browser's IANA zone. It also rewrote every stored `sleep_hours_end`
+  to start + 8h, the rule from then on.
+- **V19** — `screen_time_days`: one row per account and local date, `day_seconds` (06:00–22:00) and
+  `night_seconds` (22:00–06:00), unique on `(user_id, local_date)` while not deleted.
+- **V20** — the daily limit's second shape and its passcode: `screen_time_limits_by_day INTEGER[]`
+  (Monday first), `screen_time_passcode_hash VARCHAR(60)` (bcrypt),
+  `screen_time_passcode_failures`, `screen_time_passcode_locked_until`. It turned off every limit
+  saved before passcodes existed.
+- **V21** — `feed_keyword_filters`: one row per keyword (`keyword VARCHAR(200)`, `for_you`,
+  `following`, `friends`), unique on `(user_id, lower(keyword))` while not deleted. A child table,
+  unlike the comment keywords, because each row carries its own feeds and is edited one at a time.
+- **V22** — `last_digest_week DATE`, the weekly digest's claim (§4.3).
+
+**`time_zone` and `last_digest_week` are read-only on the entity** (`insertable = false,
+updatable = false`). Each has exactly one writer, a native statement (the heartbeat's upsert, the
+digest's claim), and neither bumps `version`. A `PATCH /me/settings` that read the row before one of
+them ran writes back every column it maps; if it mapped these, it would put the old zone back, or
+reopen a week already sent. Both cases are pinned by tests.
+
 ## 2. Public contract
 
 Base path `/api/v1/users`, both endpoints require a Bearer token like everything else in
@@ -119,29 +146,43 @@ user-service.
   "weeklyScreenTimeDigest": true,
   "filterSpamOffensive": true,
   "filterAllComments": false,
-  "commentKeywords": []
+  "commentKeywords": [],
+  "pushLikes": true,
+  "pushComments": true,
+  "pushNewFollowers": true,
+  "inAppLikes": true,
+  "inAppComments": true,
+  "inAppNewFollowers": true,
+  "inAppReposts": true,
+  "timeZone": "Asia/Ho_Chi_Minh",
+  "screenTimeLimitsByDay": null,
+  "hasScreenTimePasscode": false
 }
 ```
+
+`timeZone` is null until the web has sent a screen-time heartbeat. The passcode itself is
+write-only; `hasScreenTimePasscode` says whether one is set.
 
 A **flat keyed object**, not the section/group tree the page draws. Layout is presentation and
 stays in the client; this is the values. Getting that boundary wrong is what forces bespoke wiring
 per row.
 
-`null` on the three screen-time fields means "off" — there is no separate enable flag, and a
-`screenTimeLimitMinutes` of `0` is a validation error rather than a second way to say off.
+`null` on the screen-time fields means "off" — there is no separate enable flag, and a limit of
+`0` is a validation error rather than a second way to say off. The daily limit has two shapes, the
+same limit every day (`screenTimeLimitMinutes`) or one per weekday (`screenTimeLimitsByDay`, seven
+values, Monday first); at most one is set, and both null is off.
 
-`sleepHoursStart`/`sleepHoursEnd` are **wall-clock times with no timezone**, stored `TIME` and
-carried as `LocalTime`, on the wire as `"HH:mm"` in both directions (`@JsonFormat`, minute
-precision) so a client can PATCH back exactly the string it read — the asymmetry that
-`avatarUrl` on `PATCH /me` had to be widened for. A time that does not parse is the body parser's
-`BAD_REQUEST`, not `VALIDATION_ERROR`; the enums are `@Pattern`-checked instead precisely so an
-unknown audience names all three values. No account on this platform has a timezone attached — nothing in
-auth-service or user-service stores one — so these can only mean "22:30 wherever the viewer is",
-interpreted by whichever client enforces them. That is the right semantics for the feature (a
-sleep reminder should follow you across timezones, not chase the one you signed up in), but it
-does mean the server can never schedule anything off these fields. If a server-side reminder is
-ever wanted, it needs an account timezone first — a separate decision, not a column to slip in
-here.
+`sleepHoursStart`/`sleepHoursEnd` are **wall-clock times**, stored `TIME` and carried as
+`LocalTime`, on the wire as `"HH:mm"` in both directions (`@JsonFormat`, minute precision). As on
+TikTok, sleep hours always last eight hours: the end is derived from the start on every write and
+is no longer accepted in a PATCH. A time that does not parse is the body parser's `BAD_REQUEST`,
+not `VALIDATION_ERROR`; the enums are `@Pattern`-checked instead precisely so an unknown audience
+names all three values.
+
+The account's zone is `timeZone`, the browser's IANA zone as the last screen-time heartbeat sent it
+(§2.3). It is what notification-service reads sleep hours in (§4.3). Until there is one, sleep hours
+mute nothing on the server, and the web, which mutes its own notifications in the browser's local
+time, is the only thing honouring them.
 
 ### 2.2 `PATCH /me/settings`
 
@@ -165,9 +206,15 @@ the client doc, because the two endpoints sit next to each other and behave diff
 Validation:
 
 - `commentAudience`, `dmAudience` ∈ `EVERYONE | FRIENDS | NO_ONE` → `VALIDATION_ERROR` (400)
-- `screenTimeLimitMinutes` ∈ `[10, 1440]` or null
-- `sleepHoursStart`/`sleepHoursEnd` — both null or both set; equal start and end is a
-  validation error, but start > end is **not** (a window that crosses midnight is the normal case)
+- `screenTimeLimitMinutes` ∈ `[10, 480]` or null; `screenTimeLimitsByDay` exactly seven values in
+  the same range, or null; both non-null after the merge is a `VALIDATION_ERROR`
+- `screenTimePasscode` — write-only, exactly four digits. Turning the limit on with no stored
+  passcode and none in the patch is a `VALIDATION_ERROR` naming it; changing the limit keeps the
+  stored one; sending one while the limit is on replaces it; turning the limit off forgets it (and
+  its wrong-guess count and lock), which is how a forgotten passcode is replaced
+- `sleepHoursStart` — a start, or null to turn sleep hours off; the end follows. A `sleepHoursEnd`
+  key from an older client is ignored like any unknown key
+- the seven notification switches — booleans; `null` is a `VALIDATION_ERROR`
 - `filterSpamOffensive`, `filterAllComments` — booleans; `null` is a `VALIDATION_ERROR`
 - `commentKeywords` — the **whole list**, replacing the stored one; `[]` clears it, `null` is a
   `VALIDATION_ERROR`. At most 50. Each is sanitized like comment text (`TextSanitizer.sanitizeLine`:
@@ -186,6 +233,40 @@ row, both insert, and `uq_user_settings_user_id` stops the second. That is the c
 `FollowServiceImpl.follow` already handles, so the insert is a `saveAndFlush` and the violation is
 translated to the same 409 rather than escaping as a 500 — the caller's move is identical either
 way, and the retry finds the row and updates it.
+
+### 2.3 Screen time
+
+Under `/api/v1/users/me/screen-time` (`ScreenTimeController`):
+
+- `POST /heartbeat` `{ "seconds": 60, "timeZone": "Asia/Ho_Chi_Minh" }` → `200`. The web sends one
+  about a minute while the tab is visible and focused. `seconds` (≥ 1) is clamped to 120 — a
+  client can only inflate its own numbers, so a clamp is all the trust needed. The seconds land on
+  the local date and the half of the day (06:00–22:00 day, the rest night) of the moment the
+  server receives them, in `timeZone`, which is also stored on the account. One upsert per day adds
+  to the totals, so two tabs or a retried heartbeat never lose a count. An unknown zone is a
+  `VALIDATION_ERROR` and records nothing.
+- `GET ?weekStart=YYYY-MM-DD` → `{ weekStart, days: [{ date, daySeconds, nightSeconds }] }`, seven
+  days Monday first, zero-filled. `weekStart` must be a Monday (`VALIDATION_ERROR` otherwise).
+- `POST /passcode/verify` `{ "passcode": "1234" }` → `{ "correct": true }`. No passcode set reads
+  as wrong. The fifth wrong answer in a row locks checking for 15 minutes:
+  `TOO_MANY_PASSCODE_ATTEMPTS` (429) with `Retry-After` in seconds. The count lives on the row
+  (user-service has no Redis), and the version column serializes a burst: a request that loses
+  the race is `CONCURRENT_MODIFICATION`, never an answer, so twenty parallel guesses still get at
+  most five wrong answers. Not four digits is a `VALIDATION_ERROR` and is not counted.
+
+### 2.4 Filter keywords
+
+Under `/api/v1/users/me/keyword-filters` (`FeedKeywordFilterController`): `GET` (newest first),
+`POST` (`201`), `PUT /{id}`, `DELETE /{id}` (soft delete; the keyword can be added again). A filter
+is `{ id, keyword, forYou, following, friends }`.
+
+- The keyword is sanitized like a title, then must be one word or one hashtag (`^#?[^\s#]+$`), at
+  most 200 code points, and have something to match (`Blocklist.isMatchable`) — `VALIDATION_ERROR`
+  otherwise; at least one feed, likewise. The spelling typed is kept.
+- `KEYWORD_FILTER_DUPLICATE` (409) when the account already filters it in any capitalization — a
+  check by `lower(keyword)` backed by the unique index, which also turns a lost race into the same
+  409. `TOO_MANY_KEYWORD_FILTERS` (409) past 100 (a check, not a lock: two parallel creates can
+  reach 101). `KEYWORD_FILTER_NOT_FOUND` (404) for an id the caller does not own.
 
 ## 3. Internal contract
 
@@ -212,17 +293,28 @@ Precedents to copy: `GET /api/v1/users/internal/blocks` (`BlockController`) and
   "dmAudience": "EVERYONE",
   "filterSpamOffensive": true,
   "filterAllComments": false,
-  "commentKeywords": []
+  "commentKeywords": [],
+  "pushLikes": true,
+  "pushComments": true,
+  "pushNewFollowers": true,
+  "sleepHoursStart": "22:00",
+  "sleepHoursEnd": "06:00",
+  "timeZone": "Asia/Ho_Chi_Minh",
+  "forYouKeywords": ["cat"],
+  "followingKeywords": [],
+  "friendsKeywords": []
 }
 ```
 
-Only the fields another service enforces: the two audiences, and the comment filters video-service
-relays to interaction-service (§4.1b). Nobody outside user-service needs to know what somebody's
-screen-time preferences are, and an internal endpoint that hands them over anyway is a privacy leak
-waiting for its first careless caller. The keywords are the first thing here a creator may not want
-read — they are the words being kept off their videos — so they travel only on internal paths:
-this one, and video-service's `/policy`, both denied at the gateway and both behind the internal
-token.
+Only the fields another service enforces: the two audiences; the comment filters video-service
+relays to interaction-service (§4.1b); what notification-service checks before a phone push — the
+push switches, sleep hours and the zone they are read in; and the Filter keywords video-service
+drops from each feed. The three keyword lists are never null, empty when nothing is filtered. The
+daily limit, its passcode, the in-app switches and the digest's claim stay in user-service: nobody
+else enforces them, and an internal endpoint that hands them over anyway is a privacy leak waiting
+for its first careless caller. Both kinds of keywords are things an account may not want read, so
+they travel only on internal paths: this one, and video-service's `/policy`, both denied at the
+gateway and both behind the internal token.
 
 **An id with no settings row comes back carrying the defaults — it is never omitted.** This is the
 opposite of `GET /users?ids=`, which drops profiles the viewer cannot see. Omitting here would make
@@ -296,7 +388,7 @@ which shows the viewer none of those owners' stories.
 
 ## 4. Enforcement
 
-Storing the values is the easy half. These are the two that actually change behaviour.
+Storing the values is the easy half. These are the parts that change behaviour.
 
 ### 4.1 Comment audience
 
@@ -427,17 +519,48 @@ profile), and checking first refused that for a thread the inbox still sent in. 
 message would also put a user-service call on the hot send path. `MessageServiceImpl` keeps its
 block check and gains nothing; the block check in `getOrCreate` still runs first, reopen or not.
 
-### 4.3 Stored, not enforced
+### 4.3 Enforcement of screen time and notifications
 
-The four screen-time fields are **persisted and returned, and nothing reads them**. That is the
-honest state, not an oversight: screen-time limits are client-enforced on the real product too —
-the server's job is to sync the preference across devices, not to police it. See §2.1 on why it
-could not police them anyway without an account timezone.
+| Setting | Enforced by | How |
+|---|---|---|
+| Push switches (likes, comments, new followers) | notification-service | `NotificationServiceImpl.push` asks `/internal/settings` before FCM; the inbox entry is written regardless |
+| Sleep hours | notification-service + web | no FCM push while the recipient's local time (`timeZone`) is in `[start, start + 8h)`; the web mutes its desktop notifications and shows two reminders |
+| In-app switches | web | a banner for a `NotificationFrame` only when its switch is on |
+| Daily limit + passcode | web | an overlay at the limit, dismissed for the day by `/passcode/verify`; never shown without a passcode set |
+| Weekly screen time updates | user-service → notification-service | the digest job below |
+| Filter keywords | video-service | §4.3b |
 
-Persisting them is still worth doing, because the alternative is a control that forgets what the
-viewer told it. The weekly digest is the one that later grows a consumer: a scheduled job in
-notification-service emitting `NotificationType.SYSTEM`, which already exists, over ClickHouse
-`watch_events` (`user_id`, `watched_ms`, `occurred_at` are all already there). Out of scope here.
+Which notification each switch governs: likes = `LIKE`, `COMMENT_LIKE`; comments = `COMMENT`; new
+followers = `NEW_FOLLOWER`, `FOLLOW_REQUEST`, `FOLLOW_REQUEST_ACCEPTED`; reposts (in-app only) =
+`REPOST`. `SHARE`, `STORY`, `SYSTEM` and `REPOST` have no push switch and always push; `SCREEN_TIME`
+never pushes and never shows a banner — it is inbox only. Sleep hours mute every push.
+
+**Push is skipped when user-service cannot say what the recipient chose** — unreachable, or an
+answer without the id. That is the opposite of every fail-open guard above, on purpose: the inbox
+already holds the notification, and pushing what the recipient switched off is the worse failure.
+notification-service only asks when the recipient has a device to push to.
+
+**The weekly digest** (`WeeklyScreenTimeDigest`, hourly, `user.screen-time.digest-cron`, `-` turns
+it off) sends one `WeeklyScreenTimeSummaryEvent` per account and week: the switch on, a zone known,
+and Monday 09:00 passed in that zone. It claims the week with
+`UPDATE … SET last_digest_week = :week WHERE last_digest_week IS NULL OR last_digest_week < :week`
+in the same transaction as the outbox row, so two instances running at the same minute send it
+once, and a crash between the two leaves neither. A week with no time recorded is claimed and not
+sent. notification-service writes one `SCREEN_TIME` entry per event ("Last week you spent 3h 20m on
+Nowaa, a daily average of 28m."), claimed by `eventId`, referencing the week's Monday.
+
+### 4.3b Filter keywords
+
+video-service drops the videos whose title, description or tags match one of the viewer's keywords
+for the feed being read — matched by moderation-lib `KeywordFilter` like a creator's comment
+keywords, so case and diacritics behave the same; a leading `#` is dropped, so `#cat` filters the
+tag `cat`. Only the reads that name a feed are filtered: `GET /videos/batch?feed=FOR_YOU` (the
+ranked For You), `GET /videos/feed?feed=FOR_YOU` (its chronological fallback) and
+`GET /videos/feed/following?feed=FOLLOWING|FRIENDS` (`FOLLOWING` when absent). A profile or a share
+link is not a feed. The keywords ride in the same cached settings entry as the comment policy, so a
+change shows within that cache's TTL (3s). A shortened page keeps its cursor. Anonymous reads, and
+any read while user-service cannot answer, are served unfiltered: this is a preference, not a
+safety control, and an empty feed is the worse answer.
 
 ### 4.4 Explicitly not server-side: colour contrast
 
@@ -448,7 +571,11 @@ value and the local one. Revisit only if someone asks for it by name.
 
 ## 5. Events
 
-**None.** Tier 2 needs no new Kafka event and no `libs/event-schema` addition.
+**One:** `WeeklyScreenTimeSummaryEvent` on `user.screen-time-summary-events`, keyed by `userId`,
+through user-service's outbox (aggregate `SCREEN_TIME_SUMMARY`), consumed by notification-service
+(§4.3). Settings changes themselves still publish nothing; the rest of this section is why.
+
+Tier 2 needed no new Kafka event and no `libs/event-schema` addition.
 
 The only consumer of a settings change outside user-service is video-service's policy cache, and a
 short TTL handles that — a comment audience that takes up to a minute to tighten is not a
@@ -474,6 +601,10 @@ changes stay ordered on one partition.
 | `COMMENTS_NOT_ALLOWED` | 403 | interaction-service | Audience refuses this commenter (§4.1) |
 | `MESSAGING_NOT_ALLOWED` | 403 | chat-service | Audience refuses this sender (§4.2) |
 | `DM_SETTINGS_UNAVAILABLE` | 503 | chat-service | Settings lookup failed; fails closed |
+| `TOO_MANY_PASSCODE_ATTEMPTS` | 429 | user-service | Five wrong daily-limit passcodes in a row; `Retry-After` (§2.3) |
+| `KEYWORD_FILTER_DUPLICATE` | 409 | user-service | The account already filters that keyword (§2.4) |
+| `TOO_MANY_KEYWORD_FILTERS` | 409 | user-service | More than 100 keyword filters (§2.4) |
+| `KEYWORD_FILTER_NOT_FOUND` | 404 | user-service | No such filter on the caller's account (§2.4) |
 
 `VALIDATION_ERROR`, `CONCURRENT_MODIFICATION` and `TOO_MANY_PROFILE_IDS` are reused as-is. The
 comment filters add no code. A bad keyword list is a `VALIDATION_ERROR`, and a filtered comment is
@@ -496,8 +627,23 @@ user-service:
 - read with no row → defaults, `200`, and no row created as a side effect
 - write with no row → row inserted with patch-over-defaults
 - absent key leaves the field; explicit `null` clears a nullable one
-- each enum rejects an unknown value; `screenTimeLimitMinutes` boundaries at 9/10/1440/1441
-- sleep hours: both-or-neither, start == end rejected, start > end accepted
+- each enum rejects an unknown value; `screenTimeLimitMinutes` boundaries at 9/10/480/481; the
+  per-day list needs seven values in range; both shapes at once refused
+- passcode: needed to turn the limit on, kept when the limit changes, forgotten when it is turned
+  off; stored hashed; five wrong in a row lock for 15 minutes, a right one resets the count, and a
+  burst of twenty wrong guesses gets at most five wrong answers
+- sleep hours: the end is always start + 8h (23:30 → 07:30); clearing the start clears both; a
+  stale `sleepHoursEnd` key is ignored
+- notification switches: on by default, each saves without touching the others, an explicit
+  `null` is refused, and the internal policy carries the push ones with sleep hours and the zone
+- heartbeat: day/night split at 06:00 and 22:00 local, local date after midnight, the 120s clamp,
+  twenty parallel heartbeats add up exactly, the zone is stored and a stale settings save cannot
+  undo it
+- keyword filters: one word or hashtag, 200 code points, case-insensitive duplicates, the 101st,
+  someone else's id is not found, a deleted keyword can be added again, and the internal policy
+  carries the per-feed lists
+- digest: due from Monday 09:00 local, once per week even across two concurrent runs, a zero week
+  is claimed and not sent, and a stale settings save cannot reopen a week
 - internal settings: unknown id returns defaults rather than being omitted; 101 ids → `TOO_MANY_PROFILE_IDS`
 - internal friendship: mutual true, one-way false, self false, unknown id false
 - comment filters: defaults are spam and offence filtered and nothing else; an explicit `null` on
