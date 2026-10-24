@@ -5,10 +5,13 @@ import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.entity.RefreshToken;
 import com.tiktok.authservice.entity.SecurityEventType;
 import com.tiktok.authservice.entity.User;
+import com.tiktok.authservice.entity.UserRole;
+import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
+import com.tiktok.event.user.NewDeviceSignInEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,12 +41,18 @@ public class TokenIssuer {
     static final String CLAIM_ROLE = "role";
     static final String CLAIM_JTI = "jti";
 
+    /** The security-log detail of a sign-in that raised a new-device alert. */
+    static final String NEW_DEVICE_DETAIL = "New device";
+
     private final JwtProvider jwtProvider;
     private final JwtProperties jwtProperties;
     private final RefreshTokenRepository refreshTokenRepository;
     private final UserRepository userRepository;
     private final SecurityEventRecorder securityEventRecorder;
     private final TransactionTemplate transactionTemplate;
+    private final RequestOrigins requestOrigins;
+    private final KnownDevices knownDevices;
+    private final UserEventProducer userEventProducer;
 
     /**
      * A sign-in. Mints the pair and appends {@code signIn} to the account's security log, so every
@@ -56,12 +65,38 @@ public class TokenIssuer {
      * fill the pool with first connections all waiting for a second. A caller that is already in a
      * transaction still joins it here, as before.
      *
+     * <p>It is also where a sign-in from a new device is noticed (spec §6). The device is
+     * remembered and the alert's outbox row written inside the same transaction as the refresh
+     * token, so a sign-in that rolls back leaves neither, and an alert cannot be lost after its
+     * device was recorded as known. The request is read once, before, so the log entry and the
+     * alert name the same device and place.
+     *
      * @param signIn how the account was proven, for the log
      */
     public TokenResponse issue(User user, SecurityEventType signIn) {
-        TokenResponse tokens = transactionTemplate.execute(status -> mint(user));
-        securityEventRecorder.record(user.getId(), signIn);
-        return tokens;
+        RequestOrigin origin = requestOrigins.current();
+        Minted minted = transactionTemplate.execute(status -> {
+            TokenResponse tokens = mint(user);
+            return new Minted(tokens, alertIfNewDevice(user, origin));
+        });
+        securityEventRecorder.record(user.getId(), signIn, minted.newDevice() ? NEW_DEVICE_DETAIL : null, origin);
+        return minted.tokens();
+    }
+
+    /**
+     * ADMIN accounts are left out: they sign in only in the console, which shows no inbox from
+     * notification-service, so the alert would land where nobody can read it.
+     */
+    private boolean alertIfNewDevice(User user, RequestOrigin origin) {
+        if (user.getRole() == UserRole.ADMIN || !knownDevices.signedIn(user.getId(), origin.deviceId())) {
+            return false;
+        }
+        userEventProducer.publishNewDeviceSignIn(
+                NewDeviceSignInEvent.of(user.getId(), origin.alertLabel(), origin.location()));
+        return true;
+    }
+
+    private record Minted(TokenResponse tokens, boolean newDevice) {
     }
 
     /**
@@ -73,10 +108,19 @@ public class TokenIssuer {
      * session the log already holds is still alive. The one rotation worth an entry is the one
      * from an address the account has not used before; add it here, behind that comparison, if
      * spotting a stolen refresh token ever matters more than the rows it costs.
+     *
+     * <p>It does remember the device, and never alerts. A signed-in browser refreshes every
+     * fifteen minutes and may never sign in again, so this is how the browsers people already use
+     * become known — without it, the first sign-in after the deploy, an attacker's included, would
+     * be the account's "first device" and pass in silence.
      */
     @Transactional
     public TokenResponse reissue(User user) {
-        return mint(user);
+        TokenResponse tokens = mint(user);
+        if (user.getRole() != UserRole.ADMIN) {
+            knownDevices.refreshed(user.getId(), requestOrigins.current().deviceId());
+        }
+        return tokens;
     }
 
     private TokenResponse mint(User user) {

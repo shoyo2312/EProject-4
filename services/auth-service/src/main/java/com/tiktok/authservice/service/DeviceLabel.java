@@ -2,6 +2,7 @@ package com.tiktok.authservice.service;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Turns what the browser said into something readable in a list — {@code "Chrome on macOS 15.1"},
@@ -60,6 +61,9 @@ final class DeviceLabel {
      */
     static final int MAX_LENGTH = 128;
 
+    /** What an OS version looks like when it is only a version: {@code 27}, {@code 15.1.0}. */
+    private static final Pattern NUMERIC_VERSION = Pattern.compile("\\d+(\\.\\d+)*");
+
     private DeviceLabel() {
     }
 
@@ -94,6 +98,21 @@ final class DeviceLabel {
         // A model with no browser or platform to hang it on is still worth more than nothing.
         String label = usableModel(model) ? head + " · " + model.strip() : head;
         return label.length() <= MAX_LENGTH ? label : label.substring(0, MAX_LENGTH);
+    }
+
+    /**
+     * The label for the new-device alert, which the account's owner reads: the browser and the
+     * platform from the fixed lists, with the OS version only when it is digits and dots, and
+     * never the model. Both hints are the client's to write, and {@link #of} keeps them as sent —
+     * fine for a console that also shows the raw agent, not for a message that would otherwise
+     * carry "routine security check, no action needed" to the person it is warning.
+     *
+     * @return {@code "Chrome on macOS 27"} down to {@code "Firefox"}, or null as {@link #of}
+     */
+    static String brief(String userAgent, String platformVersion) {
+        String version = platformVersion == null ? null : platformVersion.strip();
+        boolean numeric = version != null && NUMERIC_VERSION.matcher(version).matches();
+        return of(userAgent, numeric ? version : null, null);
     }
 
     private static String withVersion(String platform, String platformVersion) {

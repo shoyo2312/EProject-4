@@ -65,6 +65,13 @@ Các lời gọi **gửi OTP** — `register`, `register/start`, `email`, `resen
 - Ticket của `POST /email` dùng cho `resend-verification`, vì các lần gửi lại mã cho địa chỉ đó đều đi qua endpoint này. `register` (mục 3.1) không trả ticket.
 - `forgot-password` và `resend-verification` trả ticket dù email có tài khoản hay không, nên ticket không dùng để dò email được.
 
+**Header `X-Device-Id`** (tuỳ chọn) trên `POST /login`, `/register/complete`, `/oauth/{google,facebook}`, `/oauth/{google,facebook}/link` và `/refresh`:
+- Một id ngẫu nhiên client tự sinh **một lần** rồi giữ lại (UUID v4 là đủ), 16–64 ký tự `[A-Za-z0-9-]`. Sai định dạng thì coi như không gửi.
+- **Không phải credential**: nó chỉ cho server biết lần đăng nhập này có đến từ thiết bị tài khoản đã dùng hay không. Đăng nhập vẫn cần mật khẩu hoặc provider.
+- Đăng nhập từ một thiết bị mới, trên tài khoản **đã từng có** thiết bị khác, gửi cho chủ tài khoản thông báo `SYSTEM` "Your account logged in from a new device" kèm thiết bị, giờ và nơi gần đúng (topic `auth.new-device-events`, mục 9). Thiết bị đầu tiên của tài khoản không báo.
+- **Không gửi header** thì mỗi lần đăng nhập đều bị coi là thiết bị lạ khi tài khoản đã từng có thiết bị, nên app mobile nên sinh và gửi id này.
+- `/refresh` chỉ ghi nhận thiết bị, không bao giờ báo. Tài khoản ADMIN không qua bước này. Web gửi header qua `src/proxy.ts` (cookie HttpOnly `nowa_device`).
+
 ### 3.1 `POST /register`
 Không cần token. Trả `201 Created`.
 
@@ -510,10 +517,11 @@ Phần này cho người tích hợp backend, không phải client mobile. `auth
 | `auth.social-avatar-events` | `SocialAvatarDiscoveredEvent` | `eventId, occurredAt, userId, avatarUrl` | **Gửi thẳng broker, fire-and-forget** (chỉ log khi lỗi). Không qua outbox: đăng nhập social gặp tài khoản sẵn có thì không ghi DB nào để "atomic" cùng, và Kafka chết không được làm hỏng login vì một tấm ảnh. **Ngoại lệ — lần đăng nhập tạo tài khoản**: ghi vào **outbox** (aggregate `SOCIAL_AVATAR`) ngay sau `UserRegisteredEvent`, cùng transaction. Gửi thẳng thì nó tới media-worker trước registration tới một chu kỳ poll (5s), bản sao tới user-service khi profile chưa tồn tại và mọi tài khoản mới kẹt ở URL của provider | media-worker (sao ảnh về MinIO) |
 | `auth.account-events` | `AccountStateChangedEvent` | `eventId, occurredAt, userId, state (DEACTIVATED / ACTIVE / DELETED), deletionScheduledAt` | **Outbox**, aggregate `ACCOUNT`, key `userId`, cùng transaction với việc đóng / mở lại / xoá (mục 3.19). Consumer áp `DEACTIVATED`/`ACTIVE` như một phép gán có guard `occurredAt`; `DELETED` là fan-out | user-service (ẩn profile; DELETED gỡ mọi follow và chỉnh counter), video-service, search-service, interaction-service (ẩn video / kết quả tìm kiếm / comment; video-service đưa video vào thùng rác khi DELETED) |
 | `auth.username-events` | `UsernameChangedEvent` | `eventId, occurredAt, userId, username, previousUsername` | **Outbox** (cùng transaction với việc đổi username, mục 3.16), key `userId`. `OutboxPublisher` chọn topic theo `aggregate_type` (`USER` / `USERNAME` / `SOCIAL_AVATAR`) — deploy bản có bảng route này phải dừng hết instance cũ trước, vì instance cũ đẩy mọi row lên `auth.user-events` | user-service (cập nhật bản sao username trong profile) |
+| `auth.new-device-events` | `NewDeviceSignInEvent` | `eventId, occurredAt, userId, deviceLabel, location`. `deviceLabel` chỉ gồm từ cố định ("Chrome on macOS 27", không có model); hai field cuối có thể null | **Outbox**, aggregate `NEW_DEVICE`, key `userId`, cùng transaction với refresh token và với việc ghi nhận thiết bị (header `X-Device-Id`, mục 3) | notification-service (thông báo `SYSTEM`, `referenceId` `"account-security"`) |
 
 Phát `SocialAvatarDiscoveredEvent` **mỗi lần** đăng nhập social có mang ảnh, không chỉ lần đầu — URL của provider (nhất là Facebook) hết hạn sau vài ngày, nên phát lại là cách media-worker luôn có URL còn sống để sao, và cũng là cách backfill tài khoản social cũ chưa có ảnh.
 
-Ba topic tách nhau vì `auth.user-events` chỉ mang đúng một shape và các consumer parse thẳng không đọc header — đăng một shape thứ hai lên đó sẽ deserialize thành `UserRegisteredEvent` với mọi field null và tạo profile rác. `UsernameChangedEvent` còn tệ hơn: nó có đủ `userId` và `username`, nên sẽ được đọc như một lần đăng ký thật.
+Ba topic tách nhau vì `auth.user-events` chỉ mang đúng một shape và các consumer parse thẳng không đọc header — đăng một shape thứ hai lên đó sẽ deserialize thành `UserRegisteredEvent` với mọi field null và tạo profile rác. `UsernameChangedEvent` còn tệ hơn: nó có đủ `userId` và `username`, nên sẽ được đọc như một lần đăng ký thật. `auth.new-device-events` tách riêng vì cùng lý do: đăng lên `auth.user-events` thì mỗi cảnh báo sẽ thành một lời chào "Welcome" mới.
 
 `ExpiredRecordCleanup` (job retention) chỉ xoá row outbox đã `published_at IS NOT NULL` — row chưa publish là event chưa tồn tại ở đâu khác.
 

@@ -55,6 +55,13 @@
     "requesterId" : 1003,
     "targetId" : 1004
   },
+  "NewDeviceSignInEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "deviceLabel" : "deviceLabel-4",
+    "location" : "location-5"
+  },
   "NotificationCreatedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",

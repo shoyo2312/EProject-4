@@ -29,4 +29,9 @@ public record RequestOrigin(
     public String deviceLabel() {
         return DeviceLabel.of(userAgent, platformVersion, model);
     }
+
+    /** The new-device alert's label, in fixed words only: {@code "Chrome on Android 15"}. */
+    public String alertLabel() {
+        return DeviceLabel.brief(userAgent, platformVersion);
+    }
 }

@@ -34,7 +34,8 @@ public class OutboxPublisher {
             UserEventProducer.USER_AGGREGATE, "auth.user-events",
             UserEventProducer.USERNAME_AGGREGATE, "auth.username-events",
             UserEventProducer.SOCIAL_AVATAR_AGGREGATE, SocialAvatarEventProducer.TOPIC,
-            UserEventProducer.ACCOUNT_AGGREGATE, "auth.account-events");
+            UserEventProducer.ACCOUNT_AGGREGATE, "auth.account-events",
+            UserEventProducer.NEW_DEVICE_AGGREGATE, "auth.new-device-events");
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxDispatcher outboxDispatcher;
