@@ -5,6 +5,7 @@ import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.event.interaction.CommentLikeChangedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
+import com.tiktok.event.interaction.VideoRepostedEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.notificationservice.client.BlockClient;
 import com.tiktok.notificationservice.client.VideoOwnerClient;
@@ -26,6 +27,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -190,5 +192,23 @@ class InteractionEventConsumerTest {
         consumer.onShare(json(VideoSharedEvent.of(3L, 7L, 9L)));
 
         verify(notificationService).create(eq(50L), any(), eq(NotificationType.SHARE), any(), any(), eq("7"));
+    }
+
+    @Test
+    void onRepost_notifiesTheVideoOwner() throws Exception {
+        when(videoOwnerClient.ownerOf("7")).thenReturn(50L);
+
+        consumer.onRepost(json(VideoRepostedEvent.of(7L, 9L, true)));
+
+        verify(notificationService).create(50L, 9L, NotificationType.REPOST,
+                "New repost", "Someone reposted your video.", "7");
+    }
+
+    /** Taking a repost back is not news, and nothing announced is withdrawn either — as with a like. */
+    @Test
+    void onRepost_anUndoIsNotNews() throws Exception {
+        consumer.onRepost(json(VideoRepostedEvent.of(7L, 9L, false)));
+
+        verifyNoInteractions(notificationService, videoOwnerClient);
     }
 }

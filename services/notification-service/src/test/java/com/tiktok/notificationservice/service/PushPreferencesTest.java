@@ -67,6 +67,18 @@ class PushPreferencesTest {
         assertThat(allOff.allows(NotificationType.SYSTEM, NOON)).isTrue();
     }
 
+    /** Reposts have an in-app switch only; TikTok's push list has none for them. */
+    @Test
+    void repostAlwaysPushesWhenAwake() {
+        assertThat(switches(false, false, false).allows(NotificationType.REPOST, NOON)).isTrue();
+    }
+
+    /** "Stay updated on your time from your Inbox": the weekly update is inbox only. */
+    @Test
+    void weeklyScreenTimeNeverPushes() {
+        assertThat(switches(true, true, true).allows(NotificationType.SCREEN_TIME, NOON)).isFalse();
+    }
+
     @Test
     void sleepWindowAcrossMidnightMutes() {
         PushPreferences night = asleep("23:30", "07:30", HCM);

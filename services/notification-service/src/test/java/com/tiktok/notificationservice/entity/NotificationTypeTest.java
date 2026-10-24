@@ -13,6 +13,12 @@ class NotificationTypeTest {
         assertThat(NotificationType.FOLLOW_REQUEST_ACCEPTED.collapsesRepeats()).isTrue();
     }
 
+    /** Repost, undo, repost again is one person's single repost, as a re-like is one like. */
+    @Test
+    void repostsCollapseRepeats() {
+        assertThat(NotificationType.REPOST.collapsesRepeats()).isTrue();
+    }
+
     /** Two stories from one owner in a day are one nudge to a follower, not two inbox entries. */
     @Test
     void storiesCollapseRepeats() {

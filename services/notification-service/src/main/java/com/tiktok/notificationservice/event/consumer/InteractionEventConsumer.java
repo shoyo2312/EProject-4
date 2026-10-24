@@ -4,6 +4,7 @@ import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentLikeChangedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
+import com.tiktok.event.interaction.VideoRepostedEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.notificationservice.client.BlockClient;
 import com.tiktok.notificationservice.client.VideoOwnerClient;
@@ -118,6 +119,20 @@ public class InteractionEventConsumer {
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
                 notifyVideoOwner(event.videoId(), event.userId(), NotificationType.SHARE,
                         "New share", "Someone shared your video."));
+    }
+
+    /** Only a repost is news; taking it back is not, and removes nothing — as with a like. */
+    @KafkaListener(topics = "interaction.repost-events", groupId = "notification-service")
+    @SneakyThrows
+    public void onRepost(String payload) {
+        VideoRepostedEvent event = objectMapper.readValue(payload, VideoRepostedEvent.class);
+        if (!event.reposted()) {
+            return;
+        }
+
+        idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
+                notifyVideoOwner(event.videoId(), event.userId(), NotificationType.REPOST,
+                        "New repost", "Someone reposted your video."));
     }
 
     private void notifyVideoOwner(Long videoId, Long actorId, NotificationType type,

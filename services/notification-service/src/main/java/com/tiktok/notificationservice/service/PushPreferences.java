@@ -26,8 +26,10 @@ public record PushPreferences(boolean likes, boolean comments, boolean newFollow
             case LIKE, COMMENT_LIKE -> likes;
             case COMMENT -> comments;
             case NEW_FOLLOWER, FOLLOW_REQUEST, FOLLOW_REQUEST_ACCEPTED -> newFollowers;
-            // TikTok's Interactions list has no switch for these.
-            case SHARE, STORY, SYSTEM -> true;
+            // TikTok's Interactions list has no switch for these; reposts have an in-app one only.
+            case SHARE, STORY, SYSTEM, REPOST -> true;
+            // "Stay updated on your time from your Inbox": the weekly update is inbox only.
+            case SCREEN_TIME -> false;
         };
     }
 
