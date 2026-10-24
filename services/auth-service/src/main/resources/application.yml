@@ -99,6 +99,10 @@ auth:
     # investigation realistically reaches; shorten it only against a real size problem, and know
     # that shortening it is deleting evidence.
     security-event-grace: 180d
+  geoip:
+    # DB-IP City Lite (make geoip). Relative to the module directory, where make run-auth and the
+    # IDE run; production sets GEOIP_DATABASE. Missing or unreadable: no places, and one WARN.
+    database: ${GEOIP_DATABASE:../../data/geoip/dbip-city-lite.mmdb}
   admin:
     # First ADMIN account for the admin console. Both must be set or nothing is provisioned;
     # an account that already owns this email is promoted, never overwritten.

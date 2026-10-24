@@ -66,6 +66,9 @@
 
         <!-- OpenAPI -->
         <springdoc.version>3.1.1</springdoc.version>
+
+        <!-- GeoIP: reads the DB-IP City Lite file auth-service turns sign-in addresses into places with -->
+        <maxmind-db.version>4.2.0</maxmind-db.version>
     </properties>
 
     <!-- ===== Dependency management (shared versions) ===== -->
@@ -139,6 +142,13 @@
                 <groupId>org.mapstruct</groupId>
                 <artifactId>mapstruct-processor</artifactId>
                 <version>${mapstruct.version}</version>
+            </dependency>
+
+            <!-- GeoIP -->
+            <dependency>
+                <groupId>com.maxmind.db</groupId>
+                <artifactId>maxmind-db</artifactId>
+                <version>${maxmind-db.version}</version>
             </dependency>
 
             <!-- OpenAPI / Swagger -->
