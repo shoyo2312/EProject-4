@@ -18,6 +18,8 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 
 /**
  * Turns the interaction streams into inbox entries for the account that owns the video.
@@ -32,6 +34,14 @@ import java.nio.charset.StandardCharsets;
 public class InteractionEventConsumer {
 
     private static final String COMMENT_CREATED = "CommentCreatedEvent";
+
+    /**
+     * Older than this, a repost is not news. This group first met {@code interaction.repost-events}
+     * with no committed offset, and reads from the earliest one, so without a cutoff that first start
+     * announced — and pushed — every repost still retained (7 days) as if it had just happened. The
+     * same cutoff covers a DLT replay or a long outage's backlog.
+     */
+    static final Duration MAX_REPOST_AGE = Duration.ofHours(24);
 
     private final IdempotentEventProcessor idempotentEventProcessor;
     private final VideoOwnerClient videoOwnerClient;
@@ -121,12 +131,16 @@ public class InteractionEventConsumer {
                         "New share", "Someone shared your video."));
     }
 
-    /** Only a repost is news; taking it back is not, and removes nothing — as with a like. */
+    /**
+     * Only a fresh repost is news; taking it back is not, and removes nothing — as with a like. See
+     * {@link #MAX_REPOST_AGE} for what "fresh" guards against.
+     */
     @KafkaListener(topics = "interaction.repost-events", groupId = "notification-service")
     @SneakyThrows
     public void onRepost(String payload) {
         VideoRepostedEvent event = objectMapper.readValue(payload, VideoRepostedEvent.class);
-        if (!event.reposted()) {
+        if (!event.reposted()
+                || event.occurredAt() != null && event.occurredAt().isBefore(Instant.now().minus(MAX_REPOST_AGE))) {
             return;
         }
 
