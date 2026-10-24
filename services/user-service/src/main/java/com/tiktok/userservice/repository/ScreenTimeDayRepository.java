@@ -34,6 +34,11 @@ public interface ScreenTimeDayRepository extends JpaRepository<ScreenTimeDay, Lo
 
     List<ScreenTimeDay> findByUserIdAndLocalDateBetweenAndDeletedAtIsNull(Long userId, LocalDate from, LocalDate to);
 
+    /** Day and night time together over {@code from}..{@code to}, both included; 0 when nothing is recorded. */
+    @Query("select coalesce(sum(d.daySeconds + d.nightSeconds), 0L) from ScreenTimeDay d "
+            + "where d.userId = :userId and d.localDate between :from and :to and d.deletedAt is null")
+    long sumSeconds(@Param("userId") Long userId, @Param("from") LocalDate from, @Param("to") LocalDate to);
+
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("update ScreenTimeDay d set d.deletedAt = :at where d.userId = :userId and d.deletedAt is null")
     int softDeleteAllOf(@Param("userId") Long userId, @Param("at") Instant at);

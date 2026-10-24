@@ -14,6 +14,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 
@@ -116,6 +117,13 @@ public class UserSettings extends BaseEntity {
      */
     @Column(name = "time_zone", insertable = false, updatable = false)
     private String timeZone;
+
+    /**
+     * The Monday of the last week the weekly update was sent (or skipped) for. Read-only here like
+     * {@link #timeZone}: only the digest job's claim writes it. See V22.
+     */
+    @Column(name = "last_digest_week", insertable = false, updatable = false)
+    private LocalDate lastDigestWeek;
 
     /**
      * What an account with no row has. Transient — a read maps this without persisting it, so

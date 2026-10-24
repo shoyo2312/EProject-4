@@ -1,12 +1,14 @@
 package com.tiktok.userservice.repository;
 
 import com.tiktok.userservice.entity.UserSettings;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -45,4 +47,25 @@ public interface UserSettingsRepository extends JpaRepository<UserSettings, Long
     int upsertTimeZone(@Param("newRowId") Long newRowId,
                        @Param("userId") Long userId,
                        @Param("timeZone") String timeZone);
+
+    /**
+     * Accounts the weekly screen time job may owe an update: the switch on, a known zone, and no
+     * update yet for {@code latestWeek} — the latest week any zone can be due. Keyset-paged by id.
+     */
+    @Query("select s from UserSettings s where s.weeklyScreenTimeDigest = true and s.timeZone is not null "
+            + "and s.deletedAt is null and (s.lastDigestWeek is null or s.lastDigestWeek < :latestWeek) "
+            + "and s.id > :afterId order by s.id")
+    List<UserSettings> findDigestCandidates(@Param("latestWeek") LocalDate latestWeek,
+                                            @Param("afterId") Long afterId,
+                                            Pageable page);
+
+    /**
+     * Claims {@code week} for the account's update. 1 means this caller won and must send; 0 means
+     * the week (or a later one) is already claimed. Leaves {@code version} alone, so a settings save
+     * running alongside is not turned into a 409.
+     */
+    @Modifying
+    @Query(value = "UPDATE user_settings SET last_digest_week = :week "
+            + "WHERE id = :id AND (last_digest_week IS NULL OR last_digest_week < :week)", nativeQuery = true)
+    int claimDigestWeek(@Param("id") Long settingsId, @Param("week") LocalDate week);
 }

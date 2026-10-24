@@ -310,5 +310,12 @@
     "watchedMs" : 1005,
     "durationMs" : 1006,
     "completed" : false
+  },
+  "WeeklyScreenTimeSummaryEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "weekStart" : "weekStart-4",
+    "totalSeconds" : 1005
   }
 }
