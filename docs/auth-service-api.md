@@ -405,7 +405,7 @@ Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `INVALID
 **Bắt buộc token có role ADMIN**; app mobile không dùng.
 
 - `GET /admin/users`, `GET /admin/users/{userId}` — danh bạ tài khoản (`status`, `role`), xem `CLAUDE.md` §Ban. Mỗi phần tử còn có `deactivatedAt` và `deletionScheduledAt` (mục 3.19): giữ nguyên khi bị ban, nên một tài khoản `BANNED` vẫn có thể đang chờ xoá. Lọc `?status=DEACTIVATED` được.
-- `GET /admin/users/{userId}/security-events?page=0&size=25` — nhật ký bảo mật của một tài khoản, **mới nhất trước**: đăng nhập thành công/thất bại, reset mật khẩu, đổi email, OTP admin. Không ghi lại refresh token và lệnh ban (ban nằm ở audit log của admin-service). Mỗi phần tử: `id, eventType, ipAddress, userAgent, deviceLabel, deviceModel, detail, createdAt`.
+- `GET /admin/users/{userId}/security-events?page=0&size=25` — nhật ký bảo mật của một tài khoản, **mới nhất trước**: đăng nhập thành công/thất bại, reset mật khẩu, đổi email, OTP admin. Không ghi lại refresh token và lệnh ban (ban nằm ở audit log của admin-service). Mỗi phần tử: `id, eventType, ipAddress, userAgent, deviceLabel, deviceModel, location, detail, createdAt`. `location` là nơi gần đúng của `ipAddress` ("Ho Chi Minh City, Vietnam", có khi chỉ quốc gia), tra từ file GeoIP lúc ghi; null với row cũ và với địa chỉ không tra được.
 
 ### 3.19 Đóng tài khoản — `/account/**`
 **Bắt buộc token.** Thiết kế: `docs/superpowers/specs/2026-10-17-account-deactivation-design.md`.

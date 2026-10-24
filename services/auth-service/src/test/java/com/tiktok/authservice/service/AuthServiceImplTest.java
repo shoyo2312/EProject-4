@@ -1405,6 +1405,24 @@ class AuthServiceImplTest {
     }
 
     /**
+     * The attempts an admin most wants to place are the failed ones: ten wrong passwords from a
+     * country the owner has never been to is the story, more than the sign-in after them.
+     */
+    @Test
+    void aFailedSignInIsFiledWithItsPlace() {
+        UserResponse registered = registerVerified();
+        arriveFrom("81.2.69.160", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                + "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpassword")))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getUserId, AuthSecurityEvent::getLocation)
+                .containsExactly(tuple(SecurityEventType.LOGIN_FAILED, registered.id(), "London, United Kingdom"));
+    }
+
+    /**
      * An attempt on a name nobody holds has no account to be filed under, and inventing one keyed
      * on the typed string would turn the log into a way of asking which usernames are real.
      */

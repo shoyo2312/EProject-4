@@ -15,6 +15,9 @@ import java.time.Instant;
  * @param deviceLabel {@code "Chrome on macOS 15.1"}, or null when the agent named nothing known
  * @param deviceModel the hardware the browser admitted to, or null — which is the normal case,
  *                    since only Chromium sends the hint and it is empty on every desktop
+ * @param location    the approximate place of {@code ipAddress}, looked up when the entry was
+ *                    written ({@code "Ho Chi Minh City, Vietnam"}, sometimes the country alone),
+ *                    or null — for older entries and addresses that resolve to nothing
  * @param detail      a short phrase, or null — never a secret
  */
 public record SecurityEventResponse(
@@ -24,6 +27,7 @@ public record SecurityEventResponse(
         String userAgent,
         String deviceLabel,
         String deviceModel,
+        String location,
         String detail,
         Instant createdAt
 ) {
