@@ -171,8 +171,8 @@ class AdminServiceImplTest {
     @Test
     void submitReport_savesPendingReport() {
         SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content");
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.empty());
         when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
                 new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "spam content", ReportStatus.PENDING, null, null, null));
@@ -280,8 +280,8 @@ class AdminServiceImplTest {
                 .reason("spam content")
                 .status(ReportStatus.PENDING)
                 .build();
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.of(existing));
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.of(existing));
         when(adminMapper.toResponse(existing)).thenReturn(
                 new ReportResponse(3L, 10L, ReportTargetType.VIDEO, "v1", "spam content", ReportStatus.PENDING, null, null, null));
 
@@ -291,11 +291,31 @@ class AdminServiceImplTest {
         verify(reportRepository, never()).saveAndFlush(any(Report.class));
     }
 
+    /**
+     * The harassment victim whose report on an account was resolved with a warning, reporting it
+     * again. The closed report is history, not a report still waiting, so the new one is filed and
+     * announced. It used to come back as the old report, with no row and no event.
+     */
+    @Test
+    void submitReport_reporterWhoseEarlierReportWasClosed_filesANewOne() {
+        // Their resolved report is still on file, but it is not the pending one this asks for.
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42", ReportStatus.PENDING)).thenReturn(Optional.empty());
+        when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "42", "Hate and harassment"));
+
+        ArgumentCaptor<Report> saved = ArgumentCaptor.forClass(Report.class);
+        verify(reportRepository).saveAndFlush(saved.capture());
+        assertThat(saved.getValue().getStatus()).isEqualTo(ReportStatus.PENDING);
+        verify(adminEventProducer).publishReportSubmitted(saved.getValue());
+    }
+
     @Test
     void submitReport_losesRaceWithConcurrentSubmit_conflicts() {
         SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content");
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.empty());
         when(reportRepository.saveAndFlush(any(Report.class)))
                 .thenThrow(violationOf("idx_reports_one_per_reporter_target"));
 
@@ -307,8 +327,8 @@ class AdminServiceImplTest {
     @Test
     void submitReport_otherConstraintViolation_isNotCalledADuplicate() {
         SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content");
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.empty());
         when(reportRepository.saveAndFlush(any(Report.class))).thenThrow(violationOf("reports_reason_check"));
 
         assertThatThrownBy(() -> adminService.submitReport(10L, request))
@@ -457,8 +477,8 @@ class AdminServiceImplTest {
     @Test
     void submitReport_targetAlreadyTakenDown_closesTheReportOnArrival() {
         SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "Nudity and sexual content");
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.empty());
         standingAction(ModerationActionType.TAKEDOWN_VIDEO);
         when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
@@ -479,8 +499,8 @@ class AdminServiceImplTest {
     @Test
     void submitReport_targetRestoredAfterTakedown_staysPending() {
         SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "Hate and harassment");
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.empty());
         // The newest state-changing action undid the takedown, so the video is up and this report
         // is about what is on the platform right now.
         standingAction(ModerationActionType.RESTORE_VIDEO);
@@ -497,8 +517,8 @@ class AdminServiceImplTest {
 
     @Test
     void submitReport_userStillServingATemporaryBan_closesTheReportOnArrival() {
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.USER, "42")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42", ReportStatus.PENDING)).thenReturn(Optional.empty());
         standingBan(Instant.now().plus(3, ChronoUnit.DAYS));
         when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -512,8 +532,8 @@ class AdminServiceImplTest {
 
     @Test
     void submitReport_userWhoseTemporaryBanRanOut_staysPending() {
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.USER, "42")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42", ReportStatus.PENDING)).thenReturn(Optional.empty());
         // The ban ended on its own: auth-service's sweep lifted it and recorded nothing here, so
         // the BAN_USER row is still the newest state-changing action. The account is back, and a
         // report against it has to reach an admin like any other.
@@ -531,8 +551,8 @@ class AdminServiceImplTest {
 
     @Test
     void submitReport_userUnderPermanentBan_closesTheReportOnArrival() {
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.USER, "42")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "42", ReportStatus.PENDING)).thenReturn(Optional.empty());
         standingBan(null);
         when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -548,8 +568,8 @@ class AdminServiceImplTest {
     void submitReport_anotherSpellingOfTheSameTarget_isTheSameReport() {
         Report filed = Report.builder().id(3L).reporterId(10L).targetType(ReportTargetType.USER)
                 .targetId("7").reason("Spam").status(ReportStatus.PENDING).build();
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.USER, "7")).thenReturn(Optional.of(filed));
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.USER, "7", ReportStatus.PENDING)).thenReturn(Optional.of(filed));
 
         adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.USER, "007", "Spam"));
 
@@ -742,8 +762,8 @@ class AdminServiceImplTest {
 
     @Test
     void submitReport_newPendingReport_isAnnouncedToTheConsole() {
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.empty());
         when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
 
         adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content"));
@@ -763,8 +783,8 @@ class AdminServiceImplTest {
                 .reason("spam content")
                 .status(ReportStatus.PENDING)
                 .build();
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.of(standing));
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.of(standing));
 
         adminService.submitReport(10L, new SubmitReportRequest(ReportTargetType.VIDEO, "v1", "spam content"));
 
@@ -773,8 +793,8 @@ class AdminServiceImplTest {
 
     @Test
     void submitReport_targetAlreadyEnforced_announcesNothing() {
-        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                10L, ReportTargetType.VIDEO, "v1")).thenReturn(Optional.empty());
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.empty());
         standingAction(ModerationActionType.TAKEDOWN_VIDEO);
         when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
 

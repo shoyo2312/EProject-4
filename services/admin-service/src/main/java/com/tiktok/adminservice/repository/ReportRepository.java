@@ -18,9 +18,13 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
 
     Optional<Report> findByIdAndDeletedAtIsNull(Long id);
 
-    /** The reporter's standing report against this target, if they already filed one. */
-    Optional<Report> findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-            Long reporterId, ReportTargetType targetType, String targetId);
+    /**
+     * The reporter's report against this target in the given status. Only ask for PENDING: the
+     * one-per-reporter index covers pending reports alone, so a reporter can hold any number of
+     * closed ones on a target, and asking for those throws once there are two.
+     */
+    Optional<Report> findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+            Long reporterId, ReportTargetType targetType, String targetId, ReportStatus status);
 
     /**
      * The report ledger, narrowed by any combination of the filters the console offers. A null
