@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.service;
 
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
@@ -30,15 +31,21 @@ public interface VideoService {
      * The same visibility rule as {@link #getById}, applied to a list, and answering in the order
      * asked. Ids that do not resolve — deleted, still processing, someone else's private video —
      * are dropped rather than reported, so the caller gets a shorter list instead of a failure.
+     *
+     * @param feed the feed this hydrates (For You does), whose keyword filters then apply; null for
+     *             any other read
      */
-    List<VideoResponse> getByIds(Long requesterId, List<String> videoIds);
+    List<VideoResponse> getByIds(Long requesterId, List<String> videoIds, FeedKind feed);
 
     /**
-     * @param cursor the previous page's {@code nextCursor}, or null to start at the newest video
-     * @param size   null falls back to the configured default; above the configured maximum it is
-     *               clamped down to it rather than refused
+     * @param requesterId the viewer, only for their keyword filters: the page is the public feed
+     *                    whoever asks
+     * @param cursor      the previous page's {@code nextCursor}, or null to start at the newest video
+     * @param size        null falls back to the configured default; above the configured maximum it
+     *                    is clamped down to it rather than refused
+     * @param feed        whose keyword filters apply (FOR_YOU when this is For You's fallback), or null
      */
-    CursorPage<VideoResponse> getFeed(String cursor, Integer size);
+    CursorPage<VideoResponse> getFeed(Long requesterId, String cursor, Integer size, FeedKind feed);
 
     /**
      * The Following tab: {@link #getFeed} narrowed to the accounts the viewer follows.
@@ -55,11 +62,13 @@ public interface VideoService {
      * @param followedUserIds the authors to draw from; empty or null is an empty page, not the
      *                        whole public feed — a viewer following nobody has an empty Following
      *                        tab, and quietly widening it to everyone would be the wrong feed
+     * @param feed            FOLLOWING or FRIENDS — both tabs read this — for the keyword filters
+     *                        that apply; a page they shorten keeps its cursor
      * @throws com.tiktok.videoservice.exception.TooManyFollowedUsersException above the cap, rather
      *                        than truncating the list and returning a feed missing whole creators
      */
     CursorPage<VideoResponse> getFollowingFeed(
-            Long requesterId, List<Long> followedUserIds, String cursor, Integer size);
+            Long requesterId, List<Long> followedUserIds, String cursor, Integer size, FeedKind feed);
 
     Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable);
 

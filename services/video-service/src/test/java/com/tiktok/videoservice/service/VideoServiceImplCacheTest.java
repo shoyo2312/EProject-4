@@ -79,7 +79,8 @@ class VideoServiceImplCacheTest {
                 followClient,
                 mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class),
                 mock(com.tiktok.videoservice.repository.OwnerBanRepository.class),
-                mock(CaptionModeration.class));
+                mock(CaptionModeration.class),
+                new FeedKeywordFilter(userSettingsClient));
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
@@ -137,7 +138,7 @@ class VideoServiceImplCacheTest {
         when(videoRepository.findByIdInAndDeletedAtIsNull(List.of("B"))).thenReturn(List.of(entity));
         when(videoMapper.toResponse(entity)).thenReturn(fromMongo);
 
-        List<VideoResponse> response = videoService.getByIds(OWNER, List.of("A", "B"));
+        List<VideoResponse> response = videoService.getByIds(OWNER, List.of("A", "B"), null);
 
         assertThat(response).containsExactly(cached, fromMongo);
         verify(videoRepository).findByIdInAndDeletedAtIsNull(List.of("B"));
@@ -149,7 +150,7 @@ class VideoServiceImplCacheTest {
         when(videoCache.getAll(List.of("A", "B")))
                 .thenReturn(Map.of("A", publicVideo("A"), "B", publicVideo("B")));
 
-        assertThat(videoService.getByIds(OWNER, List.of("A", "B"))).hasSize(2);
+        assertThat(videoService.getByIds(OWNER, List.of("A", "B"), null)).hasSize(2);
 
         verifyNoInteractions(videoRepository);
     }
@@ -167,8 +168,8 @@ class VideoServiceImplCacheTest {
 
         when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", privateVideo));
 
-        assertThat(videoService.getByIds(999L, List.of("A"))).isEmpty();
-        assertThat(videoService.getByIds(OWNER, List.of("A"))).containsExactly(privateVideo);
+        assertThat(videoService.getByIds(999L, List.of("A"), null)).isEmpty();
+        assertThat(videoService.getByIds(OWNER, List.of("A"), null)).containsExactly(privateVideo);
     }
 
     /**
@@ -212,7 +213,7 @@ class VideoServiceImplCacheTest {
     void getPolicy_carriesTheOwnersCommentAudience_andTheirCommentFilters() {
         when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(publicVideo(VIDEO_ID)));
         when(userSettingsClient.commentSettings(OWNER)).thenReturn(
-                new OwnerCommentSettings("FRIENDS", false, true, List.of("spoiler")));
+                new OwnerCommentSettings("FRIENDS", false, true, List.of("spoiler"), null));
 
         VideoPolicyResponse policy = videoService.getPolicy(VIDEO_ID);
 
@@ -299,7 +300,7 @@ class VideoServiceImplCacheTest {
         when(videoMapper.toResponse(any(Video.class))).thenReturn(mapped);
 
         assertThat(videoService.getById(OWNER, VIDEO_ID)).isEqualTo(mapped);
-        assertThat(videoService.getByIds(OWNER, List.of(VIDEO_ID))).containsExactly(mapped);
+        assertThat(videoService.getByIds(OWNER, List.of(VIDEO_ID), null)).containsExactly(mapped);
     }
 
     /**
@@ -370,7 +371,7 @@ class VideoServiceImplCacheTest {
                 "A", followed, "B", notFollowed, "C", own, "D", publicOwners));
         when(followClient.followedAmong(7L, Set.of(50L, 51L))).thenReturn(Set.of(50L));
 
-        assertThat(videoService.getByIds(7L, List.of("A", "B", "C", "D")))
+        assertThat(videoService.getByIds(7L, List.of("A", "B", "C", "D"), null))
                 .containsExactly(followed, own, publicOwners);
         verify(followClient).followedAmong(7L, Set.of(50L, 51L));
         verifyNoMoreInteractions(followClient);
@@ -382,7 +383,7 @@ class VideoServiceImplCacheTest {
         when(videoCache.getAll(List.of("A", "B")))
                 .thenReturn(Map.of("A", publicVideo("A"), "B", publicVideo("B")));
 
-        assertThat(videoService.getByIds(7L, List.of("A", "B"))).hasSize(2);
+        assertThat(videoService.getByIds(7L, List.of("A", "B"), null)).hasSize(2);
         verifyNoInteractions(followClient);
     }
 

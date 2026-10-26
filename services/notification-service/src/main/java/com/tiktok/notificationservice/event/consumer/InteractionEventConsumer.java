@@ -4,6 +4,7 @@ import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentLikeChangedEvent;
 import com.tiktok.event.interaction.VideoLikeEvent;
+import com.tiktok.event.interaction.VideoRepostedEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.notificationservice.client.BlockClient;
 import com.tiktok.notificationservice.client.VideoOwnerClient;
@@ -17,6 +18,8 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 
 /**
  * Turns the interaction streams into inbox entries for the account that owns the video.
@@ -31,6 +34,14 @@ import java.nio.charset.StandardCharsets;
 public class InteractionEventConsumer {
 
     private static final String COMMENT_CREATED = "CommentCreatedEvent";
+
+    /**
+     * Older than this, a repost is not news. This group first met {@code interaction.repost-events}
+     * with no committed offset, and reads from the earliest one, so without a cutoff that first start
+     * announced — and pushed — every repost still retained (7 days) as if it had just happened. The
+     * same cutoff covers a DLT replay or a long outage's backlog.
+     */
+    static final Duration MAX_REPOST_AGE = Duration.ofHours(24);
 
     private final IdempotentEventProcessor idempotentEventProcessor;
     private final VideoOwnerClient videoOwnerClient;
@@ -118,6 +129,24 @@ public class InteractionEventConsumer {
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
                 notifyVideoOwner(event.videoId(), event.userId(), NotificationType.SHARE,
                         "New share", "Someone shared your video."));
+    }
+
+    /**
+     * Only a fresh repost is news; taking it back is not, and removes nothing — as with a like. See
+     * {@link #MAX_REPOST_AGE} for what "fresh" guards against.
+     */
+    @KafkaListener(topics = "interaction.repost-events", groupId = "notification-service")
+    @SneakyThrows
+    public void onRepost(String payload) {
+        VideoRepostedEvent event = objectMapper.readValue(payload, VideoRepostedEvent.class);
+        if (!event.reposted()
+                || event.occurredAt() != null && event.occurredAt().isBefore(Instant.now().minus(MAX_REPOST_AGE))) {
+            return;
+        }
+
+        idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () ->
+                notifyVideoOwner(event.videoId(), event.userId(), NotificationType.REPOST,
+                        "New repost", "Someone reposted your video."));
     }
 
     private void notifyVideoOwner(Long videoId, Long actorId, NotificationType type,

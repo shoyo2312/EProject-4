@@ -2,6 +2,7 @@ package com.tiktok.videoservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.request.UpdateCommentSettingRequest;
 import com.tiktok.videoservice.dto.request.UpdateVideoVisibilityRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
@@ -54,9 +55,12 @@ public class VideoController {
      */
     @GetMapping("/feed")
     public ApiResponse<CursorPage<VideoResponse>> getFeed(
+            @AuthenticationPrincipal Long currentUserId,
             @RequestParam(required = false) String cursor,
-            @RequestParam(required = false) Integer size) {
-        return ApiResponse.success(videoService.getFeed(cursor, size));
+            @RequestParam(required = false) Integer size,
+            // FOR_YOU when this is For You's chronological fallback: the viewer's keywords apply.
+            @RequestParam(required = false) FeedKind feed) {
+        return ApiResponse.success(videoService.getFeed(currentUserId, cursor, size, feed));
     }
 
     /**
@@ -74,9 +78,11 @@ public class VideoController {
             @AuthenticationPrincipal Long currentUserId,
             @RequestParam(required = false) List<Long> followedUserIds,
             @RequestParam(required = false) String cursor,
-            @RequestParam(required = false) Integer size) {
+            @RequestParam(required = false) Integer size,
+            // The Friends tab reads this endpoint too, and says so for its own keyword list.
+            @RequestParam(defaultValue = "FOLLOWING") FeedKind feed) {
         return ApiResponse.success(
-                videoService.getFollowingFeed(currentUserId, followedUserIds, cursor, size));
+                videoService.getFollowingFeed(currentUserId, followedUserIds, cursor, size, feed));
     }
 
     @GetMapping("/{videoId}")
@@ -97,8 +103,10 @@ public class VideoController {
     @GetMapping("/batch")
     public ApiResponse<List<VideoResponse>> getByIds(
             @AuthenticationPrincipal Long currentUserId,
-            @RequestParam List<String> ids) {
-        return ApiResponse.success(videoService.getByIds(currentUserId, ids));
+            @RequestParam List<String> ids,
+            // FOR_YOU when this hydrates the For You ranking: the viewer's keywords apply.
+            @RequestParam(required = false) FeedKind feed) {
+        return ApiResponse.success(videoService.getByIds(currentUserId, ids, feed));
     }
 
     /**

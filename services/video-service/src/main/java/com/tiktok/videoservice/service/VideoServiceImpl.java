@@ -9,6 +9,7 @@ import com.tiktok.videoservice.client.UserSettingsClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
@@ -125,6 +126,7 @@ public class VideoServiceImpl implements VideoService {
     private final OwnerPrivacyRepository ownerPrivacyRepository;
     private final OwnerBanRepository ownerBanRepository;
     private final CaptionModeration captionModeration;
+    private final FeedKeywordFilter feedKeywordFilter;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -411,7 +413,7 @@ public class VideoServiceImpl implements VideoService {
      * string, and nothing else stops a caller asking for ten thousand documents in one hop.
      */
     @Override
-    public List<VideoResponse> getByIds(Long requesterId, List<String> videoIds) {
+    public List<VideoResponse> getByIds(Long requesterId, List<String> videoIds, FeedKind feed) {
         if (videoIds == null || videoIds.isEmpty()) {
             return List.of();
         }
@@ -452,9 +454,9 @@ public class VideoServiceImpl implements VideoService {
                 .toList();
         Set<Long> followed = followedPrivateOwners(requesterId, ordered);
         Set<Long> banned = hiddenAmong(ordered.stream().map(VideoResponse::userId).collect(Collectors.toSet()));
-        return withAccountComments(ordered.stream()
+        return withAccountComments(feedKeywordFilter.apply(requesterId, feed, ordered.stream()
                 .filter(video -> isVisibleTo(requesterId, video, followed, banned))
-                .toList());
+                .toList()));
     }
 
     private int maxBatchSize() {
@@ -467,13 +469,21 @@ public class VideoServiceImpl implements VideoService {
      * grid is finite, gets jumped around in, and its owner has a use for a total.
      */
     @Override
-    public CursorPage<VideoResponse> getFeed(String cursor, Integer size) {
-        return feedPage(null, cursor, size);
+    public CursorPage<VideoResponse> getFeed(Long requesterId, String cursor, Integer size, FeedKind feed) {
+        return withoutFilteredKeywords(feedPage(null, cursor, size), requesterId, feed);
+    }
+
+    /**
+     * After the page is cut, so the cursor stays the one of the page as read: a shortened page is
+     * fine, the web already treats a short page as having successors.
+     */
+    private CursorPage<VideoResponse> withoutFilteredKeywords(CursorPage<VideoResponse> page, Long viewerId, FeedKind feed) {
+        return new CursorPage<>(feedKeywordFilter.apply(viewerId, feed, page.items()), page.nextCursor());
     }
 
     @Override
     public CursorPage<VideoResponse> getFollowingFeed(
-            Long requesterId, List<Long> followedUserIds, String cursor, Integer size) {
+            Long requesterId, List<Long> followedUserIds, String cursor, Integer size, FeedKind feed) {
         // Following nobody is an empty tab, not the public feed. Returning early also keeps an
         // empty $in — which matches nothing but still costs a query — off the wire.
         if (followedUserIds == null || followedUserIds.isEmpty()) {
@@ -495,7 +505,7 @@ public class VideoServiceImpl implements VideoService {
         if (authors.isEmpty()) {
             return new CursorPage<>(List.of(), null);
         }
-        return feedPage(authors, cursor, size);
+        return withoutFilteredKeywords(feedPage(authors, cursor, size), requesterId, feed);
     }
 
     /**
