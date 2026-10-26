@@ -9,6 +9,7 @@ import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.DailyEn
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.DailyFollows;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.DailyViews;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.EngagementTotals;
+import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.NewViewers;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.WatchTotals;
 import org.junit.jupiter.api.Test;
 
@@ -18,6 +19,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
@@ -119,6 +121,19 @@ class CreatorAnalyticsServiceImplTest {
                 .extracting("videoId").containsExactly("a", "b", "c");
         assertThat(service.topVideos(7L, 7, CreatorVideoSort.LIKES, 2))
                 .extracting("videoId").containsExactly("b", "c");
+    }
+
+    @Test
+    void topVideosCarryTheNewViewersEachVideoBroughtIn() {
+        when(repository.watchTotals(any(), any(), any())).thenReturn(List.of(
+                new WatchTotals("a", 100, 50, 0, 0),
+                new WatchTotals("b", 10, 5, 0, 0)));
+        when(repository.newViewersByVideo(anyLong(), any(), any())).thenReturn(List.of(
+                new NewViewers("b", 4)));
+
+        assertThat(service.topVideos(7L, 7, CreatorVideoSort.NEW_VIEWERS, 10))
+                .extracting("videoId", "newViewers")
+                .containsExactly(tuple("b", 4L), tuple("a", 0L));
     }
 
     @Test

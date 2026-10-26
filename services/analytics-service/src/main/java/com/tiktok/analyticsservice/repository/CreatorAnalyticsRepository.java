@@ -66,6 +66,9 @@ public class CreatorAnalyticsRepository {
     public record EngagementTotals(String videoId, long likes, long comments, long shares) {
     }
 
+    public record NewViewers(String videoId, long newViewers) {
+    }
+
     public void insertFollow(String eventId, long followerId, long followingId, boolean followed, Instant occurredAt) {
         jdbcTemplate.update(
                 "INSERT INTO follow_events (event_id, follower_id, following_id, followed, occurred_at) VALUES (?, ?, ?, ?, ?)",
@@ -201,6 +204,27 @@ public class CreatorAnalyticsRepository {
                 )
                 """.formatted(OWNED_BY),
                 Long.class, to.toEpochMilli(), ownerId, from.toEpochMilli());
+    }
+
+    /**
+     * {@link #newViewers} split by the video each new viewer came in through: the first of this
+     * creator's videos they ever watched. One video per viewer, so the counts add up to
+     * {@link #newViewers} for the same window.
+     */
+    public List<NewViewers> newViewersByVideo(long ownerId, Instant from, Instant to) {
+        return jdbcTemplate.query(
+                """
+                SELECT first_video, count() AS new_viewers FROM (
+                    SELECT user_id, argMin(video_id, occurred_at) AS first_video
+                    FROM watch_events FINAL
+                    WHERE occurred_at < fromUnixTimestamp64Milli(?) AND user_id > 0 AND %s
+                    GROUP BY user_id
+                    HAVING min(occurred_at) >= fromUnixTimestamp64Milli(?)
+                )
+                GROUP BY first_video
+                """.formatted(OWNED_BY),
+                (rs, i) -> new NewViewers(rs.getString("first_video"), rs.getLong("new_viewers")),
+                to.toEpochMilli(), ownerId, from.toEpochMilli());
     }
 
     /** Distinct viewers by hour of the day, 0 to 23, in {@link #ZONE}. */

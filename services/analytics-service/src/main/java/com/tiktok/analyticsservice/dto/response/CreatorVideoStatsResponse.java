@@ -8,6 +8,8 @@ public record CreatorVideoStatsResponse(
         String videoId,
         long views,
         long viewers,
+        /** Viewers who had never watched this creator and came in through this video. */
+        long newViewers,
         long likes,
         long comments,
         long shares

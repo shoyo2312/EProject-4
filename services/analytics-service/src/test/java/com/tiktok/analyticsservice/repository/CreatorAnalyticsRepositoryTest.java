@@ -133,6 +133,25 @@ class CreatorAnalyticsRepositoryTest {
         assertThat(repository.newViewers(CREATOR, windowStart, TO)).isEqualTo(1);
     }
 
+    /** Credited to the first video they watched, once, so the split adds up to the total. */
+    @Test
+    void aNewViewerCountsForTheVideoTheyCameInThrough() {
+        engagementEventRepository.insert("pub-second", "PUBLISHED", "second", CREATOR, FROM);
+        Instant windowStart = Instant.parse("2026-10-20T00:00:00Z");
+        watch("regular", "mine", 100L, 1_000, 10_000, Instant.parse("2026-10-05T00:00:00Z"));
+        watch("regular-again", "second", 100L, 1_000, 10_000, EVENING);
+        watch("first", "second", 101L, 1_000, 10_000, EVENING);
+        watch("then", "mine", 101L, 1_000, 10_000, AFTER_MIDNIGHT);
+        watch("other", "mine", 102L, 1_000, 10_000, EVENING);
+        watch("elsewhere", "theirs", 103L, 1_000, 10_000, EVENING);
+
+        assertThat(repository.newViewersByVideo(CREATOR, windowStart, TO))
+                .containsExactlyInAnyOrder(
+                        new CreatorAnalyticsRepository.NewViewers("second", 1),
+                        new CreatorAnalyticsRepository.NewViewers("mine", 1));
+        assertThat(repository.newViewers(CREATOR, windowStart, TO)).isEqualTo(2);
+    }
+
     /** A loop reports more time than the video lasts; it still only reached the end. */
     @Test
     void retentionBucketsCapALoopAtTheEnd() {

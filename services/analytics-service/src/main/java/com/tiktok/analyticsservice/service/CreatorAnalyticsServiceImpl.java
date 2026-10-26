@@ -13,6 +13,7 @@ import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.DailyEn
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.DailyFollows;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.DailyViews;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.EngagementTotals;
+import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.NewViewers;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.Scope;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.WatchTotals;
 import org.springframework.beans.factory.annotation.Value;
@@ -99,11 +100,15 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                 WatchTotals::videoId);
         Map<String, EngagementTotals> engagement = byVideo(
                 repository.engagementTotals(scope, window.from(), window.to()), EngagementTotals::videoId);
+        // A new viewer's first watch is in the window, so their video is already among the watches.
+        Map<String, Long> newViewers = repository.newViewersByVideo(creatorId, window.from(), window.to()).stream()
+                .collect(Collectors.toMap(NewViewers::videoId, NewViewers::newViewers));
 
         Set<String> videoIds = new HashSet<>(watches.keySet());
         videoIds.addAll(engagement.keySet());
         return videoIds.stream()
-                .map(id -> stats(id, watches.getOrDefault(id, NO_WATCHES), engagement.getOrDefault(id, NO_ENGAGEMENT)))
+                .map(id -> stats(id, watches.getOrDefault(id, NO_WATCHES), newViewers.getOrDefault(id, 0L),
+                        engagement.getOrDefault(id, NO_ENGAGEMENT)))
                 .sorted(Comparator.comparingLong(metric(sort)).reversed()
                         .thenComparing(CreatorVideoStatsResponse::videoId))
                 .limit(limit)
@@ -211,8 +216,9 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
         return days.stream().mapToLong(field).sum();
     }
 
-    private static CreatorVideoStatsResponse stats(String videoId, WatchTotals watches, EngagementTotals engagement) {
-        return new CreatorVideoStatsResponse(videoId, watches.views(), watches.viewers(),
+    private static CreatorVideoStatsResponse stats(String videoId, WatchTotals watches, long newViewers,
+                                                   EngagementTotals engagement) {
+        return new CreatorVideoStatsResponse(videoId, watches.views(), watches.viewers(), newViewers,
                 engagement.likes(), engagement.comments(), engagement.shares());
     }
 
@@ -220,6 +226,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
         return switch (sort) {
             case VIEWS -> CreatorVideoStatsResponse::views;
             case VIEWERS -> CreatorVideoStatsResponse::viewers;
+            case NEW_VIEWERS -> CreatorVideoStatsResponse::newViewers;
             case LIKES -> CreatorVideoStatsResponse::likes;
             case COMMENTS -> CreatorVideoStatsResponse::comments;
             case SHARES -> CreatorVideoStatsResponse::shares;
