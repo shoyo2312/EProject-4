@@ -162,6 +162,7 @@ com.tiktok.{service}/
 - `executePipelined` cần `commons-pool2` trên classpath (video, interaction, recommendation đã có): không có pool, mỗi pipeline mở rồi đóng một kết nối TCP mới tới Redis
 - Redis timeout: `common-lib/RedisClientDefaults` đặt `spring.data.redis.timeout` + `connect-timeout` = 1s làm default cho mọi service (thua mọi config của service). Lettuce tự nó chờ **60s mỗi lệnh** khi Redis treo mà không đóng kết nối (container pause, partition), nên mọi nhánh "fail-open khi Redis chết" thực ra treo 1 phút mỗi request rồi cạn thread. Áp cho cả reactive (gateway), vì Boot bật `TimeoutOptions`. Service cần lệnh nặng hơn thì tự set timeout của mình, đừng gỡ default
 - Spring Data derived `...IgnoreCase` sinh `upper(col) = upper(?)`, index `lower(...)` không dùng được → seq scan. Cần index thì viết `@Query` với `lower(...)` (xem auth `UserRepository`)
+- Partial index (`... WHERE deleted_at IS NULL`) chỉ được dùng khi WHERE của query kéo theo đúng predicate đó. Query lọc theo cột một mình (counter UPDATE, `exists...`, subquery) là seq scan → cần một index thường riêng (xem user-service `V23__index_user_profiles_user_id.sql`)
 - Endpoint batch (counts, like-status, repost-context, settings…) đọc cả trang trong một lệnh (MGET / `IN` / pipeline), không lặp từng id
 
 ### Spring Boot 4 — bẫy khi thêm dependency hay config
