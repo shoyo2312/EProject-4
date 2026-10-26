@@ -13,16 +13,20 @@ import io.minio.errors.ErrorResponseException;
 import io.minio.messages.ErrorResponse;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -42,6 +46,16 @@ class ModerationServiceImplTest {
             new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret", "video-media");
     private static final ModerationProperties ENABLED =
             new ModerationProperties(true, "http://moderation:8099", 10, 30_000L, 3, 0L);
+
+    private static final byte[] PLAYBACK = "not really an mp4".getBytes(StandardCharsets.UTF_8);
+    /** Base64 "AQID", worked out by hand rather than with the encoder under test. */
+    private static final byte[] THUMBNAIL = {1, 2, 3};
+    /** Base64 "BAUG". */
+    private static final byte[] PREVIEW = {4, 5, 6};
+
+    /** Ten frames spread over a minute, none of them anywhere near a line. */
+    private static final ModerationResponse SPREAD_APPROVED = new ModerationResponse(
+            "APPROVED", "violence", 0.21, 0, 10, 700L, "openai/clip-vit-base-patch16", "nsfw-v1+harm-v2");
 
     @Mock
     private MinioClient minioClient;
@@ -147,6 +161,7 @@ class ModerationServiceImplTest {
     /**
      * A takedown or deletion during the transcode has already moved the output under quarantine/.
      * Reading only the public key failed all three attempts and sent the video for review unscored.
+     * The thumbnail and preview moved with it, and are read from there too.
      */
     @Test
     void moderate_readsAPlaybackFileThatIsAlreadyQuarantined() throws Exception {
@@ -171,7 +186,98 @@ class ModerationServiceImplTest {
 
         assertThat(event.verdict()).isEqualTo(ModerationVerdict.APPROVED);
         assertThat(event.totalFrames()).isEqualTo(3);
-        assertThat(asked).containsExactly("hls/vid123/source.mp4", "quarantine/hls/vid123/source.mp4");
+        assertThat(asked).containsExactly("hls/vid123/source.mp4", "quarantine/hls/vid123/source.mp4",
+                "thumbnails/vid123.jpg", "quarantine/thumbnails/vid123.jpg",
+                "previews/vid123.webp", "quarantine/previews/vid123.webp");
+    }
+
+    /**
+     * The thumbnail is the frame at 1s and the preview runs from 1s to 4s, while ten frames spread
+     * over a minute start at 3s and are 6s apart. A video explicit for its first two seconds was
+     * approved, and went out on every feed card with exactly those seconds as its cover. The cover
+     * can hold a video but never remove one, and the admin sees what the cover scored.
+     */
+    @Test
+    void moderate_whenTheThumbnailOrPreviewIsRejected_holdsTheVideoOnTheirScores() throws Exception {
+        givenTheBucketHolds(Map.of(
+                "hls/vid123/source.mp4", PLAYBACK,
+                "thumbnails/vid123.jpg", THUMBNAIL,
+                "previews/vid123.webp", PREVIEW));
+        givenFramesAreSampled(10);
+        when(moderationClient.moderate(any())).thenReturn(SPREAD_APPROVED, new ModerationResponse(
+                "REJECTED", "nsfw", 0.97, 12, 17, 450L, "Falconsai/nsfw_image_detection", "nsfw-v1+harm-v2"));
+
+        VideoModerationCompletedEvent event = service(ENABLED).moderate("vid123", 60);
+
+        assertThat(event.verdict())
+                .as("the thumbnail and preview can hold a video, never remove it")
+                .isEqualTo(ModerationVerdict.REVIEW);
+        assertThat(event).usingRecursiveComparison().ignoringFields("eventId", "occurredAt")
+                .isEqualTo(VideoModerationCompletedEvent.of("vid123", ModerationVerdict.REVIEW, "nsfw", 0.97, 12, 17,
+                        450L, "Falconsai/nsfw_image_detection", "nsfw-v1+harm-v2",
+                        "Thumbnail or preview held for review"));
+        List<List<String>> sent = framesSent();
+        assertThat(sent).hasSize(2);
+        assertThat(sent.get(1)).as("the cover's own bytes").containsExactlyInAnyOrder("AQID", "BAUG");
+    }
+
+    /** A clean cover changes nothing: the spread frames' scores are what the thresholds are tuned on. */
+    @Test
+    void moderate_whenTheThumbnailAndPreviewAreClean_theSpreadFramesVerdictAndScoresStand() throws Exception {
+        givenTheBucketHolds(Map.of(
+                "hls/vid123/source.mp4", PLAYBACK,
+                "thumbnails/vid123.jpg", THUMBNAIL,
+                "previews/vid123.webp", PREVIEW));
+        givenFramesAreSampled(10);
+        when(moderationClient.moderate(any())).thenReturn(SPREAD_APPROVED, new ModerationResponse(
+                "APPROVED", "nsfw", 0.03, 0, 17, 450L, "Falconsai/nsfw_image_detection", "nsfw-v1+harm-v2"));
+
+        VideoModerationCompletedEvent event = service(ENABLED).moderate("vid123", 60);
+
+        assertThat(framesSent()).as("the cover was checked").hasSize(2);
+        assertThat(event).usingRecursiveComparison().ignoringFields("eventId", "occurredAt")
+                .isEqualTo(VideoModerationCompletedEvent.of("vid123", ModerationVerdict.APPROVED, "violence", 0.21, 0,
+                        10, 700L, "openai/clip-vit-base-patch16", "nsfw-v1+harm-v2", null));
+    }
+
+    /**
+     * ffmpeg may have built neither, and the transcode carries on without them. Nothing public is
+     * nothing to check, not a failure. No empty call either: moderation-service answers no frames
+     * with REVIEW.
+     */
+    @Test
+    void moderate_whenThereIsNoThumbnailOrPreviewAnywhere_theSpreadFramesDecideAlone() throws Exception {
+        givenTheBucketHolds(Map.of("hls/vid123/source.mp4", PLAYBACK));
+        givenFramesAreSampled(10);
+        when(moderationClient.moderate(any())).thenReturn(SPREAD_APPROVED);
+
+        VideoModerationCompletedEvent event = service(ENABLED).moderate("vid123", 60);
+
+        assertThat(framesSent()).hasSize(1);
+        assertThat(event.verdict()).isEqualTo(ModerationVerdict.APPROVED);
+        assertThat(event.maxScore()).isEqualTo(0.21);
+        assertThat(event.reason()).isNull();
+    }
+
+    /**
+     * A takedown during the transcode moved the thumbnail under quarantine/ with the rest, and it is
+     * the cover the video gets back once the takedown is lifted. Here ffmpeg built no preview, and a
+     * REVIEW on the cover holds as a REJECTED does.
+     */
+    @Test
+    void moderate_checksAThumbnailThatIsAlreadyQuarantined() throws Exception {
+        givenTheBucketHolds(Map.of(
+                "quarantine/hls/vid123/source.mp4", PLAYBACK,
+                "quarantine/thumbnails/vid123.jpg", THUMBNAIL));
+        givenFramesAreSampled(10);
+        when(moderationClient.moderate(any())).thenReturn(SPREAD_APPROVED, new ModerationResponse(
+                "REVIEW", "nsfw", 0.66, 1, 1, 120L, "Falconsai/nsfw_image_detection", "nsfw-v1+harm-v2"));
+
+        VideoModerationCompletedEvent event = service(ENABLED).moderate("vid123", 60);
+
+        assertThat(framesSent()).hasSize(2).last().isEqualTo(List.of("AQID"));
+        assertThat(event.verdict()).isEqualTo(ModerationVerdict.REVIEW);
+        assertThat(event.maxScore()).isEqualTo(0.66);
     }
 
     @Test
@@ -246,6 +352,28 @@ class ModerationServiceImplTest {
             Files.writeString(Path.of(args.filename()), "not really an mp4");
             return null;
         }).when(minioClient).downloadObject(any(DownloadObjectArgs.class));
+    }
+
+    /** The bucket as MinIO answers a download: the keys given hold their bytes, any other is NoSuchKey. */
+    private void givenTheBucketHolds(Map<String, byte[]> objects) throws Exception {
+        doAnswer(invocation -> {
+            DownloadObjectArgs args = invocation.getArgument(0);
+            byte[] bytes = objects.get(args.object());
+            if (bytes == null) {
+                throw new ErrorResponseException(new ErrorResponse(
+                        "NoSuchKey", "gone", "video-media", args.object(), null, null, null), null, null);
+            }
+            Files.write(Path.of(args.filename()), bytes);
+            return null;
+        }).when(minioClient).downloadObject(any(DownloadObjectArgs.class));
+    }
+
+    /** What each call to moderation-service carried, in order. */
+    private List<List<String>> framesSent() {
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String>> frames = ArgumentCaptor.forClass(List.class);
+        verify(moderationClient, atLeastOnce()).moderate(frames.capture());
+        return frames.getAllValues();
     }
 
     private void givenFramesAreSampled(int count) {

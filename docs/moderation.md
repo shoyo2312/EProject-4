@@ -19,6 +19,7 @@ VideoPublishedEvent ─► transcode ─► VideoTranscodedEvent ─────
                        │
                        └─ (second consumer group on the same topic)
                           sample 10 frames ─► POST /moderate ─► verdict
+                          APPROVED? thumbnail + preview ─► POST /moderate ─► hold-only
                                                                 │
                           VideoModerationCompletedEvent ◄───────┘
                                                 │
@@ -138,6 +139,21 @@ canvas, and Pillow decodes every frame it seeks past. Only JPEG (MPO included), 
 GIF are opened: Pillow decodes the image inside an ICO before `Image.open` returns. Stills under the
 cap are scored at full size; shrinking them would change scores and needs a
 `MODERATION_MODEL_VERSION` bump.
+
+**The cover is checked on its own.** The thumbnail (`thumbnails/{id}.jpg`, the frame at 1s) and
+the hover preview (`previews/{id}.webp`, 3s from 1s at 8 fps) are what every feed card, profile
+grid and search hit shows, and the spread frames of a longer video step over the opening seconds
+they come from: on a 60s video the first sample is at 3s. When the spread frames are APPROVED,
+media-worker posts the two published objects to `/moderate` in a second call (`_decode` unpacks the
+animated WebP into up to 16 frames). That call can only hold: anything but APPROVED, REJECTED
+included, makes the video REVIEW, carrying the cover's label and scores with the reason `Thumbnail
+or preview held for review`. A clean cover leaves the spread verdict and its scores untouched. It
+is a separate call because the preview's frames are near-duplicates of one moment: mixed into the
+spread frames they would satisfy the "a second frame agrees" guards (`min_reject_frames`,
+`HARM_MIN_REVIEW_FRAMES`) by themselves. An object missing from both its public key and
+`quarantine/` is skipped; a failed download or call fails the attempt and ends in REVIEW like any
+other. When tuning thresholds against `moderation.maxScore`, leave out videos with that reason:
+their scores are the cover's, not the spread frames'.
 
 **Cigarettes and vapes are not drugs.** They have descriptions of their own in the ordinary list,
 so a vaping clip lands there instead of drifting into `drugs`. `test_harm.py` pins this.

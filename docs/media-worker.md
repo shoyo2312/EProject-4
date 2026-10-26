@@ -64,7 +64,7 @@ Không được biến một video xem được thành `FAILED` chỉ vì thiế
 
 - **Disk**: file đi qua disk của worker (bản copy-only đầu tiên không chuyển byte nào ra khỏi MinIO). Dời moov atom = viết lại container, MinIO không có thao tác server-side nào làm được. Dự trù **~2× kích thước upload** disk tạm cho mỗi transcode chạy song song.
 - **Storage**: 1 file playback + 1 thumbnail + 1 preview (~10 KB) cho mỗi video. Không có ABR ladder, không có segment.
-- Chưa làm: HLS segment (`master.m3u8` + `.ts`), ABR ladder, watermark, loudness normalization, frame sampling cho AI moderation.
+- Chưa làm: HLS segment (`master.m3u8` + `.ts`), ABR ladder, watermark, loudness normalization.
 
 ### 2.5. Binary ffmpeg và timeout
 
@@ -78,6 +78,19 @@ Không có bước Dockerfile nào. `JaveFfmpeg` dùng chính binary mà JAVE2 (
 **Input bị khoá về file local mp4/mov/webm.** Mọi lệnh chạy qua `JaveFfmpeg.run` đều được thêm input option `-protocol_whitelist file -format_whitelist mov,matroska` (ghi gọn ở các lệnh mục 1–2 cho dễ đọc). ffmpeg chọn demuxer theo **nội dung** file chứ không theo tên: một HLS playlist upload dưới đuôi `.mp4` từng được đọc như playlist, và segment của nó có thể trỏ tới bất kỳ file nào worker đọc được — kể cả upload của người khác — rồi lọt vào video transcode của kẻ upload. Bước probe (`JaveVideoProbe`, `MultimediaObject.getInfo()`) đi đường riêng của JAVE nên **không** nhận whitelist này; nó chỉ đọc metadata.
 
 Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file tạm**, không phải pipe: pipe không ai đọc sẽ đầy buffer và ffmpeg block vĩnh viễn ở lệnh write — không timeout nào trên `waitFor` bắt được.
+
+### 2.6. Kiểm duyệt nhìn vào đâu
+
+`VideoModerationConsumer` (group `media-worker-moderation`, đọc lại `VideoTranscodedEvent`) → `ModerationServiceImpl.moderate`, gọi moderation-service **hai lượt** (luật chấm ở `docs/moderation.md`):
+
+1. **Frame rải đều**: `media.moderation.frame-count` (10) frame từ file playback, rải đều cả video (`Ffmpeg.sampleFrames`, frame đầu ở giây `duration / (2 × count)`). Điểm số của lượt này là thứ ngưỡng được tune theo.
+2. **Cover** (chỉ khi lượt 1 ra `APPROVED`): `thumbnails/{id}.jpg` + `previews/{id}.webp` đúng như đã publish. moderation-service tự bung WebP động thành tối đa 16 frame. Đây là thứ mọi card feed, lưới profile, kết quả search hiện ra, và cả hai lấy từ giây 1 (§2 bước 5–6). Video 60s thì frame rải đều đầu tiên ở giây 3, cách nhau 6s: clip chỉ lộ liễu 2 giây đầu từng được `APPROVED` với cover lộ liễu.
+   - **Chỉ giữ, không bao giờ xoá**: cover không `APPROVED` (kể cả `REJECTED`, kể cả verdict lạ) → `REVIEW`, mang điểm số của cover và reason `Thumbnail or preview held for review` để admin thấy cái gì giữ video. Cover `APPROVED` → kết quả lượt 1 giữ nguyên, cả điểm số.
+   - **Lượt riêng, không gộp vào lượt 1**: preview là các frame gần như trùng nhau của cùng 3 giây. Gộp vào thì chính chúng thoả điều kiện "frame thứ hai đồng ý" (NSFW `min_reject_frames=2`, harm 2 frame ≥ 0.55), và một cảnh lẻ thành `REJECTED`.
+   - Đọc từ `quarantine/` nếu không thấy ở key public, như file playback: takedown/xoá giữa lúc transcode đã dời output sang đó. Vắng ở cả hai chỗ thì bỏ qua (ffmpeg không dựng được, transcode vẫn chạy tiếp); vắng cả hai object thì không gọi lượt 2.
+   - Lỗi tải hay lỗi gọi ở lượt nào cũng hỏng cả lần thử: retry `media.moderation.attempts` lần, hết thì `REVIEW`. Thất bại không bao giờ là pass.
+
+Sau đó `CaptionVerdict.combine` mới gộp verdict caption. Video đã `REVIEW` vì cover thì giữ reason của cover; verdict caption vẫn nằm riêng ở `textModeration` bên video-service.
 
 ### Retry & báo lỗi
 
@@ -142,7 +155,7 @@ Bucket cho đọc ẩn danh `hls/`, `thumbnails/`, `previews/` (player đi theo 
 
 Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown của video đang chờ review thì media vẫn ở quarantine, như video-service trả nó về `PENDING_REVIEW`. Marker cũ `quarantine/markers/{id}` (trước khi có hold) vẫn được tính, và restore gỡ nó. Admin console xem media bị quarantine qua URL ký ngắn hạn (`video-service/QuarantinedMediaUrls`); chủ video cũng nhận URL ký cho video của chính mình đang `PENDING_REVIEW` (trước đây họ vẫn xem được vì media còn public).
 
-**Chưa che:** video `PRIVATE`/`FRIENDS` (media vẫn public theo URL — cần URL ký hoặc CDN signed cookie cho người xem hợp lệ), và khoảng giữa transcode xong và có verdict (`PENDING_MODERATION`, thường vài giây).
+**Chưa che:** video `PRIVATE`/`FRIENDS` (media vẫn public theo URL — cần URL ký hoặc CDN signed cookie cho người xem hợp lệ), và khoảng giữa transcode xong và có verdict (`PENDING_MODERATION`, thường vài giây, gồm cả lượt chấm cover ở §2.6): trong lúc đó playback, thumbnail và preview đều public theo URL, chưa ai chấm.
 
 ## 6. Bố cục object trong bucket (`MediaKeys`)
 

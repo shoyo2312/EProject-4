@@ -26,7 +26,8 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * Samples frames from the playback file and asks moderation-service about them.
+ * Samples frames from the playback file and asks moderation-service about them, then asks again
+ * about the published thumbnail and preview (see {@code withCover}).
  *
  * <p>It reads the playback object rather than the raw upload on purpose: that file is already
  * normalized to something ffmpeg decodes cheaply and predictably, and it is the file viewers
@@ -163,7 +164,7 @@ public class ModerationServiceImpl implements ModerationService {
         Path work = createWorkDirectory(videoId);
         try {
             Path source = work.resolve("playback.mp4");
-            downloadPlayback(videoId, source);
+            downloadEitherSide(MediaKeys.playback(videoId), source);
 
             Path frameDir = Files.createDirectory(work.resolve("frames"));
             List<Path> frames = ffmpeg.sampleFrames(source, frameDir,
@@ -182,9 +183,11 @@ public class ModerationServiceImpl implements ModerationService {
                     videoId, response.verdict(), response.label(), response.maxScore(),
                     response.totalFrames(), response.suspiciousFrames(), response.processingTimeMs());
 
-            return VideoModerationCompletedEvent.of(videoId, verdictOf(response), response.label(),
-                    response.maxScore(), response.suspiciousFrames(), response.totalFrames(),
+            VideoModerationCompletedEvent spread = VideoModerationCompletedEvent.of(videoId, verdictOf(response),
+                    response.label(), response.maxScore(), response.suspiciousFrames(), response.totalFrames(),
                     response.processingTimeMs(), response.model(), response.modelVersion(), null);
+            // Already held or removed: the cover can only hold, so asking would change nothing but the scores.
+            return spread.verdict() == ModerationVerdict.APPROVED ? withCover(videoId, work, spread) : spread;
         } catch (Exception e) {
             throw new ModerationUnavailableException(
                     "Could not moderate video %s: %s".formatted(videoId, e.getMessage()), e);
@@ -194,17 +197,58 @@ public class ModerationServiceImpl implements ModerationService {
     }
 
     /**
-     * The playback file from wherever it is now. A takedown or deletion that lands while the video
-     * is transcoding has already moved the fresh output under {@code quarantine/} by the time this
-     * runs (see {@code VideoEventConsumer}), and reading only the public key failed every attempt:
-     * a REVIEW verdict with no scores, and a video later restored from the takedown landed in the
-     * review queue instead of being published. The quarantined copy is the same bytes.
+     * The thumbnail and the preview, which every feed card, profile grid and search hit shows. Both
+     * come from the opening seconds, which the spread frames of a longer video step over, so a video
+     * explicit only there was approved with an explicit cover.
+     *
+     * <p>A call of their own, and one that can only hold the video. The preview is near-identical
+     * frames of one moment: in with the spread frames they would be the "second frame that agrees"
+     * the reject and harm rules wait for, and one odd scene would remove a video. A cover that is
+     * not APPROVED therefore sends the video to a person, carrying the cover's scores so the admin
+     * sees what held it. A clean cover leaves the spread verdict untouched, scores included, since
+     * those are what the thresholds are tuned against.
+     *
+     * <p>Either may be missing: ffmpeg could not build it, and the transcode carries on without it.
+     * ponytail: a restore that moves one out of quarantine between its two reads also reads as
+     * missing; pass the transcode's thumbnailUrl/previewUrl in if that race ever matters.
+     */
+    private VideoModerationCompletedEvent withCover(String videoId, Path work, VideoModerationCompletedEvent spread)
+            throws Exception {
+        List<Path> cover = new java.util.ArrayList<>();
+        for (String key : List.of(MediaKeys.thumbnail(videoId), MediaKeys.preview(videoId))) {
+            Path target = work.resolve(key.substring(key.lastIndexOf('/') + 1));
+            if (downloadIfProduced(key, target)) {
+                cover.add(target);
+            }
+        }
+        if (cover.isEmpty()) {
+            return spread;
+        }
+
+        ModerationResponse response = moderationClient.moderate(encode(cover));
+        log.info("Cover of video {} moderated as {} ({} {} over {} frames) in {}ms", videoId, response.verdict(),
+                response.label(), response.maxScore(), response.totalFrames(), response.processingTimeMs());
+        if (verdictOf(response) == ModerationVerdict.APPROVED) {
+            return spread;
+        }
+        return VideoModerationCompletedEvent.of(videoId, ModerationVerdict.REVIEW, response.label(),
+                response.maxScore(), response.suspiciousFrames(), response.totalFrames(),
+                response.processingTimeMs(), response.model(), response.modelVersion(),
+                "Thumbnail or preview held for review");
+    }
+
+    /**
+     * An object of the video from wherever it is now. A takedown or deletion that lands while the
+     * video is transcoding has already moved the fresh output under {@code quarantine/} by the time
+     * this runs (see {@code VideoEventConsumer}), and reading only the public key of the playback
+     * file failed every attempt: a REVIEW verdict with no scores, and a video later restored from
+     * the takedown landed in the review queue instead of being published. The quarantined copy is
+     * the same bytes.
      *
      * <p>A move in the other direction between the two reads fails this attempt, and the retry
      * around it finds the file where it settled.
      */
-    private void downloadPlayback(String videoId, Path target) throws Exception {
-        String key = MediaKeys.playback(videoId);
+    private void downloadEitherSide(String key, Path target) throws Exception {
         try {
             download(key, target);
         } catch (ErrorResponseException e) {
@@ -212,6 +256,19 @@ public class ModerationServiceImpl implements ModerationService {
                 throw e;
             }
             download(MediaQuarantineService.PREFIX + key, target);
+        }
+    }
+
+    /** @return false when the object is on neither side of the quarantine */
+    private boolean downloadIfProduced(String key, Path target) throws Exception {
+        try {
+            downloadEitherSide(key, target);
+            return true;
+        } catch (ErrorResponseException e) {
+            if (!"NoSuchKey".equals(e.errorResponse().code())) {
+                throw e;
+            }
+            return false;
         }
     }
 
