@@ -1,34 +1,23 @@
 package com.tiktok.kafka.dlt;
 
-import com.tiktok.kafka.config.KafkaConsumerAutoConfiguration;
-import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.junit.jupiter.api.Test;
-import org.springframework.kafka.core.DefaultKafkaProducerFactory;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
-import org.springframework.kafka.test.utils.KafkaTestUtils;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
-import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 
+import static com.tiktok.kafka.dlt.DeadLetterFixtures.header;
+import static com.tiktok.kafka.dlt.DeadLetterFixtures.park;
+import static com.tiktok.kafka.dlt.DeadLetterFixtures.read;
+import static com.tiktok.kafka.dlt.DeadLetterFixtures.send;
+import static com.tiktok.kafka.dlt.DeadLetterFixtures.topics;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Against a real broker, with the DLT records written by the DeadLetterPublishingRecoverer
- * kafka-lib's error handler uses, so the headers read here are the ones a real failure leaves.
- */
+/** The make dlt-* tool against a real broker: what it sends, and what it tells whoever ran it. */
 @EmbeddedKafka
 class DltReplayTest {
 
@@ -47,7 +36,7 @@ class DltReplayTest {
         assertThat(new String(replayed.key(), UTF_8)).isEqualTo("v1");
         assertThat(replayed.value()).isEqualTo(records.get(0).value());
         assertThat(header(replayed, "eventType")).isEqualTo("VideoTakenDownEvent");
-        assertThat(header(replayed, DltReplay.REPLAYED_FROM)).isEqualTo(topic + ".DLT-0@0");
+        assertThat(header(replayed, DeadLetters.REPLAYED_FROM)).isEqualTo(topic + ".DLT-0@0");
         assertThat(replayed.headers()).noneMatch(h -> h.key().startsWith("kafka_dlt-"));
     }
 
@@ -83,58 +72,5 @@ class DltReplayTest {
 
     private DltReplay tool(EmbeddedKafkaBroker broker) {
         return new DltReplay(broker.getBrokersAsString(), new PrintStream(output, true, UTF_8));
-    }
-
-    private static String topics(EmbeddedKafkaBroker broker, String topic) {
-        broker.addTopics(new NewTopic(topic, 1, (short) 1), new NewTopic(topic + ".DLT", 1, (short) 1));
-        return topic;
-    }
-
-    /** The original event, as its producer sent it. */
-    private static long send(EmbeddedKafkaBroker broker, String topic, String key, String eventType) throws Exception {
-        try (KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(KafkaTestUtils.producerProps(broker),
-                new ByteArraySerializer(), new ByteArraySerializer())) {
-            ProducerRecord<byte[], byte[]> record = new ProducerRecord<>(topic, key.getBytes(UTF_8), payload(key));
-            record.headers().add("eventType", eventType.getBytes(UTF_8));
-            return producer.send(record).get().offset();
-        }
-    }
-
-    /** What kafka-lib's error handler does with a record that failed on its own content. */
-    private static void park(EmbeddedKafkaBroker broker, String topic, long offset, String key, String eventType) {
-        DefaultKafkaProducerFactory<byte[], byte[]> factory = new DefaultKafkaProducerFactory<>(
-                KafkaTestUtils.producerProps(broker), new ByteArraySerializer(), new ByteArraySerializer());
-        try {
-            ConsumerRecord<byte[], byte[]> failed = new ConsumerRecord<>(topic, 0, offset, key.getBytes(UTF_8), payload(key));
-            failed.headers().add("eventType", eventType.getBytes(UTF_8));
-            KafkaConsumerAutoConfiguration.deadLetterRecoverer(new KafkaTemplate<>(factory))
-                    .accept(failed, new IllegalStateException("bug"));
-        } finally {
-            factory.destroy();
-        }
-    }
-
-    private static List<ConsumerRecord<byte[], byte[]>> read(EmbeddedKafkaBroker broker, String topic) {
-        try (KafkaConsumer<byte[], byte[]> consumer = new KafkaConsumer<>(
-                KafkaTestUtils.consumerProps("reader", "false", broker),
-                new ByteArrayDeserializer(), new ByteArrayDeserializer())) {
-            TopicPartition tp = new TopicPartition(topic, 0);
-            consumer.assign(List.of(tp));
-            consumer.seekToBeginning(List.of(tp));
-            long end = consumer.endOffsets(List.of(tp)).get(tp);
-            List<ConsumerRecord<byte[], byte[]>> records = new ArrayList<>();
-            while (consumer.position(tp) < end) {
-                consumer.poll(Duration.ofMillis(500)).forEach(records::add);
-            }
-            return records;
-        }
-    }
-
-    private static byte[] payload(String key) {
-        return ("{\"videoId\":\"" + key + "\"}").getBytes(UTF_8);
-    }
-
-    private static String header(ConsumerRecord<byte[], byte[]> record, String name) {
-        return new String(record.headers().lastHeader(name).value(), UTF_8);
     }
 }
