@@ -167,7 +167,8 @@ Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown c
 | Thumbnail | `thumbnails/{videoId}.jpg` | media-worker transcode | cleanup |
 | Hover preview | `previews/{videoId}.webp` | media-worker transcode | cleanup |
 | Avatar | `avatars/{userId}` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; upload ghi đè, mirror bỏ qua key đã có) |
-| Story media | `stories/{userId}/{storyId}.{ext}` | client (presigned POST từ story-service) | lifecycle 3 ngày |
+| Story upload | `stories/{userId}/{uploadId}.{ext}` | client (presigned POST từ story-service) | lifecycle 3 ngày |
+| Story media | `stories/{userId}/{storyId}/media.{ext}` | story-service copy từ upload lúc `POST /stories` — bản media-worker chấm và người xem nhận | lifecycle 3 ngày, tính từ lúc đăng |
 | Bản quarantine | `quarantine/` + key gốc | quarantine (§3.1) | restore khi hết hold (dời về key gốc), hoặc cleanup |
 | Hold marker | `quarantine/holds/{videoId}/{HOLD}` | quarantine (§3.1) | restore, hoặc cleanup |
 

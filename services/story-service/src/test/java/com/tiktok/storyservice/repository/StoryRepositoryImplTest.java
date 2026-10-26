@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -23,6 +24,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 /**
@@ -103,9 +105,28 @@ class StoryRepositoryImplTest {
         assertThat(storyRepository.findAnnounceable(now, 100)).extracting(Story::getId).containsExactly("b");
     }
 
+    /**
+     * One upload backs one story. Each story has its own copy now, so the media key never collides
+     * and the upload key is what refuses the second. Sparse, because stories created before the copy
+     * have no upload key, and a plain unique index takes each missing one for the same null.
+     */
+    @Test
+    void uploadKeyRefusesASecondStoryButNotStoriesWithoutOne() {
+        storyRepository.insert(live("before1", StoryVisibility.PUBLIC).build());
+        storyRepository.insert(live("before2", StoryVisibility.PUBLIC).build());
+        storyRepository.insert(pending("s1", "stories/7/1.jpg"));
+
+        assertThatThrownBy(() -> storyRepository.insert(pending("s2", "stories/7/1.jpg")))
+                .isInstanceOf(DuplicateKeyException.class);
+    }
+
     private void insertPending(String id) {
-        storyRepository.insert(Story.pending(id, 7L, mediaKey(id), StoryMediaType.IMAGE, null,
-                StoryVisibility.PUBLIC, ModerationVerdict.APPROVED, Instant.now()));
+        storyRepository.insert(pending(id, "stories/7/" + id + ".jpg"));
+    }
+
+    private static Story pending(String id, String uploadKey) {
+        return Story.pending(id, 7L, mediaKey(id), uploadKey, StoryMediaType.IMAGE, null,
+                StoryVisibility.PUBLIC, ModerationVerdict.APPROVED, Instant.now());
     }
 
     /** An ACTIVE story with a day left, for the caller to adjust; one media key per id, the field is unique. */
@@ -121,7 +142,7 @@ class StoryRepositoryImplTest {
     }
 
     private static String mediaKey(String id) {
-        return "stories/7/" + id + ".jpg";
+        return "stories/7/" + id + "/media.jpg";
     }
 
     private static StoryModeration moderation() {

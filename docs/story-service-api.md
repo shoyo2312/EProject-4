@@ -14,7 +14,8 @@ service khác, gateway chặn hẳn.
 
 ```
 POST /upload-url → trình duyệt POST file thẳng lên MinIO (presigned, stories/{userId}/{id}.{ext})
-POST /           → caption được chấm (moderation-lib); story lưu ở PENDING_MODERATION
+POST /           → caption được chấm (moderation-lib); file được copy sang stories/{userId}/{storyId}/media.{ext}
+                   (bản được chấm và phát); story lưu ở PENDING_MODERATION
                  → story.story-events → media-worker chấm ảnh/video
                  → media.story-moderation-events → ACTIVE | HELD | REJECTED
                  → ACTIVE + PUBLIC/FRIENDS → story.activation-events (StoryActivatedEvent, key userId) → notification-service
@@ -58,6 +59,10 @@ không thấy story của nhau. Story không xem được trả **404** (không 
 
 `mediaUrl` là presigned GET **sống 1 giờ**, chỉ cấp cho story người gọi đang được xem. Hết hạn thì
 gọi lại endpoint để lấy URL mới. Prefix `stories/` không đọc công khai được.
+
+Story được chấm và phát từ bản copy riêng của nó, tạo lúc `POST /`, không phải từ file đã upload. Form
+upload còn dùng được tới hết `expiresInSeconds`, nhưng upload lại qua form sau khi đăng không đổi được
+nội dung story; muốn đổi thì đăng story mới. Mỗi file upload chỉ đăng được một story (`FOREIGN_UPLOAD`).
 
 Loại file và giới hạn: `image/jpeg`, `image/png`, `image/webp` ≤ 10 MB; `video/mp4`, `video/webm`
 ≤ 50 MB và ≤ 60 giây (dài hơn → `REJECTED`). Giới hạn dung lượng được ký vào policy upload, MinIO tự

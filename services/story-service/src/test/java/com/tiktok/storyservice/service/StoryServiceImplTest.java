@@ -54,6 +54,7 @@ class StoryServiceImplTest {
 
     private static final String UPLOAD = "s3://bucket/stories/100/1.jpg";
     private static final String KEY = "stories/100/1.jpg";
+    private static final String COPY = "stories/100/55/media.jpg";
     private static final Set<StoryVisibility> PUBLIC_ONLY = EnumSet.of(StoryVisibility.PUBLIC);
 
     @Mock
@@ -111,6 +112,7 @@ class StoryServiceImplTest {
         when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
         when(storyMedia.exists(KEY)).thenReturn(true);
         when(captionModeration.screen("hello")).thenReturn(ModerationVerdict.REVIEW);
+        when(storyMedia.copyForStory(eq(KEY), anyString())).thenReturn(COPY);
         when(storyRepository.insert(any(Story.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         StoryResponse response = storyService.create(100L, new CreateStoryRequest(UPLOAD, "hello", StoryVisibility.FRIENDS));
@@ -119,7 +121,7 @@ class StoryServiceImplTest {
         verify(storyRepository).insert(captor.capture());
         Story saved = captor.getValue();
         assertThat(saved.getUserId()).isEqualTo(100L);
-        assertThat(saved.getMediaKey()).isEqualTo(KEY);
+        assertThat(saved.getMediaKey()).isEqualTo(COPY);
         assertThat(saved.getMediaType()).isEqualTo(StoryMediaType.IMAGE);
         assertThat(saved.getCaption()).isEqualTo("hello");
         assertThat(saved.getStatus()).isEqualTo(StoryStatus.PENDING_MODERATION);
@@ -127,6 +129,31 @@ class StoryServiceImplTest {
         assertThat(saved.getTextVerdict()).isEqualTo(ModerationVerdict.REVIEW);
         assertThat(saved.getExpiresAt()).isCloseTo(Instant.now().plus(48, ChronoUnit.HOURS), within(2, ChronoUnit.SECONDS));
         assertThat(response.status()).as("the owner's own view").isEqualTo(StoryStatus.PENDING_MODERATION);
+    }
+
+    /**
+     * The upload form stays good after the story is posted, so whatever sits at the upload key can
+     * change after moderation looked at it. The story keeps its own copy, named after its id, and
+     * that copy is what media-worker screens (the created event carries the media key) and what
+     * viewers are served.
+     */
+    @Test
+    void createServesAndScreensItsOwnCopyOfTheUpload() {
+        when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
+        when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
+        when(storyMedia.exists(KEY)).thenReturn(true);
+        when(storyMedia.copyForStory(eq(KEY), anyString())).thenReturn(COPY);
+        when(storyRepository.insert(any(Story.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        storyService.create(100L, new CreateStoryRequest(UPLOAD, null, StoryVisibility.PUBLIC));
+
+        ArgumentCaptor<Story> captor = ArgumentCaptor.forClass(Story.class);
+        verify(storyRepository).insert(captor.capture());
+        Story saved = captor.getValue();
+        assertThat(saved.getMediaKey()).as("what is screened and served").isEqualTo(COPY);
+        assertThat(saved.getUploadKey()).as("what keeps one upload to one story").isEqualTo(KEY);
+        verify(storyMedia).copyForStory(KEY, saved.getId());
+        verify(storyMedia).signedGet(COPY);
     }
 
     @Test
@@ -150,14 +177,17 @@ class StoryServiceImplTest {
         assertThatThrownBy(() -> storyService.create(100L, new CreateStoryRequest(UPLOAD, "bad", StoryVisibility.PUBLIC)))
                 .isInstanceOf(StoryCaptionRejectedException.class);
         verifyNoInteractions(storyRepository);
+        verify(storyMedia, never()).copyForStory(anyString(), anyString());
     }
 
+    /** The second create copies too, then fails on the unique upload key; its copy is left to the lifecycle rule. */
     @Test
     void secondStoryFromTheSameUploadIsRefused() {
         when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
         when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
         when(storyMedia.exists(KEY)).thenReturn(true);
-        when(storyRepository.insert(any(Story.class))).thenThrow(new DuplicateKeyException("mediaKey"));
+        when(storyMedia.copyForStory(eq(KEY), anyString())).thenReturn(COPY);
+        when(storyRepository.insert(any(Story.class))).thenThrow(new DuplicateKeyException("uploadKey"));
 
         assertThatThrownBy(() -> storyService.create(100L, new CreateStoryRequest(UPLOAD, null, StoryVisibility.PUBLIC)))
                 .isInstanceOf(ForeignUploadException.class);

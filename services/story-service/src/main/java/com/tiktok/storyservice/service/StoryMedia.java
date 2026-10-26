@@ -8,7 +8,10 @@ import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.exception.ForeignUploadException;
 import com.tiktok.storyservice.exception.UnsupportedUploadTypeException;
+import com.tiktok.storyservice.exception.UploadNotFoundException;
 import com.tiktok.storyservice.exception.UploadUrlUnavailableException;
+import io.minio.CopyObjectArgs;
+import io.minio.CopySource;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
 import io.minio.PostPolicy;
@@ -119,6 +122,36 @@ public class StoryMedia {
             throw new UnsupportedUploadTypeException(key.substring(key.lastIndexOf('.')), TYPES.keySet());
         }
         return type;
+    }
+
+    /**
+     * Copies an upload to the key the story is screened and served from,
+     * {@code stories/{userId}/{storyId}/media.{ext}}. The upload form stays good for its whole
+     * lifetime, so the upload key can be written again after moderation approved what was there;
+     * the copy's extra segment is one no upload policy signs and {@link #keyOf} refuses. Made at
+     * create, the copy also starts the bucket lifecycle's clock then, so an old upload cannot back a
+     * story that outlives it.
+     *
+     * <p>The upload stays for the lifecycle rule to remove: this account cannot delete.
+     */
+    public String copyForStory(String uploadKey, String storyId) {
+        String storyKey = "%s%s/media%s".formatted(uploadKey.substring(0, uploadKey.lastIndexOf('/') + 1), storyId,
+                uploadKey.substring(uploadKey.lastIndexOf('.')));
+        try {
+            minioClient.copyObject(CopyObjectArgs.builder()
+                    .bucket(properties.bucket())
+                    .object(storyKey)
+                    .source(CopySource.builder().bucket(properties.bucket()).object(uploadKey).build())
+                    .build());
+            return storyKey;
+        } catch (ErrorResponseException e) {
+            if ("NoSuchKey".equals(e.errorResponse().code())) {
+                throw new UploadNotFoundException();
+            }
+            throw new UploadUrlUnavailableException(e);
+        } catch (Exception e) {
+            throw new UploadUrlUnavailableException(e);
+        }
     }
 
     public boolean exists(String key) {

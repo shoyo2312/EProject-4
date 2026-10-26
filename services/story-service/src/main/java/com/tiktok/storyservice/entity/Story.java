@@ -49,9 +49,19 @@ public class Story {
     @Indexed
     private Long userId;
 
-    /** Object key under {@code stories/}; never served directly, only through a presigned URL. */
+    /**
+     * The story's own copy of its upload, {@code stories/{userId}/{storyId}/media.{ext}}: what
+     * media-worker screens and viewers are served. Never served directly, only through a presigned URL.
+     */
     @Indexed(unique = true)
     private String mediaKey;
+
+    /**
+     * The upload the media was copied from. Unique, so one upload backs one story; sparse, because
+     * stories created before the copy have none.
+     */
+    @Indexed(unique = true, sparse = true)
+    private String uploadKey;
 
     private StoryMediaType mediaType;
 
@@ -98,12 +108,13 @@ public class Story {
         return String.valueOf(SnowflakeIdGenerator.nextId());
     }
 
-    public static Story pending(String id, Long userId, String mediaKey, StoryMediaType mediaType, String caption,
-                                StoryVisibility visibility, ModerationVerdict textVerdict, Instant now) {
+    public static Story pending(String id, Long userId, String mediaKey, String uploadKey, StoryMediaType mediaType,
+                                String caption, StoryVisibility visibility, ModerationVerdict textVerdict, Instant now) {
         return Story.builder()
                 .id(id)
                 .userId(userId)
                 .mediaKey(mediaKey)
+                .uploadKey(uploadKey)
                 .mediaType(mediaType)
                 .caption(caption)
                 .status(StoryStatus.PENDING_MODERATION)

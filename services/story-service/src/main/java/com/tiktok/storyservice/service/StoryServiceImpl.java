@@ -84,12 +84,17 @@ public class StoryServiceImpl implements StoryService {
         // Before the insert: a refused caption leaves nothing behind, so the upload can be posted again.
         ModerationVerdict textVerdict = captionModeration.screen(request.caption());
 
-        Story story = Story.pending(Story.newId(), userId, key, mediaType, request.caption(),
+        // Screened and served from the story's own copy: the upload form still works, so the upload
+        // key can be overwritten after moderation looked at it.
+        String storyId = Story.newId();
+        String mediaKey = storyMedia.copyForStory(key, storyId);
+        Story story = Story.pending(storyId, userId, mediaKey, key, mediaType, request.caption(),
                 request.visibility(), textVerdict, Instant.now());
         try {
             return ownerView(storyRepository.insert(story));
         } catch (DuplicateKeyException e) {
-            // The unique media key: one upload backs one story.
+            // The unique upload key: one upload backs one story. The copy just made is left to the
+            // lifecycle rule, and the first story's is untouched, as its key comes from its own id.
             throw new ForeignUploadException();
         }
     }

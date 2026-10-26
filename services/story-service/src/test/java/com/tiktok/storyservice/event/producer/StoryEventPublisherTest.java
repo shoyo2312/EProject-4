@@ -52,8 +52,8 @@ class StoryEventPublisherTest {
     }
 
     private static Story pending(String id) {
-        return Story.pending(id, 7L, "stories/7/" + id + ".mp4", StoryMediaType.VIDEO, null,
-                StoryVisibility.PUBLIC, ModerationVerdict.REVIEW, Instant.now());
+        return Story.pending(id, 7L, "stories/7/" + id + "/media.mp4", "stories/7/" + id + ".mp4",
+                StoryMediaType.VIDEO, null, StoryVisibility.PUBLIC, ModerationVerdict.REVIEW, Instant.now());
     }
 
     private static Story activated(String id) {
@@ -84,7 +84,7 @@ class StoryEventPublisherTest {
         StoryCreatedEvent event = objectMapper.readValue(first.value(), StoryCreatedEvent.class);
         assertThat(event.storyId()).isEqualTo("1");
         assertThat(event.userId()).isEqualTo(7L);
-        assertThat(event.mediaKey()).isEqualTo("stories/7/1.mp4");
+        assertThat(event.mediaKey()).as("the story's copy, not the upload").isEqualTo("stories/7/1/media.mp4");
         assertThat(event.mediaType()).isEqualTo("VIDEO");
         assertThat(event.textVerdict()).isEqualTo(ModerationVerdict.REVIEW);
 
