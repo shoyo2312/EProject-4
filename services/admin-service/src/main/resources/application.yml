@@ -77,6 +77,12 @@ admin:
     # Cheap: the unpublished rows are a partial index (idx_outbox_events_unpublished).
     poll-millis: 500
 
+  dead-letters:
+    # How long one console request may spend reading Kafka — a DLT listing, or a replay's scan of
+    # the original partition. Past it a listing answers 503 and replaying every pending record
+    # stops between two records, so a second click carries on.
+    timeout: 20s
+
 moderation:
   text:
     # The console's preview asks the same classifier the services do. Unreachable: the preview says

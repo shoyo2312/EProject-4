@@ -113,7 +113,7 @@ kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
   ├── OutboxBacklog (MeterBinder — mỗi outbox một bean trong `config/OutboxMetricsConfig` của service)
   │   └── `outbox_pending_events{outbox}` + `outbox_oldest_pending_age_seconds{outbox}`, query lại mỗi lần scrape
   │   └── outbox: `outbox_events` (auth, admin, user); video có 5 slot: published, deleted, visibility, purge, purge-request
-  ├── DltReplay (`make dlt-list` / `make dlt-replay`: gửi lại record DLT về topic gốc, có kiểm tra thứ tự theo key — §5b)
+  ├── DeadLetters (đọc + replay DLT, có kiểm tra thứ tự theo key — §5b): dùng bởi DltReplay (`make dlt-list` / `make dlt-replay`) và console admin qua admin-service
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean khi service thêm dependency, không cần @Configuration cục bộ
 
@@ -172,6 +172,13 @@ không có gì tự đọc lại DLT. Sửa nguyên nhân và deploy trước, r
 `kafka_dlt-*`, thêm `dlt-replayed-from`). Consumer đều idempotent nên gửi trùng an toàn, **nhưng thứ tự
 thì không**: tool bỏ qua record nào mà partition gốc đã có record mới hơn cùng key (vd. replay một takedown
 sau khi video đã được restore sẽ gỡ nó lần nữa) và in lệnh `FORCE=1` để chạy lại sau khi người đã xem.
+
+Cùng việc đó có trên console admin (System → Queues & DLQ), qua admin-service
+`/api/v1/admin/system/dead-letters` — đường duy nhất trên prod, vì `make dlt-*` không có mật khẩu SASL. Console liệt
+kê các DLT, 50 record mới nhất mỗi topic (vị trí lỗi, group, nguyên nhân sâu nhất trong stack trace — không hiện
+payload), replay từng record (force được, sau khi đã thấy record nào đang giữ nó) hoặc replay theo lô 50 record pending
+(không bao giờ force, cùng consumer group `dlt-replay` với `ALL=1`). Mỗi record được xử lý ghi một row
+`dead_letter_replays` (ai, force hay không, kết quả).
 
 ### 5c. Kafka — bảng topic đầy đủ
 

@@ -145,8 +145,9 @@ ssh -L 9090:<ip>:9090 <server>     # rồi mở http://localhost:9090; Alertmana
   - Mọi service dùng chung một account và chưa có ACL, nên một service bị chiếm vẫn ghi được vào mọi topic.
   - ZooKeeper không có mật khẩu.
   - Bước tiếp theo nếu cần: account riêng cho từng service và bật authorizer.
-- **DLT trên prod**: `make dlt-list` / `make dlt-replay` (`DltReplay`) chạy từ máy local và không biết SASL. Trên prod,
-  có thể xem DLT bằng listener `LOCAL` ngay trong container broker:
+- **DLT trên prod**: `make dlt-list` / `make dlt-replay` (`DltReplay`) chạy từ máy local và không biết SASL. Trên prod
+  dùng console admin, System → Queues & DLQ: admin-service dựng client từ cấu hình Kafka của chính nó nên có mật khẩu.
+  Xem payload thô (console cố ý không hiện) thì dùng listener `LOCAL` ngay trong container broker:
   `kafka-console-consumer --bootstrap-server 127.0.0.1:9092 --topic <topic>.DLT --from-beginning`.
 - **Elasticsearch**: `search-service` đang dùng user `elastic` (superuser). Nên đổi sang một role chỉ có quyền trên
   các index của nó.
