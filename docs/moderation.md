@@ -128,6 +128,17 @@ animation, first to last, shrinks each to 512px, and the rules above judge them 
 Spread by index: a flash shorter than the gap between two samples can still slip, as between a
 video's sampled frames.
 
+**A frame's size is checked before it is decoded.** A story image is capped at 10 MB but not in
+pixels: a 500 KB single-colour PNG can declare 13000×13000, about 1.3 GB once decoded and
+converted, in a container holding 2 GB of models under `mem_limit: 3g`. `app._decode` refuses any
+frame over `MAX_IMAGE_PIXELS` (64M; a 50 MP phone photo is 50.1M) from its header with a 400, which
+media-worker retries and then holds as REVIEW (a story goes HELD). The check runs after
+`Image.open` and again after every seek, not only at sampled frames: a GIF frame can grow the
+canvas, and Pillow decodes every frame it seeks past. Only JPEG (MPO included), PNG/APNG, WebP and
+GIF are opened: Pillow decodes the image inside an ICO before `Image.open` returns. Stills under the
+cap are scored at full size; shrinking them would change scores and needs a
+`MODERATION_MODEL_VERSION` bump.
+
 **Cigarettes and vapes are not drugs.** They have descriptions of their own in the ordinary list,
 so a vaping clip lands there instead of drifting into `drugs`. `test_harm.py` pins this.
 

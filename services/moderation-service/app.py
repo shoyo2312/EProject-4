@@ -201,6 +201,19 @@ ANIMATION_FRAMES = 16
 # — sixteen full-size frames of a large canvas is gigabytes. Both models look at 224 pixels.
 ANIMATION_FRAME_SIDE = 512
 
+# Pixels in a frame, read off its header before anything is decoded. A story image is capped in
+# bytes, not pixels, and a single-colour PNG of a few hundred KB can declare 13000x13000: about
+# 0.7 GB decoded, then copied by convert() and by each model's processor, in a container holding
+# 2 GB of models under a 3 GB limit. Pillow's own check raises only past 179M. 64M still takes a
+# 50 MP phone photo (8160x6144), and decodes to 256 MB at most.
+MAX_IMAGE_PIXELS = 64_000_000
+
+# The formats a frame can be: media-worker's JPEG frames, a story upload (JPEG, PNG or WebP), or a
+# GIF under one of those names, since the upload's type is checked and its bytes are not. Pillow
+# opens many more, and an ICO decodes the image inside it before Image.open returns, at whatever
+# size that image declares.
+FORMATS = ("JPEG", "PNG", "WEBP", "GIF")
+
 
 def _decode(frames: list[str]) -> tuple[list[Image.Image], list[str]]:
     """The images to score and, beside each, the base64 JPEG escalation would send for it.
@@ -211,22 +224,36 @@ def _decode(frames: list[str]) -> tuple[list[Image.Image], list[str]]:
     for index, encoded in enumerate(frames):
         try:
             raw = base64.b64decode(encoded, validate=True)
-            image = Image.open(io.BytesIO(raw))
+            image = Image.open(io.BytesIO(raw), formats=FORMATS)
+            _check_size(index, image)
             count = getattr(image, "n_frames", 1)
             if count <= 1:
                 image.load()
                 images.append(image.convert("RGB"))
                 sources.append(encoded)
                 continue
-            for position in _spread(count, ANIMATION_FRAMES):
+            sampled = set(_spread(count, ANIMATION_FRAMES))
+            # Every frame is checked, not only the sampled ones: a GIF frame can reach past the
+            # canvas, which grows it, and seeking past a frame decodes it.
+            for position in range(count):
                 image.seek(position)
+                _check_size(index, image)
+                if position not in sampled:
+                    continue
                 frame = image.convert("RGB")
                 frame.thumbnail((ANIMATION_FRAME_SIDE, ANIMATION_FRAME_SIDE))
                 images.append(frame)
                 sources.append(_jpeg(frame))
-        except (binascii.Error, ValueError, UnidentifiedImageError, OSError, EOFError) as error:
+        except (binascii.Error, ValueError, UnidentifiedImageError, OSError, EOFError,
+                Image.DecompressionBombError) as error:
             raise HTTPException(status_code=400, detail=f"frame {index} is not a decodable image: {error}")
     return images, sources
+
+
+def _check_size(index: int, image: Image.Image) -> None:
+    if image.width * image.height > MAX_IMAGE_PIXELS:
+        raise HTTPException(status_code=400, detail=f"frame {index} is {image.width}x{image.height}, "
+                                                    f"over the {MAX_IMAGE_PIXELS:,} pixel limit")
 
 
 def _spread(count: int, wanted: int) -> list[int]:
