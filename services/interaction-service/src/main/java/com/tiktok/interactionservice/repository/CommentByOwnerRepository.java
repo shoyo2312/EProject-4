@@ -10,7 +10,12 @@ import org.springframework.data.repository.query.Param;
 
 public interface CommentByOwnerRepository extends CassandraRepository<CommentByOwner, CommentByOwnerKey> {
 
-    /** One owner's inbox, newest first — the table's own clustering order, one partition. */
-    @Query("SELECT * FROM comments_by_owner WHERE owner_id = :ownerId")
-    Slice<CommentByOwner> findNewestFirst(@Param("ownerId") Long ownerId, Pageable pageable);
+    /**
+     * One owner's inbox, newest first — the table's own clustering order, one partition. Comment ids
+     * are Snowflakes, so a range of ids is a range of time: a date filter is a clustering slice here,
+     * not a scan of everything newer.
+     */
+    @Query("SELECT * FROM comments_by_owner WHERE owner_id = :ownerId AND comment_id >= :fromId AND comment_id < :toId")
+    Slice<CommentByOwner> findNewestFirst(@Param("ownerId") Long ownerId, @Param("fromId") Long fromId,
+                                          @Param("toId") Long toId, Pageable pageable);
 }

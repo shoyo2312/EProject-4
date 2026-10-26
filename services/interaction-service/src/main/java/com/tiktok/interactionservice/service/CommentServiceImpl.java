@@ -6,6 +6,7 @@ import com.tiktok.interactionservice.client.CommentAudience;
 import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
+import com.tiktok.interactionservice.dto.request.CommentInboxFilter;
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
 import com.tiktok.interactionservice.dto.response.CommentPermissionResponse;
 import com.tiktok.interactionservice.dto.response.CommentPermissionResponse.Restriction;
@@ -41,6 +42,7 @@ import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import com.tiktok.moderation.Decision;
 import com.tiktok.moderation.Flag;
 import com.tiktok.moderation.TextVerdict;
+import com.tiktok.moderation.text.TextNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.cassandra.CassandraInvalidQueryException;
@@ -55,6 +57,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -75,6 +78,10 @@ public class CommentServiceImpl implements CommentService {
 
     /** How many times a losing like-tally write re-reads and tries again — see moveLikes. */
     private static final int MAX_LIKE_CAS_RETRIES = 3;
+
+    /** {@link SnowflakeIdGenerator}'s epoch and how far up the time sits — see firstCommentIdAt. */
+    private static final long SNOWFLAKE_EPOCH_MILLIS = 1704067200000L;
+    private static final int SNOWFLAKE_TIME_SHIFT = 22;
 
     private final CommentByVideoRepository commentByVideoRepository;
     private final CommentIndexRepository commentIndexRepository;
@@ -585,18 +592,40 @@ public class CommentServiceImpl implements CommentService {
     }
 
     @Override
-    public CommentPageResponse listForOwner(Long ownerId, String cursor, int size) {
+    public CommentPageResponse listForOwner(Long ownerId, CommentInboxFilter filter, String cursor, int size) {
+        long fromId = filter.from() == null ? 0L : firstCommentIdAt(filter.from());
+        long toId = filter.to() == null ? Long.MAX_VALUE : firstCommentIdAt(filter.to());
+        String q = filter.q() == null || filter.q().isBlank() ? null : searchable(filter.q().strip());
         return scan(cursor, size,
-                pageRequest -> commentByOwnerRepository.findNewestFirst(ownerId, pageRequest),
-                this::hydrateInbox);
+                pageRequest -> commentByOwnerRepository.findNewestFirst(ownerId, fromId, toId, pageRequest),
+                page -> hydrateInbox(page.stream()
+                                .filter(row -> filter.videoId() == null || filter.videoId().equals(row.getVideoId()))
+                                .toList(),
+                        filter.status(), q));
+    }
+
+    /**
+     * The smallest Snowflake id {@link SnowflakeIdGenerator} can hand out at {@code at}: the time sits
+     * in the bits above node and sequence. Its epoch is private there, so it is repeated here and
+     * pinned by a test that generates a real id.
+     */
+    static long firstCommentIdAt(Instant at) {
+        return Math.max(0L, at.toEpochMilli() - SNOWFLAKE_EPOCH_MILLIS) << SNOWFLAKE_TIME_SHIFT;
+    }
+
+    /** Search ignores case and diacritics: creators type "hay qua" for "hay quá". */
+    private static String searchable(String text) {
+        return TextNormalizer.fold(text).toLowerCase(Locale.ROOT);
     }
 
     /**
      * The inbox spans videos, so the page is read one video at a time — at most one query per video
      * on the page. Visible and held comments both stay, the held ones marked HELD for the owner to
      * approve; deleted ones and those whose author is banned right now are left out, as on the video.
+     * Status and text are only known once the comment is read, so those filters apply here; a page
+     * they empty is walked past by {@link #scan}.
      */
-    private List<CommentResponse> hydrateInbox(List<CommentByOwner> page) {
+    private List<CommentResponse> hydrateInbox(List<CommentByOwner> page, CommentStatus status, String q) {
         Map<Long, List<Long>> idsByVideo = new LinkedHashMap<>();
         for (CommentByOwner row : page) {
             idsByVideo.computeIfAbsent(row.getVideoId(), video -> new ArrayList<>())
@@ -605,6 +634,8 @@ public class CommentServiceImpl implements CommentService {
         Map<Long, CommentByVideo> rows = new HashMap<>();
         idsByVideo.forEach((videoId, ids) -> commentByVideoRepository.findAllByCommentIds(videoId, ids).stream()
                 .filter(comment -> !comment.isDeleted())
+                .filter(comment -> status == null || comment.effectiveStatus() == status)
+                .filter(comment -> q == null || searchable(comment.getContent()).contains(q))
                 .forEach(comment -> rows.put(comment.getKey().getCommentId(), comment)));
 
         Map<Long, CommentByVideo> shown = withoutBannedAuthors(rows);

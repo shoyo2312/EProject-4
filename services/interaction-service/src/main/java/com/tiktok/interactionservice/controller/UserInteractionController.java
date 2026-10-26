@@ -1,8 +1,10 @@
 package com.tiktok.interactionservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
+import com.tiktok.interactionservice.dto.request.CommentInboxFilter;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.VideoIdPageResponse;
+import com.tiktok.interactionservice.entity.CommentStatus;
 import com.tiktok.interactionservice.service.CommentService;
 import com.tiktok.interactionservice.service.LikeService;
 import com.tiktok.interactionservice.service.RepostService;
@@ -14,6 +16,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.time.Instant;
 
 /**
  * A user's interaction history. Likes and saves are "me" only — they are private, and a
@@ -56,15 +60,21 @@ public class UserInteractionController {
     /**
      * TikTok Studio's comment inbox: what others said on any of the caller's videos, newest first,
      * the comments held for review among them with {@code status = HELD}. Approve or delete one
-     * through the per-video endpoints, with the {@code videoId} each item carries.
+     * through the per-video endpoints, with the {@code videoId} each item carries. Every filter is
+     * optional; {@code from} is inclusive, {@code to} exclusive.
      */
     @GetMapping("/me/comments")
     public ApiResponse<CommentPageResponse> listCommentsOnMyVideos(
             @AuthenticationPrincipal Long currentUserId,
+            @RequestParam(required = false) Long videoId,
+            @RequestParam(required = false) CommentStatus status,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.success(
-                commentService.listForOwner(currentUserId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
+        return ApiResponse.success(commentService.listForOwner(currentUserId,
+                new CommentInboxFilter(videoId, status, q, from, to), cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
     }
 
     /**

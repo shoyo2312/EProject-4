@@ -419,6 +419,17 @@ Lỗi: `VIDEO_NOT_FOUND` (404), `REPOST_RATE_LIMITED` (429), `INTERACTION_CONFLI
 ### 3.16 `GET /users/me/comments` — hộp bình luận của TikTok Studio
 **Bắt buộc token.** `?cursor=<nextCursor>&size=20` (1–50). Trả `data` → `CommentPageResponse` (cùng shape mục 3.5): bình luận người khác để lại trên **mọi video của người gọi**, mới nhất trước. Comment đang chờ duyệt có trong danh sách với `status = "HELD"`; duyệt hoặc xoá qua mục 3.4c / 3.6 bằng `videoId` của từng item. Comment của chính chủ video, comment đã xoá và comment của tài khoản đang bị ban không có. `likedByMe` và `replyCount` luôn là `false` / `0` ở đây. Comment đăng trước khi có tính năng này **không** nằm trong hộp (không có backfill). Cursor hỏng → `INVALID_CURSOR` (400).
 
+Lọc (đều tuỳ chọn, gửi lại **đúng bộ lọc đó** cùng `cursor` khi tải trang sau):
+
+| Tham số | Ý nghĩa |
+|---|---|
+| `videoId` | chỉ comment trên video đó |
+| `status` | `HELD` = chỉ comment chờ duyệt, `VISIBLE` = chỉ comment đang hiện |
+| `q` | nội dung có chứa chuỗi này, **không phân biệt hoa thường và dấu** (`hay qua` khớp `Hay quá`) |
+| `from`, `to` | ISO-8601 instant (vd. `2026-10-01T00:00:00Z`); `from` tính cả, `to` không tính |
+
+Trang có thể ít hơn `size` (kể cả rỗng) mà `hasMore` vẫn `true` khi bộ lọc loại nhiều comment: cứ tải tiếp theo `nextCursor`.
+
 ## 4. Counter đến từ hai nơi — đọc số nào, khi nào
 
 | Nguồn | Endpoint | Đặc điểm |
