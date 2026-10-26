@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.repository;
 
+import com.tiktok.videoservice.dto.request.StudioPostFilter;
 import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
 import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
@@ -97,6 +98,14 @@ public interface VideoRepositoryCustom {
     org.springframework.data.domain.Page<Video> findForAdmin(
             VideoStatus status, String term, java.util.Collection<Long> ownerIds,
             Boolean deleted, Boolean purged, org.springframework.data.domain.Pageable pageable);
+
+    /**
+     * TikTok Studio's Posts table: one owner's live videos in every status, narrowed and ordered by
+     * {@code filter}. Unlike {@link #findForAdmin} the match starts on {@code user_videos_idx}, so it
+     * only ever reads that owner's videos.
+     */
+    org.springframework.data.domain.Page<Video> findStudioPosts(
+            Long ownerId, StudioPostFilter filter, org.springframework.data.domain.Pageable pageable);
 
     /**
      * How many videos stand in each status among those {@link #findForAdmin} matches for the same

@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.service;
 
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.StudioPostFilter;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
@@ -62,6 +63,12 @@ public interface VideoService {
             Long requesterId, List<Long> followedUserIds, String cursor, Integer size);
 
     Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable);
+
+    /**
+     * TikTok Studio's Posts table: the caller's own videos in every status but deleted, filtered and
+     * ordered by {@code filter}. Media URLs and the comments flag come out as on the owner's own grid.
+     */
+    Page<VideoResponse> listStudioPosts(Long ownerId, StudioPostFilter filter, Pageable pageable);
 
     /**
      * Every video the owner has not deleted, whatever its status or visibility, newest first — for

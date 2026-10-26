@@ -2,6 +2,7 @@ package com.tiktok.videoservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.StudioPostFilter;
 import com.tiktok.videoservice.dto.request.UpdateCommentSettingRequest;
 import com.tiktok.videoservice.dto.request.UpdateVideoVisibilityRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
@@ -10,6 +11,8 @@ import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.service.VideoService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -122,6 +125,22 @@ public class VideoController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
         return ApiResponse.success(videoService.listForExport(userId, Math.max(page, 0), Math.clamp(size, 1, 100)));
+    }
+
+    /**
+     * TikTok Studio's Posts table. Token required (see SecurityConfig): it only ever answers for the
+     * caller. {@code page}/{@code size} as on every Page listing; the order comes from {@code sort}.
+     */
+    @GetMapping("/me")
+    public ApiResponse<Page<VideoResponse>> listStudioPosts(
+            @AuthenticationPrincipal Long currentUserId,
+            @RequestParam(required = false) VideoStatus status,
+            @RequestParam(required = false) VideoVisibility visibility,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) StudioPostFilter.Sort sort,
+            Pageable pageable) {
+        return ApiResponse.success(videoService.listStudioPosts(currentUserId,
+                new StudioPostFilter(status, visibility, q, sort), pageable));
     }
 
     @GetMapping("/users/{userId}")

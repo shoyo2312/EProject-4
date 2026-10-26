@@ -9,6 +9,7 @@ import com.tiktok.videoservice.client.UserSettingsClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.StudioPostFilter;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
@@ -561,6 +562,13 @@ public class VideoServiceImpl implements VideoService {
                 .map(quarantinedMediaUrls::forOwner)
                 .toList();
         return new CursorPage<>(items, videos.hasNext() ? String.valueOf(page + 1) : null);
+    }
+
+    @Override
+    public Page<VideoResponse> listStudioPosts(Long ownerId, StudioPostFilter filter, Pageable pageable) {
+        return withAccountComments(videoRepository.findStudioPosts(ownerId, filter, pageable)
+                .map(videoMapper::toResponse)
+                .map(quarantinedMediaUrls::forOwner));
     }
 
     @Override

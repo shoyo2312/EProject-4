@@ -40,6 +40,8 @@ public class SecurityConfig {
                         // Any method: a HEAD is answered by the GET handler, so a GET-only rule lets a JWT in.
                         .requestMatchers("/api/v1/videos/*/policy", "/api/v1/videos/internal/**")
                         .access(new InternalCallerAuthorization(internalApiToken))
+                        // Studio's Posts table answers for the caller only, so it needs to know who.
+                        .requestMatchers("/api/v1/videos/me").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .anyRequest().authenticated()
                 )
