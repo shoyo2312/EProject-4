@@ -121,6 +121,7 @@ minio:
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin123}
   bucket: ${MINIO_BUCKET:video-media}
+  region: ${MINIO_REGION:us-east-1}
 
 springdoc:
   api-docs:

@@ -45,6 +45,10 @@ Mọi store chỉ nghe trong mạng nội bộ, không publish port nào. Mật 
   `story-service` dựa vào mã đó để phân biệt "chưa upload" với "storage chết". Thêm prefix mới cho một service thì
   sửa policy của nó, không thì gặp 403.
 
+  Không policy theo service nào cấp `s3:GetBucketLocation` (trừ `backup`; `media-worker` có `s3:*`), nên
+  `MinioClient` của service phải set `.region(...)` (`minio.region: ${MINIO_REGION:us-east-1}`). Thiếu region thì
+  SDK gửi `GET /{bucket}?location` trước lần put/presign đầu tiên và nhận 403 — chỉ trên prod, vì dev dùng root.
+
 **Đổi mật khẩu**: sửa env trong Coolify rồi deploy lại cả stack. Riêng Kafka, broker và client phải đổi cùng lúc,
 nên sẽ gián đoạn vài giây. Riêng `ELASTIC_PASSWORD`: một khi mật khẩu đã được đổi qua security API thì giá trị của API
 thắng, giá trị trong env bị bỏ qua. Vì vậy hãy đổi qua API trước

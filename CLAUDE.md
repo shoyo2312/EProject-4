@@ -198,6 +198,7 @@ Test thủ công (Postman) cần đọc OTP mà không có mailbox thật. Trư�
 - **MinIO**:
   - Root chỉ `minio-init` giữ. Mỗi service có một account theo `scripts/minio/policies/`; service chạm prefix mới thì phải sửa policy của nó, không thì 403.
   - Đọc được prefix là điều kiện để key thiếu trả `NoSuchKey`. Thiếu quyền đọc thì key thiếu trả 403, và `requireUploaded` báo 503 thay vì 400.
+  - `MinioClient` phải set `.region(...)` (`minio.region: ${MINIO_REGION:us-east-1}`, như video/story/user-service). Thiếu region thì lần put/presign đầu tiên gửi `GET /{bucket}?location`, cần `s3:GetBucketLocation` mà policy theo service không cấp → 403, chỉ trên prod (dev dùng root). media-worker có `s3:*` nên không dính.
   - Lifecycle và account đều ở `scripts/minio/` (`init.sh`), dùng chung cho compose dev và prod.
 - **Backup**: container `backup` (`scripts/backup/backup.sh`).
   - Thêm store mới chứa dữ liệu không dựng lại được thì thêm bước dump vào `backup.sh` và lệnh restore vào `docs/operations.md`.
