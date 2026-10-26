@@ -83,6 +83,24 @@ admin:
     # stops between two records, so a second click carries on.
     timeout: 20s
 
+  actuator:
+    # Other services' actuator, open on the internal network. The console shows what each service
+    # reports about itself there — see ActuatorSourcesProperties.
+    timeout: 2s
+    # kafka-lib's outbox backlog gauges, from /actuator/prometheus. This service reads its own
+    # outbox directly. A service that gets an outbox is added here, or the console never shows it.
+    outboxes:
+      auth-service: ${AUTH_SERVICE_URL:http://localhost:8081}
+      user-service: ${USER_SERVICE_URI:http://localhost:8082}
+      video-service: ${VIDEO_SERVICE_URI:http://localhost:8083}
+      story-service: ${STORY_SERVICE_URI:http://localhost:8086}
+    # moderation-lib's enforcement flags, from /actuator/info: the services that act on what text
+    # moderation finds. This service's own copy only drives the console's preview.
+    text-moderation:
+      video-service: ${VIDEO_SERVICE_URI:http://localhost:8083}
+      interaction-service: ${INTERACTION_SERVICE_URI:http://localhost:8085}
+      story-service: ${STORY_SERVICE_URI:http://localhost:8086}
+
 moderation:
   text:
     # The console's preview asks the same classifier the services do. Unreachable: the preview says

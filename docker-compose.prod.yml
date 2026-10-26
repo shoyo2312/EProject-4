@@ -646,6 +646,11 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       AUTH_SERVICE_URL: http://auth-service:8081
       MODERATION_SERVICE_URL: http://moderation-service:8099
+      # Read through their actuator for the console's System screens: outbox backlog, text moderation.
+      USER_SERVICE_URI: http://user-service:8082
+      VIDEO_SERVICE_URI: http://video-service:8083
+      INTERACTION_SERVICE_URI: http://interaction-service:8085
+      STORY_SERVICE_URI: http://story-service:8086
 
   analytics-service:
     <<: *java
