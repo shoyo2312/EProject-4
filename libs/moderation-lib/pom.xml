@@ -64,6 +64,13 @@
             <artifactId>jackson-databind</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- Provided: the /actuator/info contributor. Every consuming service has actuator, and the
+             contributor's configuration is @ConditionalOnClass(InfoContributor). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-actuator</artifactId>
+            <scope>provided</scope>
+        </dependency>
         <!-- Provided: every consuming service already has slf4j-api via spring-boot-starter-logging. -->
         <dependency>
             <groupId>org.slf4j</groupId>
