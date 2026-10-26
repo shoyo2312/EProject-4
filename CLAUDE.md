@@ -159,6 +159,7 @@ com.tiktok.{service}/
 ### Gọi service khác / Redis / JPA — bẫy hiệu năng đã gặp
 - RestClient gọi service nội bộ: dùng `PooledRequestFactory.create(connect, read)` (common-lib), KHÔNG dùng `SimpleClientHttpRequestFactory` — HttpURLConnection chỉ giữ 5 kết nối idle mỗi host, quá 5 request đồng thời là mỗi call mở TCP mới. HTTP/1.1 được ghim vì uvicorn (rank/moderation) làm rơi body khi gặp h2c upgrade
 - `executePipelined` cần `commons-pool2` trên classpath (video, interaction, recommendation đã có): không có pool, mỗi pipeline mở rồi đóng một kết nối TCP mới tới Redis
+- Redis timeout: `common-lib/RedisClientDefaults` đặt `spring.data.redis.timeout` + `connect-timeout` = 1s làm default cho mọi service (thua mọi config của service). Lettuce tự nó chờ **60s mỗi lệnh** khi Redis treo mà không đóng kết nối (container pause, partition), nên mọi nhánh "fail-open khi Redis chết" thực ra treo 1 phút mỗi request rồi cạn thread. Áp cho cả reactive (gateway), vì Boot bật `TimeoutOptions`. Service cần lệnh nặng hơn thì tự set timeout của mình, đừng gỡ default
 - Spring Data derived `...IgnoreCase` sinh `upper(col) = upper(?)`, index `lower(...)` không dùng được → seq scan. Cần index thì viết `@Query` với `lower(...)` (xem auth `UserRepository`)
 - Endpoint batch (counts, like-status, repost-context, settings…) đọc cả trang trong một lệnh (MGET / `IN` / pipeline), không lặp từng id
 

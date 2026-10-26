@@ -1,1 +1,2 @@
-org.springframework.boot.EnvironmentPostProcessor=com.tiktok.common.config.ManagementDefaults
+org.springframework.boot.EnvironmentPostProcessor=com.tiktok.common.config.ManagementDefaults,\
+  com.tiktok.common.config.RedisClientDefaults
