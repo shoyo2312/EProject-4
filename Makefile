@@ -24,7 +24,8 @@ endif
 	migrate-auth migrate-user \
 	migrate-admin migrate-all \
 	moderation-up moderation-test moderation-score-texts \
-	dlt-list dlt-replay
+	dlt-list dlt-replay \
+	seed-media seed seed-backdate seed-refresh
 
 # Hiển thị help
 help:
@@ -43,6 +44,12 @@ help:
 	@echo "    make build-chat         Build chat-service"
 	@echo "    make build-admin        Build admin-service"
 	@echo "    make build-gateway      Build api-gateway"
+	@echo ""
+	@echo "  Demo seed (scripts/seed/README.md):"
+	@echo "    make seed-media         Tải video/ảnh demo từ Pixabay vào SEED_MEDIA"
+	@echo "    make seed               Nạp 50 user, 200 video, 4 tháng tương tác qua API thật (~1.5h)"
+	@echo "    make seed-backdate      Lùi ngày giờ trong mọi store theo ledger"
+	@echo "    make seed-refresh       Tương tác mới cho trending, chạy trước giờ demo"
 	@echo "    make clean              Clean tất cả target/"
 	@echo "    make image SERVICE=x    Build Docker image cho 1 service Java (Dockerfile ở root)"
 	@echo ""
@@ -320,3 +327,19 @@ migrate-admin:
 
 migrate-all:
 	./mvnw flyway:migrate -pl services/auth-service,services/user-service,services/admin-service
+# ============================================
+# Demo seed (scripts/seed/README.md)
+# ============================================
+SEED_MEDIA ?= $(HOME)/Projects/EProject/EProject4/seed-media
+
+seed-media:
+	python3 scripts/seed/fetch-pixabay.py $(SEED_MEDIA)
+
+seed:
+	SEED_AUTH_LOG=$(SEED_AUTH_LOG) python3 -I scripts/seed/seed.py $(SEED_MEDIA) --phase all
+
+seed-backdate:
+	python3 -I scripts/seed/backdate.py $(SEED_MEDIA)
+
+seed-refresh:
+	python3 -I scripts/seed/seed.py $(SEED_MEDIA) --refresh
