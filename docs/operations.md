@@ -200,3 +200,35 @@ Vị trí chỉ đúng khi gateway thấy địa chỉ thật của trình duy�
   không phải IP private hay IP của server.
 - **Deploy notification-service cùng đợt với auth-service**: cảnh báo nằm chờ trên `auth.new-device-events` (giữ 7 ngày)
   cho tới khi consumer chạy.
+
+## 7. Admin console (`../tiktok-admin`)
+
+Một resource Coolify riêng, build từ `Dockerfile` + `docker-compose.yml` của repo đó. Nó chỉ nói chuyện với
+api-gateway, từ phía server (token nằm trong cookie httpOnly, trình duyệt không gọi gateway).
+
+| Biến | Lúc nào | Giá trị |
+|---|---|---|
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | build (đánh dấu *build variable* trong Coolify) | cùng site key với web; Dockerfile từ chối build nếu thiếu, vì thiếu là không ai đăng nhập được |
+| `GATEWAY_URL` | runtime | `http://api-gateway:8080` qua mạng nội bộ (bật "Connect To Predefined Network"), cùng lý do với web ở §6: đi domain public thì mọi admin chung một bucket rate-limit |
+| `ADMIN_TRUST_PROXY` | runtime | `true` (mặc định trong compose) vì Traefik đứng trước; sign-in log mới ghi IP của admin |
+
+Không set `ADMIN_USE_MOCK`: production mặc định là live, container không có env sẽ **từ chối khởi động** (exit 1,
+`GATEWAY_URL is not set`) thay vì phục vụ dữ liệu giả không cần đăng nhập. Đăng nhập cần tài khoản `ADMIN`
+(`AdminAccountBootstrap`, §1 `ADMIN_EMAIL`/`ADMIN_PASSWORD`) đã verify email, password + Turnstile + OTP email —
+nên `RESEND_API_KEY` phải chạy trước khi đăng nhập console lần đầu.
+
+## 8. Web (`../tiktok-cloned`)
+
+Resource Coolify riêng, build từ `Dockerfile` + `docker-compose.prod.yml` của repo đó (`docker-compose.yml` bên cạnh là
+template chung, không phải prod). Mọi giá trị đều được ghim lúc `next build` (rewrite `/api`, host của `next/image`,
+`NEXT_PUBLIC_*`), nên tất cả là **build variable** trong Coolify, đổi là phải build lại image. Dockerfile từ chối build
+khi thiếu một trong bốn biến bắt buộc.
+
+| Build arg | Bắt buộc | Giá trị |
+|---|---|---|
+| `API_GATEWAY_URL` | có | `http://api-gateway:8080` qua mạng nội bộ (§6) — server Next gọi, trình duyệt không thấy |
+| `NEXT_PUBLIC_WS_GATEWAY_URL` | có | gateway **public** (`https://api.nowaa.site`): trình duyệt tự mở WebSocket tới đây |
+| `MEDIA_ORIGIN` | có | MinIO public (`https://media.nowaa.site`), đúng origin trong `MEDIA_PUBLIC_URL` của backend |
+| `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | có | thiếu thì form đăng ký / quên mật khẩu không bao giờ submit được |
+| `MEDIA_CDN_HOST` | không | host CDN https nếu có, khớp `media.allowed-hosts` của video-service |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID`, `NEXT_PUBLIC_FACEBOOK_APP_ID` | không | rỗng thì ẩn nút social sign-in |
