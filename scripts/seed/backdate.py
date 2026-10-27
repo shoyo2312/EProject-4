@@ -356,6 +356,11 @@ def backdate_clickhouse(plan, ledger):
         rows.append(("COMMENTED", vid[c["video"]], uid[c["author"]], c["at"]))
     for x in ledger.shares:
         rows.append(("SHARED", vid[x["video"]], uid[x["actor"]], x["at"]))
+    for idx, a in enumerate(plan["admin"]):  # admin comment removals produce UNCOMMENTED rows
+        cid = a.get("cid") if a["kind"] == "remove_comment" else a.get("target") if a["kind"] == "report" and a["target_type"] == "COMMENT" and a["outcome"] == "REMOVE_COMMENT" else None
+        c = ledger.comments.get(cid or "")
+        if c and ledger.actions.get(str(idx)):
+            rows.append(("UNCOMMENTED", vid[c["video"]], uid[c["author"]], a.get("resolved_at") or a["at"]))
     first = {}
     for et, v, u, at in rows:
         if (et, v, u) not in first or at < first[(et, v, u)]:
