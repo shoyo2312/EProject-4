@@ -131,8 +131,14 @@ def backdate_user(plan, ledger):
             lines.append(f"UPDATE user_follow_requests SET created_at={t}, updated_at={t} WHERE requester_id={a} AND target_id={b};")
         else:
             lines.append(f"UPDATE user_follows SET created_at={t}, updated_at={t} WHERE follower_id={a} AND following_id={b};")
+    for b in ledger.blocks:
+        t = pg_ts(b["at"])
+        lines.append(f"UPDATE user_blocks SET created_at={t}, updated_at={t} WHERE blocker_id={ledger.users[b['blocker']]['id']} AND blocked_id={ledger.users[b['blocked']]['id']};")
+    for m in ledger.mutes:
+        t = pg_ts(m["at"])
+        lines.append(f"UPDATE user_mutes SET created_at={t}, updated_at={t} WHERE muter_id={ledger.users[m['muter']]['id']} AND muted_id={ledger.users[m['muted']]['id']};")
     psql("tt-postgres-user", "user_db", "\n".join(lines))
-    log(f"user: {len(ledger.follows)} follows")
+    log(f"user: {len(ledger.follows)} follows, {len(ledger.blocks)} blocks, {len(ledger.mutes)} mutes")
 
 
 def _finished(rec):

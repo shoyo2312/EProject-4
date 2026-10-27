@@ -8,6 +8,7 @@ import json
 import math
 import random
 import sys
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -42,23 +43,25 @@ def _posting_hour(rnd):
 
 
 def _video_slots(rnd, n, t0, t1):
-    """8–16 per week, at most 4 per day, hours weighted to 11–14 and 19–23 local time."""
+    """Weekly counts between n/25 and n/12.5 (8–16 for 200 clips), at most 6 per day, hours weighted
+    to 11–14 and 19–23 local time."""
     weeks = max(1, int((t1 - t0) / timedelta(weeks=1)))
-    counts = [rnd.randint(8, 16) for _ in range(weeks)]
+    lo, hi = max(1, round(n / 25)), min(42, max(2, round(n / 12.5)))
+    counts = [rnd.randint(lo, hi) for _ in range(weeks)]
     scale = n / sum(counts)
-    counts = [max(8, min(16, round(c * scale))) for c in counts]
-    while sum(counts) != n:
+    counts = [max(lo, min(hi, round(c * scale))) for c in counts]
+    while sum(counts) != n and weeks * lo <= n <= weeks * hi:
         i = rnd.randrange(weeks)
-        if sum(counts) < n and counts[i] < 16:
+        if sum(counts) < n and counts[i] < hi:
             counts[i] += 1
-        elif sum(counts) > n and counts[i] > 8:
+        elif sum(counts) > n and counts[i] > lo:
             counts[i] -= 1
     slots = []
     for w, c in enumerate(counts):
         week_start = (t0 + timedelta(weeks=w)).astimezone(VN).replace(hour=0, minute=0, second=0, microsecond=0)
         per_day = [0] * 7
         for _ in range(c):
-            d = rnd.choice([i for i in range(7) if per_day[i] < 4])
+            d = rnd.choice([i for i in range(7) if per_day[i] < 6])
             per_day[d] += 1
             at = week_start + timedelta(days=d) + _posting_hour(rnd)
             if at < t1 - timedelta(hours=2):
@@ -106,7 +109,12 @@ def _zipf_counters(rnd, rank, n):
 
 # --------------------------------------------------------------------------------------------- build
 
+def captions():
+    return json.loads(Path(__file__).with_name("captions.json").read_text())
+
+
 def build(manifest, seed=2026, now=None):
+    caps = captions()
     rnd = random.Random(seed)
     t1 = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     personas = [dict(p) for p in C.PERSONAS]
@@ -133,11 +141,13 @@ def build(manifest, seed=2026, now=None):
             else {"commentKeywords": ["quảng cáo", "inbox"], "filterSpamOffensive": True} if p["keyword_filter"]
             else None
         )
-    spam = next(p for p in personas if p["spam"])
-    temp = next(p for p in personas if p["temp_ban"])
-    spam_ban_at = t1 - timedelta(days=30)
-    temp_ban_at = t1 - timedelta(days=2)
-    banned_after = {spam["username"]: spam_ban_at, temp["username"]: temp_ban_at}
+    spams = [p for p in personas if p["spam"]]
+    temps = [p for p in personas if p["temp_ban"]]
+    banned_after = {}  # permanent bans 30 and 41 days ago; temporary bans (5 and 7 days) 2 and 3 days ago
+    for i, p in enumerate(spams):
+        banned_after[p["username"]] = t1 - timedelta(days=30 + 11 * i)
+    for i, p in enumerate(temps):
+        banned_after[p["username"]] = t1 - timedelta(days=2 + i)
 
     def active(p, at):
         return p["join_at"] <= at and at < banned_after.get(p["username"], t1 + DAY)
@@ -178,6 +188,22 @@ def build(manifest, seed=2026, now=None):
     follows.sort(key=lambda f: f["at"])
     mutual = {(a, b) for (a, b) in follow_set if (b, a) in follow_set}
 
+    # ---- blocks (pairs with no follow edge: a block severs both edges) and mutes (of someone followed)
+    blocks, blocked_pairs = [], set()
+    for p in rnd.sample([p for p in personas if p["username"] not in banned_after], 20):
+        cands = [q for q in personas if q is not p and q["username"] not in banned_after
+                 and (p["username"], q["username"]) not in follow_set and (q["username"], p["username"]) not in follow_set]
+        q = rnd.choice(cands)
+        at = max(p["join_at"], q["join_at"]) + timedelta(days=rnd.uniform(1, 60))
+        if at < t1:
+            blocks.append({"blocker": p["username"], "blocked": q["username"], "at": at})
+            blocked_pairs |= {(p["username"], q["username"]), (q["username"], p["username"])}
+    mutes = []
+    for f in rnd.sample([f for f in follows if f["kind"] == "follow" and f["following"] not in banned_after], 30):
+        at = f["at"] + timedelta(days=rnd.uniform(1, 40))
+        if at < t1:
+            mutes.append({"muter": f["follower"], "muted": f["following"], "at": at})
+
     # ---- videos: owners by quota and topic
     pool = list(manifest["videos"])
     rnd.shuffle(pool)
@@ -208,33 +234,36 @@ def build(manifest, seed=2026, now=None):
     slots = _video_slots(rnd, len(assignments), T0, t1)
     rnd.shuffle(assignments)
     videos, remaining = [], list(assignments)
+    per_day = Counter(s.astimezone(VN).date() for s in slots)
+
+    def room(at, slot=None):  # a clip pushed past its slot (owner not joined yet) must not make a seventh post that day
+        if slot:
+            per_day[slot.astimezone(VN).date()] -= 1
+        while per_day[at.astimezone(VN).date()] >= 6:
+            at += DAY
+        per_day[at.astimezone(VN).date()] += 1
+        return at
+
     for slot in slots:
         ok = [i for i, (p, _) in enumerate(remaining) if p["join_at"] <= slot]
         i = rnd.choice(ok) if ok else 0
         p, v = remaining.pop(i)
-        videos.append({"key": v["file"][:-4], "file": v["file"], "owner": p["username"], "topic": v["topic"],
-                       "duration": v["duration"], "pixabay_tags": v["tags"], "at": max(slot, p["join_at"] + timedelta(hours=1))})
+        videos.append({"key": v["file"][:-4], "id": v["id"], "file": v["file"], "owner": p["username"], "topic": v["topic"],
+                       "duration": v["duration"], "at": room(max(slot, p["join_at"] + timedelta(hours=1)), slot)})
     for p, v in remaining:  # clips without a slot: post them within the last day or so
-        videos.append({"key": v["file"][:-4], "file": v["file"], "owner": p["username"], "topic": v["topic"],
-                       "duration": v["duration"], "pixabay_tags": v["tags"],
-                       "at": max(t1 - timedelta(hours=rnd.uniform(3, 30)), p["join_at"] + timedelta(hours=1))})
+        videos.append({"key": v["file"][:-4], "id": v["id"], "file": v["file"], "owner": p["username"], "topic": v["topic"],
+                       "duration": v["duration"], "at": room(max(t1 - timedelta(hours=rnd.uniform(3, 30)), p["join_at"] + timedelta(hours=1)))})
     videos.sort(key=lambda v: v["at"])
-    used_caption = {}
     held_pick = rnd.sample([v for v in videos if by_name[v["owner"]]["role"] == "regular" and v["owner"] not in banned_after], 3)
+    own_comments, own_replies = {}, {}
     for v in videos:
-        tags = [t.strip() for t in v["pixabay_tags"].split(",") if t.strip()]
-        tag, tag2 = (tags + ["clip", "clip"])[:2]
-        idx = used_caption.setdefault(v["topic"], 0)
-        bank = C.CAPTIONS[v["topic"]]
-        title, desc = bank[idx % len(bank)]
-        used_caption[v["topic"]] = idx + 1
-        v["title"] = title.format(tag=tag, tag2=tag2)
-        v["description"] = desc.format(tag=tag, tag2=tag2)
-        v["tags"] = rnd.sample(C.HASHTAGS[v["topic"]], rnd.randint(3, 5))
+        cap = caps[str(v["id"])]  # written against the clip's thumbnail, or its original caption (import-ytdlp.py)
+        v["title"], v["description"], v["tags"] = cap["title"], "", cap["hashtags"][:10]  # TikTok has one caption: title + tags
+        own_comments[v["key"]] = rnd.sample(cap["comments"], len(cap["comments"]))
+        own_replies[v["key"]] = list(cap["replies"])
         v["held"] = v in held_pick
         v["visibility"] = "PUBLIC" if v["held"] else rnd.choices(["PUBLIC", "FRIENDS", "PRIVATE"], [90, 6, 4])[0]
         v["taken_down_at"] = None
-        del v["pixabay_tags"]
     for i, (title, desc) in enumerate(C.HELD_CAPTIONS):
         held_pick[i]["title"], held_pick[i]["description"] = title, desc
     ranked = sorted(videos, key=lambda v: {"creator": 3, "regular": 1.2, "viewer": 0.5}[by_name[v["owner"]]["role"]] * rnd.random(), reverse=True)
@@ -250,6 +279,8 @@ def build(manifest, seed=2026, now=None):
         out = []
         for p in personas:
             if p["username"] == v["owner"] or p["username"] in exclude or not active(p, at):
+                continue
+            if (p["username"], v["owner"]) in blocked_pairs:
                 continue
             if v["visibility"] == "FRIENDS" and (p["username"], v["owner"]) not in mutual:
                 continue
@@ -276,9 +307,12 @@ def build(manifest, seed=2026, now=None):
             if not cands:
                 break
             p = rnd.choice(cands)
-            text = next((t for t in rnd.sample(C.COMMENTS, 12) if (p["username"], t) not in used_text and (v["key"], t) not in used_text), None)
+            mine = own_comments[v["key"]]
+            text = next((t for t in mine[:1] + rnd.sample(C.COMMENTS, 12) if (p["username"], t) not in used_text and (v["key"], t) not in used_text), None)
             if text is None:
                 continue
+            if mine and text == mine[0]:
+                mine.pop(0)
             used_text.add((p["username"], text))
             used_text.add((v["key"], text))
             cid = new_cid()
@@ -289,7 +323,8 @@ def build(manifest, seed=2026, now=None):
                     owner = by_name[v["owner"]]
                     replier = owner if rnd.random() < 0.5 and active(owner, rat) else rnd.choice(eligible(v, rat) or [owner])
                     events.append({"kind": "reply", "at": rat, "actor": replier["username"], "video": v["key"],
-                                   "parent_cid": cid, "text": rnd.choice(C.REPLIES), "cid": new_cid()})
+                                   "parent_cid": cid, "cid": new_cid(),
+                                   "text": rnd.choice(own_replies[v["key"]]) if own_replies[v["key"]] and rnd.random() < 0.6 else rnd.choice(C.REPLIES)})
         for kind, n in (("share", v["shares"]), ("repost", v["reposts"]), ("save", v["saves"])):
             taken = set()
             for at in _burst_times(rnd, v["at"], t1, n):
@@ -313,7 +348,7 @@ def build(manifest, seed=2026, now=None):
     pairs = sorted({tuple(sorted(x)) for x in mutual if x[0] not in banned_after and x[1] not in banned_after})
     rnd.shuffle(pairs)
     chats = []
-    for i, thread in enumerate(C.CHAT_THREADS[:15]):
+    for i, thread in enumerate(C.CHAT_THREADS):
         a, b = pairs[i]
         start = max(by_name[a]["join_at"], by_name[b]["join_at"]) + timedelta(days=rnd.uniform(1, 30))
         if i < 5:
@@ -326,15 +361,17 @@ def build(manifest, seed=2026, now=None):
         chats.append({"a": a, "b": b, "messages": msgs})
 
     # ---- stories (fresh)
-    story_owners = rnd.sample([p for p in personas if p["role"] != "viewer" and p["username"] not in banned_after], 8)
+    story_owners = rnd.sample([p for p in personas if p["role"] != "viewer" and p["username"] not in banned_after], 20)
     stories = []
-    for i, img in enumerate(rnd.sample(manifest["stories"], 12)):
-        owner = story_owners[i % 8]
-        stories.append({"owner": owner["username"], "file": img["file"], "caption": C.STORY_CAPTIONS[i % len(C.STORY_CAPTIONS)],
-                        "visibility": "PRIVATE" if i == 11 else "FRIENDS" if i >= 9 else "PUBLIC",
+    for i, img in enumerate(rnd.sample(manifest["stories"], 40)):
+        owner = story_owners[i % 20]
+        stories.append({"owner": owner["username"], "file": img["file"], "type": img.get("type", "image"),
+                        "caption": C.STORY_CAPTIONS[i % len(C.STORY_CAPTIONS)],
+                        "visibility": "PRIVATE" if i >= 38 else "FRIENDS" if i >= 32 else "PUBLIC",
                         "at": t1 - timedelta(hours=rnd.uniform(0.5, 20))})
 
-    # ---- admin: 30 reports (12 VIDEO, 8 USER, 10 COMMENT) + 6 direct comment removals + 2 restores
+    # ---- admin: 60 reports (24 VIDEO, 16 USER, 20 COMMENT) + 10 direct comment removals + 4 restores
+    # + 3 direct warnings + 1 session revocation + the managed moderation terms
     admin = []
     public_videos = [v for v in videos if v["visibility"] == "PUBLIC" and not v["held"] and v["owner"] not in banned_after]
     reporters = [p for p in personas if p["role"] == "viewer" and p["username"] not in banned_after]
@@ -359,19 +396,21 @@ def build(manifest, seed=2026, now=None):
         admin.append(entry)
         return entry
 
-    vids = rnd.sample(public_videos, 12)
+    vids = rnd.sample(public_videos, 24)
     for i, v in enumerate(vids):
-        outcome = "TAKEDOWN_VIDEO" if i < 3 else "DISMISS_REPORT" if i < 8 else "pending"
+        outcome = "TAKEDOWN_VIDEO" if i < 6 else "DISMISS_REPORT" if i < 16 else "pending"
         at = v["at"] + timedelta(days=rnd.uniform(0.2, 20)) if outcome != "pending" else t1 - timedelta(days=rnd.uniform(0.3, 13))
         at = min(max(at, v["at"] + timedelta(hours=1)), t1 - timedelta(hours=1))
         e = report(at, "VIDEO", v, outcome)
         if e and outcome == "TAKEDOWN_VIDEO":
             v["taken_down_at"] = e["resolved_at"]
-    report(spam_ban_at - timedelta(days=1), "USER", spam["username"], "BAN_USER", reason="Deceptive behavior and spam", ban_days=None, delay_h=24)
-    report(temp_ban_at - timedelta(days=1), "USER", temp["username"], "BAN_USER", reason="Hate and harassment", ban_days=5, delay_h=24)
-    warn_targets = rnd.sample([p for p in personas if p["role"] != "creator" and p["username"] not in banned_after and p is not personas[0]], 6)
+    for p in spams:
+        report(banned_after[p["username"]] - DAY, "USER", p["username"], "BAN_USER", reason="Deceptive behavior and spam", ban_days=None, delay_h=24)
+    for i, p in enumerate(temps):
+        report(banned_after[p["username"]] - DAY, "USER", p["username"], "BAN_USER", reason="Hate and harassment", ban_days=5 + 2 * i, delay_h=24)
+    warn_targets = rnd.sample([p for p in personas if p["role"] != "creator" and p["username"] not in banned_after and p is not personas[0]], 12)
     for i, p in enumerate(warn_targets):
-        outcome = "WARN_USER" if i < 5 else "DISMISS_REPORT"
+        outcome = "WARN_USER" if i < 10 else "DISMISS_REPORT"
         at = t1 - timedelta(days=rnd.uniform(1, 100)) if outcome != "pending" else t1 - timedelta(days=rnd.uniform(0.5, 20))
         report(min(max(at, p["join_at"] + DAY), t1 - timedelta(hours=1)), "USER", p["username"], outcome)
     banned_comments = [e for e in all_comments if e["actor"] in banned_after]
@@ -379,20 +418,27 @@ def build(manifest, seed=2026, now=None):
     rnd.shuffle(other_comments)
     removal_authors, removal_reports = set(), []
     for e in other_comments:
-        if e["actor"] not in removal_authors and len(removal_reports) < 4:
+        if e["actor"] not in removal_authors and len(removal_reports) < 8:
             removal_authors.add(e["actor"])
             removal_reports.append(e)
-    rest = [e for e in other_comments if e not in removal_reports][:6]
+    rest = [e for e in other_comments if e not in removal_reports][:12]
     for i, e in enumerate(removal_reports + rest):
-        outcome = "REMOVE_COMMENT" if i < 4 else "DISMISS_REPORT" if i < 6 else "pending"
+        outcome = "REMOVE_COMMENT" if i < 8 else "DISMISS_REPORT" if i < 12 else "pending"
         at = parse(iso(e["at"])) if False else e["at"]
         at = at + timedelta(hours=rnd.uniform(1, 200)) if outcome != "pending" else max(at + timedelta(hours=1), t1 - timedelta(days=rnd.uniform(0.5, 13)))
         report(min(at, t1 - timedelta(hours=1)), "COMMENT", e, outcome)
-    for e in rnd.sample(banned_comments, min(6, len(banned_comments))):
+    for e in rnd.sample(banned_comments, min(10, len(banned_comments))):
         admin.append({"kind": "remove_comment", "at": min(e["at"] + timedelta(hours=rnd.uniform(1, 100)), t1 - timedelta(hours=1)),
                       "video": e["video"], "cid": e["cid"], "reason": "Spam"})
-    for _ in range(2):
+    for _ in range(4):
         admin.append({"kind": "restore", "at": t1 - timedelta(days=rnd.uniform(5, 60)), "video": None, "reason": "Reviewed: nothing wrong"})
+    direct = rnd.sample([p for p in personas if p["role"] != "creator" and p["username"] not in banned_after
+                         and p not in warn_targets and p is not personas[0]], 4)
+    for p in direct[:3]:
+        admin.append({"kind": "warn", "at": min(p["join_at"] + timedelta(days=rnd.uniform(3, 60)), t1 - timedelta(hours=1)),
+                      "target": p["username"], "reason": "Repeated off-topic comments"})
+    admin.append({"kind": "revoke_sessions", "at": t1 - timedelta(days=rnd.uniform(1, 10)), "target": direct[3]["username"],
+                  "reason": "Account owner reported a stolen phone"})
     admin.sort(key=lambda e: e["at"])
     restores = 0
     for a in admin:  # stable keys: the ledger is keyed by these, never by list position
@@ -400,9 +446,12 @@ def build(manifest, seed=2026, now=None):
             a["key"] = f"r:{a['target_type']}:{a['target']}:{a['reporter']}"
         elif a["kind"] == "remove_comment":
             a["key"] = f"rc:{a['cid']}"
+        elif a["kind"] in ("warn", "revoke_sessions"):
+            a["key"] = f"{a['kind']}:{a['target']}"
         else:
             a["key"] = f"restore:{restores}"
             restores += 1
+    terms = [{"term": t, "category": c, "action": act, "note": n} for t, c, act, n in C.ADMIN_TERMS]
 
     def ser(obj):
         if isinstance(obj, datetime):
@@ -428,36 +477,41 @@ def build(manifest, seed=2026, now=None):
     events.sort(key=lambda e: e["at"])
 
     users = sorted(personas, key=lambda p: p["join_at"])
-    return ser({"t0": T0, "t1": t1, "users": users, "follows": follows, "videos": videos, "events": events,
-                "chats": chats, "stories": stories, "admin": admin})
+    return ser({"t0": T0, "t1": t1, "users": users, "follows": follows, "blocks": blocks, "mutes": mutes, "videos": videos,
+                "events": events, "chats": chats, "stories": stories, "admin": admin, "terms": terms})
 
 
 # --------------------------------------------------------------------------------------------- check
 
-def check(plan):
+def check(plan, clips):
     from collections import Counter
     users = {u["username"]: u for u in plan["users"]}
     videos = {v["key"]: v for v in plan["videos"]}
     t1 = parse(plan["t1"])
-    assert len(plan["users"]) == 50 and len(plan["videos"]) == 200, (len(plan["users"]), len(plan["videos"]))
+    assert len(plan["users"]) == 200 and len(plan["videos"]) == clips, (len(plan["users"]), len(plan["videos"]))
     assert sum(v["held"] for v in plan["videos"]) == 3
     for v in plan["videos"]:
         assert v["at"] >= users[v["owner"]]["join_at"], v
     per_day = Counter(parse(v["at"]).astimezone(VN).date() for v in plan["videos"])
-    assert max(per_day.values()) <= 4, max(per_day.values())
+    assert max(per_day.values()) <= 6, max(per_day.values())
     for e in plan["events"]:
         assert e["at"] >= videos[e["video"]]["at"], e
         assert e["at"] >= users[e["actor"]]["join_at"], e
     for f in plan["follows"]:
         assert f["at"] >= users[f["follower"]]["join_at"] and f["at"] >= users[f["following"]]["join_at"]
+    follow_set = {(f["follower"], f["following"]) for f in plan["follows"]}
+    for b in plan["blocks"]:
+        assert b["at"] >= users[b["blocker"]]["join_at"] and b["at"] >= users[b["blocked"]]["join_at"]
+        assert (b["blocker"], b["blocked"]) not in follow_set and (b["blocked"], b["blocker"]) not in follow_set, b
+    assert all((m["muter"], m["muted"]) in follow_set for m in plan["mutes"])
     pairs = [(e["video"], e["text"]) for e in plan["events"] if e["kind"] == "comment"]
     assert len(pairs) == len(set(pairs)), "duplicate comment text on a video"
     likes = sum(e["kind"] == "like" for e in plan["events"])
-    assert likes <= 6500, likes
+    assert likes <= 15000, likes
     demo = C.PERSONAS[0]["username"]
     cids = {e["cid"]: e for e in plan["events"] if e["kind"] in ("comment", "reply")}
     reports = [a for a in plan["admin"] if a["kind"] == "report"]
-    assert len(reports) == 30, len(reports)
+    assert len(reports) == 60, len(reports)
     assert len({a["key"] for a in plan["admin"]}) == len(plan["admin"]), "admin keys must be unique"
     for a in reports:
         if a["outcome"] == "pending":  # StaleReportSweep dismisses expiring reasons after 30 d; leave 16 d for the demo
@@ -467,7 +521,7 @@ def check(plan):
     for a in plan["admin"]:
         if a["kind"] == "remove_comment":
             assert cids[a["cid"]]["actor"] != demo
-    out = {k: len(plan[k]) for k in ("users", "follows", "videos", "events", "chats", "stories", "admin")}
+    out = {k: len(plan[k]) for k in ("users", "follows", "blocks", "mutes", "videos", "events", "chats", "stories", "admin", "terms")}
     out["events_by_kind"] = dict(Counter(e["kind"] for e in plan["events"]))
     out["report_outcomes"] = dict(Counter(a["outcome"] for a in reports))
     out["follow_requests"] = sum(f["kind"] == "follow_request" for f in plan["follows"])
@@ -485,5 +539,5 @@ if __name__ == "__main__":
     a = build(manifest, now=now)
     b = build(manifest, now=now)
     assert json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True), "build() is not deterministic"
-    print(json.dumps(check(a), ensure_ascii=False))
+    print(json.dumps(check(a, len(manifest["videos"])), ensure_ascii=False))
     print("ok")

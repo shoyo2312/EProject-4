@@ -270,3 +270,46 @@ captions unique. That is the only test; the rest is exercised by running it.
 - How the ledger maps a notification to its action when the same (recipient, actor, type, ref)
   tuple occurs twice (collapsed within 24 h by the service anyway): take the earliest planned
   instant.
+
+
+## 10. Revision 2 (2026-10-27, same day) — sound and matching text
+
+Feedback after the first full run: most clips were silent, and captions/comments were topic
+templates that often described something other than the footage. Changes:
+
+- **Scale**: 100 users (16 creators / 34 regulars / 50 viewers), 400 clips (20 per topic),
+  20 stories, every chat thread used. Admin volume unchanged (30 reports).
+- **Audio is mandatory**: Pixabay's API has no audio filter, so `fetch-pixabay.py` probes the
+  first 256 KB of the `tiny` rendition for an `soun` handler (Pixabay files are faststart) and
+  skips silent clips before downloading. Clips downloaded before the filter are pruned.
+- **Text written against the frame**: each clip's Pixabay thumbnail is downloaded next to it,
+  and `captions.json` carries per-clip title, description, hashtags, 8–10 comments and 4–6
+  replies written while looking at that frame. `scenario.py` serves a clip's own comments first
+  and only then falls back to a topic-neutral reaction bank; replies are 60 % clip-specific.
+  The per-topic caption templates and hashtag lists are gone.
+- Everything else (pipeline, backdate, admin story, refresh) is unchanged; the stack is reset and
+  re-seeded from scratch.
+
+## 11. Revision 3 (2026-10-27, same day) — TikTok clips, 200 users, the whole admin surface
+
+- **Source.** Pixabay is dropped: most of its "audio" tracks were silent. Clips now come from a
+  hand-picked URL list per topic (`seed-media/urls/<topic>.txt`, 20 topics, ~620 links) downloaded
+  with yt-dlp (`<topic>/<id>.mp4` + `<id>.info.json`). Each clip keeps its own sound.
+- **Caption.** TikTok has a single caption, so a video is title + hashtags; `description` is sent
+  empty. `import-ytdlp.py` keeps the original hashtags; the Vietnamese title, 8–10 comments and
+  4–6 replies are written against two frames of the clip (the writer brief now gets the original
+  caption + both frames).
+- **Media from the clips.** `make-media.py` cuts 220 square avatar frames and 48 stories (32
+  portrait frames + 16 clips of 8–45 s used as video stories) from the manifest's own videos. No
+  other image set is needed. 40 stories go out over 20 owners (32 PUBLIC, 6 FRIENDS, 2 PRIVATE).
+- **Scale.** 200 personas (26 creators / 64 regulars / 110 viewers); `_video_slots` caps a week at
+  42 (6/day) so 600+ clips still fit; likes stay ≤ 40 per video through the API, the rest is counter.
+- **Social graph.** 20 blocks between pairs with no follow edge (a block severs both edges, and the
+  planner keeps blocked pairs out of each other's engagement) and 30 mutes of someone followed;
+  both backdated in `user_blocks` / `user_mutes`.
+- **Admin.** 60 reports (24 video: 6 takedown / 10 dismissed / 8 pending; 16 user: 4 bans — two
+  permanent, two temporary of 5 and 7 days — 10 warnings, 2 dismissed; 20 comment: 8 removed /
+  4 dismissed / 8 pending), 10 direct comment removals, 4 restores, 3 direct warnings, 1 session
+  revocation, and 6 managed moderation terms (HOLD / REJECT / EXEMPT) added through the console
+  API. The review queue keeps up to 12 held videos (3 held by the text rules, the rest by the
+  frame classifier) instead of 6.

@@ -123,7 +123,7 @@ def sql(container, db, statement):
 
 
 class Ledger:
-    LISTS = ("likes", "shares", "reposts", "saves", "comment_likes", "follows", "chats", "stories", "refresh", "dropped")
+    LISTS = ("likes", "shares", "reposts", "saves", "comment_likes", "follows", "blocks", "mutes", "chats", "stories", "refresh", "dropped")
     MAPS = ("users", "videos", "comments", "reports", "actions", "admin", "phase_done")
 
     def __init__(self, path):
@@ -236,6 +236,20 @@ def phase_users(plan, ledger, media_dir):
         ledger.touch()
     ledger.save()
     log(f"follows: {added} new, {len(done)} existing")
+    for kind, key_a, key_b in (("blocks", "blocker", "blocked"), ("mutes", "muter", "muted")):
+        done = {(x[key_a], x[key_b]) for x in ledger.data[kind]}
+        for x in plan[kind]:
+            if (x[key_a], x[key_b]) in done:
+                continue
+            try:
+                user_api.call("POST", f"/api/v1/users/{uid_of(ledger, x[key_b])}/{kind[:-1]}", token=token_of(ledger, x[key_a]))
+            except ApiError as e:
+                if e.status != 409:
+                    raise
+            ledger.data[kind].append(dict(x))
+            ledger.touch()
+        ledger.save()
+        log(f"{kind}: {len(ledger.data[kind])}")
     ledger.phase_done["users"] = True
     ledger.save()
 
@@ -281,7 +295,7 @@ def _wait_for_pipeline(ledger, timeout_s=90 * 60):
     by_owner = {}
     for key, rec in ledger.videos.items():
         by_owner.setdefault(rec["owner"], []).append(key)
-    start, last_line = time.time(), 0
+    start, last_line, last_progress, last_pending = time.time(), 0, time.time(), None
     while True:
         pending = 0
         for owner, keys in by_owner.items():
@@ -308,6 +322,15 @@ def _wait_for_pipeline(ledger, timeout_s=90 * 60):
         if time.time() - last_line > 60:
             log(f"waiting on {pending}: {dict(c)}")
             last_line = time.time()
+        if pending != last_pending:
+            last_pending, last_progress = pending, time.time()
+        elif time.time() - last_progress > 20 * 60:  # a clip the bundled ffmpeg cannot transcode blocks the consumer; give up on what is left
+            stuck = [k for k, v in ledger.videos.items() if v["status"] in WAITING]
+            for k in stuck:
+                ledger.videos[k]["status"] = "STUCK"
+            ledger.save()
+            log(f"pipeline gave up on {len(stuck)} videos with no progress for 20 min: {stuck}")
+            return
         if time.time() - start > timeout_s:
             raise RuntimeError(f"pipeline still has {pending} videos pending after {timeout_s}s")
         time.sleep(10)
@@ -503,8 +526,9 @@ def phase_stories(plan, ledger, media_dir):
         if st["file"] in existing:
             continue
         tok = token_of(ledger, st["owner"])
-        u = story_api.call("POST", "/api/v1/stories/upload-url", {"contentType": "image/jpeg"}, token=tok)
-        post_minio(u["uploadUrl"], u["formFields"], (Path(media_dir) / st["file"]).read_bytes(), "image/jpeg", filename="story.jpg")
+        ctype = "video/mp4" if st["file"].endswith(".mp4") else "image/jpeg"
+        u = story_api.call("POST", "/api/v1/stories/upload-url", {"contentType": ctype}, token=tok)
+        post_minio(u["uploadUrl"], u["formFields"], (Path(media_dir) / st["file"]).read_bytes(), ctype, filename="story." + st["file"][-3:])
         r = story_api.call("POST", "/api/v1/stories", {"mediaUrl": u["fileUrl"], "caption": st["caption"], "visibility": st["visibility"]}, token=tok)
         ledger.stories.append({"id": r["id"], "owner": st["owner"], "file": st["file"], "at": st["at"]})
         ledger.save()
@@ -569,13 +593,13 @@ def admin_token(ledger):
 
 
 def early_restore(plan, ledger):
-    """After the pipeline: keep ≤ 6 videos in the review queue, restore the rest so engagement can target them."""
+    """After the pipeline: keep ≤ 12 videos in the review queue, restore the rest so engagement can target them."""
     held = [k for k, v in ledger.videos.items() if v["status"] == "PENDING_REVIEW"]
     if not held:
         return
     keep = [k for k in held if ledger.videos[k]["held"]]
     extra = sorted((k for k in held if k not in keep), key=lambda k: ledger.videos[k]["views"])
-    keep += extra[:max(0, 6 - len(keep))]
+    keep += extra[:max(0, 12 - len(keep))]
     to_restore = [k for k in held if k not in keep]
     log(f"review queue: {len(held)} held by the pipeline, keeping {len(keep)}, restoring {len(to_restore)}")
     if not to_restore:
@@ -647,7 +671,22 @@ def phase_admin(plan, ledger):
                                {"reason": a["reason"]}, token=admin_token(ledger))
             ledger.actions[key] = {"id": r["id"], "at": a["at"], "type": "REMOVE_COMMENT"}
             ledger.save()
+        elif a["kind"] in ("warn", "revoke_sessions"):
+            if key in ledger.actions:
+                continue
+            path = "warn" if a["kind"] == "warn" else "revoke-sessions"
+            r = admin_api.call("POST", f"/api/v1/admin/users/{uid_of(ledger, a['target'])}/{path}", {"reason": a["reason"]}, token=admin_token(ledger))
+            ledger.actions[key] = {"id": r["id"], "at": a["at"], "type": a["kind"].upper()}
+            ledger.save()
         # "restore" entries are bound in early_restore
+    done = ledger.admin.setdefault("terms", [])
+    for t in plan["terms"]:
+        if t["term"] in done:
+            continue
+        admin_api.call("POST", "/api/v1/admin/moderation/terms", t, token=admin_token(ledger), expect=(200, 201, 409))
+        done.append(t["term"])
+        ledger.save()
+    log(f"admin: {len(done)} managed terms")
     log(f"admin: {sum(1 for v in ledger.reports.values() if v)} reports, {sum(1 for v in ledger.actions.values() if v)} actions")
     ledger.phase_done["admin"] = True
     ledger.save()
