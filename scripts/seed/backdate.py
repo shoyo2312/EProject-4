@@ -79,6 +79,10 @@ def mongo_ts(s):
     return f'new Date("{s}")'
 
 
+def mongo_long(n):
+    return f'NumberLong("{n}")'
+
+
 def cql_ts(s):
     return "'" + s.replace("Z", "+0000") + "'"
 
@@ -209,9 +213,12 @@ def backdate_cassandra(plan, ledger):
         ("saves", "saves_by_user", ("user_id", "video_id", "created_at"), "saves_by_user_time"),
     ]
     moved = 0
+    t1 = ledger.admin["t1"]
     for section, member, cols, listing in pairs:
         old = _cql_old_ts(member, cols)
         for x in getattr(ledger, section):
+            if x["at"] > t1:  # sent by --refresh: real time is the right time
+                continue
             v, u = str(vid[x["video"]]), str(uid[x["actor"]])
             k = (v, u) if cols[0] == "video_id" else (u, v)
             if k not in old:
@@ -224,20 +231,17 @@ def backdate_cassandra(plan, ledger):
             where = f"video_id={v} AND user_id={u}" if cols[0] == "video_id" else f"user_id={u} AND video_id={v}"
             lines.append(f"UPDATE {member} SET created_at={new} WHERE {where};")
             moved += 1
-    if not ledger.admin.get("counters_applied"):
+    for i in range(0, len(lines), 2000):
+        cqlsh("\n".join(lines[i:i + 2000]))
+    if not ledger.admin.get("counters_applied"):  # counters only add; flag first so a crash never doubles them
         api_likes = defaultdict(int)
         for x in ledger.likes:
             api_likes[x["video"]] += 1
-        for key, rec in ledger.videos.items():
-            if rec["status"] != "PUBLISHED":
-                continue
-            extra = max(0, rec["likes"] - api_likes[key])
-            lines.append(f"UPDATE video_counters SET view_count = view_count + {rec['views']}, like_count = like_count + {extra} WHERE video_id={rec['id']};")
-    for i in range(0, len(lines), 2000):
-        cqlsh("\n".join(lines[i:i + 2000]))
-    if not ledger.admin.get("counters_applied"):
+        counters = [f"UPDATE video_counters SET view_count = view_count + {rec['views']}, like_count = like_count + {max(0, rec['likes'] - api_likes[key])} WHERE video_id={rec['id']};"
+                    for key, rec in ledger.videos.items() if rec["status"] == "PUBLISHED"]
         ledger.admin["counters_applied"] = True
         ledger.save()
+        cqlsh("\n".join(counters))
     log(f"cassandra: {len(lines)} statements, {moved} listing rows moved")
 
 
@@ -268,13 +272,15 @@ def backdate_notifications(plan, ledger):
     uid = {u: r["id"] for u, r in ledger.users.items()}
     owner = {k: r["owner"] for k, r in ledger.videos.items()}
     vid = {k: r["id"] for k, r in ledger.videos.items()}
-    earliest = {}
+    earliest, comment_dates = {}, defaultdict(list)
 
     def put(recipient, actor, typ, ref, at):
         if recipient == actor:
             return
         k = (uid[recipient], uid[actor], typ, str(ref))
-        if k not in earliest or at < earliest[k]:
+        if typ == "COMMENT":  # COMMENT is not collapsed by the service: one document per comment
+            comment_dates[k].append(at)
+        elif k not in earliest or at < earliest[k]:
             earliest[k] = at
 
     for x in ledger.likes:
@@ -294,10 +300,10 @@ def backdate_notifications(plan, ledger):
     for f in ledger.follows:
         typ = "FOLLOW_REQUEST" if f.get("status") == "REQUESTED" else "NEW_FOLLOWER"
         put(f["following"], f["follower"], typ, uid[f["follower"]], f["at"])
-    ops = [f'{{updateOne: {{filter: {{recipientId: {r}, actorId: {a}, type: "{t}", referenceId: "{ref}"}}, '
+    ops = [f'{{updateOne: {{filter: {{recipientId: {mongo_long(r)}, actorId: {mongo_long(a)}, type: "{t}", referenceId: "{ref}"}}, '
            f'update: {{$set: {{createdAt: {mongo_ts(at)}}}}}}}}}' for (r, a, t, ref), at in earliest.items()]
     for u in plan["users"]:
-        ops.append(f'{{updateMany: {{filter: {{recipientId: {uid[u["username"]]}, type: "SYSTEM", actorId: null, referenceId: null}}, '
+        ops.append(f'{{updateMany: {{filter: {{recipientId: {mongo_long(uid[u["username"]])}, type: "SYSTEM", actorId: null, referenceId: null}}, '
                    f'update: {{$set: {{createdAt: {mongo_ts(u["join_at"])}}}}}}}}}')
     for a in plan["admin"]:
         if a["kind"] != "report" or a["outcome"] in ("pending", "DISMISS_REPORT"):
@@ -310,8 +316,16 @@ def backdate_notifications(plan, ledger):
             c = ledger.comments.get(a["target"])
             recipient = c["author"] if c else None
         if recipient:
-            ops.append(f'{{updateMany: {{filter: {{recipientId: {uid[recipient]}, type: "SYSTEM", actorId: null, referenceId: {{$ne: null}}}}, '
+            ops.append(f'{{updateMany: {{filter: {{recipientId: {mongo_long(uid[recipient])}, type: "SYSTEM", actorId: null, referenceId: {{$ne: null}}}}, '
                        f'update: {{$set: {{createdAt: {mongo_ts(a["resolved_at"])}}}}}}}}}')
+    # COMMENT: documents in _id order get the planned instants in time order (one per comment, nothing collapsed)
+    groups = [[str(r), str(a), ref, sorted(dates)] for (r, a, t, ref), dates in comment_dates.items()]  # ids as strings: JSON numbers lose precision past 2^53
+    js = ("const groups = " + json.dumps(groups) + ";\n"
+          "let n = 0; groups.forEach(([r, a, ref, dates]) => {\n"
+          "  const docs = db.notifications.find({recipientId: NumberLong(r), actorId: NumberLong(a), type: 'COMMENT', referenceId: ref}).sort({_id: 1}).toArray();\n"
+          "  dates.forEach((d, i) => { if (docs[i]) { db.notifications.updateOne({_id: docs[i]._id}, {$set: {createdAt: new Date(d)}}); n++; } });\n"
+          "});\nprint('comment notifications: ' + n);")
+    log("notifications: " + mongosh("notification_db", js).strip())
     for i in range(0, len(ops), 2000):
         mongosh("notification_db", f"db.notifications.bulkWrite([{','.join(ops[i:i + 2000])}], {{ordered: false}});")
     log(f"notifications: {len(ops)} updates")
@@ -319,8 +333,8 @@ def backdate_notifications(plan, ledger):
 
 def backdate_admin(plan, ledger):
     lines = []
-    for idx, a in enumerate(plan["admin"]):
-        key = str(idx)
+    for a in plan["admin"]:
+        key = a["key"]
         rep = ledger.reports.get(key)
         if a["kind"] == "report" and rep:
             t = pg_ts(a["at"])
@@ -356,10 +370,10 @@ def backdate_clickhouse(plan, ledger):
         rows.append(("COMMENTED", vid[c["video"]], uid[c["author"]], c["at"]))
     for x in ledger.shares:
         rows.append(("SHARED", vid[x["video"]], uid[x["actor"]], x["at"]))
-    for idx, a in enumerate(plan["admin"]):  # admin comment removals produce UNCOMMENTED rows
+    for a in plan["admin"]:  # admin comment removals produce UNCOMMENTED rows
         cid = a.get("cid") if a["kind"] == "remove_comment" else a.get("target") if a["kind"] == "report" and a["target_type"] == "COMMENT" and a["outcome"] == "REMOVE_COMMENT" else None
         c = ledger.comments.get(cid or "")
-        if c and ledger.actions.get(str(idx)):
+        if c and ledger.actions.get(a["key"]):
             rows.append(("UNCOMMENTED", vid[c["video"]], uid[c["author"]], a.get("resolved_at") or a["at"]))
     first = {}
     for et, v, u, at in rows:

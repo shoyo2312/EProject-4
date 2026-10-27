@@ -346,7 +346,7 @@ def build(manifest, seed=2026, now=None):
     def report(at, target_type, target, outcome, reason=None, ban_days=None, delay_h=None):
         if reason is None:
             reason = rnd.choice(C.REPORT_REASONS[target_type])
-        if outcome == "pending" and at < t1 - timedelta(days=29) and reason not in C.NON_EXPIRING_REASONS:
+        if outcome == "pending" and at < t1 - timedelta(days=14) and reason not in C.NON_EXPIRING_REASONS:
             reason = rnd.choice(sorted(C.NON_EXPIRING_REASONS & set(C.REPORT_REASONS[target_type])) or sorted(C.NON_EXPIRING_REASONS))
         owner = target if target_type == "USER" else (target["owner"] if target_type == "VIDEO" else target["actor"])
         rep = reporter_for(at, {owner})
@@ -362,7 +362,7 @@ def build(manifest, seed=2026, now=None):
     vids = rnd.sample(public_videos, 12)
     for i, v in enumerate(vids):
         outcome = "TAKEDOWN_VIDEO" if i < 3 else "DISMISS_REPORT" if i < 8 else "pending"
-        at = v["at"] + timedelta(days=rnd.uniform(0.2, 20)) if outcome != "pending" else t1 - timedelta(days=rnd.uniform(0.3, 28))
+        at = v["at"] + timedelta(days=rnd.uniform(0.2, 20)) if outcome != "pending" else t1 - timedelta(days=rnd.uniform(0.3, 13))
         at = min(max(at, v["at"] + timedelta(hours=1)), t1 - timedelta(hours=1))
         e = report(at, "VIDEO", v, outcome)
         if e and outcome == "TAKEDOWN_VIDEO":
@@ -386,7 +386,7 @@ def build(manifest, seed=2026, now=None):
     for i, e in enumerate(removal_reports + rest):
         outcome = "REMOVE_COMMENT" if i < 4 else "DISMISS_REPORT" if i < 6 else "pending"
         at = parse(iso(e["at"])) if False else e["at"]
-        at = at + timedelta(hours=rnd.uniform(1, 200)) if outcome != "pending" else max(at + timedelta(hours=1), t1 - timedelta(days=rnd.uniform(0.5, 25)))
+        at = at + timedelta(hours=rnd.uniform(1, 200)) if outcome != "pending" else max(at + timedelta(hours=1), t1 - timedelta(days=rnd.uniform(0.5, 13)))
         report(min(at, t1 - timedelta(hours=1)), "COMMENT", e, outcome)
     for e in rnd.sample(banned_comments, min(6, len(banned_comments))):
         admin.append({"kind": "remove_comment", "at": min(e["at"] + timedelta(hours=rnd.uniform(1, 100)), t1 - timedelta(hours=1)),
@@ -394,6 +394,15 @@ def build(manifest, seed=2026, now=None):
     for _ in range(2):
         admin.append({"kind": "restore", "at": t1 - timedelta(days=rnd.uniform(5, 60)), "video": None, "reason": "Reviewed: nothing wrong"})
     admin.sort(key=lambda e: e["at"])
+    restores = 0
+    for a in admin:  # stable keys: the ledger is keyed by these, never by list position
+        if a["kind"] == "report":
+            a["key"] = f"r:{a['target_type']}:{a['target']}:{a['reporter']}"
+        elif a["kind"] == "remove_comment":
+            a["key"] = f"rc:{a['cid']}"
+        else:
+            a["key"] = f"restore:{restores}"
+            restores += 1
 
     def ser(obj):
         if isinstance(obj, datetime):
@@ -449,9 +458,10 @@ def check(plan):
     cids = {e["cid"]: e for e in plan["events"] if e["kind"] in ("comment", "reply")}
     reports = [a for a in plan["admin"] if a["kind"] == "report"]
     assert len(reports) == 30, len(reports)
+    assert len({a["key"] for a in plan["admin"]}) == len(plan["admin"]), "admin keys must be unique"
     for a in reports:
-        if a["outcome"] == "pending":
-            assert parse(a["at"]) > t1 - timedelta(days=29) or a["reason"] in C.NON_EXPIRING_REASONS, a
+        if a["outcome"] == "pending":  # StaleReportSweep dismisses expiring reasons after 30 d; leave 16 d for the demo
+            assert parse(a["at"]) > t1 - timedelta(days=14) or a["reason"] in C.NON_EXPIRING_REASONS, a
         if a["target_type"] == "COMMENT" and a["outcome"] == "REMOVE_COMMENT":
             assert cids[a["target"]]["actor"] != demo
     for a in plan["admin"]:

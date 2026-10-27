@@ -43,6 +43,13 @@ OTP is read automatically, otherwise the script asks for it on stdin (read it fr
 Everything created is recorded in `SEED_MEDIA/ledger.json`; a crashed run continues where it
 stopped. Phases can be run alone: `python3 -I scripts/seed/seed.py <media> --phase engagement`.
 
+## Demo window
+
+The seeded world ages. Within **5 days** of seeding: the temporary ban (`chu.bonsai`) expires, and
+`StaleReportSweep` starts dismissing pending reports with expiring reasons 30 days after their
+backdated `created_at` (the seed keeps them under 14 days old, so about 16 days of margin).
+Re-seed (`make infra-reset` …) if the demo slips further than that.
+
 ## Before the demo
 
 `reco:trending` only reflects the last 24 h of engagement, so a day after seeding the For You
@@ -53,6 +60,13 @@ make seed-refresh
 ```
 
 It sends ~300 fresh likes, comments and views on the 30 most-viewed videos.
+
+## After the demo
+
+- Delete `SEED_MEDIA/ledger.json`: it holds every demo user's access token and the admin's
+  remember-device token in plain text.
+- Remove `OTP_LOG_TO_CONSOLE=true` and the always-pass `TURNSTILE_SECRET_KEY` from `.env`
+  (CLAUDE.md §Dev-only affordances).
 
 ## Accounts
 

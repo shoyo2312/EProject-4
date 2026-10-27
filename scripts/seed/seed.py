@@ -123,7 +123,7 @@ def sql(container, db, statement):
 
 
 class Ledger:
-    LISTS = ("likes", "shares", "reposts", "saves", "comment_likes", "follows", "chats", "stories", "refresh")
+    LISTS = ("likes", "shares", "reposts", "saves", "comment_likes", "follows", "chats", "stories", "refresh", "dropped")
     MAPS = ("users", "videos", "comments", "reports", "actions", "admin", "phase_done")
 
     def __init__(self, path):
@@ -165,7 +165,7 @@ TOKEN_MAX_AGE = 600  # access tokens live 15 min; re-login after 10
 def token_of(ledger, username):
     rec = ledger.users[username]
     if time.time() - rec.get("token_at", 0) > TOKEN_MAX_AGE:
-        rec["token"], rec["refresh"] = login(username)
+        rec["token"], _ = login(username)
         rec["token_at"] = time.time()
     return rec["token"]
 
@@ -176,7 +176,7 @@ def uid_of(ledger, username):
 
 def login(username):
     t = auth.call("POST", "/api/v1/auth/login", {"usernameOrEmail": username, "password": PASSWORD})
-    return t["accessToken"], t["refreshToken"]
+    return t["accessToken"], None  # the refresh token is never used; keep it out of the ledger
 
 
 # --------------------------------------------------------------------------------------------- users
@@ -191,11 +191,11 @@ def phase_users(plan, ledger, media_dir):
                           {"username": name, "email": f"{name}@example.com", "password": PASSWORD, "turnstileToken": TURNSTILE})
             rec["id"] = int(r["id"])
             rec["join_at"] = u["join_at"]
-            sql("tt-postgres-auth", "auth_db", f"UPDATE users SET email_verified=true, email_verified_at=now() WHERE id={rec['id']};")
             new += 1
-            ledger.touch()
+            ledger.save()
         if "token" not in rec:
-            rec["token"], rec["refresh"] = login(name)
+            sql("tt-postgres-auth", "auth_db", f"UPDATE users SET email_verified=true, email_verified_at=now() WHERE id={rec['id']};")
+            rec["token"], _ = login(name)
             rec["token_at"] = time.time()
             ledger.touch()
         if not rec.get("profile_done"):
@@ -268,7 +268,7 @@ def phase_videos(plan, ledger, media_dir):
                                        "tags": v["tags"], "views": v["views"], "completions": v["completions"],
                                        "likes": v["likes"], "duration": v["duration"], "visibility": v["visibility"],
                                        "held": v["held"]}
-            ledger.touch()
+            ledger.save()
     ledger.save()
     _wait_for_pipeline(ledger)
     ledger.phase_done["videos"] = True
@@ -355,13 +355,17 @@ class _CommentPacer:
             time.sleep(delay)
 
 
+def event_key(ev):
+    return ev["cid"] if ev["kind"] in ("comment", "reply") else f"{ev['kind']}:{ev['actor']}:{ev['video']}:{ev['at']}"
+
+
 def _engage_one(ev, ledger, muted, pacer, lock):
     """Send one planned event; returns a ledger entry or None when dropped."""
     vid = ledger.videos[ev["video"]]["id"]
-    tok = token_of(ledger, ev["actor"])
     base = f"/api/v1/interactions/videos/{vid}"
     kind = ev["kind"]
     try:
+        tok = token_of(ledger, ev["actor"])
         if kind == "like":
             inter.call("POST", base + "/like", token=tok)
             return {"actor": ev["actor"], "video": ev["video"], "at": ev["at"]}
@@ -386,7 +390,7 @@ def _engage_one(ev, ledger, muted, pacer, lock):
                         continue
                     _handle_comment_error(e, ev["actor"], muted)
                     return None
-            return {"id": r["commentId"], "video": ev["video"], "at": ev["at"], "author": ev["actor"],
+            return {"id": r["commentId"], "video": ev["video"], "at": ev["at"], "author": ev["actor"], "text": ev["text"],
                     "parent_cid": ev.get("parent_cid"), "status": r.get("status") or "VISIBLE"}
         if kind == "comment_like":
             with lock:
@@ -405,8 +409,8 @@ def _engage_one(ev, ledger, muted, pacer, lock):
             inter.call("POST", base + "/save", token=tok)
             return {"actor": ev["actor"], "video": ev["video"], "at": ev["at"]}
     except ApiError as e:
-        if e.status in (404, 409) or e.code in ("LIKE_RATE_LIMITED", "COMMENT_LIKE_RATE_LIMITED", "SHARE_RATE_LIMITED",
-                                                "REPOST_RATE_LIMITED", "SAVE_RATE_LIMITED", "INTERACTION_BLOCKED"):
+        if e.status in (401, 403, 404, 409) or e.code in ("LIKE_RATE_LIMITED", "COMMENT_LIKE_RATE_LIMITED", "SHARE_RATE_LIMITED",
+                                                          "REPOST_RATE_LIMITED", "SAVE_RATE_LIMITED", "INTERACTION_BLOCKED"):
             log(f"drop {kind} by {ev['actor']} on {ev['video']}: {e}")
             return None
         raise
@@ -426,10 +430,15 @@ def phase_engagement(plan, ledger):
     section = {"like": ledger.likes, "share": ledger.shares, "repost": ledger.reposts, "save": ledger.saves,
                "comment_like": ledger.comment_likes}
 
+    dropped = set(ledger.dropped)
+    banned = set(ledger.admin.get("banned", []))
+
     def key(ev):
         k = ev["kind"]
+        if event_key(ev) in dropped or ev["actor"] in banned:
+            return True
         if k in ("comment", "reply"):
-            return ev["cid"] in ledger.comments or ev.get("dropped")
+            return ev["cid"] in ledger.comments
         if k == "share":
             return (ev["actor"], ev["video"], ev["at"]) in done[k]
         if k == "comment_like":
@@ -450,6 +459,7 @@ def phase_engagement(plan, ledger):
             with lock:
                 if rec is None:
                     counter["dropped"] += 1
+                    ledger.dropped.append(event_key(ev))
                 elif ev["kind"] in ("comment", "reply"):
                     ledger.comments[ev["cid"]] = rec
                 else:
@@ -571,7 +581,7 @@ def early_restore(plan, ledger):
     if not to_restore:
         return
     tok = admin_login(ledger)
-    restores = [i for i, a in enumerate(plan["admin"]) if a["kind"] == "restore"]
+    restores = [a["key"] for a in plan["admin"] if a["kind"] == "restore"]
     for n, k in enumerate(to_restore):
         rec = ledger.videos[k]
         r = admin_api.call("POST", f"/api/v1/admin/videos/{rec['id']}/restore", {"reason": "Reviewed: nothing wrong"}, token=admin_token(ledger))
@@ -581,12 +591,11 @@ def early_restore(plan, ledger):
                 break
             time.sleep(1)
         rec["status"] = "PUBLISHED"
-        idx = restores[n] if n < len(restores) else None
-        at = plan["admin"][idx]["at"] if idx is not None else scenario.iso(scenario.parse(rec["at"]) + scenario.DAY)
-        if idx is not None:
-            ledger.actions[str(idx)] = {"id": r["id"], "at": at}
+        if n < len(restores):
+            planned = next(a for a in plan["admin"] if a["key"] == restores[n])
+            ledger.actions[restores[n]] = {"id": r["id"], "at": planned["at"]}
         else:
-            ledger.actions[f"restore-{k}"] = {"id": r["id"], "at": at}
+            ledger.actions[f"restore-{k}"] = {"id": r["id"], "at": scenario.iso(scenario.parse(rec["at"]) + scenario.DAY)}
         ledger.save()
 
 
@@ -600,9 +609,9 @@ def _target_id(a, ledger):
 
 
 def phase_admin(plan, ledger):
-    tok = admin_login(ledger)
-    for idx, a in enumerate(plan["admin"]):
-        key = str(idx)
+    admin_login(ledger)
+    for a in plan["admin"]:
+        key = a["key"]
         if a["kind"] == "report":
             if key not in ledger.reports:
                 target = _target_id(a, ledger)
@@ -624,6 +633,8 @@ def phase_admin(plan, ledger):
                 ledger.actions[key] = {"report_id": rep["id"], "at": a["resolved_at"], "type": a["outcome"]}
                 if a["outcome"] == "TAKEDOWN_VIDEO":
                     ledger.videos[a["target"]]["status"] = "TAKEN_DOWN"
+                if a["outcome"] == "BAN_USER":
+                    ledger.admin.setdefault("banned", []).append(a["target"])
                 ledger.save()
         elif a["kind"] == "remove_comment":
             if key in ledger.actions:
@@ -707,6 +718,21 @@ def selftest():
         raise AssertionError("500 must raise")
     except ApiError:
         pass
+    import tempfile
+    tmp = Path(tempfile.mkdtemp()) / "ledger.json"
+    led = Ledger(tmp)
+    led.users["x"] = {"id": 1}
+    g = globals()
+    g["phase_boom"] = lambda plan, ledger: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        run_phases(["boom"], {}, led, None, skip_done=False)
+        raise AssertionError("phase error must propagate")
+    except RuntimeError:
+        pass
+    assert json.loads(tmp.read_text())["users"] == {"x": {"id": 1}}, "ledger must be saved on failure"
+    led.dropped.append(event_key({"kind": "like", "actor": "a", "video": "v", "at": "t"}))
+    assert event_key({"kind": "like", "actor": "a", "video": "v", "at": "t"}) in set(led.dropped)
+    assert event_key({"kind": "comment", "cid": "c9"}) == "c9"
     print("ok")
 
 
@@ -730,17 +756,27 @@ def main():
         ledger.save()
     plan = scenario.build(manifest, seed=args.seed, now=scenario.parse(ledger.admin["t1"]))
     phases = PHASES if args.phase == "all" else [args.phase]
-    g = globals()
-    for ph in phases:
-        fn = g.get("phase_" + ph)
-        if fn is None:
-            raise SystemExit(f"phase {ph} not implemented yet")
-        log(f"== phase {ph}")
-        fn(plan, ledger, media_dir) if ph in ("users", "videos", "stories") else fn(plan, ledger)
-        if ph == "videos":
-            early_restore(plan, ledger)
+    run_phases(phases, plan, ledger, media_dir, skip_done=args.phase == "all")
     if args.phase == "all":
         log("create pass done — now run: make seed-backdate")
+
+
+def run_phases(phases, plan, ledger, media_dir, skip_done):
+    g = globals()
+    try:
+        for ph in phases:
+            fn = g.get("phase_" + ph)
+            if fn is None:
+                raise SystemExit(f"phase {ph} not implemented yet")
+            if skip_done and ledger.phase_done.get(ph):
+                log(f"== phase {ph}: done earlier, skipped")
+                continue
+            log(f"== phase {ph}")
+            fn(plan, ledger, media_dir) if ph in ("users", "videos", "stories") else fn(plan, ledger)
+            if ph == "videos":
+                early_restore(plan, ledger)
+    finally:
+        ledger.save()
 
 
 if __name__ == "__main__":
