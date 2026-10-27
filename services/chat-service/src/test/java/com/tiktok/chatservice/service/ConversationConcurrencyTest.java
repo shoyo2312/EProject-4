@@ -4,6 +4,7 @@ import com.tiktok.chatservice.client.BlockClient;
 import com.tiktok.chatservice.dto.request.SendMessageRequest;
 import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.mapper.MessageMapperImpl;
+import com.tiktok.chatservice.repository.ChatUserPrefsRepository;
 import com.tiktok.chatservice.repository.ConversationRepository;
 import com.tiktok.chatservice.repository.MessageRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,6 +47,8 @@ class ConversationConcurrencyTest {
 
     @Autowired
     private MessageRepository messageRepository;
+    @Autowired
+    private ChatUserPrefsRepository prefsRepository;
 
     private final ConversationService conversationService = mock(ConversationService.class);
     private final SimpMessagingTemplate messagingTemplate = mock(SimpMessagingTemplate.class);
@@ -57,7 +60,9 @@ class ConversationConcurrencyTest {
         conversationRepository.deleteAll();
         messageRepository.deleteAll();
         messageService = new MessageServiceImpl(conversationService, conversationRepository,
-                messageRepository, new MessageMapperImpl(), messagingTemplate, mock(BlockClient.class));
+                messageRepository, new MessageMapperImpl(), messagingTemplate, mock(BlockClient.class),
+                mock(ChatEventPublisher.class), com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository);
+        when(conversationService.promoteIfMutual(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
     @Test

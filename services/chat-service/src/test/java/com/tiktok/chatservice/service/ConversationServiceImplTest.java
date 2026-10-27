@@ -13,6 +13,7 @@ import com.tiktok.chatservice.exception.DmSettingsUnavailableException;
 import com.tiktok.chatservice.exception.MessagingNotAllowedException;
 import com.tiktok.chatservice.exception.NotConversationParticipantException;
 import com.tiktok.chatservice.mapper.ConversationMapper;
+import com.tiktok.chatservice.repository.ChatUserPrefsRepository;
 import com.tiktok.chatservice.repository.ConversationRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -46,8 +47,9 @@ class ConversationServiceImplTest {
 
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
-        conversationService = new ConversationServiceImpl(conversationRepository, conversationMapper,
-                blockClient, settingsClient, friendshipClient);
+        conversationService = new ConversationServiceImpl(conversationRepository, blockClient, settingsClient,
+                friendshipClient, eventPublisher,
+                new ConversationViews(conversationMapper, org.mockito.Mockito.mock(com.tiktok.chatservice.repository.MessageRepository.class), org.mockito.Mockito.mock(ChatUserPrefsRepository.class)));
         // The audience check runs on every open, so the permissive answer is the baseline every
         // test that is not about it needs. Lenient: the self and block cases never reach it.
         lenient().when(settingsClient.dmAudience(any())).thenReturn(DmAudience.EVERYONE);
@@ -55,6 +57,9 @@ class ConversationServiceImplTest {
 
     @Mock
     private BlockClient blockClient;
+
+    @Mock
+    private ChatEventPublisher eventPublisher;
 
     @Mock
     private SettingsClient settingsClient;
@@ -83,7 +88,8 @@ class ConversationServiceImplTest {
         Conversation existing = Conversation.builder().id("c1").participantIds(List.of(1L, 2L)).participantKey(key).build();
         when(conversationRepository.findByParticipantKeyAndDeletedAtIsNull(key)).thenReturn(Optional.of(existing));
         when(conversationMapper.toResponse(existing, 1L))
-                .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, false));
+                .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, null, false, null, null,
+                        com.tiktok.chatservice.dto.response.SendPermission.ALLOWED, null));
 
         conversationService.getOrCreate(1L, 2L);
 
@@ -96,7 +102,8 @@ class ConversationServiceImplTest {
         when(conversationRepository.findByParticipantKeyAndDeletedAtIsNull(key)).thenReturn(Optional.empty());
         when(conversationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(conversationMapper.toResponse(any(Conversation.class), eq(1L)))
-                .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, false));
+                .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, null, false, null, null,
+                        com.tiktok.chatservice.dto.response.SendPermission.ALLOWED, null));
 
         conversationService.getOrCreate(1L, 2L);
 
@@ -145,7 +152,8 @@ class ConversationServiceImplTest {
         when(friendshipClient.areFriends(1L, 2L)).thenReturn(true);
         when(conversationRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(conversationMapper.toResponse(any(Conversation.class), eq(1L)))
-                .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, false));
+                .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, null, false, null, null,
+                        com.tiktok.chatservice.dto.response.SendPermission.ALLOWED, null));
 
         assertThat(conversationService.getOrCreate(1L, 2L).id()).isEqualTo("c1");
         verify(conversationRepository).save(any());
@@ -180,7 +188,8 @@ class ConversationServiceImplTest {
         when(conversationRepository.findByParticipantKeyAndDeletedAtIsNull(key))
                 .thenReturn(Optional.of(existing));
         when(conversationMapper.toResponse(existing, 1L))
-                .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, false));
+                .thenReturn(new ConversationResponse("c1", List.of(1L, 2L), null, null, null, null, null, false, null, null,
+                        com.tiktok.chatservice.dto.response.SendPermission.ALLOWED, null));
 
         assertThat(conversationService.getOrCreate(1L, 2L).id()).isEqualTo("c1");
         verify(settingsClient, never()).dmAudience(any());

@@ -44,8 +44,20 @@ public class DataExportSources {
     public record Conversation(String id, List<Long> participantIds, Instant createdAt) {
     }
 
+    /**
+     * {@code type} is null for a message from before chat had types, and TEXT otherwise; a STICKER has
+     * no {@code content}, only the catalog entry chat-service attached.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record Message(String id, Long senderId, String content, Instant sentAt) {
+    public record Message(String id, Long senderId, String content, Instant sentAt, String type, Sticker sticker) {
+
+        public Message(String id, Long senderId, String content, Instant sentAt) {
+            this(id, senderId, content, sentAt, null, null);
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Sticker(String name) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

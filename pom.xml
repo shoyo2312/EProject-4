@@ -79,7 +79,6 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
-
             <!-- Internal libs -->
             <dependency>
                 <groupId>com.tiktok</groupId>

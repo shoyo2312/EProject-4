@@ -69,6 +69,25 @@ class DataExportArchiverTest {
         assertThat(chat.getFirst().get("Date")).isEqualTo("2026-10-18 10:00:00 UTC");
     }
 
+    /** A sticker has no text; the export names it instead of leaving an empty cell. */
+    @Test
+    void aStickerIsNamedInTheChatHistory() {
+        when(sources.conversationsOf(ALICE)).thenReturn(List.of(
+                new DataExportSources.Conversation("c1", List.of(ALICE, BOB), Instant.EPOCH)));
+        when(sources.messagesOf("c1")).thenReturn(List.of(
+                new DataExportSources.Message("m2", BOB, null, Instant.parse("2026-10-18T10:01:00Z"),
+                        "STICKER", new DataExportSources.Sticker("Fire")),
+                new DataExportSources.Message("m1", ALICE, "hi", Instant.parse("2026-10-18T10:00:00Z"),
+                        "TEXT", null)));
+        when(userProfileRepository.findByUserIdInAndDeletedAtIsNull(anyList()))
+                .thenReturn(List.of(profile(ALICE, "alice"), profile(BOB, "bob")));
+
+        List<Map<String, String>> chat = archiver.collect(ALICE, List.of(DataExportCategory.DIRECT_MESSAGES))
+                .getFirst().files().getFirst().records();
+
+        assertThat(chat).extracting(r -> r.get("Message")).containsExactly("hi", "[Sticker: Fire]");
+    }
+
     @Test
     void sectionsComeInTheOrderAsked() {
         List<DataExportSection> sections = archiver.collect(ALICE,

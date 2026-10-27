@@ -39,11 +39,13 @@ public class InternalChatExportController {
                 .toList());
     }
 
+    /** {@code viewerId} is the person asking for their data: the history comes back as they see it. */
     @GetMapping("/{conversationId}/messages")
     public ApiResponse<MessagePageResponse> messages(
             @PathVariable String conversationId,
+            @RequestParam Long viewerId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "100") @Min(1) @Max(100) int size) {
-        return ApiResponse.success(messageService.exportMessages(conversationId, cursor, size));
+        return ApiResponse.success(messageService.exportMessages(conversationId, viewerId, cursor, size));
     }
 }

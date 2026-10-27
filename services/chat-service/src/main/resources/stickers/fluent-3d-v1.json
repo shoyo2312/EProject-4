@@ -1,0 +1,255 @@
+{
+  "packId": "fluent-3d",
+  "packName": "Fluent 3D",
+  "version": 1,
+  "source": {
+    "repository": "https://github.com/microsoft/fluentui-emoji",
+    "commit": "1ffb34c752ecf5d402f04cfb4b392c77f57c54bc",
+    "license": "MIT",
+    "licenseFile": "LICENSE-fluentui-emoji.txt",
+    "copyright": "Copyright (c) Microsoft Corporation"
+  },
+  "objectPrefix": "stickers/fluent-3d/v1/",
+  "stickers": [
+    {
+      "stickerId": "grinning-face",
+      "name": "Grinning face",
+      "sourcePath": "assets/Grinning face/3D/grinning_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/grinning-face.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 38711,
+      "sha256": "175d214df45fe18f6f106a9a094b695689d98abe6f343295fcbd690a7ee4f0ab"
+    },
+    {
+      "stickerId": "grinning-face-big-eyes",
+      "name": "Grinning face with big eyes",
+      "sourcePath": "assets/Grinning face with big eyes/3D/grinning_face_with_big_eyes_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/grinning-face-big-eyes.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 39041,
+      "sha256": "2e1e71709927b706cf9721c8f730afa735da4073685ce365a54e4951e5133c80"
+    },
+    {
+      "stickerId": "heart-eyes",
+      "name": "Smiling face with heart-eyes",
+      "sourcePath": "assets/Smiling face with heart-eyes/3D/smiling_face_with_heart-eyes_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/heart-eyes.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 43664,
+      "sha256": "2b5ab00dd73673faa86463eac8787b7fc366935c4d82a54451df33443190b9cc"
+    },
+    {
+      "stickerId": "tears-of-joy",
+      "name": "Face with tears of joy",
+      "sourcePath": "assets/Face with tears of joy/3D/face_with_tears_of_joy_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/tears-of-joy.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 44153,
+      "sha256": "8af20fb0c64c44a8d8c8d047c1410c5e529a37c3158d496832b380198ed2e9c3"
+    },
+    {
+      "stickerId": "rofl",
+      "name": "Rolling on the floor laughing",
+      "sourcePath": "assets/Rolling on the floor laughing/3D/rolling_on_the_floor_laughing_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/rofl.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 45925,
+      "sha256": "22ebfd950c4df297e784babe1e31bc1713144615f78cb0262c8dc2ce0da90ca0"
+    },
+    {
+      "stickerId": "smiling-hearts",
+      "name": "Smiling face with hearts",
+      "sourcePath": "assets/Smiling face with hearts/3D/smiling_face_with_hearts_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/smiling-hearts.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 52432,
+      "sha256": "2b8c4abe57a81fe3805ec0c271f855984e9f4a7a1d10053050a4db7b6def778e"
+    },
+    {
+      "stickerId": "blowing-a-kiss",
+      "name": "Face blowing a kiss",
+      "sourcePath": "assets/Face blowing a kiss/3D/face_blowing_a_kiss_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/blowing-a-kiss.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 46353,
+      "sha256": "5a993350588f243ae13c011b5cb8cc4a5f497d2cc213adfefc5ded40196afe10"
+    },
+    {
+      "stickerId": "winking",
+      "name": "Winking face",
+      "sourcePath": "assets/Winking face/3D/winking_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/winking.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 43638,
+      "sha256": "f14edbaa23f127ee6ee7c4a17b35969405a3c441b3f79c3356cc6406c1bf9ae4"
+    },
+    {
+      "stickerId": "sunglasses",
+      "name": "Smiling face with sunglasses",
+      "sourcePath": "assets/Smiling face with sunglasses/3D/smiling_face_with_sunglasses_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/sunglasses.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 47859,
+      "sha256": "e98cb43a7a531289c82eb57441eb20cd88cb53b895c212d8e3abf05dd2647da1"
+    },
+    {
+      "stickerId": "star-struck",
+      "name": "Star-struck",
+      "sourcePath": "assets/Star-struck/3D/star-struck_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/star-struck.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 45284,
+      "sha256": "89a14e242892cbe067095b75eb51cd55692841bceb384a45a90f8f3f8b9b2e9b"
+    },
+    {
+      "stickerId": "partying",
+      "name": "Partying face",
+      "sourcePath": "assets/Partying face/3D/partying_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/partying.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 50583,
+      "sha256": "e01bd94de6b85468f6e59da55d380985c363f6bc300b412d18290f143f7e44a9"
+    },
+    {
+      "stickerId": "hugging",
+      "name": "Hugging face",
+      "sourcePath": "assets/Hugging face/3D/hugging_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/hugging.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 51316,
+      "sha256": "2f70a465496f45c146253fc933202a38f4f8e1af8b2a0e2555832456c03f1b2e"
+    },
+    {
+      "stickerId": "thinking",
+      "name": "Thinking face",
+      "sourcePath": "assets/Thinking face/3D/thinking_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/thinking.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 45573,
+      "sha256": "cd29da5c3886e1e25726d3cf6ff79faa2f0d631b1c0873b115be287d358fc4be"
+    },
+    {
+      "stickerId": "surprised",
+      "name": "Face with open mouth",
+      "sourcePath": "assets/Face with open mouth/3D/face_with_open_mouth_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/surprised.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 36399,
+      "sha256": "d625adc79700a83d26f15d602f6e8158598f5f80fa8d839014bc938c06222046"
+    },
+    {
+      "stickerId": "exploding-head",
+      "name": "Exploding head",
+      "sourcePath": "assets/Exploding head/3D/exploding_head_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/exploding-head.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 47230,
+      "sha256": "a915d5b325dbe3130fed54ebaf793777ab88b54c130560f8f3c17ad1af2bcdaf"
+    },
+    {
+      "stickerId": "screaming",
+      "name": "Face screaming in fear",
+      "sourcePath": "assets/Face screaming in fear/3D/face_screaming_in_fear_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/screaming.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 45002,
+      "sha256": "fe82efcca47346ff85d85b6e947f9c70dcb9e8ba463b1900053b23f1faf37789"
+    },
+    {
+      "stickerId": "pleading",
+      "name": "Pleading face",
+      "sourcePath": "assets/Pleading face/3D/pleading_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/pleading.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 44074,
+      "sha256": "7dfc89c51118f0adecf886063b5eafce140a613075394ebe22ed9dd2bd9e9c4f"
+    },
+    {
+      "stickerId": "loudly-crying",
+      "name": "Loudly crying face",
+      "sourcePath": "assets/Loudly crying face/3D/loudly_crying_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/loudly-crying.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 38405,
+      "sha256": "9e7b740110d12731e7416c8958b88bfadd75e0e7121ab0245e581e8f70491e02"
+    },
+    {
+      "stickerId": "pouting",
+      "name": "Pouting face",
+      "sourcePath": "assets/Pouting face/3D/pouting_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/pouting.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 40100,
+      "sha256": "053597c33ff5340a6971eaee06acfde543820375ca77652cc1fff3461f795c06"
+    },
+    {
+      "stickerId": "sleeping",
+      "name": "Sleeping face",
+      "sourcePath": "assets/Sleeping face/3D/sleeping_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/sleeping.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 44597,
+      "sha256": "c7d1cd5d04ae7214b6ae92b9802b6c860729c755da0020ccec22c7c8171f18fa"
+    },
+    {
+      "stickerId": "red-heart",
+      "name": "Red heart",
+      "sourcePath": "assets/Red heart/3D/red_heart_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/red-heart.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 29389,
+      "sha256": "7218cb9f08ed1ef38fcd83fe699a1125d07f50725f4c87a68cb7c9f4efb3c32b"
+    },
+    {
+      "stickerId": "fire",
+      "name": "Fire",
+      "sourcePath": "assets/Fire/3D/fire_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/fire.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 26826,
+      "sha256": "d56355132d73df1741edcf37cb4e21ad54f1c46eeb76fa17224607abf4128c3f"
+    },
+    {
+      "stickerId": "sparkles",
+      "name": "Sparkles",
+      "sourcePath": "assets/Sparkles/3D/sparkles_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/sparkles.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 21948,
+      "sha256": "e4490c9ff74a3fd73a8f99c760d65b6ed51b8a3e4ad28da137fec050b77e1058"
+    },
+    {
+      "stickerId": "party-popper",
+      "name": "Party popper",
+      "sourcePath": "assets/Party popper/3D/party_popper_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/party-popper.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 42512,
+      "sha256": "70a8e2f9daf1646be9e773751b7f3b6b281a2415cf29c3c3aeebd9c923cdc3e0"
+    }
+  ]
+}

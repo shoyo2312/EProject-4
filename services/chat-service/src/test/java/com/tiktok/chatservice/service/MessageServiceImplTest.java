@@ -7,6 +7,7 @@ import com.tiktok.chatservice.dto.response.MessageResponse;
 import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.entity.Message;
 import com.tiktok.chatservice.mapper.MessageMapper;
+import com.tiktok.chatservice.repository.ChatUserPrefsRepository;
 import com.tiktok.chatservice.repository.ConversationRepository;
 import com.tiktok.chatservice.repository.MessageRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -53,8 +54,14 @@ class MessageServiceImplTest {
     void setUp() {
         messageService = new MessageServiceImpl(
                 conversationService, conversationRepository, messageRepository, messageMapper, messagingTemplate,
-                blockClient);
+                blockClient, eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), org.mockito.Mockito.mock(ChatUserPrefsRepository.class));
+        // Nothing here is a pending request, so promotion is the identity.
+        org.mockito.Mockito.lenient().when(conversationService.promoteIfMutual(any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
     }
+
+    @Mock
+    private ChatEventPublisher eventPublisher;
 
     @Mock
     private BlockClient blockClient;
@@ -78,7 +85,7 @@ class MessageServiceImplTest {
         Conversation conversation = Conversation.builder().id("c1").participantIds(List.of(1L, 2L)).build();
         when(conversationService.requireParticipant(1L, "c1")).thenReturn(conversation);
         when(messageMapper.toResponse(any(Message.class)))
-                .thenReturn(new MessageResponse("m1", "c1", 1L, "hi", null));
+                .thenReturn(new MessageResponse("m1", "c1", 1L, "hi", null, com.tiktok.chatservice.entity.MessageType.TEXT, null, null));
 
         MessageResponse response = messageService.sendMessage("c1", 1L, new SendMessageRequest("hi"));
 
@@ -87,7 +94,7 @@ class MessageServiceImplTest {
         assertThat(messageCaptor.getValue().getSenderId()).isEqualTo(1L);
         assertThat(messageCaptor.getValue().getContent()).isEqualTo("hi");
 
-        verify(conversationRepository).recordMessage(eq("c1"), eq(1L), eq("hi"), any());
+        verify(conversationRepository).recordMessage(eq("c1"), eq(1L), eq(com.tiktok.chatservice.entity.MessageType.TEXT), eq("hi"), any());
 
         verify(messagingTemplate).convertAndSend("/topic/conversations/c1", response);
     }
@@ -106,7 +113,7 @@ class MessageServiceImplTest {
     void listMessages_requiresParticipant() {
         Conversation conversation = Conversation.builder().id("c1").participantIds(List.of(1L, 2L)).build();
         when(conversationService.requireParticipant(1L, "c1")).thenReturn(conversation);
-        when(messageRepository.findPage("c1", null, null, 21)).thenReturn(List.of());
+        when(messageRepository.findPage("c1", 1L, null, null, null, 21)).thenReturn(List.of());
 
         var page = messageService.listMessages("c1", 1L, null, 20);
 
