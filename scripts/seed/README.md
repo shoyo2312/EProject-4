@@ -128,3 +128,20 @@ It sends ~300 fresh likes, comments and views on the 30 most-viewed videos.
 | `scenario.py` | deterministic planner (`--check` self-test) |
 | `seed.py` | create pass over HTTP, writes the ledger; `--refresh`; `--selftest` |
 | `backdate.py` | second pass per store (Postgres ×3, Mongo ×3, Cassandra, Elasticsearch, Redis, ClickHouse) |
+
+## Moving the seed to production
+
+The seed itself is local-only (it dials service ports, reads OTPs from the auth log, needs the
+always-pass Turnstile key). To show it on the real server, export the local stores and load them there:
+
+```
+bash scripts/seed/export-prod.sh ~/seed-export            # ~6 GB, mostly the bucket
+scp -r ~/seed-export scripts/seed/import-prod.sh homebox:~/   # over Tailscale, not through Cloudflare
+ssh homebox 'bash ~/import-prod.sh ~/seed-export https://media.nowaa.site'
+```
+
+`import-prod.sh` stops the Java services, replaces every
+store, rewrites `http://localhost:9000` to `MEDIA_PUBLIC_URL` in videos, avatars and the search index,
+clears the laptop's sessions/codes/devices from `auth_db`, and starts the services again. Prod data is
+gone afterwards; run it only on a fresh deployment. The laptop's ADMIN account comes along with its
+laptop password — change it after the first sign-in.
