@@ -404,6 +404,20 @@ def build(manifest, seed=2026, now=None):
             return [ser(x) for x in obj]
         return obj
 
+    # held comments on the keyword-filter creator's videos — appended last with their own generator so the
+    # cids and the randomness of everything above stay stable
+    rnd2 = random.Random(seed + 1)
+    kf = next(p for p in personas if p["keyword_filter"])
+    kf_videos = [v for v in videos if v["owner"] == kf["username"] and v["visibility"] == "PUBLIC" and not v["held"]]
+    for text in C.HELD_COMMENTS:
+        v = rnd2.choice(kf_videos)
+        at = parse(iso(v["at"])) if isinstance(v["at"], str) else v["at"]
+        at = at + timedelta(days=rnd2.uniform(0.5, 10))
+        cands = [p for p in personas if p["role"] == "viewer" and active(p, at)]
+        if at < t1 and cands:
+            events.append({"kind": "comment", "at": at, "actor": rnd2.choice(cands)["username"], "video": v["key"], "text": text, "cid": new_cid()})
+    events.sort(key=lambda e: e["at"])
+
     users = sorted(personas, key=lambda p: p["join_at"])
     return ser({"t0": T0, "t1": t1, "users": users, "follows": follows, "videos": videos, "events": events,
                 "chats": chats, "stories": stories, "admin": admin})

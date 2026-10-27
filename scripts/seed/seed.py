@@ -159,8 +159,15 @@ def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
 
 
+TOKEN_MAX_AGE = 600  # access tokens live 15 min; re-login after 10
+
+
 def token_of(ledger, username):
-    return ledger.users[username]["token"]
+    rec = ledger.users[username]
+    if time.time() - rec.get("token_at", 0) > TOKEN_MAX_AGE:
+        rec["token"], rec["refresh"] = login(username)
+        rec["token_at"] = time.time()
+    return rec["token"]
 
 
 def uid_of(ledger, username):
@@ -189,6 +196,7 @@ def phase_users(plan, ledger, media_dir):
             ledger.touch()
         if "token" not in rec:
             rec["token"], rec["refresh"] = login(name)
+            rec["token_at"] = time.time()
             ledger.touch()
         if not rec.get("profile_done"):
             for _ in range(120):
@@ -318,25 +326,33 @@ def _handle_comment_error(err, actor, muted):
 
 
 class _CommentPacer:
-    """Per-actor pacing under the service limits: 1 comment / 3.2 s and 9 per minute."""
+    """Per-actor pacing under the service limits: 3.2 s between comments, 9 per minute, 95 per hour."""
 
     def __init__(self):
+        import threading
+        self.lock = threading.Lock()
         self.last = {}
-        self.minute = {}
+        self.sent = {}
 
     def wait(self, actor):
-        now = time.time()
-        q = [t for t in self.minute.get(actor, []) if now - t < 60]
-        if len(q) >= 9:
-            time.sleep(60 - (now - q[0]) + 0.1)
-            now = time.time()
-            q = [t for t in q if now - t < 60]
-        gap = 3.2 - (now - self.last.get(actor, 0))
-        if gap > 0:
-            time.sleep(gap)
-        self.last[actor] = time.time()
-        q.append(self.last[actor])
-        self.minute[actor] = q
+        while True:
+            with self.lock:
+                now = time.time()
+                q = [t for t in self.sent.get(actor, []) if now - t < 3600]
+                self.sent[actor] = q
+                minute = [t for t in q if now - t < 60]
+                delay = 0
+                if len(q) >= 95:
+                    delay = 3600 - (now - q[0]) + 1
+                elif len(minute) >= 9:
+                    delay = 60 - (now - minute[0]) + 0.2
+                else:
+                    delay = max(0, 3.2 - (now - self.last.get(actor, 0)))
+                    if delay == 0:
+                        self.last[actor] = now
+                        q.append(now)
+                        return
+            time.sleep(delay)
 
 
 def _engage_one(ev, ledger, muted, pacer, lock):
@@ -360,13 +376,13 @@ def _engage_one(ev, ledger, muted, pacer, lock):
                     return None
                 body["parentId"] = parent["id"]
             pacer.wait(ev["actor"])
-            for attempt in range(2):
+            for attempt in range(12):
                 try:
                     r = inter.call("POST", base + "/comments", body, token=tok)
                     break
                 except ApiError as e:
-                    if e.code == "COMMENT_RATE_LIMITED" and attempt == 0:
-                        time.sleep(10)
+                    if e.code == "COMMENT_RATE_LIMITED" and attempt < 11:
+                        time.sleep(30)
                         continue
                     _handle_comment_error(e, ev["actor"], muted)
                     return None
@@ -516,7 +532,7 @@ def admin_login(ledger):
         try:
             t = auth.call("POST", "/api/v1/auth/login", {"usernameOrEmail": email, "password": password,
                                                         "turnstileToken": TURNSTILE, "deviceToken": ledger.admin["device_token"]})
-            ledger.admin["token"] = t["accessToken"]
+            ledger.admin["token"], ledger.admin["token_at"] = t["accessToken"], time.time()
             ledger.save()
             return t["accessToken"]
         except ApiError as e:
@@ -531,9 +547,15 @@ def admin_login(ledger):
     time.sleep(2)
     otp = _otp_from_log() or input("Admin OTP from auth-service log: ").strip()
     t = auth.call("POST", "/api/v1/auth/login/otp", {"usernameOrEmail": email, "otp": otp, "turnstileToken": TURNSTILE, "rememberDevice": True})
-    ledger.admin["token"], ledger.admin["device_token"] = t["accessToken"], t.get("deviceToken")
+    ledger.admin["token"], ledger.admin["device_token"], ledger.admin["token_at"] = t["accessToken"], t.get("deviceToken"), time.time()
     ledger.save()
     return t["accessToken"]
+
+
+def admin_token(ledger):
+    if time.time() - ledger.admin.get("token_at", 0) > TOKEN_MAX_AGE:
+        return admin_login(ledger)
+    return ledger.admin["token"]
 
 
 def early_restore(plan, ledger):
@@ -552,7 +574,7 @@ def early_restore(plan, ledger):
     restores = [i for i, a in enumerate(plan["admin"]) if a["kind"] == "restore"]
     for n, k in enumerate(to_restore):
         rec = ledger.videos[k]
-        r = admin_api.call("POST", f"/api/v1/admin/videos/{rec['id']}/restore", {"reason": "Reviewed: nothing wrong"}, token=tok)
+        r = admin_api.call("POST", f"/api/v1/admin/videos/{rec['id']}/restore", {"reason": "Reviewed: nothing wrong"}, token=admin_token(ledger))
         for _ in range(30):
             v = video_api.call("GET", f"/api/v1/videos/{rec['id']}", token=token_of(ledger, rec["owner"]))
             if v["status"] == "PUBLISHED":
@@ -597,7 +619,7 @@ def phase_admin(plan, ledger):
                 body = {"actionType": a["outcome"], "reason": a["reason"]}
                 if a.get("ban_days"):
                     body["banDays"] = a["ban_days"]
-                r = admin_api.call("POST", f"/api/v1/admin/reports/{rep['id']}/resolve", body, token=tok)
+                r = admin_api.call("POST", f"/api/v1/admin/reports/{rep['id']}/resolve", body, token=admin_token(ledger))
                 rep["status"] = r["status"]
                 ledger.actions[key] = {"report_id": rep["id"], "at": a["resolved_at"], "type": a["outcome"]}
                 if a["outcome"] == "TAKEDOWN_VIDEO":
@@ -611,7 +633,7 @@ def phase_admin(plan, ledger):
                 ledger.actions[key] = None
                 continue
             r = admin_api.call("POST", f"/api/v1/admin/comments/{ledger.videos[c['video']]['id']}/{c['id']}/remove",
-                               {"reason": a["reason"]}, token=tok)
+                               {"reason": a["reason"]}, token=admin_token(ledger))
             ledger.actions[key] = {"id": r["id"], "at": a["at"], "type": "REMOVE_COMMENT"}
             ledger.save()
         # "restore" entries are bound in early_restore

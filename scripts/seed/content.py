@@ -526,6 +526,9 @@ NON_EXPIRING_REASONS = {
     "Sharing personal information",
 }
 
+# Comments that trip the keyword filter of the persona with keyword_filter=True (held for the owner).
+HELD_COMMENTS = ["Inbox mình để nhận ưu đãi nha", "Quảng cáo chút: shop mình đang giảm 50%", "Ai cần hàng giống video thì inbox mình"]
+
 STORY_CAPTIONS = [
     "Sáng nay ☕", "Bữa trưa hôm nay", "Hoàng hôn đẹp quá", "Quán mới gần nhà", "Đi làm thôi", "Góc nhỏ cuối tuần",
     "Mưa rồi", "Thành phố chiều nay", "Hoa nở rồi nè", "Bơ ngủ cả ngày", "Biển vắng", "Về quê", "Chill",
