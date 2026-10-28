@@ -8,7 +8,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 
-public interface StoryViewRepository extends MongoRepository<StoryView, String> {
+public interface StoryViewRepository extends MongoRepository<StoryView, String>, StoryViewRepositoryCustom {
 
     List<StoryView> findByViewerIdAndStoryIdIn(Long viewerId, Collection<String> storyIds);
 

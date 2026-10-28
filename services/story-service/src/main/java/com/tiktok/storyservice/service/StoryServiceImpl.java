@@ -13,9 +13,11 @@ import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.entity.StoryView;
+import com.tiktok.storyservice.entity.StoryReaction;
 import com.tiktok.storyservice.entity.StoryVisibility;
 import com.tiktok.storyservice.exception.ForeignUploadException;
 import com.tiktok.storyservice.exception.NotStoryOwnerException;
+import com.tiktok.storyservice.exception.OwnStoryReactionException;
 import com.tiktok.storyservice.exception.StoryNotFoundException;
 import com.tiktok.storyservice.exception.TooManyFollowedUsersException;
 import com.tiktok.storyservice.exception.TooManyRingUsersException;
@@ -102,7 +104,7 @@ public class StoryServiceImpl implements StoryService {
     @Override
     public StoryResponse getById(Long requesterId, String storyId) {
         Story story = findVisibleTo(requesterId, storyId);
-        return isOwner(requesterId, story) ? ownerView(story) : viewerView(story, seenAmong(requesterId, List.of(story)));
+        return isOwner(requesterId, story) ? ownerView(story) : viewerView(story, viewsAmong(requesterId, List.of(story)));
     }
 
     @Override
@@ -115,8 +117,8 @@ public class StoryServiceImpl implements StoryService {
         List<Story> visible = visibleOf(requesterId, storyRepository
                 .findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(
                         List.of(userId), StoryStatus.ACTIVE, now));
-        Set<String> seen = seenAmong(requesterId, visible);
-        return visible.stream().map(story -> viewerView(story, seen)).toList();
+        Map<String, StoryView> views = viewsAmong(requesterId, visible);
+        return visible.stream().map(story -> viewerView(story, views)).toList();
     }
 
     /**
@@ -151,14 +153,14 @@ public class StoryServiceImpl implements StoryService {
         }
         List<Story> visible = visibleOf(requesterId, storyRepository
                 .findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(others, StoryStatus.ACTIVE, now));
-        Set<String> seen = seenAmong(requesterId, visible);
+        Map<String, StoryView> views = viewsAmong(requesterId, visible);
 
         Map<Long, List<Story>> byOwner = visible.stream()
                 .collect(Collectors.groupingBy(Story::getUserId, LinkedHashMap::new, Collectors.toList()));
         byOwner.entrySet().stream()
                 .map(entry -> new StoryGroupResponse(entry.getKey(),
-                        entry.getValue().stream().map(story -> viewerView(story, seen)).toList(),
-                        entry.getValue().stream().anyMatch(story -> !seen.contains(story.getId()))))
+                        entry.getValue().stream().map(story -> viewerView(story, views)).toList(),
+                        entry.getValue().stream().anyMatch(story -> !views.containsKey(story.getId()))))
                 .sorted(Comparator.comparing(StoryGroupResponse::hasUnseen).reversed()
                         .thenComparing(group -> group.stories().getLast().createdAt(),
                                 Comparator.nullsLast(Comparator.reverseOrder())))
@@ -200,8 +202,8 @@ public class StoryServiceImpl implements StoryService {
         if (!others.isEmpty()) {
             List<Story> visible = visibleOf(requesterId, storyRepository
                     .findByUserIdInAndStatusAndDeletedAtIsNullAndExpiresAtAfterOrderByCreatedAtAsc(others, StoryStatus.ACTIVE, now));
-            Set<String> seen = seenAmong(requesterId, visible);
-            visible.forEach(story -> unseenByOwner.merge(story.getUserId(), !seen.contains(story.getId()), Boolean::logicalOr));
+            Map<String, StoryView> views = viewsAmong(requesterId, visible);
+            visible.forEach(story -> unseenByOwner.merge(story.getUserId(), !views.containsKey(story.getId()), Boolean::logicalOr));
         }
 
         return ids.stream().filter(unseenByOwner::containsKey)
@@ -215,7 +217,8 @@ public class StoryServiceImpl implements StoryService {
         StoryResponse current = ownerView(story);
         return new StoryResponse(current.id(), current.userId(), current.mediaUrl(), current.mediaType(),
                 current.caption(), visibility, current.status(), current.durationSeconds(), current.viewCount(),
-                current.viewedByMe(), current.createdAt(), current.expiresAt());
+                current.viewedByMe(), current.myReaction(), current.reactionCounts(), current.createdAt(),
+                current.expiresAt());
     }
 
     @Override
@@ -237,6 +240,28 @@ public class StoryServiceImpl implements StoryService {
             return;
         }
         storyRepository.incrementViewCount(storyId);
+    }
+
+    @Override
+    public void react(Long viewerId, String storyId, StoryReaction reaction) {
+        Story story = findVisibleTo(viewerId, storyId);
+        if (isOwner(viewerId, story)) {
+            throw new OwnStoryReactionException();
+        }
+        // The upsert decides whether this is the viewer's first touch of the story; only then does
+        // the view count move, as in recordView. A reaction that lands before the view does is both.
+        if (storyViewRepository.upsertReaction(storyId, viewerId, reaction, story.getExpiresAt(), Instant.now())) {
+            storyRepository.incrementViewCount(storyId);
+        }
+    }
+
+    @Override
+    public void unreact(Long viewerId, String storyId) {
+        Story story = findVisibleTo(viewerId, storyId);
+        if (isOwner(viewerId, story)) {
+            return;
+        }
+        storyViewRepository.clearReaction(storyId, viewerId);
     }
 
     @Override
@@ -310,21 +335,24 @@ public class StoryServiceImpl implements StoryService {
                 .toList();
     }
 
-    private Set<String> seenAmong(Long viewerId, List<Story> stories) {
+    /** The viewer's own view rows for these stories, by story id: what they saw, and how they reacted. */
+    private Map<String, StoryView> viewsAmong(Long viewerId, List<Story> stories) {
         if (viewerId == null || stories.isEmpty()) {
-            return Set.of();
+            return Map.of();
         }
         return storyViewRepository.findByViewerIdAndStoryIdIn(viewerId, stories.stream().map(Story::getId).toList())
-                .stream().map(StoryView::getStoryId).collect(Collectors.toSet());
+                .stream().collect(Collectors.toMap(StoryView::getStoryId, view -> view, (first, second) -> first));
     }
 
     private StoryResponse ownerView(Story story) {
-        return storyMapper.toResponse(story, storyMedia.signedGet(story.getMediaKey()), false);
+        return storyMapper.toResponse(story, storyMedia.signedGet(story.getMediaKey()), false, null,
+                storyViewRepository.countReactions(story.getId()));
     }
 
-    private StoryResponse viewerView(Story story, Set<String> seen) {
-        return storyMapper.toResponse(story, storyMedia.signedGet(story.getMediaKey()), seen.contains(story.getId()))
-                .forViewer();
+    private StoryResponse viewerView(Story story, Map<String, StoryView> views) {
+        StoryView view = views.get(story.getId());
+        return storyMapper.toResponse(story, storyMedia.signedGet(story.getMediaKey()), view != null,
+                view == null ? null : view.getReaction(), null).forViewer();
     }
 
     private static boolean isOwner(Long requesterId, Story story) {

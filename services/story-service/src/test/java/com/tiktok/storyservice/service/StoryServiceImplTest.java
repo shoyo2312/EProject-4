@@ -8,11 +8,13 @@ import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryRingResponse;
 import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.entity.StoryMediaType;
+import com.tiktok.storyservice.entity.StoryReaction;
 import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.entity.StoryView;
 import com.tiktok.storyservice.entity.StoryVisibility;
 import com.tiktok.storyservice.exception.ForeignUploadException;
 import com.tiktok.storyservice.exception.NotStoryOwnerException;
+import com.tiktok.storyservice.exception.OwnStoryReactionException;
 import com.tiktok.storyservice.exception.StoryCaptionRejectedException;
 import com.tiktok.storyservice.exception.StoryNotFoundException;
 import com.tiktok.storyservice.exception.TooManyFollowedUsersException;
@@ -457,6 +459,102 @@ class StoryServiceImplTest {
         assertThat(viewCaptor.getValue().getExpiresAt()).isEqualTo(story.getExpiresAt());
         verify(storyRepository).incrementViewCount("s1");
         verify(storyRepository, never()).save(any());
+    }
+
+    // --- reactions ----------------------------------------------------------------------------
+
+    @Test
+    void react_ownerReactingToOwnStory_isBadRequest() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
+
+        assertThatThrownBy(() -> storyService.react(1L, "s1", StoryReaction.LOVE))
+                .isInstanceOf(OwnStoryReactionException.class);
+        verifyNoInteractions(storyViewRepository);
+    }
+
+    @Test
+    void react_firstTouchInsertsTheViewAndCountsIt() {
+        Story story = active("s1", 1L);
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
+        when(storyAudience.resolve(2L, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
+        when(storyViewRepository.upsertReaction(eq("s1"), eq(2L), eq(StoryReaction.LOVE), eq(story.getExpiresAt()), any()))
+                .thenReturn(true);
+
+        storyService.react(2L, "s1", StoryReaction.LOVE);
+
+        verify(storyRepository).incrementViewCount("s1");
+    }
+
+    @Test
+    void react_afterAViewDoesNotCountAgain() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
+        when(storyAudience.resolve(2L, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
+        when(storyViewRepository.upsertReaction(any(), any(), any(), any(), any())).thenReturn(false);
+
+        storyService.react(2L, "s1", StoryReaction.WOW);
+
+        verify(storyRepository, never()).incrementViewCount(any());
+    }
+
+    @Test
+    void react_onAStoryTheViewerMayNotSee_isNotFound() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1"))
+                .thenReturn(Optional.of(story("s1", 1L, StoryStatus.ACTIVE, StoryVisibility.PRIVATE, Instant.now())));
+        when(storyAudience.resolve(2L, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
+
+        assertThatThrownBy(() -> storyService.react(2L, "s1", StoryReaction.SAD)).isInstanceOf(StoryNotFoundException.class);
+        verifyNoInteractions(storyViewRepository);
+    }
+
+    @Test
+    void unreact_isIdempotent() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
+        when(storyAudience.resolve(2L, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
+
+        storyService.unreact(2L, "s1");
+        storyService.unreact(2L, "s1");
+
+        verify(storyViewRepository, times(2)).clearReaction("s1", 2L);
+        verify(storyRepository, never()).incrementViewCount(any());
+    }
+
+    @Test
+    void getById_asViewer_carriesMyReactionAndNoCounts() {
+        Story story = active("s1", 1L);
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(story));
+        when(storyAudience.resolve(2L, List.of(1L))).thenReturn(Map.of(1L, PUBLIC_ONLY));
+        when(storyViewRepository.findByViewerIdAndStoryIdIn(2L, List.of("s1")))
+                .thenReturn(List.of(StoryView.builder().storyId("s1").viewerId(2L).reaction(StoryReaction.LOVE).build()));
+
+        StoryResponse response = storyService.getById(2L, "s1");
+
+        assertThat(response.myReaction()).isEqualTo(StoryReaction.LOVE);
+        assertThat(response.viewedByMe()).isTrue();
+        assertThat(response.reactionCounts()).isNull();
+        verify(storyViewRepository, never()).countReactions(any());
+    }
+
+    @Test
+    void getById_asOwner_carriesCountsAndNoMyReaction() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
+        when(storyViewRepository.countReactions("s1")).thenReturn(Map.of(StoryReaction.LOVE, 2L));
+
+        StoryResponse response = storyService.getById(1L, "s1");
+
+        assertThat(response.reactionCounts()).containsExactly(Map.entry(StoryReaction.LOVE, 2L));
+        assertThat(response.myReaction()).isNull();
+    }
+
+    @Test
+    void listViewers_carriesEachViewersReaction() {
+        when(storyRepository.findByIdAndDeletedAtIsNull("s1")).thenReturn(Optional.of(active("s1", 1L)));
+        StoryView view = StoryView.builder().storyId("s1").viewerId(2L).viewedAt(Instant.now())
+                .reaction(StoryReaction.ANGRY).build();
+        when(storyViewRepository.findByStoryIdAndViewedAtBeforeOrderByViewedAtDesc(eq("s1"), any(), any()))
+                .thenReturn(List.of(view));
+
+        assertThat(storyService.listViewers(1L, "s1", null, null)).singleElement()
+                .satisfies(viewer -> assertThat(viewer.reaction()).isEqualTo(StoryReaction.ANGRY));
     }
 
     @Test

@@ -80,10 +80,13 @@ từ chối file lớn hơn.
 | GET | `/{storyId}` | không | — | `StoryResponse` |
 | PATCH | `/{storyId}/visibility` | chủ story | `{visibility}` | `StoryResponse` |
 | POST | `/{storyId}/views` | cần | — | `204`; xem lại hoặc tự xem story của mình thì không đếm |
-| GET | `/{storyId}/viewers` | chủ story | `before?` (ISO instant), `size?` (1–50, mặc định 20) | `[{viewerId, viewedAt}]`, mới trước |
+| GET | `/{storyId}/viewers` | chủ story | `before?` (ISO instant), `size?` (1–50, mặc định 20) | `[{viewerId, viewedAt, reaction}]`, mới trước; `reaction` null khi chưa thả |
+| PUT | `/{storyId}/reaction` | cần | `{reaction: LIKE\|LOVE\|WOW\|ANGRY\|SAD}` | `204`; một reaction mỗi người, gọi lại là thay; chủ story → `400 STORY_OWN_REACTION`; thả reaction trước khi view được ghi thì tạo luôn view (và đếm `viewCount` đúng một lần) |
+| DELETE | `/{storyId}/reaction` | cần | — | `204`, idempotent; view vẫn giữ |
 | DELETE | `/{storyId}` | chủ story | — | xoá mềm |
 
-`StoryResponse`: `id, userId, mediaUrl, mediaType (IMAGE|VIDEO), caption, visibility, status, durationSeconds, viewCount, viewedByMe, createdAt, expiresAt`.
+`StoryResponse`: `id, userId, mediaUrl, mediaType (IMAGE|VIDEO), caption, visibility, status, durationSeconds, viewCount, viewedByMe, myReaction, reactionCounts, createdAt, expiresAt`.
+`myReaction` là reaction của người gọi (null khi chưa thả, và luôn null với chủ story); `reactionCounts` (`{LOVE: 12, WOW: 3}`, chỉ loại có người thả) chỉ chủ story thấy, người khác nhận null như `viewCount`. Reaction nằm trên bản ghi view (`story_views`) nên hết hạn cùng story và không đi qua notification.
 
 `StoryGroupResponse`: `{userId, stories, hasUnseen}`. Nhóm của chính người gọi đứng đầu (mọi status,
 `hasUnseen=false`), sau đó các nhóm còn story chưa xem, rồi theo story mới nhất. Trong một nhóm, story

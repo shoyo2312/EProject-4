@@ -2,6 +2,7 @@ package com.tiktok.storyservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
+import com.tiktok.storyservice.dto.request.ReactToStoryRequest;
 import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
 import com.tiktok.storyservice.dto.request.UpdateStoryVisibilityRequest;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
@@ -84,6 +85,23 @@ public class StoryController {
             @AuthenticationPrincipal Long currentUserId,
             @PathVariable String storyId) {
         storyService.recordView(currentUserId, storyId);
+    }
+
+    @PutMapping("/{storyId}/reaction")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void react(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable String storyId,
+            @Valid @RequestBody ReactToStoryRequest request) {
+        storyService.react(currentUserId, storyId, request.reaction());
+    }
+
+    @DeleteMapping("/{storyId}/reaction")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unreact(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable String storyId) {
+        storyService.unreact(currentUserId, storyId);
     }
 
     /** Newest first; pass the last {@code viewedAt} as {@code before} for the next page. */

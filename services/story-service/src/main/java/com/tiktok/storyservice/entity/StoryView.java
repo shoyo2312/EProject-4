@@ -42,4 +42,9 @@ public class StoryView {
 
     @CreatedDate
     private Instant viewedAt;
+
+    /** The viewer's reaction, if they gave one; null otherwise. Lives and expires with the view. */
+    private StoryReaction reaction;
+
+    private Instant reactedAt;
 }

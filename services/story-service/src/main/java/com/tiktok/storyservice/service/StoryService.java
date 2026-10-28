@@ -8,6 +8,7 @@ import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryRingResponse;
 import com.tiktok.storyservice.dto.response.StoryUploadUrlResponse;
 import com.tiktok.storyservice.dto.response.StoryViewerResponse;
+import com.tiktok.storyservice.entity.StoryReaction;
 import com.tiktok.storyservice.entity.StoryVisibility;
 
 import java.time.Instant;
@@ -31,6 +32,12 @@ public interface StoryService {
     StoryResponse updateVisibility(Long requesterId, String storyId, StoryVisibility visibility);
 
     void recordView(Long viewerId, String storyId);
+
+    /** One reaction per viewer per story; a second call replaces it. The owner is refused. */
+    void react(Long viewerId, String storyId, StoryReaction reaction);
+
+    /** Removes the viewer's reaction. Idempotent. */
+    void unreact(Long viewerId, String storyId);
 
     List<StoryViewerResponse> listViewers(Long requesterId, String storyId, Instant before, Integer size);
 
