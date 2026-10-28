@@ -384,6 +384,29 @@ Build lỗi (service nào đó chết) → giữ lease, thử lại sau `lease` 
 - `readyFiles`: file `READY` chưa quá hạn, tức đang chiếm chỗ trên MinIO.
 - `failed`: số yêu cầu thành `FAILED` trong 7 ngày gần nhất; `recentFailures` là 20 cái mới nhất. `failedAt` lấy từ `updated_at` — sau khi `FAILED` không còn gì cập nhật row nữa.
 
+### 3.23 `GET /me/suggested-accounts?limit=20` — gợi ý "người bạn có thể biết"
+**Cần token.** Danh sách phụ thuộc vào **người xem**, không phụ thuộc vào profile đang mở — mở trên profile nào cũng ra cùng một danh sách, client tự bỏ chủ profile nếu cần (xin `limit + 1`). `limit` mặc định 20, ngoài khoảng 1–50 thì bị **kẹp lại** (không 400).
+
+Ba tầng, nối theo đúng thứ tự, mỗi tài khoản chỉ xuất hiện **một lần** ở tầng đầu tiên tìm thấy nó:
+
+| `reason` | Ai | Thứ tự |
+|---|---|---|
+| `FOLLOWS_YOU` | Người đang follow bạn mà bạn chưa follow lại | follow mới nhất trước |
+| `FOLLOWED_BY` | Người được ít nhất một tài khoản bạn follow follow | nhiều người bạn follow cùng follow nhất trước, rồi `followerCount` giảm dần, rồi `userId` tăng dần |
+| `POPULAR` | Bù cho đủ `limit` bằng tài khoản nhiều follower nhất | `followerCount` giảm dần, rồi `userId` tăng dần |
+
+Không bao giờ gợi ý: chính bạn; người bạn đang follow hoặc đang có lời mời follow chờ duyệt; người có block với bạn ở bất kỳ chiều nào; người bạn đã mute; tài khoản đã xoá hoặc đã đóng (`deactivatedAt`). Nguồn của `FOLLOWED_BY` cũng phải là tài khoản còn mở — không bao giờ hiện "Followed by" một tài khoản đã đóng, và tài khoản đã đóng không được tính vào số người cùng follow.
+
+`followedBy` chỉ có với `FOLLOWED_BY`: `displayName` (không có thì `username`) của **một** người bạn follow mà đang follow tài khoản này — người bạn follow gần đây nhất. Các `reason` khác trả `null`.
+
+**Khoảng trống đã biết:** tài khoản **bị ban** vẫn có thể được gợi ý — user-service không giữ dữ liệu ban (danh sách follower/following cũng không lọc ban).
+
+```json
+[{ "profile": { "userId": 13, "username": "ann", "displayName": "Ann", "...": "…" },
+   "reason": "FOLLOWED_BY", "followedBy": "user11" },
+ { "profile": { "userId": 17, "...": "…" }, "reason": "POPULAR", "followedBy": null }]
+```
+
 ## 4. Enums
 
 | Enum | Giá trị | Dùng ở đâu |
@@ -393,6 +416,7 @@ Build lỗi (service nào đó chết) → giữ lease, thử lại sau `lease` 
 | `DataExportStatus` | `PROCESSING`, `READY`, `CANCELED`, `FAILED`, `EXPIRED` | mục 3.21 |
 | `SettingsAudience` | `EVERYONE`, `FRIENDS`, `NO_ONE` | `commentAudience` và `dmAudience` ở mục 3.14 / 3.15. `FRIENDS` nghĩa là **follow lẫn nhau** (mutual), không phải "người tôi follow" |
 | `FollowResponse.status` | `FOLLOWING`, `REQUESTED` | `status` ở mục 3.4 và 3.16 |
+| `SuggestedAccountResponse.reason` | `FOLLOWS_YOU`, `FOLLOWED_BY`, `POPULAR` | mục 3.23 |
 
 Ngoài các enum trên, follow/block/mute và lời mời follow đều là quan hệ có/không, xoá mềm qua `deletedAt`. Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
 
