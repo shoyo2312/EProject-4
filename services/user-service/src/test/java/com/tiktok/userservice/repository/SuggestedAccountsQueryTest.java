@@ -46,6 +46,7 @@ import static org.assertj.core.api.Assertions.entry;
  * V follows (in this order):      3, 11, 12.
  * Other follows:                  3→13, 11→13, 3→14, 11→2, 12→15; 11→16 soft-deleted.
  * Blocks: V blocks 5; 6 blocks V.   Mute: V mutes 8.   Live follow request: V → 10.
+ * Undone (soft-deleted): 18 blocked V, V muted 19, V requested 20.
  * </pre>
  */
 @SpringBootTest
@@ -114,6 +115,10 @@ class SuggestedAccountsQueryTest {
         userBlockRepository.save(UserBlock.builder().blockerId(6L).blockedId(VIEWER).build());
         userMuteRepository.save(UserMute.builder().muterId(VIEWER).mutedId(8L).build());
         followRequestRepository.save(FollowRequest.builder().requesterId(VIEWER).targetId(10L).build());
+        // Undone, so they must count as gone: 18, 19, 20 stay in the POPULAR tail.
+        userBlockRepository.save(UserBlock.builder().blockerId(18L).blockedId(VIEWER).deletedAt(Instant.now()).build());
+        userMuteRepository.save(UserMute.builder().muterId(VIEWER).mutedId(19L).deletedAt(Instant.now()).build());
+        followRequestRepository.save(FollowRequest.builder().requesterId(VIEWER).targetId(20L).deletedAt(Instant.now()).build());
     }
 
     @Test
@@ -168,6 +173,37 @@ class SuggestedAccountsQueryTest {
         assertThat(all).extracting(a -> a.profile().userId())
                 .startsWith(17L, 15L, 18L, 19L, 20L).doesNotContain(30L, 7L, 12L);
         assertThat(all).extracting(SuggestedAccountResponse::reason).containsOnly(POPULAR);
+    }
+
+    @Test
+    void undoneBlocksMutesAndRequestsCountAsGone() {
+        assertThat(suggestedAccountService.suggest(VIEWER, 50)).extracting(a -> a.profile().userId())
+                .contains(18L, 19L, 20L);
+    }
+
+    /** Viewer 40 follows 41, who follows 200..219; 220 follows 40 and is not followed back. */
+    @Test
+    void aListFilledByFollowedByAloneIsNotCutShort() {
+        profile(40, 0, false);
+        profile(41, 0, false);
+        userFollowRepository.save(follow(40, 41, false));
+        for (long id = 200; id < 220; id++) {
+            profile(id, 0, false);
+            userFollowRepository.save(follow(41, id, false));
+        }
+        profile(220, 0, false);
+        userFollowRepository.save(follow(220, 40, false));
+
+        List<SuggestedAccountResponse> twenty = suggestedAccountService.suggest(40L, 20);
+        assertThat(twenty).hasSize(20);
+        assertThat(twenty).extracting(SuggestedAccountResponse::reason)
+                .containsExactly(FOLLOWS_YOU, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY,
+                        FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY,
+                        FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY, FOLLOWED_BY);
+        assertThat(twenty).filteredOn(a -> a.reason() == FOLLOWED_BY)
+                .extracting(SuggestedAccountResponse::followedBy).containsOnly("user41");
+
+        assertThat(suggestedAccountService.suggest(40L, 21)).hasSize(21);
     }
 
     @Test

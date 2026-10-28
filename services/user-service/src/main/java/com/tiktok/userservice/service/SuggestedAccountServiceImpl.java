@@ -13,8 +13,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 
 import static java.util.stream.Collectors.toMap;
@@ -56,9 +58,12 @@ public class SuggestedAccountServiceImpl implements SuggestedAccountService {
             }
         }
 
-        List<Long> ids = new ArrayList<>();
+        // Bounded by picks taken, not by ids collected: a via id rides along with its candidate
+        // and must not use up a slot, or a list that is mostly FOLLOWED_BY comes back half-loaded.
+        Set<Long> ids = new LinkedHashSet<>();
+        int taken = 0;
         for (Map.Entry<Long, Pick> e : picks.entrySet()) {
-            if (ids.size() == n) {
+            if (taken++ == n) {
                 break;
             }
             ids.add(e.getKey());
@@ -67,7 +72,7 @@ public class SuggestedAccountServiceImpl implements SuggestedAccountService {
             }
         }
         Map<Long, UserProfile> profiles = userProfileRepository
-                .findByUserIdInAndDeletedAtIsNullAndDeactivatedAtIsNull(ids).stream()
+                .findByUserIdInAndDeletedAtIsNullAndDeactivatedAtIsNull(new ArrayList<>(ids)).stream()
                 .collect(toMap(UserProfile::getUserId, Function.identity()));
 
         List<SuggestedAccountResponse> out = new ArrayList<>(n);
