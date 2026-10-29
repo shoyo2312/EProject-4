@@ -49,20 +49,22 @@ class OutboxPublisherTest {
         when(outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc()).thenReturn(List.of(
                 row(1L, "USER_FOLLOW", "2"),
                 row(2L, "FOLLOW_REQUEST", "3"),
-                row(3L, "USER_PRIVACY", "4")));
+                row(3L, "USER_PRIVACY", "4"),
+                row(4L, "USER_BLOCK", "2:9")));
         when(kafkaOperations.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(null));
 
         publisher().publishPending();
 
         ArgumentCaptor<ProducerRecord<String, String>> sent = ArgumentCaptor.forClass(ProducerRecord.class);
-        verify(kafkaOperations, times(3)).send(sent.capture());
+        verify(kafkaOperations, times(4)).send(sent.capture());
         assertThat(sent.getAllValues())
                 .extracting(ProducerRecord::topic, ProducerRecord::key)
                 .containsExactly(
                         tuple("user.follow-events", "2"),
                         tuple("user.follow-request-events", "3"),
-                        tuple("user.privacy-events", "4"));
-        verify(outboxEventRepository).markPublished(eq(List.of(1L, 2L, 3L)), any(Instant.class));
+                        tuple("user.privacy-events", "4"),
+                        tuple("user.block-events", "2:9"));
+        verify(outboxEventRepository).markPublished(eq(List.of(1L, 2L, 3L, 4L)), any(Instant.class));
     }
 
     /**

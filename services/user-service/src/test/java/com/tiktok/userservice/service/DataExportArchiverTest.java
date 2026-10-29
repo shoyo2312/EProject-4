@@ -51,10 +51,10 @@ class DataExportArchiverTest {
                 new DataExportSources.Conversation("c1", List.of(ALICE, BOB), Instant.EPOCH),
                 new DataExportSources.Conversation("c2", List.of(GONE, ALICE), Instant.EPOCH)));
         // Newest first, as chat-service pages them.
-        when(sources.messagesOf("c1")).thenReturn(List.of(
+        when(sources.messagesOf("c1", ALICE)).thenReturn(List.of(
                 new DataExportSources.Message("m2", BOB, "hi back", Instant.parse("2026-10-18T10:01:00Z")),
                 new DataExportSources.Message("m1", ALICE, "hi", Instant.parse("2026-10-18T10:00:00Z"))));
-        when(sources.messagesOf("c2")).thenReturn(List.of(
+        when(sources.messagesOf("c2", ALICE)).thenReturn(List.of(
                 new DataExportSources.Message("m3", GONE, "bye", Instant.parse("2026-10-17T09:00:00Z"))));
         when(userProfileRepository.findByUserIdInAndDeletedAtIsNull(anyList()))
                 .thenReturn(List.of(profile(ALICE, "alice"), profile(BOB, "bob")));
@@ -74,7 +74,7 @@ class DataExportArchiverTest {
     void aStickerIsNamedInTheChatHistory() {
         when(sources.conversationsOf(ALICE)).thenReturn(List.of(
                 new DataExportSources.Conversation("c1", List.of(ALICE, BOB), Instant.EPOCH)));
-        when(sources.messagesOf("c1")).thenReturn(List.of(
+        when(sources.messagesOf("c1", ALICE)).thenReturn(List.of(
                 new DataExportSources.Message("m2", BOB, null, Instant.parse("2026-10-18T10:01:00Z"),
                         "STICKER", new DataExportSources.Sticker("Fire")),
                 new DataExportSources.Message("m1", ALICE, "hi", Instant.parse("2026-10-18T10:00:00Z"),
@@ -100,5 +100,20 @@ class DataExportArchiverTest {
 
     private static UserProfile profile(Long userId, String username) {
         return UserProfile.builder().userId(userId).username(username).build();
+    }
+
+    @Test
+    void videoIdAndCaptionAreKeptInDownloadedChatHistory() {
+        when(sources.conversationsOf(ALICE)).thenReturn(List.of(
+                new DataExportSources.Conversation("c1", List.of(ALICE, BOB), Instant.EPOCH)));
+        var json = tools.jackson.databind.json.JsonMapper.builder().findAndAddModules().build();
+        DataExportSources.Message video = json.readValue("{\"id\":\"m1\",\"senderId\":1,\"type\":\"VIDEO\",\"videoId\":\"123\",\"content\":\"note\",\"sentAt\":\"2026-10-18T10:00:00Z\"}", DataExportSources.Message.class);
+        when(sources.messagesOf("c1", ALICE)).thenReturn(List.of(video));
+        when(userProfileRepository.findByUserIdInAndDeletedAtIsNull(anyList()))
+                .thenReturn(List.of(profile(ALICE, "alice"), profile(BOB, "bob")));
+        var record = archiver.collect(ALICE, List.of(DataExportCategory.DIRECT_MESSAGES))
+                .getFirst().files().getFirst().records().getFirst();
+        assertThat(record).containsEntry("Type", "VIDEO").containsEntry("Video ID", "123")
+                .containsEntry("Message", "note").containsEntry("Date", "2026-10-18 10:00:00 UTC");
     }
 }

@@ -1,6 +1,7 @@
 package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.response.BlockResponse;
+import com.tiktok.userservice.dto.response.BlockStateResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.entity.FollowRequest;
 import com.tiktok.userservice.entity.UserBlock;
@@ -8,6 +9,7 @@ import com.tiktok.userservice.event.producer.UserEventPublisher;
 import com.tiktok.userservice.exception.AlreadyBlockedException;
 import com.tiktok.userservice.exception.CannotBlockSelfException;
 import com.tiktok.userservice.exception.NotBlockedException;
+import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.UserBlockRepository;
@@ -20,6 +22,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
 @Service
 @RequiredArgsConstructor
 public class BlockServiceImpl implements BlockService {
@@ -30,10 +38,12 @@ public class BlockServiceImpl implements BlockService {
     private final UserProfileRepository userProfileRepository;
     private final UserProfileBatchAssembler profileBatchAssembler;
     private final UserEventPublisher userEventPublisher;
+    private final UserPairLock pairLock;
 
     @Override
     @Transactional
     public BlockResponse block(Long blockerId, Long blockedId) {
+        pairLock.acquire(blockerId, blockedId);
         if (blockerId.equals(blockedId)) {
             throw new CannotBlockSelfException();
         }
@@ -46,14 +56,15 @@ public class BlockServiceImpl implements BlockService {
             throw new AlreadyBlockedException();
         }
 
-        // See FollowServiceImpl.follow: the check above loses to a concurrent duplicate, and only
-        // uq_user_blocks_blocker_blocked stops it. Flushing here turns that into the same 409 the
-        // sequential path returns instead of a 500.
+        // The pair lock serializes current writers. Keep the unique-index backstop for older
+        // instances during deployment; flushing translates its violation into the same 409.
+        Instant changedAt = nextChangeAt(blockerId, blockedId);
         try {
-            userBlockRepository.saveAndFlush(UserBlock.builder()
+            UserBlock block = userBlockRepository.saveAndFlush(UserBlock.builder()
                     .blockerId(blockerId)
                     .blockedId(blockedId)
                     .build());
+            userBlockRepository.advanceCreatedAt(block.getId(), changedAt);
         } catch (DataIntegrityViolationException ex) {
             throw new AlreadyBlockedException();
         }
@@ -67,16 +78,20 @@ public class BlockServiceImpl implements BlockService {
         removeFollowRequestIfPresent(blockerId, blockedId);
         removeFollowRequestIfPresent(blockedId, blockerId);
 
+        userEventPublisher.publishBlockChanged(blockerId, blockedId, true);
+
         return new BlockResponse(blockerId, blockedId);
     }
 
     @Override
     @Transactional
     public void unblock(Long blockerId, Long blockedId) {
+        pairLock.acquire(blockerId, blockedId);
         UserBlock block = userBlockRepository.findByBlockerIdAndBlockedIdAndDeletedAtIsNull(blockerId, blockedId)
                 .orElseThrow(NotBlockedException::new);
 
-        block.markDeleted();
+        userBlockRepository.endBlock(block.getId(), nextChangeAt(blockerId, blockedId));
+        userEventPublisher.publishBlockChanged(blockerId, blockedId, false);
     }
 
     @Override
@@ -91,6 +106,31 @@ public class BlockServiceImpl implements BlockService {
     @Transactional(readOnly = true)
     public boolean isBlockedBetween(Long userA, Long userB) {
         return userBlockRepository.existsBlockBetween(userA, userB);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<BlockStateResponse> states(Long viewerId, List<Long> otherIds) {
+        if (otherIds.size() > 100) {
+            throw new TooManyProfileIdsException(100);
+        }
+        List<Long> ids = otherIds.stream().distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, UserBlockRepository.BlockState> found = userBlockRepository.findStates(viewerId, ids).stream()
+                .collect(Collectors.toMap(UserBlockRepository.BlockState::getUserId, Function.identity()));
+        return ids.stream().map(id -> {
+            var state = found.get(id);
+            return state == null ? new BlockStateResponse(id, false, false, 0)
+                    : new BlockStateResponse(id, state.getBlockedByViewer(), state.getBlockedViewer(), state.getVersion());
+        }).toList();
+    }
+
+    private Instant nextChangeAt(Long a, Long b) {
+        long previous = userBlockRepository.findStates(a, List.of(b)).stream()
+                .mapToLong(UserBlockRepository.BlockState::getVersion).max().orElse(0);
+        return Instant.ofEpochMilli(Math.max(System.currentTimeMillis(), previous + 1));
     }
 
     private void removeFollowIfPresent(Long followerId, Long followingId) {

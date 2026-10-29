@@ -99,6 +99,13 @@
     "reason" : "reason-5",
     "bannedUntil" : "2026-10-08T09:30:21.123456789Z"
   },
+  "UserBlockChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "blockerId" : 1003,
+    "blockedId" : 1004,
+    "blocked" : false
+  },
   "UserFollowChangedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",

@@ -42,10 +42,12 @@ public class FollowServiceImpl implements FollowService {
     private final UserProfileBatchAssembler profileBatchAssembler;
     private final ProfileVisibilityGuard profileVisibilityGuard;
     private final UserEventPublisher userEventPublisher;
+    private final UserPairLock pairLock;
 
     @Override
     @Transactional
     public FollowResponse follow(Long followerId, Long followingId) {
+        pairLock.acquire(followerId, followingId);
         if (followerId.equals(followingId)) {
             throw new CannotFollowSelfException();
         }
@@ -83,6 +85,7 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public void unfollow(Long followerId, Long followingId) {
+        pairLock.acquire(followerId, followingId);
         Optional<UserFollow> follow =
                 userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(followerId, followingId);
         if (follow.isPresent()) {
@@ -164,9 +167,13 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public FollowResponse approveFollowRequest(Long ownerId, Long requesterId) {
+        pairLock.acquire(ownerId, requesterId);
         FollowRequest request = followRequestRepository
                 .findByRequesterIdAndTargetIdAndDeletedAtIsNull(requesterId, ownerId)
                 .orElseThrow(FollowRequestNotFoundException::new);
+        if (userBlockRepository.existsBlockBetween(ownerId, requesterId)) {
+            throw new CannotFollowBlockedUserException();
+        }
         approve(List.of(request));
         return new FollowResponse(requesterId, ownerId, FollowResponse.Status.FOLLOWING);
     }
@@ -186,7 +193,13 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public void approveAllFollowRequests(Long ownerId) {
-        approve(followRequestRepository.findByTargetIdAndDeletedAtIsNull(ownerId));
+        // Lock in a deterministic order, then re-read: block may have ended a request while we
+        // waited. Do not reuse the list read before acquiring the locks.
+        List<Long> requesters = followRequestRepository.findByTargetIdAndDeletedAtIsNull(ownerId).stream()
+                .map(FollowRequest::getRequesterId).distinct().sorted().toList();
+        requesters.forEach(requester -> pairLock.acquire(ownerId, requester));
+        approve(followRequestRepository.findByTargetIdAndDeletedAtIsNull(ownerId).stream()
+                .filter(request -> requesters.contains(request.getRequesterId())).toList());
     }
 
     /**
@@ -248,6 +261,9 @@ public class FollowServiceImpl implements FollowService {
     private void approve(List<FollowRequest> requests) {
         requests.forEach(FollowRequest::markDeleted);
         for (FollowRequest request : requests) {
+            if (userBlockRepository.existsBlockBetween(request.getRequesterId(), request.getTargetId())) {
+                continue;
+            }
             // The edge can already be there: a request left pending across a switch to public (see
             // request()), then a direct follow. Ending the request is all that is left to do.
             if (!hasEdge(request.getRequesterId(), request.getTargetId())) {

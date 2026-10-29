@@ -130,7 +130,7 @@ public class DataExportArchiver {
         Map<DataExportSources.Conversation, List<DataExportSources.Message>> messages = new LinkedHashMap<>();
         List<Long> accounts = new ArrayList<>();
         for (DataExportSources.Conversation conversation : conversations) {
-            messages.put(conversation, sources.messagesOf(conversation.id()));
+            messages.put(conversation, sources.messagesOf(conversation.id(), userId));
             accounts.addAll(conversation.participantIds());
         }
         Map<Long, String> usernames = usernames(accounts);
@@ -150,6 +150,10 @@ public class DataExportArchiver {
                 record.put("Chat with", with);
                 record.put("From", username(usernames, message.senderId()));
                 record.put("Message", messageText(message));
+                if ("VIDEO".equals(message.type())) {
+                    record.put("Type", "VIDEO");
+                    record.put("Video ID", text(message.videoId()));
+                }
                 records.add(record);
             }
         });

@@ -196,6 +196,10 @@ Lỗi: `NOT_BLOCKED` (404), `CONCURRENT_MODIFICATION` (409 — xem mục 3.5).
 ### 3.10 `GET /me/blocked`
 Danh sách user mình đang block. Phân trang giống mục 3.6. Trả `200 OK`, `data` → `Page<UserProfileResponse>`.
 
+### 3.10a `GET /api/v1/users/internal/blocks/states?viewerId=&otherIds=1,2,3` (nội bộ)
+Chỉ chat-service gọi (header `X-Internal-Token`, gateway `denyAll`). Tối đa 100 id. Một query cho cả danh sách. Mỗi phần tử: `{userId, blockedByViewer, blockedViewer, version}`. `version` là epoch-millis lớn nhất trong mọi dòng block của cặp (kể cả đã gỡ), tăng ở **mỗi** lần block/unblock — client dùng nó để bỏ qua trả lời cũ. chat-service **không** lộ `blockedViewer`: người xem chỉ biết "tôi đã chặn" (`blockedByViewer`) và "không thể nhắn" (`messagingBlocked`, một trong hai chiều).
+
+
 ### 3.11 `POST /{userId}/mute`
 Mute 1 user (ẩn nội dung của họ khỏi feed/thông báo — tuỳ service khác dùng thông tin này, user-service chỉ lưu trạng thái). Trả `201 Created`.
 
@@ -459,8 +463,9 @@ Ghi vào bảng `outbox_events` trong **cùng transaction** với thay đổi; `
 | `user.follow-events` | `UserFollowChangedEvent` | `followingId` | `eventId, occurredAt, followerId, followingId, followed, requestApproved` | Follow / unfollow / block cắt follow; duyệt lời mời (`requestApproved = true`). Event cũ không có `requestApproved` → đọc là `false` |
 | `user.follow-request-events` | `FollowRequestedEvent` | `targetId` | `eventId, occurredAt, requesterId, targetId` | Follow tài khoản riêng tư. Rút hay từ chối **không** phát gì |
 | `user.privacy-events` | `UserPrivacyChangedEvent` | `userId` | `eventId, occurredAt, userId, privateAccount` | `privateAccount` ở mục 3.15 thật sự đổi giá trị |
+| `user.block-events` | `UserBlockChangedEvent` | `min(a,b):max(a,b)` | `eventId, occurredAt, blockerId, blockedId, blocked` | Block (`blocked=true`) hoặc unblock (`false`), cùng transaction với thay đổi. Khoá theo **cặp** để mọi thay đổi của một cặp giữ thứ tự trên một partition. Consumer chỉ coi nó là tín hiệu "đọc lại trạng thái": không tin cờ `blocked` để suy ra trạng thái |
 
-Consumer: `user.follow-events` → notification-service (`NEW_FOLLOWER` / `FOLLOW_REQUEST_ACCEPTED`) và chat-service (counter realtime); `user.follow-request-events` → notification-service (`FOLLOW_REQUEST`); `user.privacy-events` → video-service (collection `owner_privacy` và đánh dấu lại video).
+Consumer: `user.follow-events` → notification-service (`NEW_FOLLOWER` / `FOLLOW_REQUEST_ACCEPTED`) và chat-service (counter realtime); `user.follow-request-events` → notification-service (`FOLLOW_REQUEST`); `user.privacy-events` → video-service (collection `owner_privacy` và đánh dấu lại video). `user.block-events` → chat-service (`BlockEventFanout`: đẩy khung `CONVERSATION` riêng cho từng người trong cuộc trò chuyện, tính lại từ trạng thái hiện tại nên event trùng/cũ vô hại).
 
 ### Tiêu thụ (consumer)
 

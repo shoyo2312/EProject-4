@@ -29,7 +29,8 @@ public class OutboxPublisher {
     private static final Map<String, String> TOPICS = Map.of(
             UserEventPublisher.FOLLOW_AGGREGATE, "user.follow-events",
             UserEventPublisher.FOLLOW_REQUEST_AGGREGATE, "user.follow-request-events",
-            UserEventPublisher.PRIVACY_AGGREGATE, "user.privacy-events");
+            UserEventPublisher.PRIVACY_AGGREGATE, "user.privacy-events",
+            UserEventPublisher.BLOCK_AGGREGATE, "user.block-events");
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxDispatcher outboxDispatcher;
