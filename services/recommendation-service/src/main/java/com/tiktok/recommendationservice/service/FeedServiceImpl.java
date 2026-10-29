@@ -153,7 +153,7 @@ public class FeedServiceImpl implements FeedService {
         }
 
         Set<String> excluded = alreadyDelivered(RedisPipeline.answer(reads, 2), RedisPipeline.answer(reads, 3));
-        excluded.addAll(byMutedAccounts(userId, pool));
+        excluded.addAll(byHiddenOwners(userId, pool));
         List<String> candidates = pool.stream()
                 .filter(videoId -> !excluded.contains(videoId))
                 .limit(CANDIDATE_POOL)
@@ -322,21 +322,28 @@ public class FeedServiceImpl implements FeedService {
     }
 
     /**
-     * Videos in the pool posted by an account the viewer muted. Filtered before the pool cap, so
-     * a muted account cannot use up the viewer's five hundred slots either. A video published
-     * before owners were recorded has no entry and is let through.
+     * Videos in the pool posted by an account the viewer muted, or by the viewer. Filtered before
+     * the pool cap, so a muted account cannot use up the viewer's five hundred slots either. The
+     * viewer's own uploads were never reached by trending on a small instance, but the catalogue
+     * draw reaches everything, and an uploader who is also one of two viewers would otherwise be
+     * fed their own videos. A video published before owners were recorded has no entry and is let
+     * through.
      */
-    private Set<String> byMutedAccounts(Long userId, Set<String> pool) {
-        Set<Long> muted = userMuteClient.mutedIds(userId);
-        if (muted.isEmpty() || pool.isEmpty()) {
+    private Set<String> byHiddenOwners(Long userId, Set<String> pool) {
+        if (pool.isEmpty()) {
             return Set.of();
         }
+        Set<Long> hiddenOwners = new HashSet<>(userMuteClient.mutedIds(userId));
+        hiddenOwners.add(userId);
         List<Object> videoIds = List.copyOf(pool);
         List<Object> owners = redisTemplate.opsForHash().multiGet(RecoKeys.VIDEO_OWNER, videoIds);
+        if (owners == null || owners.size() != videoIds.size()) {
+            return Set.of();
+        }
         Set<String> hidden = new HashSet<>();
         for (int i = 0; i < videoIds.size(); i++) {
-            Object owner = owners == null ? null : owners.get(i);
-            if (owner != null && muted.contains(Long.valueOf(owner.toString()))) {
+            Object owner = owners.get(i);
+            if (owner != null && hiddenOwners.contains(Long.valueOf(owner.toString()))) {
                 hidden.add((String) videoIds.get(i));
             }
         }

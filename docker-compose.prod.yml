@@ -413,7 +413,8 @@ services:
   # moves whole videos, so it calls MinIO in-cluster and takes the public base from MEDIA_PUBLIC_URL.
   # video-service has a second, in-cluster client for its own calls (MINIO_INTERNAL_ENDPOINT): its
   # per-row statObject through Cloudflare held the admin dashboard at 6-13 s.
-  # ponytail: user-service still hairpins its small server-side calls; give it the same split if
+  # ponytail: user-service and story-service still hairpin their server-side calls (story-service
+  # copies each story's media through it, StoryMedia.copyForStory); give them the same split if
   # those start failing.
   user-service:
     <<: *java

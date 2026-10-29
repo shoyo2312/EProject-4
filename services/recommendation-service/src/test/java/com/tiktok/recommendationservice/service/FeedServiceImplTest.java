@@ -299,6 +299,22 @@ class FeedServiceImplTest {
     }
 
     /**
+     * The catalogue draw reaches every published video, the viewer's own included. On the small
+     * instance the draw was added for, the two active viewers are also the main uploaders, so
+     * without this they were fed what they had just posted.
+     */
+    @Test
+    void getFeed_dropsTheViewersOwnVideos() {
+        givenCatalogue("mine", "theirs");
+        when(hashOperations.multiGet("reco:video:owner", List.of("mine", "theirs")))
+                .thenReturn(List.of(String.valueOf(VIEWER), "8"));
+
+        assertThat(feedService.getFeed(VIEWER, 20))
+                .extracting(FeedItemResponse::videoId)
+                .containsExactly("theirs");
+    }
+
+    /**
      * The failure the whole feature exists for: trending holds a few dozen videos, the viewer's
      * tags a few dozen more, and after three pages the ranking is spent while hundreds of
      * published videos sit in the catalogue and never get a turn. A random draw from the
