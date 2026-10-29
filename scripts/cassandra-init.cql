@@ -192,3 +192,11 @@ ALTER TABLE video_counters ADD IF NOT EXISTS view_count counter;
 ALTER TABLE video_counters ADD IF NOT EXISTS save_count counter;
 -- Same reason, for clusters created before reposts were counted.
 ALTER TABLE video_counters ADD IF NOT EXISTS repost_count counter;
+
+-- One share per delivered chat message; claims expire after 30 days.
+CREATE TABLE IF NOT EXISTS chat_share_dedupe (
+    video_id bigint,
+    dedupe_key text,
+    share_id bigint,
+    PRIMARY KEY ((video_id, dedupe_key))
+) WITH default_time_to_live = 2592000;
