@@ -30,7 +30,8 @@ public class OutboxPublisher {
             UserEventPublisher.FOLLOW_AGGREGATE, "user.follow-events",
             UserEventPublisher.FOLLOW_REQUEST_AGGREGATE, "user.follow-request-events",
             UserEventPublisher.PRIVACY_AGGREGATE, "user.privacy-events",
-            UserEventPublisher.SCREEN_TIME_SUMMARY_AGGREGATE, "user.screen-time-summary-events");
+            UserEventPublisher.SCREEN_TIME_SUMMARY_AGGREGATE, "user.screen-time-summary-events",
+            UserEventPublisher.BLOCK_AGGREGATE, "user.block-events");
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxDispatcher outboxDispatcher;

@@ -6,6 +6,7 @@ import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.userservice.config.SecurityConfig;
 import com.tiktok.userservice.dto.response.BlockResponse;
+import com.tiktok.userservice.dto.response.BlockStateResponse;
 import com.tiktok.userservice.dto.response.MuteResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.exception.AlreadyBlockedException;
@@ -251,5 +252,45 @@ class BlockMuteControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0]").value(2))
                 .andExpect(jsonPath("$.data[1]").value(3));
+    }
+
+    @Test
+    void blockStates_returnsDirectionsAndVersionForInternalCallers() throws Exception {
+        when(blockService.states(1L, List.of(2L, 3L))).thenReturn(List.of(
+                new BlockStateResponse(2L, true, false, 1234),
+                new BlockStateResponse(3L, false, false, 0)));
+        mockMvc.perform(get("/api/v1/users/internal/blocks/states")
+                        .param("viewerId", "1").param("otherIds", "2,3")
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].userId").value(2))
+                .andExpect(jsonPath("$.data[0].blockedByViewer").value(true))
+                .andExpect(jsonPath("$.data[0].blockedViewer").value(false))
+                .andExpect(jsonPath("$.data[0].version").value(1234))
+                .andExpect(jsonPath("$.data[1].version").value(0));
+    }
+
+    @Test
+    void blockStates_requiresInternalToken() throws Exception {
+        mockMvc.perform(get("/api/v1/users/internal/blocks/states")
+                        .param("viewerId", "1").param("otherIds", "2")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+        verify(blockService, never()).states(any(), any());
+    }
+
+    @Test
+    void blockStates_capsTheRawListAt100() throws Exception {
+        String hundred = java.util.stream.LongStream.rangeClosed(1, 100).mapToObj(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
+        mockMvc.perform(get("/api/v1/users/internal/blocks/states")
+                        .param("viewerId", "1").param("otherIds", hundred)
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/users/internal/blocks/states")
+                        .param("viewerId", "1").param("otherIds", hundred + ",1")
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
+                .andExpect(status().isBadRequest());
+        verify(blockService, org.mockito.Mockito.times(1)).states(eq(1L), any());
     }
 }

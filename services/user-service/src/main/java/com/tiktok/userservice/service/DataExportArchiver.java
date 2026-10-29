@@ -145,7 +145,7 @@ public class DataExportArchiver {
         Map<DataExportSources.Conversation, List<DataExportSources.Message>> messages = new LinkedHashMap<>();
         List<Long> accounts = new ArrayList<>();
         for (DataExportSources.Conversation conversation : conversations) {
-            messages.put(conversation, sources.messagesOf(conversation.id()));
+            messages.put(conversation, sources.messagesOf(conversation.id(), userId));
             accounts.addAll(conversation.participantIds());
         }
         Map<Long, String> usernames = usernames(accounts);
@@ -164,7 +164,11 @@ public class DataExportArchiver {
                 record.put("Date", date(message.sentAt()));
                 record.put("Chat with", with);
                 record.put("From", username(usernames, message.senderId()));
-                record.put("Message", text(message.content()));
+                record.put("Message", messageText(message));
+                if ("VIDEO".equals(message.type())) {
+                    record.put("Type", "VIDEO");
+                    record.put("Video ID", text(message.videoId()));
+                }
                 records.add(record);
             }
         });
@@ -245,6 +249,14 @@ public class DataExportArchiver {
 
     private static String yesNo(boolean value) {
         return value ? "On" : "Off";
+    }
+
+    /** A sticker has no text; the file says which one was sent rather than leaving the cell empty. */
+    private static String messageText(DataExportSources.Message message) {
+        if ("STICKER".equals(message.type())) {
+            return message.sticker() == null ? "[Sticker]" : "[Sticker: " + message.sticker().name() + "]";
+        }
+        return text(message.content());
     }
 
     private static String text(String value) {

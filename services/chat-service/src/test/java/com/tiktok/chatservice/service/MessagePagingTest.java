@@ -5,6 +5,7 @@ import com.tiktok.chatservice.dto.response.MessagePageResponse;
 import com.tiktok.chatservice.dto.response.MessageResponse;
 import com.tiktok.chatservice.entity.Message;
 import com.tiktok.chatservice.mapper.MessageMapperImpl;
+import com.tiktok.chatservice.repository.ChatUserPrefsRepository;
 import com.tiktok.chatservice.repository.ConversationRepository;
 import com.tiktok.chatservice.repository.MessageRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,6 +46,8 @@ class MessagePagingTest {
 
     @Autowired
     private MessageRepository messageRepository;
+    @Autowired
+    private ChatUserPrefsRepository prefsRepository;
 
     @Autowired
     private ConversationRepository conversationRepository;
@@ -55,7 +58,10 @@ class MessagePagingTest {
     void setUp() {
         messageRepository.deleteAll();
         messageService = new MessageServiceImpl(mock(ConversationService.class), conversationRepository,
-                messageRepository, new MessageMapperImpl(), mock(SimpMessagingTemplate.class), mock(BlockClient.class));
+                messageRepository, new MessageMapperImpl(), mock(SimpMessagingTemplate.class), mock(BlockClient.class),
+                mock(ChatEventPublisher.class), com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository,
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
 
         save("100", BURST.minusMillis(1));
         for (int i = 1; i <= 5; i++) {

@@ -8,6 +8,7 @@ import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.dto.response.ViewableVideoResponse;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -36,6 +37,8 @@ public interface VideoService {
      *             any other read
      */
     List<VideoResponse> getByIds(Long requesterId, List<String> videoIds, FeedKind feed);
+
+    List<ViewableVideoResponse> getViewable(Long viewerId, List<String> ids);
 
     /**
      * @param requesterId the viewer, only for their keyword filters: the page is the public feed

@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.common.exception.BadRequestException;
 import com.tiktok.common.storage.ObjectKeys;
 import com.tiktok.videoservice.client.BlockClient;
 import com.tiktok.videoservice.client.FollowClient;
@@ -16,6 +17,7 @@ import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.dto.response.ViewableVideoResponse;
 import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.Video;
@@ -43,18 +45,18 @@ import io.minio.errors.ErrorResponseException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -457,6 +459,26 @@ public class VideoServiceImpl implements VideoService {
         return withAccountComments(feedKeywordFilter.apply(requesterId, feed, ordered.stream()
                 .filter(video -> isVisibleTo(requesterId, video, followed, banned))
                 .toList()));
+    }
+
+    /** Internal chat cards use the batch audience policy plus one block check per distinct owner. */
+    @Override
+    public List<ViewableVideoResponse> getViewable(Long viewerId, List<String> ids) {
+        if (ids == null || ids.isEmpty() || ids.size() > 50 || ids.stream().anyMatch(id -> id == null || id.isBlank())) {
+            throw new BadRequestException("VALIDATION_ERROR", "ids: 1 to 50 non-blank ids required");
+        }
+        List<VideoResponse> videos = getByIds(viewerId, ids, null);
+        Set<Long> hidden = hiddenAmong(videos.stream().map(VideoResponse::userId).collect(Collectors.toSet()));
+        Map<Long, Boolean> blocked = new HashMap<>();
+        Map<String, ViewableVideoResponse> available = new HashMap<>();
+        for (VideoResponse video : videos) {
+            // Even an owner cannot share unfinished, removed, or banned-owner content.
+            if (video.status() == VideoStatus.PUBLISHED && video.deletedAt() == null && !hidden.contains(video.userId())
+                    && !blocked.computeIfAbsent(video.userId(), owner -> blockClient.isBlockedBetween(owner, viewerId))) {
+                available.put(video.id(), ViewableVideoResponse.from(video));
+            }
+        }
+        return ids.stream().map(available::get).filter(Objects::nonNull).toList();
     }
 
     private int maxBatchSize() {

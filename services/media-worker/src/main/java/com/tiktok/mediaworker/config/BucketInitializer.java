@@ -32,6 +32,12 @@ public class BucketInitializer implements ApplicationRunner {
      * viewer of every comment, and it is a copy of something the provider was already serving to
      * anyone with the URL.
      *
+     * <p>{@code stickers/} is the chat sticker pack (see chat-service {@code StickerCatalog} and
+     * {@code scripts/stickers/import-chat-stickers.mjs}). Messages store only a sticker id and the
+     * backend hands the browser an unsigned URL, which has to keep working for as long as the
+     * message exists — a presigned URL saved in history would expire. The prefix holds nothing but
+     * the pack: fixed, versioned, MIT-licensed images that carry no user data.
+     *
      * <p>{@code raw/} is deliberately excluded and must stay excluded. Those are the users' own
      * uploads, the key names the uploader, and they are reached through a presigned PUT that
      * expires in minutes — publishing them would hand out every original ever uploaded.
@@ -55,14 +61,20 @@ public class BucketInitializer implements ApplicationRunner {
                 "Resource": [
                   "arn:aws:s3:::%1$s/hls/*",
                   "arn:aws:s3:::%1$s/thumbnails/*",
-                "arn:aws:s3:::%1$s/previews/*",
-                  "arn:aws:s3:::%1$s/avatars/*"
+                  "arn:aws:s3:::%1$s/previews/*",
+                  "arn:aws:s3:::%1$s/avatars/*",
+                  "arn:aws:s3:::%1$s/stickers/*"
                 ]
               }]
             }""";
 
     private final MinioClient minioClient;
     private final MinioProperties properties;
+
+    /** The policy document for {@code bucket}; exposed so a test can read exactly what is applied. */
+    static String readPolicyFor(String bucket) {
+        return READABLE_OUTPUT_POLICY.formatted(bucket);
+    }
 
     @Override
     public void run(ApplicationArguments args) throws Exception {
@@ -77,7 +89,7 @@ public class BucketInitializer implements ApplicationRunner {
         try {
             minioClient.setBucketPolicy(SetBucketPolicyArgs.builder()
                     .bucket(properties.bucket())
-                    .config(READABLE_OUTPUT_POLICY.formatted(properties.bucket()))
+                    .config(readPolicyFor(properties.bucket()))
                     .build());
         } catch (Exception e) {
             // Not fatal: transcoding still works and still writes the files. What breaks is

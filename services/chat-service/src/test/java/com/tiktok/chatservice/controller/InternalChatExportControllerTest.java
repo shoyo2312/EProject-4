@@ -42,7 +42,7 @@ class InternalChatExportControllerTest {
 
     static final String JWT_SECRET = "test-secret-at-least-32-bytes-long-0123456789";
 
-    private static final String MESSAGES = "/api/v1/conversations/internal/c1/messages";
+    private static final String MESSAGES = "/api/v1/conversations/internal/c1/messages?viewerId=7";
 
     @Autowired
     private MockMvc mockMvc;
@@ -70,14 +70,14 @@ class InternalChatExportControllerTest {
 
     @Test
     void messages_answerTheInternalToken() throws Exception {
-        when(messageService.exportMessages("c1", null, 100))
+        when(messageService.exportMessages("c1", 7L, null, 100))
                 .thenReturn(new MessagePageResponse(List.of(), null, false));
 
         mockMvc.perform(get(MESSAGES).header(InternalApiToken.HEADER, internalApiToken.value()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.hasMore").value(false));
 
-        verify(messageService).exportMessages("c1", null, 100);
+        verify(messageService).exportMessages("c1", 7L, null, 100);
     }
 
     /** The prefix would otherwise fall to anyRequest().authenticated(), which admits any signed-in user. */
@@ -86,7 +86,7 @@ class InternalChatExportControllerTest {
         mockMvc.perform(get(MESSAGES)).andExpect(status().isForbidden());
         mockMvc.perform(get(MESSAGES).header("Authorization", bearer(9L))).andExpect(status().isForbidden());
 
-        verify(messageService, never()).exportMessages(any(), any(), anyInt());
+        verify(messageService, never()).exportMessages(any(), any(), any(), anyInt());
     }
 
     /**
@@ -97,6 +97,6 @@ class InternalChatExportControllerTest {
     void messages_refuseAHeadWithAUsersJwt() throws Exception {
         mockMvc.perform(head(MESSAGES).header("Authorization", bearer(9L))).andExpect(status().isForbidden());
 
-        verify(messageService, never()).exportMessages(any(), any(), anyInt());
+        verify(messageService, never()).exportMessages(any(), any(), any(), anyInt());
     }
 }

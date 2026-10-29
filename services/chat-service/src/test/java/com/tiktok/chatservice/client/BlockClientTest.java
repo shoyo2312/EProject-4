@@ -9,6 +9,8 @@ import org.springframework.http.MediaType;
 import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
+import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -55,5 +57,47 @@ class BlockClientTest {
         server.expect(requestTo(URL)).andRespond(withServerError());
 
         assertThatThrownBy(() -> client.requireNotBlocked(1L, 2L)).isInstanceOf(BlockCheckUnavailableException.class);
+    }
+
+    private static final String STATES_URL = "http://user-service/api/v1/users/internal/blocks/states?viewerId=1&otherIds=2,3";
+
+    @Test
+    void statesOf_readsOneBatchWithInternalToken() {
+        server.expect(requestTo(STATES_URL)).andExpect(header(InternalApiToken.HEADER, TOKEN.value()))
+                .andRespond(withSuccess("""
+                        {"success":true,"data":[
+                          {"userId":2,"blockedByViewer":false,"blockedViewer":true,"version":123},
+                          {"userId":3,"blockedByViewer":false,"blockedViewer":false,"version":0}]}
+                        """, MediaType.APPLICATION_JSON));
+        assertThat(client.statesOf(1L, List.of(2L, 3L, 2L)))
+                .containsEntry(2L, new BlockClient.BlockState(false, true, 123))
+                .containsEntry(3L, new BlockClient.BlockState(false, false, 0));
+        server.verify();
+    }
+
+    @Test
+    void statesOf_outageIsUnknown() {
+        server.expect(requestTo(STATES_URL)).andRespond(withServerError());
+        assertThat(client.statesOf(1L, List.of(2L, 3L))).isEmpty();
+    }
+
+    @Test
+    void statesOf_malformedOrPartialResponseIsUnknown() {
+        server.expect(requestTo(STATES_URL)).andRespond(withSuccess("""
+                {"success":true,"data":[{"userId":2,"blockedByViewer":true}]}
+                """, MediaType.APPLICATION_JSON));
+        assertThat(client.statesOf(1L, List.of(2L, 3L))).isEmpty();
+    }
+
+    @Test
+    void statesOf_invalidJsonIsUnknown() {
+        server.expect(requestTo(STATES_URL)).andRespond(withSuccess("not json", MediaType.APPLICATION_JSON));
+        assertThat(client.statesOf(1L, List.of(2L, 3L))).isEmpty();
+    }
+
+    @Test
+    void statesOf_emptyListMakesNoRequest() {
+        assertThat(client.statesOf(1L, List.of())).isEmpty();
+        server.verify();
     }
 }

@@ -49,4 +49,18 @@ class UserEventPublisherTest {
         verify(outboxEventRepository).save(row.capture());
         assertThat(row.getValue().getPayload()).contains("\"followed\":true", "\"requestApproved\":false");
     }
+
+    @Test
+    void blocksInEitherDirection_shareOnePairKey() {
+        publisher.publishBlockChanged(9L, 2L, true);
+        publisher.publishBlockChanged(2L, 9L, false);
+        ArgumentCaptor<OutboxEvent> rows = ArgumentCaptor.forClass(OutboxEvent.class);
+        verify(outboxEventRepository, times(2)).save(rows.capture());
+        assertThat(rows.getAllValues()).extracting(OutboxEvent::getAggregateType,
+                        OutboxEvent::getAggregateId, OutboxEvent::getEventType)
+                .containsExactly(tuple("USER_BLOCK", "2:9", "UserBlockChangedEvent"),
+                        tuple("USER_BLOCK", "2:9", "UserBlockChangedEvent"));
+        assertThat(rows.getAllValues().get(0).getPayload()).contains("\"blocked\":true", "\"blockerId\":9");
+        assertThat(rows.getAllValues().get(1).getPayload()).contains("\"blocked\":false", "\"blockedId\":9");
+    }
 }
