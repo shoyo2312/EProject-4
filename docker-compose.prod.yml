@@ -92,7 +92,7 @@ services:
       - mongodb-data:/data/db
     healthcheck:
       test: [ "CMD-SHELL", "mongosh --quiet --eval 'db.runCommand(\"ping\").ok' localhost:27017/test" ]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
 
