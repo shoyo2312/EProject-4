@@ -66,3 +66,8 @@ $RECYCLE.BIN/
 .directory
 *~
 .fuse_hidden*
+# run-services.ps1 logs
+logs/
+
+### Seed media (large files) ###
+videos/
