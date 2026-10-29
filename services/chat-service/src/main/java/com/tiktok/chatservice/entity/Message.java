@@ -33,7 +33,12 @@ import java.util.Map;
         // It needs no transaction (this Mongo is a standalone, which has none) and leaks no
         // allowance when a save fails, because the allowance is the row itself.
         @CompoundIndex(name = "one_request_message_idx", def = "{'conversationId': 1}", unique = true,
-                partialFilter = "{'requestMessage': true}")
+                partialFilter = "{'requestMessage': true}"),
+        // Partial rather than sparse=true: Mongo forbids combining both options. Missing keys
+        // do not participate; null fields are omitted by Spring Data's default field mapping.
+        @CompoundIndex(name = "message_client_request_idx",
+                def = "{'conversationId': 1, 'senderId': 1, 'clientRequestId': 1}", unique = true,
+                partialFilter = "{'clientRequestId': {'$exists': true}}")
 })
 public class Message {
 
@@ -47,11 +52,15 @@ public class Message {
     /** Null on messages stored before types existed; read through {@link #getType()}, which says TEXT. */
     private MessageType type;
 
-    /** Present on TEXT messages, absent on STICKER ones. */
+    /** TEXT content or an optional VIDEO caption; absent on STICKER messages. */
     private String content;
 
     /** Present only on STICKER messages: an id in the sticker catalog, never a URL or a storage key. */
     private String stickerId;
+
+    private String videoId;
+
+    private String clientRequestId;
 
     private Instant sentAt;
 
@@ -68,8 +77,8 @@ public class Message {
     private String replyToMessageId;
 
     /**
-     * Set when the sender takes the message back, for both sides. {@code content}, {@code stickerId}
-     * and {@code reactions} are removed from the document in the same update, so nothing that reads
+     * Set when the sender takes the message back, for both sides. {@code content}, {@code stickerId},
+     * {@code videoId} and {@code reactions} are removed in the same update, so nothing that reads
      * the row — history, export, a quote — can return what was recalled. The row itself stays: its
      * id, position in time, and the {@code requestMessage} slot it may hold.
      */

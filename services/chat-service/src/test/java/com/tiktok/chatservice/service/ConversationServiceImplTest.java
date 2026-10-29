@@ -49,7 +49,7 @@ class ConversationServiceImplTest {
     void setUp() {
         conversationService = new ConversationServiceImpl(conversationRepository, blockClient, settingsClient,
                 friendshipClient, eventPublisher,
-                new ConversationViews(conversationMapper, org.mockito.Mockito.mock(com.tiktok.chatservice.repository.MessageRepository.class), org.mockito.Mockito.mock(ChatUserPrefsRepository.class)));
+                new ConversationViews(conversationMapper, org.mockito.Mockito.mock(com.tiktok.chatservice.repository.MessageRepository.class), org.mockito.Mockito.mock(ChatUserPrefsRepository.class), blockClient));
         // The audience check runs on every open, so the permissive answer is the baseline every
         // test that is not about it needs. Lenient: the self and block cases never reach it.
         lenient().when(settingsClient.dmAudience(any())).thenReturn(DmAudience.EVERYONE);

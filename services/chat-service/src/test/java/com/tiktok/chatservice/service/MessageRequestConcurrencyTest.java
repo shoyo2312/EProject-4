@@ -90,14 +90,16 @@ class MessageRequestConcurrencyTest {
         when(settingsClient.dmAudience(any())).thenReturn(DmAudience.EVERYONE);
         when(friendshipClient.areFriends(any(), any())).thenReturn(false);
         conversationService = new ConversationServiceImpl(conversationRepository, mock(BlockClient.class), settingsClient,
-                friendshipClient, eventPublisher, new ConversationViews(new ConversationMapperImpl(), messageRepository, prefsRepository));
+                friendshipClient, eventPublisher, new ConversationViews(new ConversationMapperImpl(), messageRepository, prefsRepository, mock(BlockClient.class)));
         messageService = serviceOver(messageRepository);
-        stomp = new ChatWebSocketController(messageService);
+        stomp = new ChatWebSocketController(messageService, null);
     }
 
     private MessageServiceImpl serviceOver(MessageRepository messages) {
         return new MessageServiceImpl(conversationService, conversationRepository, messages,
-                new MessageMapperImpl(), messagingTemplate, mock(BlockClient.class), eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository);
+                new MessageMapperImpl(), messagingTemplate, mock(BlockClient.class), eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository,
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
     }
 
     private Conversation pendingRequest() {

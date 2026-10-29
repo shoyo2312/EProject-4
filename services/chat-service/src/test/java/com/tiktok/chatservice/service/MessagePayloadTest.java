@@ -89,4 +89,60 @@ class MessagePayloadTest {
         assertThatThrownBy(() -> json.readValue("{\"type\":\"GIF\",\"content\":\"x\"}", SendMessageRequest.class))
                 .isInstanceOf(Exception.class);
     }
+
+    @Test
+    void videoRequiresOnlyAnIdAndTrimsItsOptionalCaption() {
+        MessagePayload video = of(SendMessageRequest.video("123", "  note  ", "key"));
+        assertThat(video.type()).isEqualTo(MessageType.VIDEO);
+        assertThat(video.videoId()).isEqualTo("123");
+        assertThat(video.content()).isEqualTo("note");
+        assertThat(video.stickerId()).isNull();
+        assertThat(of(SendMessageRequest.video("123", "   ", null)).content()).isNull();
+        assertThat(of(SendMessageRequest.video("123", null, null)).content()).isNull();
+    }
+
+    @Test
+    void videoCaptionLimitIs300Utf16UnitsAfterTrim() {
+        assertThat(of(SendMessageRequest.video("123", "  " + "x".repeat(300) + "  ", null)).content()).hasSize(300);
+        assertThatThrownBy(() -> of(SendMessageRequest.video("123", "x".repeat(301), null)))
+                .isInstanceOf(InvalidMessageException.class);
+        assertThatThrownBy(() -> of(SendMessageRequest.video("123", "\uD83D\uDE00".repeat(151), null)))
+                .isInstanceOf(InvalidMessageException.class);
+        assertThat(of(SendMessageRequest.video("123", " ".repeat(2100), null)).content()).isNull();
+    }
+
+    @Test
+    void videoContradictionsAndIdsOnOtherTypesAreRejected() {
+        for (String id : new String[]{null, "", " "}) {
+            assertThatThrownBy(() -> of(SendMessageRequest.video(id, null, null)))
+                    .isInstanceOf(InvalidMessageException.class);
+        }
+        assertThatThrownBy(() -> of(new SendMessageRequest(MessageType.VIDEO, null, "fire", null, "123", null)))
+                .isInstanceOf(InvalidMessageException.class);
+        assertThatThrownBy(() -> of(new SendMessageRequest(MessageType.TEXT, "hi", null, null, "123", null)))
+                .isInstanceOf(InvalidMessageException.class);
+        assertThatThrownBy(() -> of(new SendMessageRequest(MessageType.STICKER, null, "fire", null, "123", null)))
+                .isInstanceOf(InvalidMessageException.class);
+    }
+
+    @Test
+    void clientSuppliedCardMetadataIsIgnoredAndReplyFactoryKeepsIds() {
+        SendMessageRequest request = json.readValue("{\"type\":\"VIDEO\",\"videoId\":\"123\",\"thumbnailUrl\":\"evil\",\"ownerId\":9}", SendMessageRequest.class);
+        assertThat(of(request).videoId()).isEqualTo("123");
+        SendMessageRequest reply = SendMessageRequest.video("123", "note", "key").replyingTo("original");
+        assertThat(reply.videoId()).isEqualTo("123");
+        assertThat(reply.clientRequestId()).isEqualTo("key");
+        assertThat(reply.replyToMessageId()).isEqualTo("original");
+    }
+
+    @Test
+    void beanValidationKeepsTheTextSizeConstraintWithoutApplyingItBeforeVideoTrim() {
+        try (var factory = jakarta.validation.Validation.buildDefaultValidatorFactory()) {
+            var validator = factory.getValidator();
+            assertThat(validator.validate(new SendMessageRequest("x".repeat(2001)))).singleElement()
+                    .satisfies(v -> assertThat(v.getPropertyPath().toString()).isEqualTo("content"));
+            assertThat(validator.validate(SendMessageRequest.video("123", " ".repeat(2100) + "note", null))).isEmpty();
+            assertThat(of(SendMessageRequest.video("123", " ".repeat(2100) + "note", null)).content()).isEqualTo("note");
+        }
+    }
 }

@@ -59,7 +59,9 @@ class MessagePagingTest {
         messageRepository.deleteAll();
         messageService = new MessageServiceImpl(mock(ConversationService.class), conversationRepository,
                 messageRepository, new MessageMapperImpl(), mock(SimpMessagingTemplate.class), mock(BlockClient.class),
-                mock(ChatEventPublisher.class), com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository);
+                mock(ChatEventPublisher.class), com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository,
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
 
         save("100", BURST.minusMillis(1));
         for (int i = 1; i <= 5; i++) {

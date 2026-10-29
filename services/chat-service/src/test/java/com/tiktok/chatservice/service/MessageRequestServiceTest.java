@@ -64,7 +64,7 @@ class MessageRequestServiceTest {
     void setUp() {
         service = new ConversationServiceImpl(conversationRepository, blockClient, settingsClient,
                 friendshipClient, eventPublisher,
-                new ConversationViews(new ConversationMapperImpl(), org.mockito.Mockito.mock(com.tiktok.chatservice.repository.MessageRepository.class), org.mockito.Mockito.mock(ChatUserPrefsRepository.class)));
+                new ConversationViews(new ConversationMapperImpl(), org.mockito.Mockito.mock(com.tiktok.chatservice.repository.MessageRepository.class), org.mockito.Mockito.mock(ChatUserPrefsRepository.class), blockClient));
         lenient().when(settingsClient.dmAudience(any())).thenReturn(DmAudience.EVERYONE);
         lenient().when(conversationRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }

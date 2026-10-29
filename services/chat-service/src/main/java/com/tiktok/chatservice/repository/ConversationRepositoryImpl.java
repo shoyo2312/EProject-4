@@ -3,9 +3,10 @@ package com.tiktok.chatservice.repository;
 import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.entity.MessageRequestState;
 import com.tiktok.chatservice.entity.MessageType;
+import com.tiktok.chatservice.entity.ReceiptMark;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -28,15 +29,16 @@ public class ConversationRepositoryImpl implements ConversationRepositoryCustom 
                 where("lastMessageAt").is(null),
                 where("lastMessageAt").lt(sentAt)));
         mongoTemplate.updateFirst(newer, new Update()
-                .set("lastMessageContent", content)
+                .set("lastMessageContent", type == MessageType.VIDEO ? null : content)
                 .set("lastMessageType", type)
                 .set("lastMessageSenderId", senderId)
                 .set("lastMessageAt", sentAt)
                 .unset("lastMessageRecalled")
+                // Sending is not reading: what the sender has caught up on is untouched, and "unread"
+                // for the other side is measured against this instead of against lastMessageAt.
+                .max("lastSentAt." + senderId, sentAt)
                 // Kept moving so a whole-document save elsewhere still sees that it is stale.
                 .inc("version", 1), Conversation.class);
-
-        markRead(conversationId, senderId, sentAt);
     }
 
     @Override
@@ -124,5 +126,24 @@ public class ConversationRepositoryImpl implements ConversationRepositoryCustom 
         mongoTemplate.updateFirst(Query.query(where("_id").is(conversationId)), new Update()
                 .max("lastReadAt." + userId, readAt)
                 .inc("version", 1), Conversation.class);
+    }
+
+    @Override
+    public boolean advanceMark(String conversationId, Long userId, MarkKind kind, String messageId,
+                               Instant sentAt, Instant at) {
+        String field = kind.field() + "." + userId;
+        // Absent, or at an earlier position: by time, and for messages sent in the same millisecond
+        // by id — the order the thread itself is kept in.
+        Criteria later = new Criteria().orOperator(
+                where(field).exists(false),
+                where(field).is(null),
+                where(field + ".sentAt").lt(sentAt),
+                new Criteria().andOperator(where(field + ".sentAt").is(sentAt), where(field + ".messageId").lt(messageId)));
+        Update update = new Update().set(field, new ReceiptMark(messageId, sentAt, at)).inc("version", 1);
+        if (kind == MarkKind.READ) {
+            update.max("lastReadAt." + userId, sentAt);
+        }
+        return mongoTemplate.updateFirst(Query.query(where("_id").is(conversationId).andOperator(later)), update,
+                Conversation.class).getModifiedCount() > 0;
     }
 }

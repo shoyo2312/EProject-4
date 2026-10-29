@@ -32,6 +32,19 @@ public interface MessageRepositoryCustom {
     List<Message> findPage(String conversationId, Long viewerId, Instant visibleAfter, Instant beforeSentAt,
                            String beforeId, int limit);
 
+    /**
+     * The messages not sent by {@code excludedSender} in the stretch after {@code (afterSentAt, afterId)}
+     * — exclusive, or from the very first message when null — up to and including
+     * {@code (throughSentAt, throughId)}, oldest first. Hidden or deleted-for-someone messages are
+     * included: whether they count is the caller's call. Used to check that an acknowledgement leaves
+     * no gap of messages it does not mention.
+     */
+    List<Message> findOthersBetween(String conversationId, Long excludedSender, Instant afterSentAt, String afterId,
+                                    Instant throughSentAt, String throughId, int limit);
+
+    /** The newest message not sent by {@code excludedSender}, if any. */
+    Optional<Message> findNewestOthers(String conversationId, Long excludedSender);
+
     /** The message, only if it belongs to this conversation. */
     Optional<Message> findInConversation(String conversationId, String messageId);
 

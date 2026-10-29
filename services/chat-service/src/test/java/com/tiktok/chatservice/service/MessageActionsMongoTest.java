@@ -86,9 +86,11 @@ class MessageActionsMongoTest {
         when(friends.areFriends(any(), any())).thenReturn(false);
         ChatEventPublisher publisher = mock(ChatEventPublisher.class);
         conversationService = new ConversationServiceImpl(conversationRepository, mock(BlockClient.class), settings, friends,
-                publisher, new ConversationViews(new ConversationMapperImpl(), messageRepository, prefsRepository));
+                publisher, new ConversationViews(new ConversationMapperImpl(), messageRepository, prefsRepository, mock(BlockClient.class)));
         messageService = new MessageServiceImpl(conversationService, conversationRepository, messageRepository,
-                new MessageMapperImpl(), mock(SimpMessagingTemplate.class), mock(BlockClient.class), publisher, catalog, prefsRepository);
+                new MessageMapperImpl(), mock(SimpMessagingTemplate.class), mock(BlockClient.class), publisher, catalog, prefsRepository,
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
         conversationRepository.save(Conversation.builder().id("c1").participantIds(List.of(A, B))
                 .participantKey("1_2").initiatorId(A).build());
         conversationRepository.save(Conversation.builder().id("c2").participantIds(List.of(A, OUTSIDER))

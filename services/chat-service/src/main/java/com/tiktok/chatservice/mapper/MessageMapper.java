@@ -8,6 +8,8 @@ import org.mapstruct.Mapping;
 @Mapper(componentModel = "spring")
 public interface MessageMapper {
 
+    @Mapping(target = "video", ignore = true)
+    @Mapping(target = "replayed", ignore = true)
     @Mapping(target = "sticker", ignore = true)
     @Mapping(target = "replyTo", ignore = true)
     @Mapping(target = "reactions", ignore = true)

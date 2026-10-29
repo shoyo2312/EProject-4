@@ -61,7 +61,9 @@ class ConversationConcurrencyTest {
         messageRepository.deleteAll();
         messageService = new MessageServiceImpl(conversationService, conversationRepository,
                 messageRepository, new MessageMapperImpl(), messagingTemplate, mock(BlockClient.class),
-                mock(ChatEventPublisher.class), com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository);
+                mock(ChatEventPublisher.class), com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository,
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
         when(conversationService.promoteIfMutual(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }
 
@@ -85,7 +87,9 @@ class ConversationConcurrencyTest {
 
         Conversation after = conversationRepository.findById("c1").orElseThrow();
         assertThat(after.getLastMessageContent()).isEqualTo("hi from 2");
-        assertThat(after.getLastReadAt()).containsKeys("1", "2");
+        // Both writes landed. Sending is not reading, so it is "last sent" that records them.
+        assertThat(after.getLastSentAt()).containsKeys("1", "2");
+        assertThat(after.getLastReadAt()).isNullOrEmpty();
     }
 
     @Test
@@ -99,10 +103,12 @@ class ConversationConcurrencyTest {
         when(conversationService.requireParticipant(2L, "c2")).thenReturn(readByReader);
 
         messageService.sendMessage("c2", 1L, new SendMessageRequest("hello"));
-        messageService.markRead("c2", 2L);
+        messageService.markRead("c2", 2L, null);
 
         Conversation after = conversationRepository.findById("c2").orElseThrow();
         assertThat(after.getLastMessageContent()).isEqualTo("hello");
-        assertThat(after.getLastReadAt()).containsKeys("1", "2");
+        assertThat(after.getLastSentAt()).containsKey("1");
+        assertThat(after.getReadMark()).containsKey("2");
+        assertThat(after.getLastReadAt()).containsOnlyKeys("2");
     }
 }

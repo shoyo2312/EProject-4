@@ -66,7 +66,7 @@ class ChatWebSocketControllerTest {
         assertThat(handler.getAnnotation(MessageExceptionHandler.class)).isNotNull();
         assertThat(handler.getAnnotation(SendToUser.class).value()).containsExactly("/queue/errors");
 
-        ApiResponse<Void> body = new ChatWebSocketController(null).handleRefusal(new MessagingBlockedException());
+        ApiResponse<Void> body = new ChatWebSocketController(null, null).handleRefusal(new MessagingBlockedException());
         assertThat(body.code()).isEqualTo("MESSAGING_BLOCKED");
     }
 }

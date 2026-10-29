@@ -1,6 +1,7 @@
 package com.tiktok.chatservice.service;
 
 import com.tiktok.chatservice.dto.response.ChatEvent;
+import com.tiktok.chatservice.dto.response.ReceiptView;
 import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.dto.response.MessageUpdateResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -54,6 +55,15 @@ public class ChatEventPublisher {
     /** The conversation as one participant sees it — for a change that is theirs alone, like deleting a message for themselves. */
     public void conversationChangedFor(Conversation conversation, Long userId) {
         toUser(userId, ChatEvent.conversation(views.of(conversation, userId)));
+    }
+
+    /** The other participants learn how far {@code receipt.userId()} has got; that participant is not told. */
+    public void receipt(Conversation conversation, ReceiptView receipt) {
+        for (Long participant : conversation.getParticipantIds()) {
+            if (!participant.equals(receipt.userId())) {
+                toUser(participant, ChatEvent.receipt(receipt));
+            }
+        }
     }
 
     /** Reactions or a recall: identical for both participants, so one payload goes to each. */

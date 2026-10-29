@@ -1,5 +1,6 @@
 package com.tiktok.chatservice.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.tiktok.chatservice.entity.MessageType;
 
 /**
@@ -15,8 +16,13 @@ public record ReplyQuote(
         Long senderId,
         MessageType type,
         String content,
-        StickerView sticker
+        StickerView sticker,
+        @JsonInclude(JsonInclude.Include.NON_NULL) VideoCard video
 ) {
+
+    public ReplyQuote(String messageId, State state, Long senderId, MessageType type, String content, StickerView sticker) {
+        this(messageId, state, senderId, type, content, sticker, null);
+    }
 
     public enum State {
         OK,

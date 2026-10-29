@@ -63,7 +63,9 @@ class MessageRequestSendTest {
     @BeforeEach
     void setUp() {
         service = new MessageServiceImpl(conversationService, conversationRepository, messageRepository,
-                messageMapper, messagingTemplate, blockClient, eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), org.mockito.Mockito.mock(ChatUserPrefsRepository.class));
+                messageMapper, messagingTemplate, blockClient, eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), org.mockito.Mockito.mock(ChatUserPrefsRepository.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
         lenient().when(conversationService.promoteIfMutual(any())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(messageMapper.toResponse(any(Message.class)))
                 .thenAnswer(invocation -> {

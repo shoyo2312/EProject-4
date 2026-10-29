@@ -54,7 +54,9 @@ class MessageServiceImplTest {
     void setUp() {
         messageService = new MessageServiceImpl(
                 conversationService, conversationRepository, messageRepository, messageMapper, messagingTemplate,
-                blockClient, eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), org.mockito.Mockito.mock(ChatUserPrefsRepository.class));
+                blockClient, eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), org.mockito.Mockito.mock(ChatUserPrefsRepository.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
         // Nothing here is a pending request, so promotion is the identity.
         org.mockito.Mockito.lenient().when(conversationService.promoteIfMutual(any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -100,13 +102,13 @@ class MessageServiceImplTest {
     }
 
     @Test
-    void markRead_updatesLastReadAtForCurrentUser() {
+    void markRead_withNothingFromTheOtherSide_changesNothing() {
         Conversation conversation = Conversation.builder().id("c1").participantIds(List.of(1L, 2L)).build();
         when(conversationService.requireParticipant(2L, "c1")).thenReturn(conversation);
 
-        messageService.markRead("c1", 2L);
+        messageService.markRead("c1", 2L, null);
 
-        verify(conversationRepository).markRead(eq("c1"), eq(2L), any());
+        verify(conversationRepository, never()).advanceMark(any(), any(), any(), any(), any(), any());
     }
 
     @Test

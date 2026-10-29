@@ -19,10 +19,14 @@ import java.util.List;
  * that — it stays the time of the newest message sent, since the sending rules and the ordering of
  * the inbox are built on it.
  *
- * <p>The last four fields are the viewer's own choices about their copy: {@code pinnedAt} (null when
+ * <p>The viewer's own choices about their copy are {@code pinnedAt} (null when
  * not pinned; a later pin outranks an earlier one), {@code muteMode} and {@code mutedUntil} as of now
  * on the server's clock (an expired timed mute reads NONE), and {@code inboxHidden} — the viewer
  * deleted the conversation and nothing newer has arrived, so it belongs in no list of theirs.
+ *
+ * <p>{@code blockedByViewer} describes only the viewer's own block; {@code messagingBlocked}
+ * combines both directions without revealing the other participant's choice. These and
+ * {@code blockVersion} are null when the state lookup is unavailable.
  */
 public record ConversationResponse(
         String id,
@@ -41,8 +45,29 @@ public record ConversationResponse(
         Instant pinnedAt,
         MuteMode muteMode,
         Instant mutedUntil,
-        boolean inboxHidden
+        boolean inboxHidden,
+        Boolean blockedByViewer,
+        Boolean messagingBlocked,
+        Long blockVersion
 ) {
+
+    public ConversationResponse(String id, List<Long> participantIds, String lastMessageContent,
+                                MessageType lastMessageType, Long lastMessageSenderId, Instant lastMessageAt,
+                                Instant createdAt, boolean hasUnread, MessageRequestState requestState,
+                                Long initiatorId, SendPermission sendPermission, Instant retryAvailableAt,
+                                boolean lastMessageRecalled, Instant pinnedAt, MuteMode muteMode,
+                                Instant mutedUntil, boolean inboxHidden) {
+        this(id, participantIds, lastMessageContent, lastMessageType, lastMessageSenderId, lastMessageAt,
+                createdAt, hasUnread, requestState, initiatorId, sendPermission, retryAvailableAt,
+                lastMessageRecalled, pinnedAt, muteMode, mutedUntil, inboxHidden, false, false, 0L);
+    }
+
+    public ConversationResponse withBlockState(Boolean ownBlock, Boolean blocked, Long version) {
+        return new ConversationResponse(id, participantIds, lastMessageContent, lastMessageType,
+                lastMessageSenderId, lastMessageAt, createdAt, hasUnread, requestState, initiatorId,
+                sendPermission, retryAvailableAt, lastMessageRecalled, pinnedAt, muteMode, mutedUntil,
+                inboxHidden, ownBlock, blocked, version);
+    }
 
     public ConversationResponse(String id, List<Long> participantIds, String lastMessageContent,
                                 MessageType lastMessageType, Long lastMessageSenderId, Instant lastMessageAt,
@@ -65,12 +90,13 @@ public record ConversationResponse(
     public ConversationResponse withPreview(String content, MessageType type, Long senderId, boolean recalled) {
         return new ConversationResponse(id, participantIds, content, type, senderId, lastMessageAt, createdAt,
                 hasUnread, requestState, initiatorId, sendPermission, retryAvailableAt, recalled,
-                pinnedAt, muteMode, mutedUntil, inboxHidden);
+                pinnedAt, muteMode, mutedUntil, inboxHidden, blockedByViewer, messagingBlocked, blockVersion);
     }
 
     public ConversationResponse withViewerChoices(Instant pinned, MuteMode mute, Instant mutedUntilAt, boolean hidden) {
         return new ConversationResponse(id, participantIds, lastMessageContent, lastMessageType,
                 lastMessageSenderId, lastMessageAt, createdAt, hasUnread && !hidden, requestState, initiatorId,
-                sendPermission, retryAvailableAt, lastMessageRecalled, pinned, mute, mutedUntilAt, hidden);
+                sendPermission, retryAvailableAt, lastMessageRecalled, pinned, mute, mutedUntilAt, hidden,
+                blockedByViewer, messagingBlocked, blockVersion);
     }
 }

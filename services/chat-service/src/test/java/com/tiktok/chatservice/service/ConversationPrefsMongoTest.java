@@ -89,11 +89,13 @@ class ConversationPrefsMongoTest {
         when(friends.areFriends(any(), any())).thenReturn(false);
         blockClient = mock(BlockClient.class);
         ChatEventPublisher publisher = mock(ChatEventPublisher.class);
-        ConversationViews views = new ConversationViews(new ConversationMapperImpl(), messageRepository, prefsRepository);
+        ConversationViews views = new ConversationViews(new ConversationMapperImpl(), messageRepository, prefsRepository, blockClient);
         conversationService = new ConversationServiceImpl(conversationRepository, blockClient, settings, friends, publisher, views);
         prefsService = new ConversationPrefsService(conversationService, prefsRepository, conversationRepository, publisher, views);
         messageService = new MessageServiceImpl(conversationService, conversationRepository, messageRepository,
-                new MessageMapperImpl(), mock(SimpMessagingTemplate.class), blockClient, publisher, catalog, prefsRepository);
+                new MessageMapperImpl(), mock(SimpMessagingTemplate.class), blockClient, publisher, catalog, prefsRepository,
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
     }
 
     /** Conversation {@code id} between A and a different partner each time. */

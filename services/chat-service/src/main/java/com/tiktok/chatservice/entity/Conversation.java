@@ -66,6 +66,22 @@ public class Conversation {
     @Builder.Default
     private Map<String, Instant> lastReadAt = new HashMap<>();
 
+    /**
+     * Per participant: when they last sent a message. "Unread" is measured against the other side's
+     * entry — a participant who sends without opening the thread has still not read what came before.
+     * Absent on conversations from before this existed, which fall back to {@code lastMessageAt}.
+     */
+    @Builder.Default
+    private Map<String, Instant> lastSentAt = new HashMap<>();
+
+    /** Per participant: the newest message of the other side their client has received and acknowledged. */
+    @Builder.Default
+    private Map<String, ReceiptMark> deliveredMark = new HashMap<>();
+
+    /** Per participant: the newest message of the other side they have actually looked at. */
+    @Builder.Default
+    private Map<String, ReceiptMark> readMark = new HashMap<>();
+
     /** Null for an ordinary conversation; see {@link MessageRequestState}. */
     private MessageRequestState requestState;
 

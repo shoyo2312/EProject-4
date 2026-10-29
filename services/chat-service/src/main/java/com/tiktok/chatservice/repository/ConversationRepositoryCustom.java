@@ -30,8 +30,40 @@ public interface ConversationRepositoryCustom {
     /** Notes that the user deleted a message on their side, so their preview is worked out from their own history. */
     void markPreviewHiddenBy(String conversationId, Long userId);
 
-    /** Advances the user's read marker; never moves it backwards. */
+    /**
+     * Unread bookkeeping only: advances the time up to which the user has caught up, never backwards.
+     * It is not a receipt — nothing the other side can see follows from it. Used when the user deletes
+     * a conversation from their side, and by {@link #advanceMark} to keep "unread" in step with what
+     * they actually read.
+     */
     void markRead(String conversationId, Long userId, Instant readAt);
+
+    /** Which of a participant's two marks to move. */
+    enum MarkKind {
+        DELIVERED("deliveredMark"),
+        READ("readMark");
+
+        private final String field;
+
+        MarkKind(String field) {
+            this.field = field;
+        }
+
+        public String field() {
+            return field;
+        }
+    }
+
+    /**
+     * Moves the user's mark to {@code (sentAt, messageId)} — only if that is a later position than the
+     * mark now holds (or there is none), in one conditional update, so racing acknowledgements, repeats
+     * and late responses can never move it back and never rewrite {@code at} of an unchanged mark.
+     * Moving the read mark also moves {@code lastReadAt} to the message's own time, so "unread" never
+     * counts a message that arrived after the one that was read.
+     *
+     * @return true only for the call that advanced it
+     */
+    boolean advanceMark(String conversationId, Long userId, MarkKind kind, String messageId, Instant sentAt, Instant at);
 
     /**
      * PENDING to ordinary, in one conditional update: true only for the call that made the change.

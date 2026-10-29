@@ -31,6 +31,36 @@ public class MessageRepositoryImpl implements MessageRepositoryCustom {
     }
 
     @Override
+    public List<Message> findOthersBetween(String conversationId, Long excludedSender, Instant afterSentAt,
+                                           String afterId, Instant throughSentAt, String throughId, int limit) {
+        List<Criteria> all = new ArrayList<>();
+        all.add(where("conversationId").is(conversationId));
+        all.add(where("deletedAt").is(null));
+        all.add(where("senderId").ne(excludedSender));
+        if (afterSentAt != null && afterId != null) {
+            all.add(new Criteria().orOperator(
+                    where("sentAt").gt(afterSentAt),
+                    where("sentAt").is(afterSentAt).and("_id").gt(afterId)));
+        }
+        all.add(new Criteria().orOperator(
+                where("sentAt").lt(throughSentAt),
+                where("sentAt").is(throughSentAt).and("_id").lte(throughId)));
+        Query query = Query.query(new Criteria().andOperator(all))
+                .with(Sort.by(Sort.Direction.ASC, "sentAt", "_id"))
+                .limit(limit);
+        return mongoTemplate.find(query, Message.class);
+    }
+
+    @Override
+    public Optional<Message> findNewestOthers(String conversationId, Long excludedSender) {
+        Query query = Query.query(where("conversationId").is(conversationId).and("deletedAt").is(null)
+                        .and("senderId").ne(excludedSender))
+                .with(Sort.by(Sort.Direction.DESC, "sentAt", "_id"))
+                .limit(1);
+        return Optional.ofNullable(mongoTemplate.findOne(query, Message.class));
+    }
+
+    @Override
     public List<Message> findPage(String conversationId, Long viewerId, Instant visibleAfter, Instant beforeSentAt,
                                   String beforeId, int limit) {
         // ne on an array is "does not contain" — and true when the field is missing, which is every
@@ -109,6 +139,7 @@ public class MessageRepositoryImpl implements MessageRepositoryCustom {
                 .set("recalledAt", at)
                 .unset("content")
                 .unset("stickerId")
+                .unset("videoId")
                 .unset("reactions")
                 .inc("revision", 1);
         return mongoTemplate.updateFirst(query, update, Message.class).getModifiedCount() > 0;

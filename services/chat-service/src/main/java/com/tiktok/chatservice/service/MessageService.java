@@ -4,6 +4,9 @@ import com.tiktok.chatservice.dto.request.SendMessageRequest;
 import com.tiktok.chatservice.dto.response.MessagePageResponse;
 import com.tiktok.chatservice.dto.response.MessageResponse;
 import com.tiktok.chatservice.dto.response.MessageUpdateResponse;
+import com.tiktok.chatservice.dto.response.ReceiptView;
+
+import java.util.List;
 
 public interface MessageService {
 
@@ -11,7 +14,28 @@ public interface MessageService {
 
     MessagePageResponse listMessages(String conversationId, Long currentUserId, String cursor, int size);
 
-    void markRead(String conversationId, Long currentUserId);
+    /**
+     * The user has looked at the thread up to {@code messageId}, a message of the other side: moves the
+     * read mark there (and the delivered mark with it — seeing implies receiving), only if that is
+     * further than it was, and tells the other side only when something moved. With no id — a client
+     * from before positions existed — it is the newest message of the other side as of now.
+     *
+     * @return the user's own marks as they stand afterwards
+     */
+    ReceiptView markRead(String conversationId, Long currentUserId, String messageId);
+
+    /**
+     * The user's client has received these messages of the other side. The delivered mark moves only
+     * across a run of messages that are all named, so a message the client never got is never covered
+     * by an acknowledgement of a later one; a message the user deleted from their side does not block
+     * the run.
+     *
+     * @return the user's own marks as they stand afterwards
+     */
+    ReceiptView markDelivered(String conversationId, Long currentUserId, List<String> messageIds);
+
+    /** How far the other participant has got — what a sender needs to show "Delivered" and "Seen". */
+    ReceiptView receipts(String conversationId, Long currentUserId);
 
     /**
      * {@link #listMessages} for user-service's "Download your data" job — it asks on behalf of

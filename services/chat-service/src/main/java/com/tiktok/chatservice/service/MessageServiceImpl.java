@@ -1,20 +1,27 @@
 package com.tiktok.chatservice.service;
 
 import com.tiktok.chatservice.client.BlockClient;
+import com.tiktok.chatservice.client.ShareStatsClient;
+import com.tiktok.chatservice.client.VideoClient;
 import com.tiktok.chatservice.dto.request.SendMessageRequest;
 import com.tiktok.chatservice.dto.response.ChatEvent;
-import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.dto.response.MessagePageResponse;
 import com.tiktok.chatservice.dto.response.MessageResponse;
 import com.tiktok.chatservice.dto.response.MessageUpdateResponse;
 import com.tiktok.chatservice.dto.response.ReactionView;
+import com.tiktok.chatservice.dto.response.ReceiptView;
 import com.tiktok.chatservice.dto.response.ReplyQuote;
 import com.tiktok.chatservice.dto.response.SendPermission;
 import com.tiktok.chatservice.dto.response.StickerView;
+import com.tiktok.chatservice.dto.response.VideoCard;
+import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.entity.Message;
 import com.tiktok.chatservice.entity.MessageType;
-import com.tiktok.chatservice.sticker.StickerCatalog;
+import com.tiktok.chatservice.entity.ReceiptMark;
+import com.tiktok.chatservice.exception.ConversationNotFoundException;
 import com.tiktok.chatservice.exception.InvalidReactionException;
+import com.tiktok.chatservice.exception.InvalidReceiptException;
+import com.tiktok.chatservice.repository.ConversationRepositoryCustom;
 import com.tiktok.chatservice.exception.InvalidReplyTargetException;
 import com.tiktok.chatservice.exception.MessageNotFoundException;
 import com.tiktok.chatservice.exception.MessageRecalledException;
@@ -22,22 +29,30 @@ import com.tiktok.chatservice.exception.MessageRequestLimitReachedException;
 import com.tiktok.chatservice.exception.MessageRequestNotAcceptedException;
 import com.tiktok.chatservice.exception.NotMessageAuthorException;
 import com.tiktok.chatservice.exception.ReactionNotAllowedException;
+import com.tiktok.chatservice.exception.VideoNotAvailableException;
+import com.tiktok.chatservice.exception.VideoNotShareableToRecipientException;
 import com.tiktok.chatservice.mapper.MessageMapper;
 import com.tiktok.chatservice.repository.ChatUserPrefsRepository;
 import com.tiktok.chatservice.repository.ConversationRepository;
 import com.tiktok.chatservice.repository.MessageRepository;
+import com.tiktok.chatservice.sticker.StickerCatalog;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * Persists to Mongo first, then broadcasts over STOMP — both the REST send endpoint and the
@@ -51,6 +66,7 @@ import java.util.Set;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class MessageServiceImpl implements MessageService {
 
     private static final String TOPIC_PREFIX = "/topic/conversations/";
@@ -71,10 +87,20 @@ public class MessageServiceImpl implements MessageService {
     private final ChatEventPublisher eventPublisher;
     private final StickerCatalog stickerCatalog;
     private final ChatUserPrefsRepository prefsRepository;
+    private final VideoClient videoClient;
+    private final ShareStatsClient shareStatsClient;
 
     @Override
     public MessageResponse sendMessage(String conversationId, Long senderId, SendMessageRequest request) {
         Conversation conversation = conversationService.requireParticipant(senderId, conversationId);
+        // A retry is the already-delivered message, even when the pending-request policy now
+        // says REQUEST_SENT. It does not promote, reopen, broadcast, or spend another slot.
+        if (request.clientRequestId() != null) {
+            Message existing = deduplicated(conversationId, senderId, request.clientRequestId());
+            if (existing != null) {
+                return render(existing, senderId).asReplay();
+            }
+        }
         // Per message, not only when the conversation opens: a block placed later has to stop a
         // thread that already exists.
         requireNoBlock(conversation, senderId);
@@ -83,6 +109,15 @@ public class MessageServiceImpl implements MessageService {
         // its request and the sender's one message exactly as they were.
         MessagePayload payload = MessagePayload.from(request, stickerCatalog);
         String replyTo = requireReplyTarget(conversationId, senderId, request.replyToMessageId());
+
+        if (payload.type() == MessageType.VIDEO) {
+            requireViewable(payload.videoId(), senderId, true);
+            for (Long participant : conversation.getParticipantIds()) {
+                if (!participant.equals(senderId)) {
+                    requireViewable(payload.videoId(), participant, false);
+                }
+            }
+        }
 
         // A request whose two sides follow each other by now is just a conversation.
         conversation = conversationService.promoteIfMutual(conversation);
@@ -117,6 +152,8 @@ public class MessageServiceImpl implements MessageService {
                 .type(payload.type())
                 .content(payload.content())
                 .stickerId(payload.stickerId())
+                .videoId(payload.videoId())
+                .clientRequestId(request.clientRequestId())
                 .sentAt(now)
                 .requestMessage(requestMessage ? Boolean.TRUE : null)
                 .replyToMessageId(replyTo)
@@ -124,6 +161,12 @@ public class MessageServiceImpl implements MessageService {
         try {
             messageRepository.save(message);
         } catch (DuplicateKeyException e) {
+            if (request.clientRequestId() != null) {
+                Message existing = deduplicated(conversationId, senderId, request.clientRequestId());
+                if (existing != null) {
+                    return render(existing, senderId).asReplay();
+                }
+            }
             // one_request_message_idx: another send already used this request's single message —
             // a second tab, or the same send arriving over the other transport. Nothing was stored.
             throw new MessageRequestLimitReachedException();
@@ -140,7 +183,7 @@ public class MessageServiceImpl implements MessageService {
         conversationRepository.recordMessage(conversationId, senderId, payload.type(), payload.content(), now);
 
         MessageResponse response = render(message, senderId);
-        if (replyTo == null) {
+        if (replyTo == null && payload.type() != MessageType.VIDEO) {
             messagingTemplate.convertAndSend(TOPIC_PREFIX + conversationId, response);
             for (Long participant : conversation.getParticipantIds()) {
                 if (!participant.equals(senderId)) {
@@ -148,11 +191,11 @@ public class MessageServiceImpl implements MessageService {
                 }
             }
         } else {
-            // A reply's quote depends on who is looking — the other side may have deleted the
+            // Video cards and reply quotes depend on who is looking — the other side may have deleted the
             // original from their own — so it is rendered per person and goes to each of them
             // privately, the sender's other tabs included, instead of one frame on the shared topic.
             for (Long participant : conversation.getParticipantIds()) {
-                eventPublisher.toUser(participant, ChatEvent.message(render(message, participant)));
+                eventPublisher.toUser(participant, ChatEvent.message(participant.equals(senderId) ? response : render(message, participant)));
             }
         }
         if (requestMessage) {
@@ -162,7 +205,29 @@ public class MessageServiceImpl implements MessageService {
                     .ifPresent(eventPublisher::conversationChanged);
         }
 
+        if (payload.type() == MessageType.VIDEO) {
+            try {
+                shareStatsClient.count(payload.videoId(), senderId, message.getId());
+            } catch (RuntimeException e) {
+                log.warn("Could not count delivered chat share {}", message.getId(), e);
+            }
+        }
         return response;
+    }
+
+    private Message deduplicated(String conversationId, Long senderId, String key) {
+        return messageRepository.findByConversationIdAndSenderIdAndClientRequestId(conversationId, senderId, key)
+                .orElse(null);
+    }
+
+    private void requireViewable(String videoId, Long viewerId, boolean sender) {
+        VideoCard card = videoClient.viewable(viewerId, List.of(videoId)).get(videoId);
+        if (card == null || !"AVAILABLE".equals(card.state())) {
+            if (sender) {
+                throw new VideoNotAvailableException();
+            }
+            throw new VideoNotShareableToRecipientException();
+        }
     }
 
     @Override
@@ -203,7 +268,8 @@ public class MessageServiceImpl implements MessageService {
             originals.put(original.getId(), original);
         }
 
-        return new MessagePageResponse(page.stream().map(m -> render(m, viewerId, cleared, originals)).toList(), nextCursor, hasMore);
+        Map<String, VideoCard> videos = hydrate(page, originals.values(), viewerId, cleared);
+        return new MessagePageResponse(page.stream().map(m -> render(m, viewerId, cleared, originals, videos)).toList(), nextCursor, hasMore);
     }
 
     /** A stored message as the viewer draws it: sticker resolved, reactions listed, a recall redacted, the quote worked out. */
@@ -214,10 +280,23 @@ public class MessageServiceImpl implements MessageService {
             messageRepository.findInConversation(message.getConversationId(), replyTo)
                     .ifPresent(original -> originals.put(original.getId(), original));
         }
-        return render(message, viewerId, clearedAt(viewerId, message.getConversationId()), originals);
+        Instant cleared = clearedAt(viewerId, message.getConversationId());
+        return render(message, viewerId, cleared, originals,
+                hydrate(List.of(message), originals.values(), viewerId, cleared));
     }
 
-    private MessageResponse render(Message message, Long viewerId, Instant cleared, Map<String, Message> originals) {
+    private Map<String, VideoCard> hydrate(Collection<Message> messages,
+                                            Collection<Message> originals, Long viewerId, Instant cleared) {
+        Set<String> ids = new HashSet<>();
+        Stream.concat(messages.stream(), originals.stream())
+                .filter(m -> !m.isRecalled() && !hiddenFrom(m, viewerId, cleared))
+                .filter(m -> m.getType() == MessageType.VIDEO && m.getVideoId() != null)
+                .forEach(m -> ids.add(m.getVideoId()));
+        return ids.isEmpty() ? Map.of() : videoClient.hydrate(viewerId, ids);
+    }
+
+    private MessageResponse render(Message message, Long viewerId, Instant cleared, Map<String, Message> originals,
+                                   Map<String, VideoCard> videos) {
         MessageResponse response = messageMapper.toResponse(message);
         if (response == null) {
             return null;
@@ -228,16 +307,19 @@ public class MessageServiceImpl implements MessageService {
             if (response.type() == MessageType.STICKER) {
                 response = response.withSticker(stickerCatalog.find(response.stickerId()).orElse(null));
             }
+            if (response.type() == MessageType.VIDEO) {
+                response = response.withVideo(videos.getOrDefault(message.getVideoId(), VideoCard.unavailable(message.getVideoId())));
+            }
             response = response.withReactions(reactionViews(message));
         }
         if (message.getReplyToMessageId() != null) {
-            response = response.withReplyTo(quote(message.getReplyToMessageId(), originals.get(message.getReplyToMessageId()), viewerId, cleared));
+            response = response.withReplyTo(quote(message.getReplyToMessageId(), originals.get(message.getReplyToMessageId()), viewerId, cleared, videos));
         }
         return response;
     }
 
     /** What the viewer may see of the original right now: recalled and deleted-for-them carry no content. */
-    private ReplyQuote quote(String id, Message original, Long viewerId, Instant cleared) {
+    private ReplyQuote quote(String id, Message original, Long viewerId, Instant cleared, Map<String, VideoCard> videos) {
         if (original == null || hiddenFrom(original, viewerId, cleared)) {
             return ReplyQuote.unavailable(id);
         }
@@ -247,7 +329,9 @@ public class MessageServiceImpl implements MessageService {
         StickerView sticker = original.getType() == MessageType.STICKER
                 ? stickerCatalog.find(original.getStickerId()).orElse(null) : null;
         return new ReplyQuote(id, ReplyQuote.State.OK, original.getSenderId(), original.getType(),
-                shorten(original.getContent()), sticker);
+                shorten(original.getContent()), sticker,
+                original.getType() == MessageType.VIDEO
+                        ? videos.getOrDefault(original.getVideoId(), VideoCard.unavailable(original.getVideoId())).minimal() : null);
     }
 
     private static String shorten(String text) {
@@ -416,9 +500,119 @@ public class MessageServiceImpl implements MessageService {
         return "\u2764".equals(emoji) ? "\u2764\uFE0F" : emoji;
     }
 
+    /** How many messages one delivery acknowledgement may name, and how far the server looks for gaps. */
+    static final int MAX_ACK_MESSAGES = 100;
+    private static final int GAP_WALK_LIMIT = 500;
+
+    /** The thread's own order: by time, and by id for messages sent in the same millisecond. */
+    private static final Comparator<Message> THREAD_ORDER =
+            Comparator.comparing(Message::getSentAt).thenComparing(Message::getId);
+
     @Override
-    public void markRead(String conversationId, Long currentUserId) {
-        conversationService.requireParticipant(currentUserId, conversationId);
-        conversationRepository.markRead(conversationId, currentUserId, Instant.now());
+    public ReceiptView markRead(String conversationId, Long currentUserId, String messageId) {
+        Conversation conversation = conversationService.requireParticipant(currentUserId, conversationId);
+        Instant cleared = clearedAt(currentUserId, conversationId);
+        Message through;
+        if (messageId == null) {
+            through = messageRepository.findNewestOthers(conversationId, currentUserId).orElse(null);
+        } else {
+            through = messageRepository.findInConversation(conversationId, messageId).orElse(null);
+            if (through == null || through.isDeleted() || currentUserId.equals(through.getSenderId())
+                    || hiddenFrom(through, currentUserId, cleared)) {
+                throw new InvalidReceiptException();
+            }
+        }
+        if (through == null) {
+            return marksOf(conversation, currentUserId);
+        }
+        Instant now = Instant.now();
+        boolean read = conversationRepository.advanceMark(conversationId, currentUserId,
+                ConversationRepositoryCustom.MarkKind.READ, through.getId(), through.getSentAt(), now);
+        boolean delivered = conversationRepository.advanceMark(conversationId, currentUserId,
+                ConversationRepositoryCustom.MarkKind.DELIVERED, through.getId(), through.getSentAt(), now);
+        return settle(conversationId, currentUserId, read || delivered);
+    }
+
+    @Override
+    public ReceiptView markDelivered(String conversationId, Long currentUserId, List<String> messageIds) {
+        Conversation conversation = conversationService.requireParticipant(currentUserId, conversationId);
+        List<String> ids = messageIds == null ? List.of()
+                : messageIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty() || ids.size() > MAX_ACK_MESSAGES) {
+            throw new InvalidReceiptException();
+        }
+        Map<String, Message> found = new HashMap<>();
+        for (Message message : messageRepository.findInConversation(conversationId, ids)) {
+            found.put(message.getId(), message);
+        }
+        List<Message> named = new ArrayList<>();
+        for (String id : ids) {
+            Message message = found.get(id);
+            // Not here, or the caller's own: nothing this person can have received.
+            if (message == null || message.isDeleted() || currentUserId.equals(message.getSenderId())) {
+                throw new InvalidReceiptException();
+            }
+            named.add(message);
+        }
+        named.sort(THREAD_ORDER);
+        Message last = named.get(named.size() - 1);
+        Set<String> namedIds = new HashSet<>(ids);
+        Instant cleared = clearedAt(currentUserId, conversationId);
+
+        ReceiptMark current = conversation.getDeliveredMark() == null ? null
+                : conversation.getDeliveredMark().get(String.valueOf(currentUserId));
+        // The stretch the mark would cross. With no mark yet it starts at the first message named:
+        // what came before it is history the person opened the thread onto, not a gap.
+        List<Message> candidates = new ArrayList<>();
+        if (current == null) {
+            candidates.add(named.get(0));
+            candidates.addAll(messageRepository.findOthersBetween(conversationId, currentUserId,
+                    named.get(0).getSentAt(), named.get(0).getId(), last.getSentAt(), last.getId(), GAP_WALK_LIMIT));
+        } else {
+            candidates.addAll(messageRepository.findOthersBetween(conversationId, currentUserId,
+                    current.sentAt(), current.messageId(), last.getSentAt(), last.getId(), GAP_WALK_LIMIT));
+        }
+        Message through = null;
+        for (Message candidate : candidates) {
+            if (hiddenFrom(candidate, currentUserId, cleared)) {
+                continue;
+            }
+            if (!namedIds.contains(candidate.getId())) {
+                break;
+            }
+            through = candidate;
+        }
+        if (through == null) {
+            return marksOf(conversation, currentUserId);
+        }
+        boolean advanced = conversationRepository.advanceMark(conversationId, currentUserId,
+                ConversationRepositoryCustom.MarkKind.DELIVERED, through.getId(), through.getSentAt(), Instant.now());
+        return settle(conversationId, currentUserId, advanced);
+    }
+
+    @Override
+    public ReceiptView receipts(String conversationId, Long currentUserId) {
+        Conversation conversation = conversationService.requireParticipant(currentUserId, conversationId);
+        Long peer = conversation.getParticipantIds().stream()
+                .filter(id -> !id.equals(currentUserId)).findFirst().orElse(currentUserId);
+        return marksOf(conversation, peer);
+    }
+
+    /** Reloads after a change and, when something moved, tells the other side where this user now is. */
+    private ReceiptView settle(String conversationId, Long userId, boolean moved) {
+        Conversation fresh = conversationRepository.findByIdAndDeletedAtIsNull(conversationId)
+                .orElseThrow(() -> new ConversationNotFoundException(conversationId));
+        ReceiptView view = marksOf(fresh, userId);
+        if (moved) {
+            eventPublisher.receipt(fresh, view);
+        }
+        return view;
+    }
+
+    private static ReceiptView marksOf(Conversation conversation, Long userId) {
+        String key = String.valueOf(userId);
+        return new ReceiptView(conversation.getId(), userId,
+                conversation.getDeliveredMark() == null ? null : conversation.getDeliveredMark().get(key),
+                conversation.getReadMark() == null ? null : conversation.getReadMark().get(key));
     }
 }

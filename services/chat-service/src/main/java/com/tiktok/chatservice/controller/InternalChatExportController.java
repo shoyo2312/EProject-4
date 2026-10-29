@@ -2,6 +2,9 @@ package com.tiktok.chatservice.controller;
 
 import com.tiktok.chatservice.dto.response.ConversationExportResponse;
 import com.tiktok.chatservice.dto.response.MessagePageResponse;
+import com.tiktok.chatservice.dto.response.MessageResponse;
+import com.tiktok.chatservice.dto.response.ReplyQuote;
+import com.tiktok.chatservice.entity.MessageType;
 import com.tiktok.chatservice.repository.ConversationRepository;
 import com.tiktok.chatservice.service.MessageService;
 import com.tiktok.common.response.ApiResponse;
@@ -15,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -41,11 +45,33 @@ public class InternalChatExportController {
 
     /** {@code viewerId} is the person asking for their data: the history comes back as they see it. */
     @GetMapping("/{conversationId}/messages")
-    public ApiResponse<MessagePageResponse> messages(
+    public ApiResponse<ExportPage> messages(
             @PathVariable String conversationId,
             @RequestParam Long viewerId,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "100") @Min(1) @Max(100) int size) {
-        return ApiResponse.success(messageService.exportMessages(conversationId, viewerId, cursor, size));
+        MessagePageResponse page = messageService.exportMessages(conversationId, viewerId, cursor, size);
+        return ApiResponse.success(new ExportPage(page.items().stream().map(InternalChatExportController::exportItem).toList(),
+                page.nextCursor(), page.hasMore()));
     }
+
+    /** Keep TEXT/STICKER shapes; video exports contain identifiers and captions, never card media. */
+    private static Object exportItem(MessageResponse message) {
+        if (message.type() == MessageType.VIDEO) {
+            return new VideoExportMessage(message.id(), message.conversationId(), message.senderId(), message.type(),
+                    message.recalledAt() == null && message.video() != null ? message.video().videoId() : null,
+                    message.content(), message.sentAt(), message.recalledAt());
+        }
+        if (message.replyTo() != null && message.replyTo().video() != null) {
+            var quote = message.replyTo();
+            return message.withReplyTo(new ReplyQuote(quote.messageId(), quote.state(),
+                    quote.senderId(), quote.type(), quote.content(), quote.sticker()));
+        }
+        return message;
+    }
+
+    public record ExportPage(List<Object> items, String nextCursor, boolean hasMore) {}
+    public record VideoExportMessage(String id, String conversationId, Long senderId,
+                                    MessageType type, String videoId,
+                                    String content, Instant sentAt, Instant recalledAt) {}
 }

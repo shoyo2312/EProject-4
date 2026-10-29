@@ -6,5 +6,6 @@ package com.tiktok.chatservice.entity;
  */
 public enum MessageType {
     TEXT,
-    STICKER
+    STICKER,
+    VIDEO
 }
