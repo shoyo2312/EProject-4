@@ -7,6 +7,7 @@ import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.dto.response.ViewableVideoResponse;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -32,6 +33,8 @@ public interface VideoService {
      * are dropped rather than reported, so the caller gets a shorter list instead of a failure.
      */
     List<VideoResponse> getByIds(Long requesterId, List<String> videoIds);
+
+    List<ViewableVideoResponse> getViewable(Long viewerId, List<String> ids);
 
     /**
      * @param cursor the previous page's {@code nextCursor}, or null to start at the newest video
