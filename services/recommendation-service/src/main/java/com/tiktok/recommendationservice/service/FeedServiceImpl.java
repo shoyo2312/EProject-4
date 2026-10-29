@@ -21,6 +21,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.random.RandomGenerator;
 import java.util.stream.Collectors;
 
 /**
@@ -47,8 +48,25 @@ public class FeedServiceImpl implements FeedService {
     /** How deep into the trending ranking candidate generation reaches. */
     private static final long TRENDING_POOL = 300;
 
+    /**
+     * Random draw from the whole published catalogue, each request. Trending and the viewer's
+     * tags between them reach a few dozen videos on a small instance, and once those are seen or
+     * served the ranking was spent while hundreds of videos sat unreachable — the client then
+     * fell through to the chronological feed, which is the same list every time.
+     */
+    private static final long EXPLORE_POOL = 200;
+
     /** Hard ceiling on scored candidates, so one request is a bounded amount of work. */
     private static final int CANDIDATE_POOL = 500;
+
+    /**
+     * Gumbel noise added to each score before the sort, as a fraction of the spread between the
+     * best and worst candidate. The score itself is a deterministic function of state that barely
+     * moves between two openings of the app, so without this the page was the same both times.
+     * Gumbel rather than uniform so the perturbed order is a sample proportional to the scores:
+     * the best candidate is still the likeliest to come first, just not certain to.
+     */
+    private static final double EXPLORATION_TEMPERATURE = 0.25;
 
     private static final double TREND_WEIGHT = 1.0;
     private static final double AFFINITY_WEIGHT = 2.0;
@@ -72,6 +90,7 @@ public class FeedServiceImpl implements FeedService {
     private final StringRedisTemplate redisTemplate;
     private final RankClient rankClient;
     private final UserMuteClient userMuteClient;
+    private final RandomGenerator random;
 
     @Override
     public List<FeedItemResponse> getFeed(Long userId, int limit) {
@@ -81,6 +100,15 @@ public class FeedServiceImpl implements FeedService {
             ops.opsForZSet().reverseRangeWithScores(RecoKeys.userTags(userId), 0, TOP_TAGS - 1L);
             ops.opsForZSet().range(RecoKeys.userSeen(userId), 0, -1);
             ops.opsForZSet().range(RecoKeys.userServed(userId), 0, -1);
+            ops.opsForZSet().randomMembers(RecoKeys.VIDEO_PUBLISHED, EXPLORE_POOL);
+            // The published set keeps private, taken-down and held videos (they come back when
+            // the reason lifts), so unlike the indexes a draw from it has to be checked. Whole
+            // sets rather than SMISMEMBER per draw: that operation reads its own reply and
+            // cannot run inside a pipeline, and these sets are the hidden fraction of the
+            // catalogue, not the catalogue.
+            ops.opsForSet().members(RecoKeys.VIDEO_PRIVATE);
+            ops.opsForSet().members(RecoKeys.VIDEO_TAKEN_DOWN);
+            ops.opsForSet().members(RecoKeys.VIDEO_HELD);
         });
         Map<String, Double> trending = trendingCandidates(RedisPipeline.answer(reads, 0));
         Map<String, Double> topTags = topTags(RedisPipeline.answer(reads, 1));
@@ -110,6 +138,19 @@ public class FeedServiceImpl implements FeedService {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         // Trending comes out of trendingCandidates in rank order, which this set preserves.
         pool.addAll(trending.keySet());
+        // Last, so under the cap it is the exploration draw that gets cut, never a tag match or
+        // a trending video.
+        Set<String> hidden = new HashSet<>();
+        for (int i = 5; i <= 7; i++) {
+            Set<String> members = RedisPipeline.answer(reads, i);
+            if (members != null) {
+                hidden.addAll(members);
+            }
+        }
+        for (String videoId : exploration(RedisPipeline.answer(reads, 4), pool, hidden)) {
+            pool.add(videoId);
+            reasons.computeIfAbsent(videoId, id -> new ArrayList<>()).add("explore");
+        }
 
         Set<String> excluded = alreadyDelivered(RedisPipeline.answer(reads, 2), RedisPipeline.answer(reads, 3));
         excluded.addAll(byMutedAccounts(userId, pool));
@@ -142,17 +183,45 @@ public class FeedServiceImpl implements FeedService {
             candidates.forEach(videoId -> reasons.computeIfAbsent(videoId, id -> new ArrayList<>()).add("model"));
         }
 
+        Map<String, Double> order = perturbed(candidates, scores);
         List<FeedItemResponse> feed = candidates.stream()
+                .sorted(Comparator.comparingDouble(order::get).reversed())
+                .limit(limit)
                 .map(videoId -> new FeedItemResponse(
                         videoId,
                         round(scores.getOrDefault(videoId, 0.0)),
                         reasons.getOrDefault(videoId, List.of())))
-                .sorted(Comparator.comparingDouble(FeedItemResponse::score).reversed())
-                .limit(limit)
                 .toList();
 
         markServed(userId, feed);
         return feed;
+    }
+
+    /** The catalogue draw, minus what trending and the tags already reached and minus the hidden. */
+    private List<String> exploration(List<String> drawn, Set<String> alreadyInPool, Set<String> hidden) {
+        if (drawn == null) {
+            return List.of();
+        }
+        return drawn.stream()
+                .filter(videoId -> videoId != null && !alreadyInPool.contains(videoId) && !hidden.contains(videoId))
+                .distinct()
+                .toList();
+    }
+
+    /**
+     * Score plus Gumbel noise scaled to the candidates' spread, for the sort only — the response
+     * still carries the real score. All-equal scores have no spread and get no noise.
+     */
+    private Map<String, Double> perturbed(List<String> candidates, Map<String, Double> scores) {
+        double min = candidates.stream().mapToDouble(id -> scores.getOrDefault(id, 0.0)).min().orElse(0.0);
+        double max = candidates.stream().mapToDouble(id -> scores.getOrDefault(id, 0.0)).max().orElse(0.0);
+        double temperature = EXPLORATION_TEMPERATURE * (max - min);
+        Map<String, Double> order = new HashMap<>();
+        for (String videoId : candidates) {
+            double gumbel = -Math.log(-Math.log(random.nextDouble()));
+            order.put(videoId, scores.getOrDefault(videoId, 0.0) + temperature * gumbel);
+        }
+        return order;
     }
 
     private List<CandidateFeatures> features(List<String> candidates,
