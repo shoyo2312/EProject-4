@@ -114,6 +114,10 @@ minio:
   # presigned uploads land in. endpoint is what the browser PUTs to, so in any deployment where
   # the client is not on the service network this is the public address, not the internal one.
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  # Where the service's own calls go (statObject, the upload form's policy signature). In
+  # production this is the in-cluster MinIO; through the public endpoint every call goes out
+  # through Cloudflare and back in. See MinioConfig.
+  internal-endpoint: ${MINIO_INTERNAL_ENDPOINT:${minio.endpoint}}
   upload-url: ${MEDIA_UPLOAD_URL:${minio.endpoint}}
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin123}

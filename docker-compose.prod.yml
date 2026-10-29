@@ -411,8 +411,10 @@ services:
   # store and hand to browsers from it, and presigned uploads are signed for that host. Server-side
   # MinIO calls therefore go out through Cloudflare and back in. media-worker is the exception: it
   # moves whole videos, so it calls MinIO in-cluster and takes the public base from MEDIA_PUBLIC_URL.
-  # ponytail: user/video-service still hairpin their small server-side calls; give them a second,
-  # in-cluster MinioClient if those start failing.
+  # video-service has a second, in-cluster client for its own calls (MINIO_INTERNAL_ENDPOINT): its
+  # per-row statObject through Cloudflare held the admin dashboard at 6-13 s.
+  # ponytail: user-service still hairpins its small server-side calls; give it the same split if
+  # those start failing.
   user-service:
     <<: *java
     build:
@@ -464,6 +466,7 @@ services:
       MODERATION_SERVICE_URL: http://moderation-service:8099
       ADMIN_SERVICE_URL: http://admin-service:8096
       MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
+      MINIO_INTERNAL_ENDPOINT: http://minio:9000
       # Its own account (raw/, read on quarantine/), made by minio-init.
       MINIO_ACCESS_KEY: video-service
       MINIO_SECRET_KEY: ${MINIO_VIDEO_SECRET_KEY:?}

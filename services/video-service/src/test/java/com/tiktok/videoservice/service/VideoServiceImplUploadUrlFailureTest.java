@@ -47,7 +47,7 @@ class VideoServiceImplUploadUrlFailureTest {
                 mock(com.tiktok.videoservice.client.FriendshipClient.class),
                 new UploadLimitProperties(524_288_000L, 600),
                 new QuarantinedMediaUrls(mock(MinioClient.class), new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret",
-                        "video-media", "us-east-1", Duration.ofMinutes(15))),
+                        "video-media", "us-east-1", Duration.ofMinutes(15)), mock(MinioClient.class)),
                 mock(com.tiktok.videoservice.client.BlockClient.class),
                 mock(com.tiktok.videoservice.client.UserSettingsClient.class),
                 mock(com.tiktok.videoservice.client.FollowClient.class),

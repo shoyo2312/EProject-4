@@ -75,7 +75,7 @@ class VideoServiceImplCacheTest {
             friendshipClient,
             new UploadLimitProperties(524_288_000L, 600),
             new QuarantinedMediaUrls(quarantineClient, new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret",
-                    "video-media", "us-east-1", Duration.ofMinutes(15))),
+                    "video-media", "us-east-1", Duration.ofMinutes(15)), quarantineClient),
                 blockClient,
                 userSettingsClient,
                 followClient,
