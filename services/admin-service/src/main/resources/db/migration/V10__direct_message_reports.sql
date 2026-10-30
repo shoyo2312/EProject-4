@@ -39,6 +39,7 @@ CREATE TABLE report_evidence (
     content         TEXT,
     sticker_id      VARCHAR(100),
     video_id        VARCHAR(100),
+    story_id        VARCHAR(100),
     created_at      TIMESTAMPTZ  NOT NULL,
     updated_at      TIMESTAMPTZ  NOT NULL,
     deleted_at      TIMESTAMPTZ,

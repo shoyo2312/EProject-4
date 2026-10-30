@@ -33,7 +33,7 @@ public class ChatEvidenceClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Message(String messageId, Long senderId, String type, Instant sentAt,
-                          String text, String stickerId, String videoId) {
+                          String text, String stickerId, String videoId, String storyId) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

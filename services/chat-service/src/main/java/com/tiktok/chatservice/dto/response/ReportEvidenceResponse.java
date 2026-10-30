@@ -23,7 +23,8 @@ public record ReportEvidenceResponse(
             Instant sentAt,
             String text,
             String stickerId,
-            String videoId
+            String videoId,
+            String storyId
     ) {
     }
 }

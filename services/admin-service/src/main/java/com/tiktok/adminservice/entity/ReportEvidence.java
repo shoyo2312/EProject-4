@@ -49,4 +49,7 @@ public class ReportEvidence extends BaseEntity {
 
     @Column(name = "video_id")
     private String videoId;
+
+    @Column(name = "story_id")
+    private String storyId;
 }

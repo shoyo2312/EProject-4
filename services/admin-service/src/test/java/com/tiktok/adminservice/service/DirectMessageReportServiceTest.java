@@ -69,8 +69,8 @@ class DirectMessageReportServiceTest {
 
     private ChatEvidenceClient.Captured captured() {
         return new ChatEvidenceClient.Captured("c1", 2L, T0.plusSeconds(100), List.of(
-                new ChatEvidenceClient.Message("m1", 2L, "TEXT", T0, "hello", null, null),
-                new ChatEvidenceClient.Message("m2", 1L, "TEXT", T0.plusSeconds(5), "context", null, null)));
+                new ChatEvidenceClient.Message("m1", 2L, "TEXT", T0, "hello", null, null, null),
+                new ChatEvidenceClient.Message("m2", 1L, "TEXT", T0.plusSeconds(5), "context", null, null, null)));
     }
 
     @Test

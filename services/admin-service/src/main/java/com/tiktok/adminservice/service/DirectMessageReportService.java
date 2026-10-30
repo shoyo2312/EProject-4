@@ -101,6 +101,7 @@ public class DirectMessageReportService {
                         .content(m.text())
                         .stickerId(m.stickerId())
                         .videoId(m.videoId())
+                        .storyId(m.storyId())
                         .build())
                 .toList());
 
@@ -123,6 +124,6 @@ public class DirectMessageReportService {
                 reported, rows.isEmpty() ? null : rows.get(0).getCapturedAt(),
                 rows.stream().map(r -> new ReportEvidenceResponse.Item(r.getMessageId(), r.getSenderId(),
                         r.getSenderId().equals(report.getReporterId()) ? "REPORTER" : "REPORTED",
-                        r.getMessageType(), r.getSentAt(), r.getContent(), r.getStickerId(), r.getVideoId())).toList());
+                        r.getMessageType(), r.getSentAt(), r.getContent(), r.getStickerId(), r.getVideoId(), r.getStoryId())).toList());
     }
 }

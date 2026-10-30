@@ -60,7 +60,7 @@ public class ReportEvidenceService {
         List<ReportEvidenceResponse.Item> items = found.values().stream()
                 .sorted(Comparator.comparing(Message::getSentAt).thenComparing(Message::getId))
                 .map(m -> new ReportEvidenceResponse.Item(m.getId(), m.getSenderId(), m.getType().name(),
-                        m.getSentAt(), m.getContent(), m.getStickerId(), m.getVideoId()))
+                        m.getSentAt(), m.getContent(), m.getStickerId(), m.getVideoId(), m.getStoryId()))
                 .toList();
         return new ReportEvidenceResponse(request.conversationId(), reported, Instant.now(), items);
     }
