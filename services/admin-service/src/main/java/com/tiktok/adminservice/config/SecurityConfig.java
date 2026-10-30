@@ -40,7 +40,8 @@ public class SecurityConfig {
                         // Any method: a HEAD is answered by the GET handler, so a GET-only rule lets a JWT in.
                         .requestMatchers("/api/v1/admin/internal/**")
                         .access(new InternalCallerAuthorization(internalApiToken))
-                        .requestMatchers(HttpMethod.POST, "/api/v1/admin/reports").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/admin/reports", "/api/v1/admin/reports/direct-message")
+                        .authenticated()
                         .anyRequest().hasRole("ADMIN")
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

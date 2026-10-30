@@ -374,6 +374,12 @@ public class AdminServiceImpl implements AdminService {
      * closed on arrival and never reaches an admin.
      */
     private Optional<ModerationAction> standingEnforcement(ReportTargetType targetType, String targetId) {
+        return standingEnforcement(moderationActionRepository, targetType, targetId);
+    }
+
+    /** Static so a direct-message report applies the same rule as every other one. */
+    static Optional<ModerationAction> standingEnforcement(ModerationActionRepository moderationActionRepository,
+                                                          ReportTargetType targetType, String targetId) {
         Instant now = Instant.now();
         return moderationActionRepository
                 .findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(
