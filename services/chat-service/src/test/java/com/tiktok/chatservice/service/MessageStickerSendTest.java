@@ -75,6 +75,7 @@ class MessageStickerSendTest {
                 new MessageMapperImpl(), messagingTemplate, blockClient, eventPublisher,
                 StickerCatalog.load("http://localhost:9000", "video-media"), org.mockito.Mockito.mock(ChatUserPrefsRepository.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
         lenient().when(conversationService.promoteIfMutual(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }

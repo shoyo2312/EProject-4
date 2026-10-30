@@ -140,6 +140,7 @@ public class MessageRepositoryImpl implements MessageRepositoryCustom {
                 .unset("content")
                 .unset("stickerId")
                 .unset("videoId")
+                .unset("storyId")
                 .unset("reactions")
                 .inc("revision", 1);
         return mongoTemplate.updateFirst(query, update, Message.class).getModifiedCount() > 0;

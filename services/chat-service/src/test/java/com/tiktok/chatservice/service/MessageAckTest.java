@@ -64,6 +64,7 @@ class MessageAckTest {
                 messagingTemplate, blockClient, eventPublisher,
                 com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefs,
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
         conversation = Conversation.builder().id("c1").participantIds(List.of(A, B)).participantKey("1_2")
                 .deliveredMark(new HashMap<>()).readMark(new HashMap<>()).build();

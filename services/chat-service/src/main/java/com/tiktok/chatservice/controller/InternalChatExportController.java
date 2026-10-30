@@ -62,6 +62,11 @@ public class InternalChatExportController {
                     message.recalledAt() == null && message.video() != null ? message.video().videoId() : null,
                     message.content(), message.sentAt(), message.recalledAt());
         }
+        if (message.type() == MessageType.STORY_REPLY) {
+            return new StoryReplyExportMessage(message.id(), message.conversationId(), message.senderId(), message.type(),
+                    message.recalledAt() == null && message.story() != null ? message.story().storyId() : null,
+                    message.content(), message.sentAt(), message.recalledAt());
+        }
         if (message.replyTo() != null && message.replyTo().video() != null) {
             var quote = message.replyTo();
             return message.withReplyTo(new ReplyQuote(quote.messageId(), quote.state(),
@@ -71,6 +76,9 @@ public class InternalChatExportController {
     }
 
     public record ExportPage(List<Object> items, String nextCursor, boolean hasMore) {}
+    public record StoryReplyExportMessage(String id, String conversationId, Long senderId,
+                                          MessageType type, String storyId,
+                                          String content, Instant sentAt, Instant recalledAt) {}
     public record VideoExportMessage(String id, String conversationId, Long senderId,
                                     MessageType type, String videoId,
                                     String content, Instant sentAt, Instant recalledAt) {}

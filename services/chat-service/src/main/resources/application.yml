@@ -66,6 +66,7 @@ downstream:
   interaction-service-uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
   video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+  story-service-uri: ${STORY_SERVICE_URI:http://localhost:8086}
 
 realtime:
   flush-interval-millis: 500
