@@ -14,6 +14,8 @@ import jakarta.validation.constraints.Size;
  *   <li>{@code TEXT} (or no type, which is what every older client sends): {@code content}, not blank,
  *       at most 2000 characters; no {@code stickerId}.</li>
  *   <li>{@code STICKER}: {@code stickerId} from the catalog; no {@code content}.</li>
+ *   <li>{@code STORY_REPLY}: {@code storyId} and a non-blank {@code content} of at most 1000 characters.
+ *       The server finds the story's owner and the conversation; nothing else about the story comes from the client.</li>
  *   <li>{@code VIDEO}: {@code videoId}, with an optional trimmed caption of at most 300 UTF-16 units.</li>
  * </ul>
  *
@@ -28,8 +30,18 @@ public record SendMessageRequest(
         String stickerId,
         @Size(max = 64) String replyToMessageId,
         @Size(max = 64) String videoId,
-        @Size(max = 64) String clientRequestId
+        @Size(max = 64) String clientRequestId,
+        @Size(max = 64) String storyId
 ) {
+
+    public SendMessageRequest(MessageType type, String content, String stickerId, String replyToMessageId,
+                              String videoId, String clientRequestId) {
+        this(type, content, stickerId, replyToMessageId, videoId, clientRequestId, null);
+    }
+
+    public static SendMessageRequest storyReply(String storyId, String text, String clientRequestId) {
+        return new SendMessageRequest(MessageType.STORY_REPLY, text, null, null, null, clientRequestId, storyId);
+    }
 
     public SendMessageRequest(MessageType type, String content, String stickerId, String replyToMessageId) {
         this(type, content, stickerId, replyToMessageId, null, null);
@@ -53,6 +65,6 @@ public record SendMessageRequest(
     }
 
     public SendMessageRequest replyingTo(String messageId) {
-        return new SendMessageRequest(type, content, stickerId, messageId, videoId, clientRequestId);
+        return new SendMessageRequest(type, content, stickerId, messageId, videoId, clientRequestId, storyId);
     }
 }

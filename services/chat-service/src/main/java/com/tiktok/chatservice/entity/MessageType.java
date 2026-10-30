@@ -7,5 +7,7 @@ package com.tiktok.chatservice.entity;
 public enum MessageType {
     TEXT,
     STICKER,
-    VIDEO
+    VIDEO,
+    /** A text answer to someone's story: content is the text, storyId the story. */
+    STORY_REPLY
 }

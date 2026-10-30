@@ -56,6 +56,7 @@ class MessageServiceImplTest {
                 conversationService, conversationRepository, messageRepository, messageMapper, messagingTemplate,
                 blockClient, eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), org.mockito.Mockito.mock(ChatUserPrefsRepository.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
         // Nothing here is a pending request, so promotion is the identity.
         org.mockito.Mockito.lenient().when(conversationService.promoteIfMutual(any()))

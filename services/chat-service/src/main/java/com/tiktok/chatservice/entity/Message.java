@@ -60,6 +60,9 @@ public class Message {
 
     private String videoId;
 
+    /** Present only on STORY_REPLY: the id only. The story is resolved for each viewer on every render, never copied. */
+    private String storyId;
+
     private String clientRequestId;
 
     private Instant sentAt;

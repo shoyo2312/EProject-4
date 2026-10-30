@@ -63,6 +63,7 @@ class ConversationConcurrencyTest {
                 messageRepository, new MessageMapperImpl(), messagingTemplate, mock(BlockClient.class),
                 mock(ChatEventPublisher.class), com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository,
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
         when(conversationService.promoteIfMutual(any())).thenAnswer(invocation -> invocation.getArgument(0));
     }

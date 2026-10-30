@@ -15,14 +15,18 @@ import com.tiktok.common.exception.BadRequestException;
  * <p>The client names a sticker by id only. Whether that id exists, and is still offered, is the
  * catalog's answer — never a URL or storage key from the request.
  */
-record MessagePayload(MessageType type, String content, String stickerId, String videoId) {
+record MessagePayload(MessageType type, String content, String stickerId, String videoId, String storyId) {
 
     static final int MAX_TEXT = 2000;
+    static final int MAX_STORY_REPLY = 1000;
 
     static MessagePayload from(SendMessageRequest request, StickerCatalog catalog) {
         MessageType type = request.type() == null ? MessageType.TEXT : request.type();
         if (type != MessageType.VIDEO && request.videoId() != null) {
             throw new InvalidMessageException("Only VIDEO messages can carry a videoId");
+        }
+        if (type != MessageType.STORY_REPLY && request.storyId() != null) {
+            throw new InvalidMessageException("Only STORY_REPLY messages can carry a storyId");
         }
         if ((request.videoId() != null && request.videoId().length() > 64)
                 || (request.clientRequestId() != null && request.clientRequestId().length() > 64)) {
@@ -31,6 +35,7 @@ record MessagePayload(MessageType type, String content, String stickerId, String
         return switch (type) {
             case VIDEO -> video(request);
             case TEXT -> text(request);
+            case STORY_REPLY -> storyReply(request);
             case STICKER -> sticker(request, catalog);
         };
     }
@@ -46,7 +51,22 @@ record MessagePayload(MessageType type, String content, String stickerId, String
         if (note != null && note.length() > 300) {
             throw new InvalidMessageException("Video caption must be at most 300 characters after trimming");
         }
-        return new MessagePayload(MessageType.VIDEO, note, null, request.videoId());
+        return new MessagePayload(MessageType.VIDEO, note, null, request.videoId(), null);
+    }
+
+    private static MessagePayload storyReply(SendMessageRequest request) {
+        if (request.storyId() == null || request.storyId().isBlank() || request.stickerId() != null
+                || request.videoId() != null || request.replyToMessageId() != null) {
+            throw new InvalidMessageException("STORY_REPLY requires a storyId and nothing else but text");
+        }
+        String text = request.content() == null ? "" : request.content().trim();
+        if (text.isEmpty()) {
+            throw new BadRequestException("VALIDATION_ERROR", "content: must not be blank");
+        }
+        if (text.length() > MAX_STORY_REPLY) {
+            throw new BadRequestException("VALIDATION_ERROR", "content: size must be between 1 and " + MAX_STORY_REPLY);
+        }
+        return new MessagePayload(MessageType.STORY_REPLY, text, null, null, request.storyId());
     }
 
     private static MessagePayload text(SendMessageRequest request) {
@@ -60,7 +80,7 @@ record MessagePayload(MessageType type, String content, String stickerId, String
         if (content.length() > MAX_TEXT) {
             throw new BadRequestException("VALIDATION_ERROR", "content: size must be between 0 and " + MAX_TEXT);
         }
-        return new MessagePayload(MessageType.TEXT, content, null, null);
+        return new MessagePayload(MessageType.TEXT, content, null, null, null);
     }
 
     private static MessagePayload sticker(SendMessageRequest request, StickerCatalog catalog) {
@@ -70,6 +90,6 @@ record MessagePayload(MessageType type, String content, String stickerId, String
         if (!catalog.sendable(request.stickerId())) {
             throw new InvalidStickerException();
         }
-        return new MessagePayload(MessageType.STICKER, null, request.stickerId(), null);
+        return new MessagePayload(MessageType.STICKER, null, request.stickerId(), null, null);
     }
 }
