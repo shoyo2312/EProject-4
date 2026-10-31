@@ -6,6 +6,8 @@ import com.tiktok.chatservice.client.StoryClient;
 import com.tiktok.chatservice.client.VideoClient;
 import com.tiktok.chatservice.dto.request.SendMessageRequest;
 import com.tiktok.chatservice.dto.response.ChatEvent;
+import com.tiktok.chatservice.dto.response.ImageView;
+import com.tiktok.chatservice.repository.ChatImageRepository;
 import com.tiktok.chatservice.dto.response.MessagePageResponse;
 import com.tiktok.chatservice.dto.response.MessageResponse;
 import com.tiktok.chatservice.dto.response.MessageUpdateResponse;
@@ -21,6 +23,7 @@ import com.tiktok.chatservice.entity.Message;
 import com.tiktok.chatservice.entity.MessageType;
 import com.tiktok.chatservice.entity.ReceiptMark;
 import com.tiktok.chatservice.exception.ConversationNotFoundException;
+import com.tiktok.chatservice.exception.InvalidMessageException;
 import com.tiktok.chatservice.exception.InvalidReactionException;
 import com.tiktok.chatservice.exception.InvalidReceiptException;
 import com.tiktok.chatservice.repository.ConversationRepositoryCustom;
@@ -94,6 +97,8 @@ public class MessageServiceImpl implements MessageService {
     private final VideoClient videoClient;
     private final StoryClient storyClient;
     private final ShareStatsClient shareStatsClient;
+    private final ChatImageRepository chatImages;
+    private final ChatImageService chatImageService;
 
     @Override
     public MessageResponse sendMessage(String conversationId, Long senderId, SendMessageRequest request) {
@@ -154,14 +159,22 @@ public class MessageServiceImpl implements MessageService {
             messageRepository.clearStaleRequestFlag(conversationId, now.minus(SendPolicy.RETRY_AFTER));
         }
 
+        String messageId = Message.newId();
+        if (payload.type() == MessageType.IMAGE
+                && !chatImages.claim(conversationId, payload.imageId(), senderId, messageId)) {
+            // Not this sender's, not in this conversation, expired, or already on another message.
+            throw new InvalidMessageException("The image is not available to send");
+        }
+
         Message message = Message.builder()
-                .id(Message.newId())
+                .id(messageId)
                 .conversationId(conversationId)
                 .senderId(senderId)
                 .type(payload.type())
                 .content(payload.content())
                 .stickerId(payload.stickerId())
                 .videoId(payload.videoId())
+                .imageId(payload.imageId())
                 .storyId(payload.storyId())
                 .clientRequestId(request.clientRequestId())
                 .sentAt(now)
@@ -171,6 +184,9 @@ public class MessageServiceImpl implements MessageService {
         try {
             messageRepository.save(message);
         } catch (DuplicateKeyException e) {
+            if (payload.type() == MessageType.IMAGE) {
+                chatImages.release(messageId);
+            }
             if (request.clientRequestId() != null) {
                 Message existing = deduplicated(conversationId, senderId, request.clientRequestId());
                 if (existing != null) {
@@ -296,7 +312,8 @@ public class MessageServiceImpl implements MessageService {
 
         Map<String, VideoCard> videos = hydrate(page, originals.values(), viewerId, cleared);
         Map<String, StoryCard> stories = hydrateStories(page, viewerId, cleared);
-        return new MessagePageResponse(page.stream().map(m -> render(m, viewerId, cleared, originals, videos, stories)).toList(), nextCursor, hasMore);
+        Map<String, ImageView> images = hydrateImages(conversationId, page, originals.values());
+        return new MessagePageResponse(page.stream().map(m -> render(m, viewerId, cleared, originals, videos, stories, images)).toList(), nextCursor, hasMore);
     }
 
     /** A stored message as the viewer draws it: sticker resolved, reactions listed, a recall redacted, the quote worked out. */
@@ -310,7 +327,8 @@ public class MessageServiceImpl implements MessageService {
         Instant cleared = clearedAt(viewerId, message.getConversationId());
         return render(message, viewerId, cleared, originals,
                 hydrate(List.of(message), originals.values(), viewerId, cleared),
-                hydrateStories(List.of(message), viewerId, cleared));
+                hydrateStories(List.of(message), viewerId, cleared),
+                hydrateImages(message.getConversationId(), List.of(message), originals.values()));
     }
 
     private Map<String, VideoCard> hydrate(Collection<Message> messages,
@@ -323,6 +341,16 @@ public class MessageServiceImpl implements MessageService {
         return ids.isEmpty() ? Map.of() : videoClient.hydrate(viewerId, ids);
     }
 
+    /** Recalled messages have no imageId left, so only live pictures are asked about. */
+    private Map<String, ImageView> hydrateImages(String conversationId, Collection<Message> messages,
+                                                  Collection<Message> originals) {
+        Set<String> ids = new HashSet<>();
+        Stream.concat(messages.stream(), originals.stream())
+                .filter(m -> !m.isRecalled() && m.getType() == MessageType.IMAGE && m.getImageId() != null)
+                .forEach(m -> ids.add(m.getImageId()));
+        return chatImageService.views(conversationId, ids);
+    }
+
     private Map<String, StoryCard> hydrateStories(Collection<Message> messages, Long viewerId, Instant cleared) {
         Set<String> ids = new HashSet<>();
         messages.stream()
@@ -333,7 +361,8 @@ public class MessageServiceImpl implements MessageService {
     }
 
     private MessageResponse render(Message message, Long viewerId, Instant cleared, Map<String, Message> originals,
-                                   Map<String, VideoCard> videos, Map<String, StoryCard> stories) {
+                                   Map<String, VideoCard> videos, Map<String, StoryCard> stories,
+                                   Map<String, ImageView> images) {
         MessageResponse response = messageMapper.toResponse(message);
         if (response == null) {
             return null;
@@ -347,19 +376,23 @@ public class MessageServiceImpl implements MessageService {
             if (response.type() == MessageType.VIDEO) {
                 response = response.withVideo(videos.getOrDefault(message.getVideoId(), VideoCard.unavailable(message.getVideoId())));
             }
+            if (response.type() == MessageType.IMAGE) {
+                response = response.withImage(images.get(message.getImageId()));
+            }
             if (response.type() == MessageType.STORY_REPLY) {
                 response = response.withStory(stories.getOrDefault(message.getStoryId(), StoryCard.unavailable(message.getStoryId())));
             }
             response = response.withReactions(reactionViews(message));
         }
         if (message.getReplyToMessageId() != null) {
-            response = response.withReplyTo(quote(message.getReplyToMessageId(), originals.get(message.getReplyToMessageId()), viewerId, cleared, videos));
+            response = response.withReplyTo(quote(message.getReplyToMessageId(), originals.get(message.getReplyToMessageId()), viewerId, cleared, videos, images));
         }
         return response;
     }
 
     /** What the viewer may see of the original right now: recalled and deleted-for-them carry no content. */
-    private ReplyQuote quote(String id, Message original, Long viewerId, Instant cleared, Map<String, VideoCard> videos) {
+    private ReplyQuote quote(String id, Message original, Long viewerId, Instant cleared, Map<String, VideoCard> videos,
+                             Map<String, ImageView> images) {
         if (original == null || hiddenFrom(original, viewerId, cleared)) {
             return ReplyQuote.unavailable(id);
         }
@@ -371,7 +404,8 @@ public class MessageServiceImpl implements MessageService {
         return new ReplyQuote(id, ReplyQuote.State.OK, original.getSenderId(), original.getType(),
                 shorten(original.getContent()), sticker,
                 original.getType() == MessageType.VIDEO
-                        ? videos.getOrDefault(original.getVideoId(), VideoCard.unavailable(original.getVideoId())).minimal() : null);
+                        ? videos.getOrDefault(original.getVideoId(), VideoCard.unavailable(original.getVideoId())).minimal() : null,
+                original.getType() == MessageType.IMAGE ? images.get(original.getImageId()) : null);
     }
 
     private static String shorten(String text) {
@@ -494,6 +528,8 @@ public class MessageServiceImpl implements MessageService {
         boolean changed = messageRepository.recall(conversationId, messageId, userId, Instant.now());
         MessageUpdateResponse update = updateOf(reload(conversationId, messageId));
         if (changed) {
+            // The bytes go with the content: nothing that reads the database can return a recalled picture.
+            chatImages.deleteByMessageId(messageId);
             // Not lastMessageAt, not requestMessage: only what the preview shows.
             conversationRepository.markLastMessageRecalled(conversationId, userId, message.getSentAt());
             eventPublisher.messageUpdated(conversation, update);

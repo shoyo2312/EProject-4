@@ -14,6 +14,7 @@ import java.util.List;
  *
  * <p>{@code video} is resolved from video-service for this viewer on every render, never stored.
  * {@code story} is resolved from story-service for this viewer on every render, never stored.
+ * {@code image} is the picture's metadata and its authenticated path; the bytes are fetched separately.
  * {@code replayed} is transport-only (not JSON): REST uses it to return 200 for a deduplicated send.
  *
  * <p>A recalled message ({@code recalledAt} set) has no content, sticker or reactions: the text is
@@ -36,6 +37,7 @@ public record MessageResponse(
         long revision,
         @JsonInclude(JsonInclude.Include.NON_NULL) VideoCard video,
         @JsonInclude(JsonInclude.Include.NON_NULL) StoryCard story,
+        @JsonInclude(JsonInclude.Include.NON_NULL) ImageView image,
         @JsonIgnore boolean replayed
 ) {
 
@@ -43,22 +45,27 @@ public record MessageResponse(
                            MessageType type, String stickerId, StickerView sticker, String replyToMessageId,
                            ReplyQuote replyTo, Instant recalledAt, List<ReactionView> reactions, long revision) {
         this(id, conversationId, senderId, content, sentAt, type, stickerId, sticker, replyToMessageId,
-                replyTo, recalledAt, reactions, revision, null, null, false);
+                replyTo, recalledAt, reactions, revision, null, null, null, false);
     }
 
     public MessageResponse withVideo(VideoCard card) {
         return new MessageResponse(id, conversationId, senderId, content, sentAt, type, stickerId, sticker,
-                replyToMessageId, replyTo, recalledAt, reactions, revision, card, story, replayed);
+                replyToMessageId, replyTo, recalledAt, reactions, revision, card, story, image, replayed);
+    }
+
+    public MessageResponse withImage(ImageView view) {
+        return new MessageResponse(id, conversationId, senderId, content, sentAt, type, stickerId, sticker,
+                replyToMessageId, replyTo, recalledAt, reactions, revision, video, story, view, replayed);
     }
 
     public MessageResponse withStory(StoryCard card) {
         return new MessageResponse(id, conversationId, senderId, content, sentAt, type, stickerId, sticker,
-                replyToMessageId, replyTo, recalledAt, reactions, revision, video, card, replayed);
+                replyToMessageId, replyTo, recalledAt, reactions, revision, video, card, image, replayed);
     }
 
     public MessageResponse asReplay() {
         return new MessageResponse(id, conversationId, senderId, content, sentAt, type, stickerId, sticker,
-                replyToMessageId, replyTo, recalledAt, reactions, revision, video, story, true);
+                replyToMessageId, replyTo, recalledAt, reactions, revision, video, story, image, true);
     }
 
     /** A message with no reply, recall or reactions — the shape every message had before they existed. */
@@ -69,17 +76,17 @@ public record MessageResponse(
 
     public MessageResponse withSticker(StickerView resolved) {
         return new MessageResponse(id, conversationId, senderId, content, sentAt, type, stickerId, resolved,
-                replyToMessageId, replyTo, recalledAt, reactions, revision, video, story, replayed);
+                replyToMessageId, replyTo, recalledAt, reactions, revision, video, story, image, replayed);
     }
 
     public MessageResponse withReplyTo(ReplyQuote quote) {
         return new MessageResponse(id, conversationId, senderId, content, sentAt, type, stickerId, sticker,
-                replyToMessageId, quote, recalledAt, reactions, revision, video, story, replayed);
+                replyToMessageId, quote, recalledAt, reactions, revision, video, story, image, replayed);
     }
 
     public MessageResponse withReactions(List<ReactionView> views) {
         return new MessageResponse(id, conversationId, senderId, content, sentAt, type, stickerId, sticker,
-                replyToMessageId, replyTo, recalledAt, views, revision, video, story, replayed);
+                replyToMessageId, replyTo, recalledAt, views, revision, video, story, image, replayed);
     }
 
     /** The tombstone: what is left of a message once its sender has taken it back. */

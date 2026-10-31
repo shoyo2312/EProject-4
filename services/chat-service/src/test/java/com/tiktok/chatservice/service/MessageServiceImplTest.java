@@ -18,6 +18,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 
+import static org.mockito.Mockito.mock;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,7 +58,7 @@ class MessageServiceImplTest {
                 blockClient, eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), org.mockito.Mockito.mock(ChatUserPrefsRepository.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
-                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class), mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
         // Nothing here is a pending request, so promotion is the identity.
         org.mockito.Mockito.lenient().when(conversationService.promoteIfMutual(any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));

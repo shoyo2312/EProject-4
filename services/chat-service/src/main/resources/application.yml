@@ -24,6 +24,12 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+  servlet:
+    multipart:
+      # A little over ImageInspector.MAX_BYTES (5 MB), so the service answers the size error itself.
+      max-file-size: 6MB
+      max-request-size: 7MB
+
   task:
     scheduling:
       # One thread per @Scheduled method: the two counter flushers, which can block on a

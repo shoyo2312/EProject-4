@@ -29,7 +29,7 @@ public class ConversationRepositoryImpl implements ConversationRepositoryCustom 
                 where("lastMessageAt").is(null),
                 where("lastMessageAt").lt(sentAt)));
         mongoTemplate.updateFirst(newer, new Update()
-                .set("lastMessageContent", type == MessageType.VIDEO ? null : content)
+                .set("lastMessageContent", type == MessageType.VIDEO || type == MessageType.IMAGE ? null : content)
                 .set("lastMessageType", type)
                 .set("lastMessageSenderId", senderId)
                 .set("lastMessageAt", sentAt)

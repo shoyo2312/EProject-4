@@ -9,5 +9,7 @@ public enum MessageType {
     STICKER,
     VIDEO,
     /** A text answer to someone's story: content is the text, storyId the story. */
-    STORY_REPLY
+    STORY_REPLY,
+    /** One picture (imageId, in the chat database) with an optional caption in content. */
+    IMAGE
 }

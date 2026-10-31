@@ -15,15 +15,20 @@ import com.tiktok.common.exception.BadRequestException;
  * <p>The client names a sticker by id only. Whether that id exists, and is still offered, is the
  * catalog's answer — never a URL or storage key from the request.
  */
-record MessagePayload(MessageType type, String content, String stickerId, String videoId, String storyId) {
+record MessagePayload(MessageType type, String content, String stickerId, String videoId, String storyId,
+                      String imageId) {
 
     static final int MAX_TEXT = 2000;
     static final int MAX_STORY_REPLY = 1000;
+    static final int MAX_IMAGE_CAPTION = 1000;
 
     static MessagePayload from(SendMessageRequest request, StickerCatalog catalog) {
         MessageType type = request.type() == null ? MessageType.TEXT : request.type();
         if (type != MessageType.VIDEO && request.videoId() != null) {
             throw new InvalidMessageException("Only VIDEO messages can carry a videoId");
+        }
+        if (type != MessageType.IMAGE && request.imageId() != null) {
+            throw new InvalidMessageException("Only IMAGE messages can carry an imageId");
         }
         if (type != MessageType.STORY_REPLY && request.storyId() != null) {
             throw new InvalidMessageException("Only STORY_REPLY messages can carry a storyId");
@@ -37,6 +42,7 @@ record MessagePayload(MessageType type, String content, String stickerId, String
             case TEXT -> text(request);
             case STORY_REPLY -> storyReply(request);
             case STICKER -> sticker(request, catalog);
+            case IMAGE -> image(request);
         };
     }
 
@@ -51,7 +57,22 @@ record MessagePayload(MessageType type, String content, String stickerId, String
         if (note != null && note.length() > 300) {
             throw new InvalidMessageException("Video caption must be at most 300 characters after trimming");
         }
-        return new MessagePayload(MessageType.VIDEO, note, null, request.videoId(), null);
+        return new MessagePayload(MessageType.VIDEO, note, null, request.videoId(), null, null);
+    }
+
+    private static MessagePayload image(SendMessageRequest request) {
+        if (request.imageId() == null || request.imageId().isBlank() || request.stickerId() != null
+                || request.videoId() != null || request.storyId() != null) {
+            throw new InvalidMessageException("IMAGE requires an imageId and cannot carry anything but a caption");
+        }
+        String caption = request.content() == null ? null : request.content().trim();
+        if (caption != null && caption.isEmpty()) {
+            caption = null;
+        }
+        if (caption != null && caption.length() > MAX_IMAGE_CAPTION) {
+            throw new BadRequestException("VALIDATION_ERROR", "content: size must be between 0 and " + MAX_IMAGE_CAPTION);
+        }
+        return new MessagePayload(MessageType.IMAGE, caption, null, null, null, request.imageId());
     }
 
     private static MessagePayload storyReply(SendMessageRequest request) {
@@ -66,7 +87,7 @@ record MessagePayload(MessageType type, String content, String stickerId, String
         if (text.length() > MAX_STORY_REPLY) {
             throw new BadRequestException("VALIDATION_ERROR", "content: size must be between 1 and " + MAX_STORY_REPLY);
         }
-        return new MessagePayload(MessageType.STORY_REPLY, text, null, null, request.storyId());
+        return new MessagePayload(MessageType.STORY_REPLY, text, null, null, request.storyId(), null);
     }
 
     private static MessagePayload text(SendMessageRequest request) {
@@ -80,7 +101,7 @@ record MessagePayload(MessageType type, String content, String stickerId, String
         if (content.length() > MAX_TEXT) {
             throw new BadRequestException("VALIDATION_ERROR", "content: size must be between 0 and " + MAX_TEXT);
         }
-        return new MessagePayload(MessageType.TEXT, content, null, null, null);
+        return new MessagePayload(MessageType.TEXT, content, null, null, null, null);
     }
 
     private static MessagePayload sticker(SendMessageRequest request, StickerCatalog catalog) {
@@ -90,6 +111,6 @@ record MessagePayload(MessageType type, String content, String stickerId, String
         if (!catalog.sendable(request.stickerId())) {
             throw new InvalidStickerException();
         }
-        return new MessagePayload(MessageType.STICKER, null, request.stickerId(), null, null);
+        return new MessagePayload(MessageType.STICKER, null, request.stickerId(), null, null, null);
     }
 }

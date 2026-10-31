@@ -140,6 +140,7 @@ public class MessageRepositoryImpl implements MessageRepositoryCustom {
                 .unset("content")
                 .unset("stickerId")
                 .unset("videoId")
+                .unset("imageId")
                 .unset("storyId")
                 .unset("reactions")
                 .inc("revision", 1);

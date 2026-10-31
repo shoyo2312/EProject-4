@@ -10,6 +10,7 @@ public interface MessageMapper {
 
     @Mapping(target = "video", ignore = true)
     @Mapping(target = "story", ignore = true)
+    @Mapping(target = "image", ignore = true)
     @Mapping(target = "replayed", ignore = true)
     @Mapping(target = "sticker", ignore = true)
     @Mapping(target = "replyTo", ignore = true)

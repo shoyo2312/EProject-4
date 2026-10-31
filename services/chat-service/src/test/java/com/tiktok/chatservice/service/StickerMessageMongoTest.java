@@ -82,7 +82,7 @@ class StickerMessageMongoTest {
                 new MessageMapperImpl(), mock(SimpMessagingTemplate.class), mock(BlockClient.class), publisher, catalog, prefsRepository,
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
-                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class), mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
     }
 
     private Conversation ordinary() {

@@ -19,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 
+import static org.mockito.Mockito.mock;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
@@ -65,7 +66,7 @@ class MessageAckTest {
                 com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefs,
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
-                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class), mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
         conversation = Conversation.builder().id("c1").participantIds(List.of(A, B)).participantKey("1_2")
                 .deliveredMark(new HashMap<>()).readMark(new HashMap<>()).build();
         lenient().when(conversationService.requireParticipant(B, "c1")).thenReturn(conversation);

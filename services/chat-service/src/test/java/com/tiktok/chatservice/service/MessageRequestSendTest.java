@@ -22,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 
+import static org.mockito.Mockito.mock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -66,7 +67,7 @@ class MessageRequestSendTest {
                 messageMapper, messagingTemplate, blockClient, eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), org.mockito.Mockito.mock(ChatUserPrefsRepository.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
-                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class), mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
         lenient().when(conversationService.promoteIfMutual(any())).thenAnswer(invocation -> invocation.getArgument(0));
         lenient().when(messageMapper.toResponse(any(Message.class)))
                 .thenAnswer(invocation -> {

@@ -60,6 +60,9 @@ public class Message {
 
     private String videoId;
 
+    /** Present only on IMAGE messages: the id of a ChatImage; the picture is never copied into the message. */
+    private String imageId;
+
     /** Present only on STORY_REPLY: the id only. The story is resolved for each viewer on every render, never copied. */
     private String storyId;
 

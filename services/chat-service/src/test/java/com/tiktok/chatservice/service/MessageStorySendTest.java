@@ -33,7 +33,7 @@ class MessageStorySendTest {
     private final MessageServiceImpl service = new MessageServiceImpl(conversations, conversationRepository, messages,
             new MessageMapperImpl(), topic, mock(BlockClient.class), events,
             StickerCatalog.load("http://localhost:9000", "video-media"), mock(ChatUserPrefsRepository.class),
-            mock(VideoClient.class), stories, mock(ShareStatsClient.class));
+            mock(VideoClient.class), stories, mock(ShareStatsClient.class), mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
     private static final StoryCard CARD = new StoryCard("s1", "AVAILABLE", 2L, "IMAGE", "https://signed/s1");
     private Conversation thread;
 
@@ -101,7 +101,7 @@ class MessageStorySendTest {
 
     @Test
     void storyIdOnAPlainTextMessageIsRefused() {
-        var request = new SendMessageRequest(MessageType.TEXT, "hi", null, null, null, null, "s1");
+        var request = new SendMessageRequest(MessageType.TEXT, "hi", null, null, null, null, "s1", null);
         assertThatThrownBy(() -> service.sendMessage("c", 1L, request)).isInstanceOf(InvalidMessageException.class);
         assertNoMutation();
     }

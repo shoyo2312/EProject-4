@@ -34,7 +34,7 @@ class MessageVideoSendTest {
     private final SimpMessagingTemplate topic = mock(SimpMessagingTemplate.class);
     private final MessageServiceImpl service = new MessageServiceImpl(conversations, conversationRepository, messages,
             new MessageMapperImpl(), topic, blocks, events, StickerCatalog.load("http://localhost:9000", "video-media"),
-            mock(ChatUserPrefsRepository.class), videos, mock(StoryClient.class), shares);
+            mock(ChatUserPrefsRepository.class), videos, mock(StoryClient.class), shares, mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
     private static final VideoCard CARD = new VideoCard("123", "AVAILABLE", 7L, "thumb", "title", 10);
     private Conversation thread;
 

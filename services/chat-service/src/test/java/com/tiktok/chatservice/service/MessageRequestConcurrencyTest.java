@@ -100,7 +100,7 @@ class MessageRequestConcurrencyTest {
                 new MessageMapperImpl(), messagingTemplate, mock(BlockClient.class), eventPublisher, com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefsRepository,
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
-                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class), mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
     }
 
     private Conversation pendingRequest() {
