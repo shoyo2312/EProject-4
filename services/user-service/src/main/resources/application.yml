@@ -38,11 +38,12 @@ spring:
 
   task:
     scheduling:
-      # One thread per @Scheduled method: the outbox poll, the two retention cleanups, and the
-      # data export worker and its cleanup. On the default pool of one they take turns, and an
-      # outbox poll waiting out its ack timeout on a dead broker holds up every other job behind it.
+      # One thread per @Scheduled method: the outbox poll, the two retention cleanups, the data
+      # export worker and its cleanup, and the weekly screen time digest. On the default pool of
+      # one they take turns, and an outbox poll waiting out its ack timeout on a dead broker holds
+      # up every other job behind it.
       pool:
-        size: 5
+        size: 6
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
@@ -72,6 +73,11 @@ user:
     # enough to still have the row when someone asks why a follower count moved last week, short
     # enough that the table stops growing.
     published-outbox-grace: 7d
+
+  screen-time:
+    # Hourly, so each zone gets its Monday 09:00 update within the hour (WeeklyScreenTimeDigest).
+    # "-" turns it off.
+    digest-cron: ${USER_SCREEN_TIME_DIGEST_CRON:0 5 * * * *}
 
   data-export:
     poll-millis: ${DATA_EXPORT_POLL_MILLIS:5000}
@@ -115,6 +121,7 @@ minio:
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin123}
   bucket: ${MINIO_BUCKET:video-media}
+  region: ${MINIO_REGION:us-east-1}
 
 springdoc:
   api-docs:

@@ -49,7 +49,7 @@ class AdminVideoDirectoryTest {
             .credentials(MINIO.accessKey(), MINIO.secretKey()).region(MINIO.region()).build());
 
     private final AdminVideoDirectory directory = new AdminVideoDirectory(videoRepository, new VideoMapperImpl(),
-            new QuarantinedMediaUrls(minioClient, MINIO));
+            new QuarantinedMediaUrls(minioClient, MINIO, minioClient));
 
     /** Every status is in the answer, so the console never reads a missing key as a count. */
     @Test

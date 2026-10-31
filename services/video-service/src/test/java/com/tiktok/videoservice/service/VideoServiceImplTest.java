@@ -1,6 +1,8 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.videoservice.client.FeedKeywords;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
@@ -22,10 +24,15 @@ import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.PrivateAccountException;
 import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
+import com.tiktok.videoservice.exception.UploadNotFoundException;
+import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.repository.OwnerBanRepository;
 import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
 import com.tiktok.videoservice.repository.VideoRepository;
+import io.minio.MinioClient;
+import io.minio.messages.ErrorResponse;
+import io.minio.errors.ErrorResponseException;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -57,6 +64,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -87,6 +95,10 @@ class VideoServiceImplTest {
     @MockitoBean
     private com.tiktok.videoservice.client.FollowClient followClient;
 
+    // Mocked so no test reaches a real user-service: null settings and no keywords, the fail-open answers.
+    @MockitoBean
+    private com.tiktok.videoservice.client.UserSettingsClient userSettingsClient;
+
     // Spied so a test can make owner_privacy answer differently from one read to the next.
     @MockitoSpyBean
     private OwnerPrivacyRepository ownerPrivacyRepository;
@@ -107,8 +119,14 @@ class VideoServiceImplTest {
     @Autowired
     private AdminVideoDirectory adminVideoDirectory;
 
+    // Spied, not mocked: presigning stays real (it is local), and publish's existence check is
+    // answered here instead of by a MinIO this test does not run. Every upload exists by default.
+    @MockitoSpyBean
+    private MinioClient minioClient;
+
     @BeforeEach
-    void cleanUp() {
+    void cleanUp() throws Exception {
+        doReturn(null).when(minioClient).statObject(any());
         videoRepository.deleteAll();
         ownerPrivacyRepository.deleteAll();
         ownerBanRepository.deleteAll();
@@ -161,6 +179,32 @@ class VideoServiceImplTest {
      * keys are namespaced by uploader, so without this check publishing someone else's raw key
      * republishes their video under the caller's name — the pipeline does the rest of the work.
      */
+    /**
+     * The key's shape says whose upload it would be, not that one happened. A made-up key used to
+     * reach media-worker, which retried the missing file for seconds on its one listener thread.
+     */
+    @Test
+    void publish_aKeyNothingWasUploadedTo_isRejected() throws Exception {
+        doThrow(new ErrorResponseException(
+                new ErrorResponse("NoSuchKey", "not found", "video-media", "k", "k", "r", "h"), null, null))
+                .when(minioClient).statObject(any());
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Never uploaded", null, "s3://video-media/raw/1/never.mp4", VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(UploadNotFoundException.class);
+        assertThat(videoRepository.count()).isZero();
+    }
+
+    @Test
+    void publish_whileStorageIsDown_isUnavailableRatherThanTheCallersFault() throws Exception {
+        doThrow(new java.net.ConnectException("refused")).when(minioClient).statObject(any());
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
+                "Storage down", null, "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(UploadUrlUnavailableException.class);
+        assertThat(videoRepository.count()).isZero();
+    }
+
     @Test
     void publish_someoneElsesUploadKey_isRejected() {
         assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest(
@@ -471,7 +515,7 @@ class VideoServiceImplTest {
         VideoResponse third = publishedPublic(1L, "s3://video-media/raw/1/b3.mp4");
 
         List<VideoResponse> hydrated = videoService.getByIds(
-                null, List.of(third.id(), first.id(), second.id()));
+                null, List.of(third.id(), first.id(), second.id()), null);
 
         assertThat(hydrated).extracting(VideoResponse::id)
                 .containsExactly(third.id(), first.id(), second.id());
@@ -493,11 +537,70 @@ class VideoServiceImplTest {
         videoService.delete(1L, deleted.id());
 
         List<VideoResponse> hydrated = videoService.getByIds(1L, List.of(
-                stillProcessing.id(), visible.id(), someoneElsesPrivate.id(), deleted.id(), "no-such-id"));
+                stillProcessing.id(), visible.id(), someoneElsesPrivate.id(), deleted.id(), "no-such-id"), null);
 
         // stillProcessing survives: it is the caller's own, and an owner sees their whole shelf.
         assertThat(hydrated).extracting(VideoResponse::id)
                 .containsExactly(stillProcessing.id(), visible.id());
+    }
+
+    private VideoResponse publishedAs(Long userId, String title) {
+        VideoResponse video = publishAs(userId, title, VideoVisibility.PUBLIC);
+        markPublished(video.id());
+        return video;
+    }
+
+    private void filtersFromForYou(Long viewer, String keyword) {
+        when(userSettingsClient.feedKeywords(viewer)).thenReturn(new FeedKeywords(List.of(keyword), List.of(), List.of()));
+    }
+
+    /** What the For You tab hydrates its ranking through. Without the feed it is not a feed — a share link still opens. */
+    @Test
+    void getByIds_forYouGoesThroughTheFilter() {
+        VideoResponse cat = publishedAs(1L, "my cat");
+        VideoResponse dog = publishedAs(1L, "my dog");
+        filtersFromForYou(9L, "cat");
+
+        assertThat(videoService.getByIds(9L, List.of(cat.id(), dog.id()), FeedKind.FOR_YOU))
+                .extracting(VideoResponse::id).containsExactly(dog.id());
+        assertThat(videoService.getByIds(9L, List.of(cat.id(), dog.id()), null))
+                .extracting(VideoResponse::id).containsExactly(cat.id(), dog.id());
+    }
+
+    /** For You falls back to the chronological feed when ranking is down, and the keywords still hold there. */
+    @Test
+    void getFeed_forYouFallbackGoesThroughTheFilter() {
+        VideoResponse cat = publishedAs(1L, "my cat");
+        VideoResponse dog = publishedAs(1L, "my dog");
+        filtersFromForYou(9L, "cat");
+
+        assertThat(videoService.getFeed(9L, null, 10, FeedKind.FOR_YOU).items())
+                .extracting(VideoResponse::id).containsExactly(dog.id());
+        assertThat(videoService.getFeed(null, null, 10, FeedKind.FOR_YOU).items())
+                .extracting(VideoResponse::id).containsExactly(dog.id(), cat.id());
+    }
+
+    /**
+     * A page the filter shortened keeps the cursor of the page as read: moving it back to the last
+     * survivor would serve the dropped videos' successors twice, moving it on is what already happens.
+     */
+    @Test
+    void followingFeed_keepsTheCursorWhenThePageShrinks() {
+        VideoResponse older = publishedAs(1L, "my cat");
+        VideoResponse middle = publishedAs(1L, "my dog");
+        VideoResponse newest = publishedAs(1L, "another cat");
+        when(userSettingsClient.feedKeywords(9L)).thenReturn(new FeedKeywords(List.of(), List.of("cat"), List.of()));
+
+        CursorPage<VideoResponse> first = videoService.getFollowingFeed(9L, List.of(1L), null, 2, FeedKind.FOLLOWING);
+        CursorPage<VideoResponse> unfiltered = videoService.getFollowingFeed(9L, List.of(1L), null, 2, FeedKind.FRIENDS);
+
+        assertThat(first.items()).extracting(VideoResponse::id).containsExactly(middle.id());
+        assertThat(unfiltered.items()).extracting(VideoResponse::id).containsExactly(newest.id(), middle.id());
+        assertThat(first.nextCursor()).isNotNull().isEqualTo(unfiltered.nextCursor());
+        CursorPage<VideoResponse> second = videoService.getFollowingFeed(9L, List.of(1L), first.nextCursor(), 2, FeedKind.FOLLOWING);
+        assertThat(second.items()).isEmpty();
+        assertThat(videoService.getFollowingFeed(9L, List.of(1L), first.nextCursor(), 2, FeedKind.FRIENDS).items())
+                .extracting(VideoResponse::id).containsExactly(older.id());
     }
 
     private VideoResponse publishedPublic(Long userId, String rawFileUrl) {
@@ -518,7 +621,7 @@ class VideoServiceImplTest {
                 new CreateVideoRequest("Private published", null, "s3://video-media/raw/1/6.mp4", VideoVisibility.PRIVATE, List.of()));
         markPublished(privatePublished.id());
 
-        CursorPage<VideoResponse> feed = videoService.getFeed(null, 10);
+        CursorPage<VideoResponse> feed = videoService.getFeed(null, null, 10, null);
 
         assertThat(feed.items()).extracting(VideoResponse::id).containsExactly(published.id());
         assertThat(feed.items()).extracting(VideoResponse::id).doesNotContain(processing.id(), privatePublished.id());
@@ -545,7 +648,7 @@ class VideoServiceImplTest {
         List<String> walked = new ArrayList<>();
         String cursor = null;
         do {
-            CursorPage<VideoResponse> page = videoService.getFeed(cursor, 7);
+            CursorPage<VideoResponse> page = videoService.getFeed(null, cursor, 7, null);
             walked.addAll(page.items().stream().map(VideoResponse::id).toList());
             cursor = page.nextCursor();
         } while (cursor != null);
@@ -562,7 +665,7 @@ class VideoServiceImplTest {
             markPublished(video.id());
         }
 
-        assertThat(videoService.getFeed(null, 1000).items()).hasSize(50);
+        assertThat(videoService.getFeed(null, null, 1000, null).items()).hasSize(50);
     }
 
     @Test
@@ -574,7 +677,7 @@ class VideoServiceImplTest {
         VideoResponse stranger = publishAs(3L, "Stranger", VideoVisibility.PUBLIC);
         markPublished(stranger.id());
 
-        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(null, List.of(1L, 2L), null, 10);
+        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(null, List.of(1L, 2L), null, 10, null);
 
         // Newest first, so the seeding order reversed.
         assertThat(feed.items()).extracting(VideoResponse::id)
@@ -597,7 +700,7 @@ class VideoServiceImplTest {
         markPublished(takenDown.id());
         markTakenDown(takenDown.id());
 
-        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(null, List.of(1L), null, 10);
+        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(null, List.of(1L), null, 10, null);
 
         assertThat(feed.items()).extracting(VideoResponse::id).containsExactly(published.id());
         assertThat(feed.items()).extracting(VideoResponse::id)
@@ -610,8 +713,8 @@ class VideoServiceImplTest {
         VideoResponse stranger = publishAs(3L, "Stranger", VideoVisibility.PUBLIC);
         markPublished(stranger.id());
 
-        assertThat(videoService.getFollowingFeed(null, List.of(), null, 10).items()).isEmpty();
-        assertThat(videoService.getFollowingFeed(null, null, null, 10).items()).isEmpty();
+        assertThat(videoService.getFollowingFeed(null, List.of(), null, 10, null).items()).isEmpty();
+        assertThat(videoService.getFollowingFeed(null, null, null, 10, null).items()).isEmpty();
     }
 
     /** Same keyset property {@link #getFeed_pagingByCursor_visitsEveryVideoExactlyOnce} asserts. */
@@ -630,7 +733,7 @@ class VideoServiceImplTest {
         List<String> walked = new ArrayList<>();
         String cursor = null;
         do {
-            CursorPage<VideoResponse> page = videoService.getFollowingFeed(null, List.of(1L, 2L), cursor, 7);
+            CursorPage<VideoResponse> page = videoService.getFollowingFeed(null, List.of(1L, 2L), cursor, 7, null);
             walked.addAll(page.items().stream().map(VideoResponse::id).toList());
             cursor = page.nextCursor();
         } while (cursor != null);
@@ -643,13 +746,13 @@ class VideoServiceImplTest {
     void getFollowingFeed_tooManyAuthors_isRefusedRatherThanTruncated() {
         List<Long> tooMany = LongStream.rangeClosed(1, 501).boxed().toList();
 
-        assertThatThrownBy(() -> videoService.getFollowingFeed(null, tooMany, null, 10))
+        assertThatThrownBy(() -> videoService.getFollowingFeed(null, tooMany, null, 10, null))
                 .isInstanceOf(TooManyFollowedUsersException.class);
     }
 
     @Test
     void getFeed_unusableCursor_isRejected() {
-        assertThatThrownBy(() -> videoService.getFeed("not-a-cursor", 10))
+        assertThatThrownBy(() -> videoService.getFeed(null, "not-a-cursor", 10, null))
                 .isInstanceOf(InvalidFeedCursorException.class);
     }
 
@@ -768,7 +871,7 @@ class VideoServiceImplTest {
         VideoResponse publicOwners = publishAs(2L, "Public owner", VideoVisibility.PUBLIC);
         markPublished(publicOwners.id());
 
-        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+        assertThat(videoService.getFeed(null, null, 10, null).items()).extracting(VideoResponse::id)
                 .containsExactly(publicOwners.id());
     }
 
@@ -788,7 +891,7 @@ class VideoServiceImplTest {
         markPublished(publicOwners.id());
         when(followClient.followedAmong(eq(9L), anyCollection())).thenReturn(Set.of(1L));
 
-        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(9L, List.of(1L, 2L, 3L), null, 10);
+        CursorPage<VideoResponse> feed = videoService.getFollowingFeed(9L, List.of(1L, 2L, 3L), null, 10, null);
 
         assertThat(feed.items()).extracting(VideoResponse::id)
                 .containsExactly(publicOwners.id(), followed.id());
@@ -803,7 +906,7 @@ class VideoServiceImplTest {
         VideoResponse publicOwners = publishAs(2L, "Public", VideoVisibility.PUBLIC);
         markPublished(publicOwners.id());
 
-        assertThat(videoService.getFollowingFeed(null, List.of(1L, 2L), null, 10).items())
+        assertThat(videoService.getFollowingFeed(null, List.of(1L, 2L), null, 10, null).items())
                 .extracting(VideoResponse::id)
                 .containsExactly(publicOwners.id());
     }
@@ -815,7 +918,7 @@ class VideoServiceImplTest {
         VideoResponse own = publishAs(1L, "Own", VideoVisibility.PUBLIC);
         markPublished(own.id());
 
-        assertThat(videoService.getFollowingFeed(1L, List.of(1L), null, 10).items())
+        assertThat(videoService.getFollowingFeed(1L, List.of(1L), null, 10, null).items())
                 .extracting(VideoResponse::id)
                 .containsExactly(own.id());
         verifyNoInteractions(followClient);
@@ -912,12 +1015,12 @@ class VideoServiceImplTest {
         markPublished(other.id());
         ban(1L, OwnerBan.PERMANENT);
 
-        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+        assertThat(videoService.getFeed(null, null, 10, null).items()).extracting(VideoResponse::id)
                 .containsExactly(other.id());
-        assertThat(videoService.getFollowingFeed(9L, List.of(1L, 2L), null, 10).items())
+        assertThat(videoService.getFollowingFeed(9L, List.of(1L, 2L), null, 10, null).items())
                 .extracting(VideoResponse::id)
                 .containsExactly(other.id());
-        assertThat(videoService.getByIds(9L, List.of(banned.id(), other.id()))).extracting(VideoResponse::id)
+        assertThat(videoService.getByIds(9L, List.of(banned.id(), other.id()), null)).extracting(VideoResponse::id)
                 .containsExactly(other.id());
         assertThatThrownBy(() -> videoService.getById(9L, banned.id())).isInstanceOf(VideoNotFoundException.class);
         assertThat(videoService.listByUser(9L, 1L, PageRequest.of(0, 10)).getContent()).isEmpty();
@@ -933,12 +1036,12 @@ class VideoServiceImplTest {
         markPublished(other.id());
         ownerBanRepository.save(new OwnerBan(1L, null, null, Instant.now(), Instant.now()));
 
-        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+        assertThat(videoService.getFeed(null, null, 10, null).items()).extracting(VideoResponse::id)
                 .containsExactly(other.id());
-        assertThat(videoService.getFollowingFeed(9L, List.of(1L, 2L), null, 10).items())
+        assertThat(videoService.getFollowingFeed(9L, List.of(1L, 2L), null, 10, null).items())
                 .extracting(VideoResponse::id)
                 .containsExactly(other.id());
-        assertThat(videoService.getByIds(9L, List.of(closed.id(), other.id()))).extracting(VideoResponse::id)
+        assertThat(videoService.getByIds(9L, List.of(closed.id(), other.id()), null)).extracting(VideoResponse::id)
                 .containsExactly(other.id());
         assertThatThrownBy(() -> videoService.getById(9L, closed.id())).isInstanceOf(VideoNotFoundException.class);
         assertThat(videoService.listByUser(9L, 1L, PageRequest.of(0, 10)).getContent()).isEmpty();
@@ -952,7 +1055,7 @@ class VideoServiceImplTest {
         markPublished(video.id());
         ban(1L, Instant.now().minusSeconds(60));
 
-        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+        assertThat(videoService.getFeed(null, null, 10, null).items()).extracting(VideoResponse::id)
                 .containsExactly(video.id());
         assertThat(videoService.getById(9L, video.id()).id()).isEqualTo(video.id());
         assertThat(videoService.listByUser(9L, 1L, PageRequest.of(0, 10)).getContent()).hasSize(1);
@@ -968,7 +1071,7 @@ class VideoServiceImplTest {
         assertThat(mongoTemplate.findById(published.id(), Document.class, "videos"))
                 .doesNotContainKey("ownerPrivate");
 
-        assertThat(videoService.getFeed(null, 10).items()).extracting(VideoResponse::id)
+        assertThat(videoService.getFeed(null, null, 10, null).items()).extracting(VideoResponse::id)
                 .containsExactly(published.id());
     }
 }

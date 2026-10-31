@@ -55,6 +55,13 @@
     "requesterId" : 1003,
     "targetId" : 1004
   },
+  "NewDeviceSignInEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "deviceLabel" : "deviceLabel-4",
+    "location" : "location-5"
+  },
   "NotificationCreatedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
@@ -91,6 +98,36 @@
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
     "dismissed" : 3
   },
+  "StoryActivatedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "storyId" : "storyId-3",
+    "userId" : 1004
+  },
+  "StoryCreatedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "storyId" : "storyId-3",
+    "userId" : 1004,
+    "mediaKey" : "mediaKey-5",
+    "mediaType" : "mediaType-6",
+    "textVerdict" : "REVIEW"
+  },
+  "StoryModerationCompletedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "storyId" : "storyId-3",
+    "verdict" : "REVIEW",
+    "label" : "label-5",
+    "maxScore" : 6.25,
+    "suspiciousFrames" : 7,
+    "totalFrames" : 8,
+    "processingTimeMs" : 1009,
+    "model" : "model-10",
+    "modelVersion" : "modelVersion-11",
+    "reason" : "reason-12",
+    "durationSeconds" : 13
+  },
   "UserBannedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
@@ -98,6 +135,13 @@
     "adminId" : 1004,
     "reason" : "reason-5",
     "bannedUntil" : "2026-10-08T09:30:21.123456789Z"
+  },
+  "UserBlockChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "blockerId" : 1003,
+    "blockedId" : 1004,
+    "blocked" : false
   },
   "UserFollowChangedEvent" : {
     "eventId" : "eventId-1",
@@ -280,5 +324,12 @@
     "watchedMs" : 1005,
     "durationMs" : 1006,
     "completed" : false
+  },
+  "WeeklyScreenTimeSummaryEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "weekStart" : "weekStart-4",
+    "totalSeconds" : 1005
   }
 }

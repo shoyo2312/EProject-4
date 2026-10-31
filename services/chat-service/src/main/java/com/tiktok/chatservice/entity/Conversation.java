@@ -44,7 +44,19 @@ public class Conversation {
 
     private String lastMessageContent;
 
+    /** Null until the first message, and on conversations stored before types existed (read as TEXT). */
+    private MessageType lastMessageType;
+
     private Long lastMessageSenderId;
+
+    /** True while the newest message is a recalled one: the preview then has no text to show. */
+    private Boolean lastMessageRecalled;
+
+    /**
+     * People who deleted some message from their own side. Only these viewers get a preview worked
+     * out from their own history; everyone else reads the fields above.
+     */
+    private List<Long> previewHiddenBy;
 
     private Instant lastMessageAt;
 
@@ -53,6 +65,31 @@ public class Conversation {
 
     @Builder.Default
     private Map<String, Instant> lastReadAt = new HashMap<>();
+
+    /**
+     * Per participant: when they last sent a message. "Unread" is measured against the other side's
+     * entry — a participant who sends without opening the thread has still not read what came before.
+     * Absent on conversations from before this existed, which fall back to {@code lastMessageAt}.
+     */
+    @Builder.Default
+    private Map<String, Instant> lastSentAt = new HashMap<>();
+
+    /** Per participant: the newest message of the other side their client has received and acknowledged. */
+    @Builder.Default
+    private Map<String, ReceiptMark> deliveredMark = new HashMap<>();
+
+    /** Per participant: the newest message of the other side they have actually looked at. */
+    @Builder.Default
+    private Map<String, ReceiptMark> readMark = new HashMap<>();
+
+    /** Null for an ordinary conversation; see {@link MessageRequestState}. */
+    private MessageRequestState requestState;
+
+    /** Who opened the thread. Set on every new conversation; the only side that can send while PENDING. */
+    private Long initiatorId;
+
+    /** When the recipient accepted or deleted the request. */
+    private Instant requestRespondedAt;
 
     private Instant deletedAt;
 
@@ -71,6 +108,18 @@ public class Conversation {
 
     public boolean hasParticipant(Long userId) {
         return participantIds != null && participantIds.contains(userId);
+    }
+
+    public boolean isPending() {
+        return requestState == MessageRequestState.PENDING;
+    }
+
+    public boolean isDeclined() {
+        return requestState == MessageRequestState.DECLINED;
+    }
+
+    public boolean isInitiator(Long userId) {
+        return initiatorId != null && initiatorId.equals(userId);
     }
 
     public boolean isDeleted() {

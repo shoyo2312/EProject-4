@@ -10,7 +10,9 @@ import java.util.function.Supplier;
 
 /**
  * Admits a request that carries the internal API token — for endpoints only other services call:
- * {@code .requestMatchers(GET, "/api/v1/users/internal/**").access(new InternalCallerAuthorization(token))}.
+ * {@code .requestMatchers("/api/v1/users/internal/**").access(new InternalCallerAuthorization(token))}.
+ * Leave the HTTP method out of the matcher: Spring MVC answers a HEAD with the GET handler, so a
+ * GET-only rule lets a HEAD carrying a user's JWT fall through to the next rule.
  * See {@link InternalApiToken} for why the gateway refusing those paths is not enough.
  */
 public class InternalCallerAuthorization implements AuthorizationManager<RequestAuthorizationContext> {

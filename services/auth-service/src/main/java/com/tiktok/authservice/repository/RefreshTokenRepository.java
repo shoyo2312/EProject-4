@@ -25,15 +25,28 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * true, and the caller learns it lost. Under READ COMMITTED the second transaction blocks on
      * the winner's row lock until it commits, so the outcome does not depend on timing.
      *
-     * <p>{@code revoked_at IS NULL} is deliberately NOT part of the predicate: logout revokes
-     * without rotating, and treating a logged-out token as a lost race would turn signing out on
-     * one device into signing out everywhere. Whether the token is still active is checked
-     * separately, on the row that was read.
+     * <p>{@code revoked_at IS NULL} is part of it too. The caller checked the row it read, but a
+     * logout or password reset can commit between that read and this UPDATE; without it the
+     * revoked token was rotated anyway and its successor outlived the reset. A 0 can therefore
+     * mean either, and the caller tells them apart by reading the row again: only a token that
+     * was rotated has a successor somewhere and counts as a replay. Treating a logged-out token
+     * as a lost race would turn signing out on one device into signing out everywhere.
      */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("UPDATE RefreshToken t SET t.rotatedAt = :now, t.revokedAt = :now " +
-            "WHERE t.tokenHash = :tokenHash AND t.rotatedAt IS NULL")
+            "WHERE t.tokenHash = :tokenHash AND t.rotatedAt IS NULL AND t.revokedAt IS NULL")
     int claimForRotation(@Param("tokenHash") String tokenHash, @Param("now") Instant now);
+
+    /**
+     * Revokes one token at logout, returning 1 if this call is the one that ended it.
+     *
+     * <p>An UPDATE of {@code revoked_at} alone rather than a save of the entity: Hibernate writes
+     * every column back, so a logout that read the row before a concurrent refresh committed put
+     * {@code rotated_at} back to null — erasing the rotation, and with it replay detection.
+     */
+    @Modifying
+    @Query("UPDATE RefreshToken t SET t.revokedAt = :now WHERE t.tokenHash = :tokenHash AND t.revokedAt IS NULL")
+    int revoke(@Param("tokenHash") String tokenHash, @Param("now") Instant now);
 
     @Modifying
     @Query("UPDATE RefreshToken t SET t.revokedAt = :revokedAt WHERE t.userId = :userId AND t.revokedAt IS NULL")

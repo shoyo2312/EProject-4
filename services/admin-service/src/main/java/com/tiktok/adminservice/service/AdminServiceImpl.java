@@ -60,13 +60,17 @@ public class AdminServiceImpl implements AdminService {
         // spelling, or "007" and "7" would be two targets — see ReportTargetType.
         String targetId = request.targetType().canonicalTargetId(request.targetId());
 
-        // The ordinary repeat — the same user reporting the same thing again — answers with the
-        // report they already filed. Reading first rather than inserting and recovering: Postgres
-        // aborts the transaction on a constraint violation, so a SELECT in the catch block runs
-        // against a dead transaction and fails with "current transaction is aborted".
+        // The ordinary repeat — the same user reporting the same thing while their report is still
+        // pending — answers with that report. A closed one does not count: the decision on it says
+        // nothing about what the target has done since, and handing it back dropped the new
+        // report with no row and no event. A report closed on arrival below is never pending
+        // either, so each repeat against an enforced target adds another closed row.
+        // Reading first rather than inserting and recovering: Postgres aborts the transaction on
+        // a constraint violation, so a SELECT in the catch block runs against a dead transaction
+        // and fails with "current transaction is aborted".
         Optional<Report> existing = reportRepository
-                .findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                        reporterId, request.targetType(), targetId);
+                .findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                        reporterId, request.targetType(), targetId, ReportStatus.PENDING);
         if (existing.isPresent()) {
             return adminMapper.toResponse(existing.get());
         }
@@ -370,6 +374,12 @@ public class AdminServiceImpl implements AdminService {
      * closed on arrival and never reaches an admin.
      */
     private Optional<ModerationAction> standingEnforcement(ReportTargetType targetType, String targetId) {
+        return standingEnforcement(moderationActionRepository, targetType, targetId);
+    }
+
+    /** Static so a direct-message report applies the same rule as every other one. */
+    static Optional<ModerationAction> standingEnforcement(ModerationActionRepository moderationActionRepository,
+                                                          ReportTargetType targetType, String targetId) {
         Instant now = Instant.now();
         return moderationActionRepository
                 .findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(

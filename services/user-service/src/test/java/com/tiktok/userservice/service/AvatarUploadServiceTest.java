@@ -38,7 +38,7 @@ class AvatarUploadServiceTest {
         userProfileService = mock(UserProfileService.class);
         service = new AvatarUploadService(
                 minioClient,
-                new MinioProperties("http://localhost:9000", "key", "secret", "video-media"),
+                new MinioProperties("http://localhost:9000", "key", "secret", "video-media", "us-east-1"),
                 userProfileService,
                 1_000L);
     }

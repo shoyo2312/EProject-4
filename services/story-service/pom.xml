@@ -50,6 +50,12 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-kafka</artifactId>
         </dependency>
+        <!-- Presigned uploads into stories/ and presigned reads out of it. -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+            <version>8.5.12</version>
+        </dependency>
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
@@ -77,8 +83,23 @@
             <groupId>com.tiktok</groupId>
             <artifactId>security-lib</artifactId>
         </dependency>
+        <!-- Outbox dispatch and the consumers' error handling (DLT, unlimited retry on outages). -->
+        <dependency>
+            <groupId>com.tiktok</groupId>
+            <artifactId>kafka-lib</artifactId>
+        </dependency>
+        <!-- TextModerator and TextClassifier: captions are screened at create time. -->
+        <dependency>
+            <groupId>com.tiktok</groupId>
+            <artifactId>moderation-lib</artifactId>
+        </dependency>
 
         <!-- Test -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-testcontainers</artifactId>
@@ -87,6 +108,13 @@
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-mongodb</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- A real MinIO for the upload copy: whether a presigned POST can still rewrite what a story
+             serves is MinIO's behaviour, and a mock would only echo the assumption. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-minio</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

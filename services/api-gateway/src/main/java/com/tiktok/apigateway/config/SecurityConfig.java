@@ -13,11 +13,30 @@ import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.authentication.AuthenticationWebFilter;
+import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher;
+import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatchers;
 
 @Configuration
 @EnableWebFluxSecurity
 @RequiredArgsConstructor
 public class SecurityConfig {
+
+    /**
+     * The routes auth-service serves without a session, as its own SecurityConfig permits them.
+     * Only these: its session routes (/auth/me, /auth/account/**…) refuse a guest with a 403,
+     * which no client refreshes on, so a stale token there has to stay this filter's 401. A
+     * sign-in route missing here costs that route one refresh-and-retry, not a session.
+     */
+    private static final ServerWebExchangeMatcher SIGN_IN_ROUTES = ServerWebExchangeMatchers.pathMatchers(
+            HttpMethod.POST,
+            "/api/v1/auth/register", "/api/v1/auth/register/start", "/api/v1/auth/register/verify",
+            "/api/v1/auth/register/complete", "/api/v1/auth/login", "/api/v1/auth/login/otp",
+            "/api/v1/auth/refresh", "/api/v1/auth/logout", "/api/v1/auth/verify-email",
+            "/api/v1/auth/resend-verification", "/api/v1/auth/forgot-password",
+            "/api/v1/auth/reset-password", "/api/v1/auth/reset-password/verify",
+            "/api/v1/auth/reset-password/complete", "/api/v1/auth/oauth/google",
+            "/api/v1/auth/oauth/facebook", "/api/v1/auth/oauth/google/link",
+            "/api/v1/auth/oauth/facebook/link");
 
     private final JwtServerAuthenticationConverter jwtServerAuthenticationConverter;
     private final JwtReactiveAuthenticationManager jwtReactiveAuthenticationManager;
@@ -32,8 +51,16 @@ public class SecurityConfig {
         // quiet downgrade to guest. The clients refresh once on a 401 and retry; a guest answer
         // to a signed-in viewer is wrong data with nothing to say so: every heart unliked, their
         // own private videos gone. No token at all is the guest, and passes as one.
+        //
+        // The exception is the sign-in routes, which take their credentials in the body. The
+        // mobile app sends its stored token with every call, /auth/refresh included, and that
+        // token has expired by the time it refreshes: a 401 there signed users out every 15
+        // minutes. A token that verifies still authenticates there: the rate limiter keys an
+        // admin by it.
         authenticationWebFilter.setAuthenticationFailureHandler((webFilterExchange, exception) ->
-                restAuthenticationEntryPoint.commence(webFilterExchange.getExchange(), exception));
+                SIGN_IN_ROUTES.matches(webFilterExchange.getExchange()).flatMap(match -> match.isMatch()
+                        ? webFilterExchange.getChain().filter(webFilterExchange.getExchange())
+                        : restAuthenticationEntryPoint.commence(webFilterExchange.getExchange(), exception)));
 
         return http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
@@ -47,7 +74,7 @@ public class SecurityConfig {
                         // other services should reach them. First, so no later rule can open them.
                         .pathMatchers("/api/v1/users/internal/**", "/api/v1/interactions/internal/**",
                                 "/api/v1/admin/internal/**", "/api/v1/videos/internal/**",
-                                "/api/v1/conversations/internal/**").denyAll()
+                                "/api/v1/conversations/internal/**", "/api/v1/stories/internal/**").denyAll()
                         // Unfiltered by visibility on purpose (interaction-service needs the owner
                         // of PRIVATE videos too), so from outside it would name the owner of any
                         // private video id.
@@ -87,6 +114,14 @@ public class SecurityConfig {
                                 "/api/v1/interactions/videos/*/counts",
                                 "/api/v1/interactions/videos/counts/batch",
                                 "/api/v1/interactions/videos/*/like-status").permitAll()
+                        // A profile's stories, a single story and the avatar rings, like the videos
+                        // beside them: story-service shows a signed-out viewer only PUBLIC stories
+                        // of public accounts. The feed is matched first because /stories/* would
+                        // cover it. The rings are named although it covers them too, so the
+                        // intent shows.
+                        .pathMatchers(HttpMethod.GET, "/api/v1/stories/feed").authenticated()
+                        .pathMatchers(HttpMethod.GET, "/api/v1/stories/rings", "/api/v1/stories/users/*",
+                                "/api/v1/stories/*").permitAll()
                         // The chat handshake carries its token as a query parameter, not a
                         // header: a browser cannot set one on a WebSocket/SockJS handshake.
                         // chat-service validates it itself in JwtHandshakeInterceptor and

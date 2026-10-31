@@ -1,7 +1,10 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.userservice.dto.request.StoryAudienceScope;
 import com.tiktok.userservice.dto.response.FollowResponse;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
+import com.tiktok.userservice.dto.response.RelationshipResponse;
+import com.tiktok.userservice.dto.response.StoryAudienceResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.entity.FollowRequest;
 import com.tiktok.userservice.entity.UserFollow;
@@ -23,6 +26,7 @@ import com.tiktok.userservice.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,10 +34,14 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class FollowServiceImpl implements FollowService {
+
+    /** What {@link #storyAudience} returns without a {@code size}, and the most it will return. */
+    private static final int MAX_STORY_AUDIENCE_PAGE = 500;
 
     private final UserFollowRepository userFollowRepository;
     private final UserProfileRepository userProfileRepository;
@@ -42,10 +50,12 @@ public class FollowServiceImpl implements FollowService {
     private final UserProfileBatchAssembler profileBatchAssembler;
     private final ProfileVisibilityGuard profileVisibilityGuard;
     private final UserEventPublisher userEventPublisher;
+    private final UserPairLock pairLock;
 
     @Override
     @Transactional
     public FollowResponse follow(Long followerId, Long followingId) {
+        pairLock.acquire(followerId, followingId);
         if (followerId.equals(followingId)) {
             throw new CannotFollowSelfException();
         }
@@ -83,6 +93,7 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public void unfollow(Long followerId, Long followingId) {
+        pairLock.acquire(followerId, followingId);
         Optional<UserFollow> follow =
                 userFollowRepository.findByFollowerIdAndFollowingIdAndDeletedAtIsNull(followerId, followingId);
         if (follow.isPresent()) {
@@ -134,6 +145,52 @@ public class FollowServiceImpl implements FollowService {
 
     @Override
     @Transactional(readOnly = true)
+    public List<RelationshipResponse> relationships(Long viewerId, List<Long> userIds) {
+        // Against the raw list, before the distinct below, as followingAmong does.
+        if (userIds.size() > UserProfileService.MAX_BATCH_IDS) {
+            throw new TooManyProfileIdsException(UserProfileService.MAX_BATCH_IDS);
+        }
+
+        List<Long> ids = userIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        // Edge-only, like friendship(): each fact is read off its own rows, none of them gated on
+        // another. The viewer is left out of the edge queries so no row can make them their own
+        // blocker or follower, and a guest has no edges to ask about.
+        List<Long> others = viewerId == null ? List.of() : ids.stream().filter(id -> !id.equals(viewerId)).toList();
+        Set<Long> blocked = others.isEmpty() ? Set.of()
+                : Set.copyOf(userBlockRepository.findBlockedIdsAmong(viewerId, others));
+        Set<Long> following = others.isEmpty() ? Set.of()
+                : Set.copyOf(userFollowRepository.findFollowingIdsAmong(viewerId, others));
+        // Only someone the viewer follows can be a friend, so only they are asked about.
+        Set<Long> friends = following.isEmpty() ? Set.of()
+                : Set.copyOf(userFollowRepository.findFollowerIdsAmong(viewerId, following));
+        // The viewer's own id included: whether an account is private is not about who is asking.
+        Set<Long> privateAccounts = Set.copyOf(userProfileRepository.findPrivateUserIdsAmong(ids));
+
+        return ids.stream()
+                .map(id -> new RelationshipResponse(id, blocked.contains(id), privateAccounts.contains(id),
+                        following.contains(id), friends.contains(id)))
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public StoryAudienceResponse storyAudience(Long ownerId, StoryAudienceScope scope, Long after, Integer size) {
+        int limit = size == null ? MAX_STORY_AUDIENCE_PAGE : Math.clamp(size, 1, MAX_STORY_AUDIENCE_PAGE);
+
+        List<Long> userIds = userFollowRepository.findStoryAudience(ownerId, scope == StoryAudienceScope.FRIENDS,
+                after == null ? 0L : after, PageRequest.ofSize(limit));
+
+        // A full page may be the last one, which the caller finds out from the empty page after it.
+        // Reading a row past the limit would save that call at the price of a second path to get wrong.
+        return new StoryAudienceResponse(userIds, userIds.size() == limit ? userIds.getLast() : null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public Page<UserProfileResponse> listFollowers(Long viewerId, Long userId, Pageable pageable) {
         requireListVisible(viewerId, userId);
 
@@ -164,9 +221,13 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public FollowResponse approveFollowRequest(Long ownerId, Long requesterId) {
+        pairLock.acquire(ownerId, requesterId);
         FollowRequest request = followRequestRepository
                 .findByRequesterIdAndTargetIdAndDeletedAtIsNull(requesterId, ownerId)
                 .orElseThrow(FollowRequestNotFoundException::new);
+        if (userBlockRepository.existsBlockBetween(ownerId, requesterId)) {
+            throw new CannotFollowBlockedUserException();
+        }
         approve(List.of(request));
         return new FollowResponse(requesterId, ownerId, FollowResponse.Status.FOLLOWING);
     }
@@ -186,7 +247,13 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public void approveAllFollowRequests(Long ownerId) {
-        approve(followRequestRepository.findByTargetIdAndDeletedAtIsNull(ownerId));
+        // Lock in a deterministic order, then re-read: block may have ended a request while we
+        // waited. Do not reuse the list read before acquiring the locks.
+        List<Long> requesters = followRequestRepository.findByTargetIdAndDeletedAtIsNull(ownerId).stream()
+                .map(FollowRequest::getRequesterId).distinct().sorted().toList();
+        requesters.forEach(requester -> pairLock.acquire(ownerId, requester));
+        approve(followRequestRepository.findByTargetIdAndDeletedAtIsNull(ownerId).stream()
+                .filter(request -> requesters.contains(request.getRequesterId())).toList());
     }
 
     /**
@@ -248,6 +315,9 @@ public class FollowServiceImpl implements FollowService {
     private void approve(List<FollowRequest> requests) {
         requests.forEach(FollowRequest::markDeleted);
         for (FollowRequest request : requests) {
+            if (userBlockRepository.existsBlockBetween(request.getRequesterId(), request.getTargetId())) {
+                continue;
+            }
             // The edge can already be there: a request left pending across a switch to public (see
             // request()), then a direct follow. Ending the request is all that is left to do.
             if (!hasEdge(request.getRequesterId(), request.getTargetId())) {

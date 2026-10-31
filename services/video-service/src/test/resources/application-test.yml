@@ -14,16 +14,6 @@ app:
       # VideoServiceImplCacheTest, both plain Mockito.
       enabled: false
       ttl: 60s
-  upload:
-    # The Spring-context tests run without a Redis; the limiter fails open, but each attempt would
-    # still wait out a connection timeout. What it does is covered by UploadRateLimiterTest.
-    rate-limit:
-      upload-url:
-        per-hour: 0
-        per-day: 0
-      publish:
-        per-hour: 0
-        per-day: 0
 
 moderation:
   text:

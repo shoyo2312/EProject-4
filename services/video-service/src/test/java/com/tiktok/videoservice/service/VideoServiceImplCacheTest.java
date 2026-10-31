@@ -62,6 +62,8 @@ class VideoServiceImplCacheTest {
     private final com.tiktok.videoservice.client.FollowClient followClient =
             mock(com.tiktok.videoservice.client.FollowClient.class);
 
+    private final com.tiktok.videoservice.repository.OwnerBanRepository bans = mock(com.tiktok.videoservice.repository.OwnerBanRepository.class);
+
     private final VideoService videoService = new VideoServiceImpl(
             videoRepository,
             videoMapper,
@@ -73,14 +75,14 @@ class VideoServiceImplCacheTest {
             friendshipClient,
             new UploadLimitProperties(524_288_000L, 600),
             new QuarantinedMediaUrls(quarantineClient, new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret",
-                    "video-media", "us-east-1", Duration.ofMinutes(15))),
+                    "video-media", "us-east-1", Duration.ofMinutes(15)), quarantineClient),
                 blockClient,
                 userSettingsClient,
                 followClient,
                 mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class),
-                mock(com.tiktok.videoservice.repository.OwnerBanRepository.class),
+                bans,
                 mock(CaptionModeration.class),
-                mock(UploadRateLimiter.class));
+                new FeedKeywordFilter(userSettingsClient));
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
@@ -138,7 +140,7 @@ class VideoServiceImplCacheTest {
         when(videoRepository.findByIdInAndDeletedAtIsNull(List.of("B"))).thenReturn(List.of(entity));
         when(videoMapper.toResponse(entity)).thenReturn(fromMongo);
 
-        List<VideoResponse> response = videoService.getByIds(OWNER, List.of("A", "B"));
+        List<VideoResponse> response = videoService.getByIds(OWNER, List.of("A", "B"), null);
 
         assertThat(response).containsExactly(cached, fromMongo);
         verify(videoRepository).findByIdInAndDeletedAtIsNull(List.of("B"));
@@ -150,7 +152,7 @@ class VideoServiceImplCacheTest {
         when(videoCache.getAll(List.of("A", "B")))
                 .thenReturn(Map.of("A", publicVideo("A"), "B", publicVideo("B")));
 
-        assertThat(videoService.getByIds(OWNER, List.of("A", "B"))).hasSize(2);
+        assertThat(videoService.getByIds(OWNER, List.of("A", "B"), null)).hasSize(2);
 
         verifyNoInteractions(videoRepository);
     }
@@ -168,8 +170,8 @@ class VideoServiceImplCacheTest {
 
         when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", privateVideo));
 
-        assertThat(videoService.getByIds(999L, List.of("A"))).isEmpty();
-        assertThat(videoService.getByIds(OWNER, List.of("A"))).containsExactly(privateVideo);
+        assertThat(videoService.getByIds(999L, List.of("A"), null)).isEmpty();
+        assertThat(videoService.getByIds(OWNER, List.of("A"), null)).containsExactly(privateVideo);
     }
 
     /**
@@ -213,7 +215,7 @@ class VideoServiceImplCacheTest {
     void getPolicy_carriesTheOwnersCommentAudience_andTheirCommentFilters() {
         when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(publicVideo(VIDEO_ID)));
         when(userSettingsClient.commentSettings(OWNER)).thenReturn(
-                new OwnerCommentSettings("FRIENDS", false, true, List.of("spoiler")));
+                new OwnerCommentSettings("FRIENDS", false, true, List.of("spoiler"), null));
 
         VideoPolicyResponse policy = videoService.getPolicy(VIDEO_ID);
 
@@ -300,7 +302,7 @@ class VideoServiceImplCacheTest {
         when(videoMapper.toResponse(any(Video.class))).thenReturn(mapped);
 
         assertThat(videoService.getById(OWNER, VIDEO_ID)).isEqualTo(mapped);
-        assertThat(videoService.getByIds(OWNER, List.of(VIDEO_ID))).containsExactly(mapped);
+        assertThat(videoService.getByIds(OWNER, List.of(VIDEO_ID), null)).containsExactly(mapped);
     }
 
     /**
@@ -371,7 +373,7 @@ class VideoServiceImplCacheTest {
                 "A", followed, "B", notFollowed, "C", own, "D", publicOwners));
         when(followClient.followedAmong(7L, Set.of(50L, 51L))).thenReturn(Set.of(50L));
 
-        assertThat(videoService.getByIds(7L, List.of("A", "B", "C", "D")))
+        assertThat(videoService.getByIds(7L, List.of("A", "B", "C", "D"), null))
                 .containsExactly(followed, own, publicOwners);
         verify(followClient).followedAmong(7L, Set.of(50L, 51L));
         verifyNoMoreInteractions(followClient);
@@ -383,7 +385,7 @@ class VideoServiceImplCacheTest {
         when(videoCache.getAll(List.of("A", "B")))
                 .thenReturn(Map.of("A", publicVideo("A"), "B", publicVideo("B")));
 
-        assertThat(videoService.getByIds(7L, List.of("A", "B"))).hasSize(2);
+        assertThat(videoService.getByIds(7L, List.of("A", "B"), null)).hasSize(2);
         verifyNoInteractions(followClient);
     }
 
@@ -398,5 +400,61 @@ class VideoServiceImplCacheTest {
         return new VideoResponse(
                 id, OWNER, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
                 10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+    }
+
+    @Test
+    void viewableOrdersRequestedIdsAndChecksBlocksOncePerOwner() {
+        when(videoCache.getAll(List.of("B", "A", "C"))).thenReturn(Map.of(
+                "A", publicVideo("A"), "B", publicVideo("B"), "C", privateOwnersVideo("C", VideoVisibility.PUBLIC, 77L)));
+        when(followClient.followedAmong(7L, Set.of(77L))).thenReturn(Set.of(77L));
+        when(blockClient.isBlockedBetween(77L, 7L)).thenReturn(true);
+        assertThat(videoService.getViewable(7L, List.of("B", "A", "C")))
+                .extracting(com.tiktok.videoservice.dto.response.ViewableVideoResponse::id).containsExactly("B", "A");
+        verify(blockClient).isBlockedBetween(OWNER, 7L);
+        verify(blockClient).isBlockedBetween(77L, 7L);
+        verifyNoMoreInteractions(blockClient);
+    }
+
+    @Test
+    void viewablePrivateFriendsAndPrivateOwnerAudiencesUseTheBatchPolicy() {
+        when(videoCache.getAll(List.of("private", "friends", "follower", "stranger"))).thenReturn(Map.of(
+                "private", privateOwnersVideo("private", VideoVisibility.PRIVATE, OWNER),
+                "friends", privateOwnersVideo("friends", VideoVisibility.FRIENDS, OWNER),
+                "follower", privateOwnersVideo("follower", VideoVisibility.PUBLIC, 50L),
+                "stranger", privateOwnersVideo("stranger", VideoVisibility.PUBLIC, 51L)));
+        when(followClient.followedAmong(7L, Set.of(50L, 51L))).thenReturn(Set.of(50L));
+        when(friendshipClient.areFriends(OWNER, 7L)).thenReturn(true);
+        assertThat(videoService.getViewable(7L, List.of("private", "friends", "follower", "stranger")))
+                .extracting(com.tiktok.videoservice.dto.response.ViewableVideoResponse::id).containsExactly("friends", "follower");
+    }
+
+    @Test
+    void viewableHidesBannedAndDeactivatedOwnersIncludingTheViewerOwnVideos() {
+        when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", publicVideo("A")));
+        when(bans.findHiddenAmong(org.mockito.ArgumentMatchers.anyCollection(), any()))
+                .thenReturn(List.of(new com.tiktok.videoservice.entity.OwnerBan(OWNER, Instant.now().plusSeconds(60), Instant.now())));
+        assertThat(videoService.getViewable(OWNER, List.of("A"))).isEmpty();
+    }
+
+    @Test
+    void viewableDropsDeletedMissingAndUnpublishedVideosEvenForOwner() {
+        VideoResponse processing = new VideoResponse("processing", OWNER, "title", "description", "thumb", null, null,
+                10, 1080, 1920, VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(),
+                null, null, null, null, null, null, null, null, false, false, null);
+        when(videoCache.getAll(List.of("deleted", "processing"))).thenReturn(Map.of("processing", processing));
+        when(videoRepository.findByIdInAndDeletedAtIsNull(List.of("deleted"))).thenReturn(List.of());
+        assertThat(videoService.getViewable(OWNER, List.of("deleted", "processing"))).isEmpty();
+    }
+
+    @Test
+    void viewableRejectsMoreThan50IdsBeforeAnyLookupAndTrimsTitle() {
+        assertThatThrownBy(() -> videoService.getViewable(7L,
+                java.util.stream.IntStream.range(0, 51).mapToObj(String::valueOf).toList()))
+                .isInstanceOf(com.tiktok.common.exception.BadRequestException.class);
+        verifyNoInteractions(videoCache, videoRepository, blockClient);
+        VideoResponse longTitle = new VideoResponse("A", OWNER, "  " + "x".repeat(100) + "  ", null, "thumb", null, null,
+                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(),
+                null, null, null, null, null, null, null, null, false, false, null);
+        assertThat(com.tiktok.videoservice.dto.response.ViewableVideoResponse.from(longTitle).title()).isEqualTo("x".repeat(80));
     }
 }

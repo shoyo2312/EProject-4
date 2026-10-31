@@ -64,6 +64,14 @@ public class AuthSecurityEvent {
     @Column(name = "device_model", length = 64)
     private String deviceModel;
 
+    /**
+     * The approximate place of {@link #ipAddress} — {@code "Ho Chi Minh City, Vietnam"}, sometimes
+     * the country alone — resolved from the GeoIP file when the entry was written (V18). Null for
+     * entries from before that, and for an address that resolves to nothing.
+     */
+    @Column(name = "location", length = 128)
+    private String location;
+
     /** A short phrase: the new address, why sessions were revoked. Never a secret. */
     @Column(name = "detail", length = 255)
     private String detail;

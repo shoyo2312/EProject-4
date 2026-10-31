@@ -29,23 +29,39 @@ public class OutboxPublisher {
     private static final Map<String, String> TOPICS = Map.of(
             UserEventPublisher.FOLLOW_AGGREGATE, "user.follow-events",
             UserEventPublisher.FOLLOW_REQUEST_AGGREGATE, "user.follow-request-events",
-            UserEventPublisher.PRIVACY_AGGREGATE, "user.privacy-events");
+            UserEventPublisher.PRIVACY_AGGREGATE, "user.privacy-events",
+            UserEventPublisher.SCREEN_TIME_SUMMARY_AGGREGATE, "user.screen-time-summary-events",
+            UserEventPublisher.BLOCK_AGGREGATE, "user.block-events");
 
     private final OutboxEventRepository outboxEventRepository;
     private final OutboxDispatcher outboxDispatcher;
+
+    /** Rows per fetch: the repository's Top100. */
+    private static final int BATCH_SIZE = 100;
 
     /**
      * Not {@code @Transactional}: the dispatcher waits up to the ack timeout for the broker, and a
      * transaction around that wait held a pooled connection for all of it whenever Kafka was slow
      * or down. The acknowledged rows are marked afterwards in one short update of their own.
+     *
+     * <p>A full batch that all went through is followed by the next one in the same run. The Monday
+     * screen-time digest writes one row per account at once; at one batch per poll, every privacy
+     * and follow event written after it waited minutes. A short batch, or one the broker did not
+     * take whole, ends the run.
      */
     @Scheduled(fixedDelay = 5000)
     public void publishPending() {
-        List<OutboxEvent> pending = outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
-        if (pending.isEmpty()) {
-            return;
-        }
+        List<OutboxEvent> pending;
+        do {
+            pending = outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc();
+            if (pending.isEmpty() || publish(pending) < pending.size()) {
+                return;
+            }
+        } while (pending.size() == BATCH_SIZE);
+    }
 
+    /** @return how many of {@code pending} the broker acknowledged, each now marked published */
+    private int publish(List<OutboxEvent> pending) {
         List<Long> acked = new ArrayList<>(pending.size());
         int published = outboxDispatcher.dispatch(pending, this::toRecord, event -> acked.add(event.getId()));
         if (!acked.isEmpty()) {
@@ -56,6 +72,7 @@ public class OutboxPublisher {
             log.warn("Published {}/{} user outbox events, the rest stay pending for the next poll",
                     published, pending.size());
         }
+        return published;
     }
 
     private ProducerRecord<String, String> toRecord(OutboxEvent event) {

@@ -1,6 +1,7 @@
 package com.tiktok.storyservice.entity;
 
 import com.tiktok.common.id.SnowflakeIdGenerator;
+import com.tiktok.event.video.ModerationVerdict;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -13,13 +14,22 @@ import org.springframework.data.mongodb.core.index.CompoundIndexes;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
+import java.time.Duration;
 import java.time.Instant;
 
 /**
  * {@code expiresAt} carries a Mongo TTL index (expireAfterSeconds = 0) so MongoDB physically
- * removes the document ~24h after creation regardless of {@code deletedAt} — this hard removal
- * is the intended ephemeral-content behavior for stories, not a violation of the soft-delete rule,
- * which still governs manual deletes before expiry via {@link #markDeleted()}.
+ * removes the document once it passes, regardless of {@code deletedAt} — this hard removal is the
+ * intended ephemeral-content behavior for stories, not a violation of the soft-delete rule, which
+ * still governs manual deletes before expiry ({@code StoryRepositoryCustom.markDeleted}).
+ *
+ * <p>A new story gets a {@link #PENDING_CEILING} rather than the 24h display window: the window
+ * starts when moderation approves it ({@code StoryRepositoryCustom.decide}), so screening time does
+ * not eat into it, and the ceiling removes a story whose verdict never arrives instead of keeping
+ * it forever. HELD and REJECTED stories keep the ceiling.
+ *
+ * <p>The outbox is a flag on the document, as on video-service's Video: this Mongo deployment
+ * has no replica set, so there is no transaction to put a separate outbox row in.
  */
 @Getter
 @SuperBuilder
@@ -27,9 +37,11 @@ import java.time.Instant;
 @AllArgsConstructor
 @Document(collection = "stories")
 @CompoundIndexes({
-        @CompoundIndex(name = "author_feed_idx", def = "{'userId': 1, 'deletedAt': 1, 'createdAt': -1}")
+        @CompoundIndex(name = "author_status_idx", def = "{'userId': 1, 'status': 1, 'expiresAt': 1}")
 })
 public class Story {
+
+    public static final Duration PENDING_CEILING = Duration.ofHours(48);
 
     @Id
     private String id;
@@ -37,11 +49,35 @@ public class Story {
     @Indexed
     private Long userId;
 
-    private String mediaUrl;
+    /**
+     * The story's own copy of its upload, {@code stories/{userId}/{storyId}/media.{ext}}: what
+     * media-worker screens and viewers are served. Never served directly, only through a presigned URL.
+     */
+    @Indexed(unique = true)
+    private String mediaKey;
+
+    /**
+     * The upload the media was copied from. Unique, so one upload backs one story; sparse, because
+     * stories created before the copy have none.
+     */
+    @Indexed(unique = true, sparse = true)
+    private String uploadKey;
 
     private StoryMediaType mediaType;
 
     private String caption;
+
+    private StoryStatus status;
+
+    private StoryVisibility visibility;
+
+    /** A video's probed length, from the moderation verdict; null for images and until then. */
+    private Integer durationSeconds;
+
+    private StoryModeration moderation;
+
+    /** The caption's verdict, carried to media-worker on the created event. */
+    private ModerationVerdict textVerdict;
 
     private long viewCount;
 
@@ -53,11 +89,41 @@ public class Story {
 
     private Instant deletedAt;
 
+    /** Set once the broker acknowledged StoryCreatedEvent — the outbox flag. */
+    private Instant eventPublishedAt;
+
+    /**
+     * When moderation made the story ACTIVE. Null until then, and on stories that went live before
+     * this field existed — which is what keeps them from being announced.
+     */
+    private Instant activatedAt;
+
+    /** Set once the broker acknowledged StoryActivatedEvent — that event's outbox flag. */
+    private Instant announcedAt;
+
     @Version
     private Long version;
 
     public static String newId() {
         return String.valueOf(SnowflakeIdGenerator.nextId());
+    }
+
+    public static Story pending(String id, Long userId, String mediaKey, String uploadKey, StoryMediaType mediaType,
+                                String caption, StoryVisibility visibility, ModerationVerdict textVerdict, Instant now) {
+        return Story.builder()
+                .id(id)
+                .userId(userId)
+                .mediaKey(mediaKey)
+                .uploadKey(uploadKey)
+                .mediaType(mediaType)
+                .caption(caption)
+                .status(StoryStatus.PENDING_MODERATION)
+                .visibility(visibility)
+                .textVerdict(textVerdict)
+                .viewCount(0)
+                .createdAt(now)
+                .expiresAt(now.plus(PENDING_CEILING))
+                .build();
     }
 
     public boolean isDeleted() {
@@ -68,15 +134,4 @@ public class Story {
         return expiresAt != null && expiresAt.isBefore(Instant.now());
     }
 
-    public boolean isVisible() {
-        return !isDeleted() && !isExpired();
-    }
-
-    public void markDeleted() {
-        this.deletedAt = Instant.now();
-    }
-
-    public void incrementViewCount() {
-        this.viewCount++;
-    }
 }

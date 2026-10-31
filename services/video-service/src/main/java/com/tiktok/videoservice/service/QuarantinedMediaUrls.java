@@ -10,6 +10,7 @@ import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.Set;
@@ -36,8 +37,12 @@ public class QuarantinedMediaUrls {
     private static final Set<VideoStatus> QUARANTINED =
             Set.of(VideoStatus.PENDING_REVIEW, VideoStatus.REJECTED, VideoStatus.TAKEN_DOWN);
 
+    /** In-cluster: the existence check runs once per quarantined row of a listing. */
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
+    /** The signed URLs go to the moderator's browser, so they are signed for the public host. */
+    @Qualifier("publicMinioClient")
+    private final MinioClient publicMinioClient;
 
     public VideoResponse forAdmin(VideoResponse video) {
         if (!QUARANTINED.contains(video.status()) && video.deletedAt() == null) {
@@ -82,7 +87,7 @@ public class QuarantinedMediaUrls {
             return url;
         }
         try {
-            return minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+            return publicMinioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
                     .method(Method.GET)
                     .bucket(minioProperties.bucket())
                     .object(PREFIX + key)

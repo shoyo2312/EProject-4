@@ -17,7 +17,7 @@ recommendation-service ──POST /rank (5 feature/video)──► rank-service 
         └─► GET /api/v1/recommendations/feed
 ```
 
-**Chỉ thứ tự là do mô hình quyết định.** Việc *video nào được đưa vào danh sách xét* vẫn do luật cũ làm: trending + tag của người xem, trong `FeedServiceImpl`. Tách như vậy có ba lý do:
+**Chỉ thứ tự là do mô hình quyết định.** Việc *video nào được đưa vào danh sách xét* vẫn do luật cũ làm: trending + tag của người xem + một mẫu ngẫu nhiên từ toàn bộ catalogue (`ZRANDMEMBER reco:video:published`, lý do `explore`, lọc private/taken-down/held, xếp sau cùng để bị cắt trước khi pool chạm trần), trong `FeedServiceImpl`. Mẫu ngẫu nhiên có vì trending + tag trên một instance nhỏ chỉ với tới vài chục video; xem hết là ranking cạn và client rơi về feed theo thời gian, lần nào mở cũng cùng một list. Cùng lý do đó, điểm được cộng nhiễu Gumbel (`EXPLORATION_TEMPERATURE` = 0.25 × khoảng cách điểm cao nhất − thấp nhất) **chỉ để sắp xếp** — response vẫn mang điểm thật; điểm là hàm deterministic của trạng thái gần như không đổi giữa hai lần mở app, không có nhiễu thì trang đầu y hệt nhau. Tách như vậy có ba lý do:
 
 1. Mô hình sai thì feed xấu đi, không rỗng.
 2. Điểm trending là engagement đã suy giảm theo giờ — nó **không tồn tại trong lịch sử event**, nên không thể tái dựng lúc huấn luyện. Cho mô hình học dựa vào nó là dạy nó dựa vào một con số mà lúc phục vụ nó sẽ nhận một con số khác.
@@ -56,6 +56,8 @@ Nhãn là `completed`: **cho rằng người ta đã bấm vào xem, họ có xe
 Muốn sửa phải **log impression**: ghi lại những video đã được phục vụ nhưng không được xem, để có negative thật. Hiện chưa có gì sinh ra dữ liệu đó. Đó là việc của chặng sau, không phải thứ có thể vá trong `train.py`.
 
 **Chống rò rỉ nhãn**: feature dựng tại mốc cắt `T`, nhãn lấy trong `[T, T+1 ngày)`. Không dòng nào được chấm bằng một lượt xem chưa xảy ra. Đánh giá dùng mốc cắt **muộn hơn** mốc huấn luyện — chia theo thời gian, không chia ngẫu nhiên, vì câu hỏi thật là "mô hình có chạy được ngày mai không".
+
+**Tập huấn luyện là nhiều cửa sổ xếp chồng** (`training_frame`, `TRAIN_WINDOWS` = 14, env cùng tên): mốc đánh giá là `latest − 1 ngày`, rồi 14 mốc huấn luyện lùi dần mỗi ngày trước đó, mỗi mốc một frame dựng riêng, nối lại. Một cặp (user, video) chỉ được gán nhãn ở cửa sổ chứa lượt xem đầu tiên của nó, vì `build_dataset` bỏ cặp đã xem trước mốc cắt. Trước đây chỉ có **một** cửa sổ huấn luyện: trên prod ngày đó rơi vào lúc chỉ còn hai người dùng thật, ra 126 dòng và AUC 0.42 — bốn tháng lịch sử trước đó chỉ làm feature, không bao giờ làm nhãn. Với 14 cửa sổ cùng dữ liệu đó ra 8.8k dòng, AUC 0.54.
 
 ## 4. Chạy
 

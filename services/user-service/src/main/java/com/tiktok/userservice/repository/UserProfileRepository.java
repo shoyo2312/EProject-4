@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -169,6 +170,15 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
      * which is right: nothing can make an account private before its profile row exists.
      */
     boolean existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(Long userId);
+
+    /**
+     * {@link #existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue} for a page of ids in one
+     * query: the subset of {@code userIds} with a live, private profile. A closed account counts
+     * like any other — whether it is shown at all is for the caller's own record of closures.
+     */
+    @Query("select p.userId from UserProfile p where p.userId in :userIds "
+            + "and p.deletedAt is null and p.privateAccount = true")
+    List<Long> findPrivateUserIdsAmong(@Param("userIds") Collection<Long> userIds);
 
     // The four counter updates leave the version alone on purpose: a follow must not fail the
     // owner's concurrent profile edit. That edit cannot write the old count back, because

@@ -1,5 +1,6 @@
 package com.tiktok.notificationservice.service;
 
+import com.tiktok.notificationservice.client.PushPreferencesClient;
 import com.tiktok.notificationservice.dto.response.NotificationResponse;
 import com.tiktok.notificationservice.entity.DeviceToken;
 import com.tiktok.notificationservice.entity.Notification;
@@ -30,6 +31,7 @@ public class NotificationServiceImpl implements NotificationService {
     private final DeviceTokenRepository deviceTokenRepository;
     private final PushNotificationService pushNotificationService;
     private final NotificationEventPublisher notificationEventPublisher;
+    private final PushPreferencesClient pushPreferencesClient;
 
     /**
      * How long a like/share/follow from the same person on the same thing counts as already
@@ -91,12 +93,24 @@ public class NotificationServiceImpl implements NotificationService {
      * is only the nudge that it arrived. A device that cannot be reached — or Firebase being
      * down — must not fail the event consumer that got here, because a retried delivery would
      * write the entry a second time.
+     *
+     * <p>The recipient's push switches and sleep hours decide whether to nudge at all. They are
+     * asked for only when there is a device to push to, and when user-service cannot say what the
+     * recipient chose the push is skipped on purpose (spec §3.3): pushing what they switched off is
+     * the worse failure, and the entry is in the inbox either way.
      */
     private void push(Notification notification) {
         try {
-            deviceTokenRepository.findByUserId(notification.getRecipientId()).forEach(device ->
-                    pushNotificationService.send(
-                            device.getToken(), notification.getTitle(), notification.getBody()));
+            List<DeviceToken> devices = deviceTokenRepository.findByUserId(notification.getRecipientId());
+            if (devices.isEmpty()) {
+                return;
+            }
+            PushPreferences preferences = pushPreferencesClient.preferencesOf(notification.getRecipientId());
+            if (preferences == null || !preferences.allows(notification.getType(), Instant.now())) {
+                return;
+            }
+            devices.forEach(device -> pushNotificationService.send(
+                    device.getToken(), notification.getTitle(), notification.getBody()));
         } catch (RuntimeException ex) {
             log.warn("Notification {} was stored but could not be pushed", notification.getId(), ex);
         }

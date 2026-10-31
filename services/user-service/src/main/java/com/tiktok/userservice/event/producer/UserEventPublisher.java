@@ -4,12 +4,17 @@ import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.DomainEvent;
 import com.tiktok.event.user.FollowRequestedEvent;
 import com.tiktok.event.user.UserFollowChangedEvent;
+import com.tiktok.event.user.UserBlockChangedEvent;
+import com.tiktok.userservice.service.UserPairLock;
 import com.tiktok.event.user.UserPrivacyChangedEvent;
+import com.tiktok.event.user.WeeklyScreenTimeSummaryEvent;
 import com.tiktok.userservice.entity.OutboxEvent;
 import com.tiktok.userservice.repository.OutboxEventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import org.springframework.stereotype.Component;
+
+import java.time.LocalDate;
 
 /**
  * Writes user-service's announcements to the outbox in the caller's transaction; {@link OutboxPublisher}
@@ -28,6 +33,8 @@ public class UserEventPublisher {
     static final String FOLLOW_AGGREGATE = "USER_FOLLOW";
     static final String FOLLOW_REQUEST_AGGREGATE = "FOLLOW_REQUEST";
     static final String PRIVACY_AGGREGATE = "USER_PRIVACY";
+    static final String SCREEN_TIME_SUMMARY_AGGREGATE = "SCREEN_TIME_SUMMARY";
+    static final String BLOCK_AGGREGATE = "USER_BLOCK";
 
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -54,8 +61,19 @@ public class UserEventPublisher {
         save(PRIVACY_AGGREGATE, userId, UserPrivacyChangedEvent.of(userId, privateAccount));
     }
 
+    /** Must be called in the transaction that claimed the week, so the claim and the event commit together. */
+    public void publishWeeklyScreenTimeSummary(Long userId, LocalDate weekStart, long totalSeconds) {
+        save(SCREEN_TIME_SUMMARY_AGGREGATE, userId,
+                WeeklyScreenTimeSummaryEvent.of(userId, weekStart.toString(), totalSeconds));
+    }
+
+    public void publishBlockChanged(Long blockerId, Long blockedId, boolean blocked) {
+        save(BLOCK_AGGREGATE, UserPairLock.key(blockerId, blockedId),
+                UserBlockChangedEvent.of(blockerId, blockedId, blocked));
+    }
+
     @SneakyThrows
-    private void save(String aggregateType, Long key, DomainEvent event) {
+    private void save(String aggregateType, Object key, DomainEvent event) {
         outboxEventRepository.save(OutboxEvent.builder()
                 .aggregateType(aggregateType)
                 .aggregateId(String.valueOf(key))

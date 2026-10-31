@@ -10,7 +10,8 @@ public enum Surface {
     COMMENT,
     VIDEO_TITLE,
     VIDEO_DESCRIPTION,
-    VIDEO_TAGS;
+    VIDEO_TAGS,
+    STORY_CAPTION;
 
     /** A video's own text, written by its owner — as opposed to something said about it. */
     public boolean isCaption() {

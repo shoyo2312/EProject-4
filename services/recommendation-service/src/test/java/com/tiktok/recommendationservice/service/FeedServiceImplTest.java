@@ -13,13 +13,16 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
+import java.util.random.RandomGenerator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
@@ -49,13 +52,23 @@ class FeedServiceImplTest {
     @Mock
     private HashOperations<String, Object, Object> hashOperations;
 
+    @Mock
+    private SetOperations<String, String> setOperations;
+
+    /**
+     * Always 0.5, so the exploration noise is the same for every candidate and the ordering the
+     * existing cases assert is the plain score order.
+     */
+    private static final RandomGenerator NO_NOISE = () -> Long.MIN_VALUE;
+
     private FeedServiceImpl feedService;
 
     @BeforeEach
     void setUp() {
-        feedService = new FeedServiceImpl(redisTemplate, rankClient, userMuteClient);
+        feedService = new FeedServiceImpl(redisTemplate, rankClient, userMuteClient, NO_NOISE);
         when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
         when(redisTemplate.<Object, Object>opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForSet()).thenReturn(setOperations);
         MockPipeline.install(redisTemplate);
         givenTrending();
         givenTags();
@@ -63,6 +76,7 @@ class FeedServiceImplTest {
         givenServed();
         givenNoQualityData();
         givenNoPublishTimes();
+        givenCatalogue();
         // The default for every existing case: no model, so the heuristic ordering is asserted.
         when(rankClient.score(any(), any())).thenReturn(Map.of());
     }
@@ -282,6 +296,92 @@ class FeedServiceImplTest {
         assertThat(feedService.getFeed(VIEWER, 20))
                 .extracting(FeedItemResponse::videoId)
                 .containsExactly("fromOther");
+    }
+
+    /**
+     * The catalogue draw reaches every published video, the viewer's own included. On the small
+     * instance the draw was added for, the two active viewers are also the main uploaders, so
+     * without this they were fed what they had just posted.
+     */
+    @Test
+    void getFeed_dropsTheViewersOwnVideos() {
+        givenCatalogue("mine", "theirs");
+        when(hashOperations.multiGet("reco:video:owner", List.of("mine", "theirs")))
+                .thenReturn(List.of(String.valueOf(VIEWER), "8"));
+
+        assertThat(feedService.getFeed(VIEWER, 20))
+                .extracting(FeedItemResponse::videoId)
+                .containsExactly("theirs");
+    }
+
+    /**
+     * The failure the whole feature exists for: trending holds a few dozen videos, the viewer's
+     * tags a few dozen more, and after three pages the ranking is spent while hundreds of
+     * published videos sit in the catalogue and never get a turn. A random draw from the
+     * catalogue is what keeps the feed going past what engagement and taste happen to reach.
+     */
+    @Test
+    void getFeed_whenTrendingAndTagsRunDry_drawsFromTheCatalogue() {
+        givenCatalogue("old1", "old2");
+
+        List<FeedItemResponse> feed = feedService.getFeed(VIEWER, 20);
+
+        assertThat(feed).extracting(FeedItemResponse::videoId).containsExactlyInAnyOrder("old1", "old2");
+        assertThat(feed.get(0).reasons()).containsExactly("explore");
+    }
+
+    /**
+     * The published set keeps private, taken-down and held videos (they come back when the
+     * reason lifts), so a draw from it has to ask before serving — trending and the tag indexes
+     * had those withdrawn, the catalogue has not.
+     */
+    @Test
+    void getFeed_catalogueDraw_skipsHiddenVideos() {
+        givenCatalogue("private", "takenDown", "held", "fine");
+        when(setOperations.members("reco:video:private")).thenReturn(Set.of("private"));
+        when(setOperations.members("reco:video:taken-down")).thenReturn(Set.of("takenDown"));
+        when(setOperations.members("reco:video:held")).thenReturn(Set.of("held"));
+
+        assertThat(feedService.getFeed(VIEWER, 20))
+                .extracting(FeedItemResponse::videoId)
+                .containsExactly("fine");
+    }
+
+    /** A video already reached through trending or a tag is not an exploration pick as well. */
+    @Test
+    void getFeed_catalogueDraw_doesNotDuplicateWhatTrendingAlreadyOffers() {
+        givenTrending(tuple("vid1", 10.0));
+        givenCatalogue("vid1", "old1");
+
+        List<FeedItemResponse> feed = feedService.getFeed(VIEWER, 20);
+
+        assertThat(feed).extracting(FeedItemResponse::videoId).containsExactlyInAnyOrder("vid1", "old1");
+        assertThat(feed.get(0).reasons()).containsExactly("trending");
+    }
+
+    /**
+     * Why two openings of the app half an hour apart used to show the same page: the score is a
+     * deterministic function of state that barely moves, so the ranking was too. A little noise
+     * on the way to the sort is what makes the next visit a different one.
+     */
+    @Test
+    void getFeed_doesNotHandTheSameOrderTwice() {
+        feedService = new FeedServiceImpl(redisTemplate, rankClient, userMuteClient, new Random(1));
+        ZSetOperations.TypedTuple<String>[] trending = new ZSetOperations.TypedTuple[30];
+        for (int i = 0; i < trending.length; i++) {
+            trending[i] = tuple("vid" + i, 30.0 - i);
+        }
+        givenTrending(trending);
+
+        List<String> first = feedService.getFeed(VIEWER, 20).stream().map(FeedItemResponse::videoId).toList();
+        List<String> second = feedService.getFeed(VIEWER, 20).stream().map(FeedItemResponse::videoId).toList();
+
+        assertThat(first).isNotEqualTo(second);
+    }
+
+    private void givenCatalogue(String... videoIds) {
+        when(zSetOperations.randomMembers("reco:video:published", 200L)).thenReturn(List.of(videoIds));
+        when(setOperations.members(any())).thenReturn(Set.of());
     }
 
     @SafeVarargs

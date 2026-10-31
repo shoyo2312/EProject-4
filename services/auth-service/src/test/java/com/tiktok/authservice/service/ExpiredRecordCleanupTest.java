@@ -77,8 +77,14 @@ class ExpiredRecordCleanupTest {
     /** verification_tokens carries a foreign key to users, so the rows need a real owner. */
     private Long userId;
 
+    @Autowired
+    private KnownDevices knownDevices;
+
     @BeforeEach
     void cleanUp() {
+        // Before the users they reference.
+        jdbcTemplate.update("delete from known_devices");
+        jdbcTemplate.update("delete from known_device_accounts");
         refreshTokenRepository.deleteAll();
         verificationTokenRepository.deleteAll();
         outboxEventRepository.deleteAll();
@@ -159,6 +165,24 @@ class ExpiredRecordCleanupTest {
         cleanup.purgeExpiredRecords();
 
         assertThat(refreshTokenRepository.count()).isZero();
+    }
+
+    /**
+     * The privacy pages promise sign-in records go after 180 days, so an unused device does too.
+     * The account's mark stays: without it, an account whose devices all aged out would read as
+     * brand new, and the next sign-in — whoever's — would pass as its first device, in silence.
+     */
+    @Test
+    void purge_forgetsDevicesUnusedPastTheGrace_butNotThatTheAccountHadOne() {
+        jdbcTemplate.update("insert into known_devices values (1, ?, 'old-hash', now() - interval '181 days')", userId);
+        jdbcTemplate.update("insert into known_devices values (2, ?, 'recent-hash', now() - interval '1 day')", userId);
+        jdbcTemplate.update("insert into known_device_accounts values (?)", userId);
+
+        cleanup.purgeExpiredRecords();
+
+        assertThat(jdbcTemplate.queryForList("select device_hash from known_devices", String.class))
+                .containsExactly("recent-hash");
+        assertThat(knownDevices.signedIn(userId, "device-never-seen-01")).isTrue();
     }
 
     private RefreshToken saveRefreshToken(String hash, Instant expiresAt) {

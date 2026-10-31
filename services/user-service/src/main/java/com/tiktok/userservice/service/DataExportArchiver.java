@@ -15,15 +15,20 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Component;
 
+import java.time.DayOfWeek;
 import java.time.Instant;
+import java.time.format.TextStyle;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static com.tiktok.userservice.service.DataExportWriter.date;
 
@@ -83,12 +88,22 @@ public class DataExportArchiver {
         return record;
     }
 
+    private static String dailyLimit(UserSettings settings) {
+        List<Integer> byDay = settings.getScreenTimeLimitsByDay();
+        if (byDay != null) {
+            return IntStream.range(0, byDay.size())
+                    .mapToObj(i -> DayOfWeek.of(i + 1).getDisplayName(TextStyle.FULL, Locale.ENGLISH)
+                            + " " + byDay.get(i) + " minutes")
+                    .collect(Collectors.joining(", "));
+        }
+        return settings.getScreenTimeLimitMinutes() == null ? "Off" : settings.getScreenTimeLimitMinutes() + " minutes";
+    }
+
     private static Map<String, String> settingsRecord(UserSettings settings) {
         Map<String, String> record = new LinkedHashMap<>();
         record.put("Who can comment", audience(settings.getCommentAudience()));
         record.put("Who can send you direct messages", audience(settings.getDmAudience()));
-        record.put("Daily screen time limit", settings.getScreenTimeLimitMinutes() == null
-                ? "Off" : settings.getScreenTimeLimitMinutes() + " minutes");
+        record.put("Daily screen time limit", dailyLimit(settings));
         record.put("Sleep reminder", settings.getSleepHoursStart() == null || settings.getSleepHoursEnd() == null
                 ? "Off" : settings.getSleepHoursStart() + " – " + settings.getSleepHoursEnd());
         record.put("Weekly screen time updates", yesNo(settings.isWeeklyScreenTimeDigest()));
@@ -130,7 +145,7 @@ public class DataExportArchiver {
         Map<DataExportSources.Conversation, List<DataExportSources.Message>> messages = new LinkedHashMap<>();
         List<Long> accounts = new ArrayList<>();
         for (DataExportSources.Conversation conversation : conversations) {
-            messages.put(conversation, sources.messagesOf(conversation.id()));
+            messages.put(conversation, sources.messagesOf(conversation.id(), userId));
             accounts.addAll(conversation.participantIds());
         }
         Map<Long, String> usernames = usernames(accounts);
@@ -149,7 +164,11 @@ public class DataExportArchiver {
                 record.put("Date", date(message.sentAt()));
                 record.put("Chat with", with);
                 record.put("From", username(usernames, message.senderId()));
-                record.put("Message", text(message.content()));
+                record.put("Message", messageText(message));
+                if ("VIDEO".equals(message.type())) {
+                    record.put("Type", "VIDEO");
+                    record.put("Video ID", text(message.videoId()));
+                }
                 records.add(record);
             }
         });
@@ -230,6 +249,14 @@ public class DataExportArchiver {
 
     private static String yesNo(boolean value) {
         return value ? "On" : "Off";
+    }
+
+    /** A sticker has no text; the file says which one was sent rather than leaving the cell empty. */
+    private static String messageText(DataExportSources.Message message) {
+        if ("STICKER".equals(message.type())) {
+            return message.sticker() == null ? "[Sticker]" : "[Sticker: " + message.sticker().name() + "]";
+        }
+        return text(message.content());
     }
 
     private static String text(String value) {

@@ -71,6 +71,10 @@ spring:
               uri: ${SEARCH_SERVICE_URI:http://localhost:8095}
               predicates:
                 - Path=/api/v1/search/**
+            - id: story-service
+              uri: ${STORY_SERVICE_URI:http://localhost:8086}
+              predicates:
+                - Path=/api/v1/stories/**
             - id: analytics-service
               uri: ${ANALYTICS_SERVICE_URI:http://localhost:8097}
               predicates:

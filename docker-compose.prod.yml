@@ -1,8 +1,7 @@
 # =====================================================================
 # Production stack for Coolify (Docker Compose build pack).
 #
-# Every service the two frontends reach through the gateway. Not here: story-service — the gateway
-# has no route to it and its Mongo URI is a hard-coded localhost one.
+# Every service the two frontends reach through the gateway.
 #
 # Nothing publishes a port. Coolify's proxy is the only way in, and only two services get a
 # domain in its UI:
@@ -28,6 +27,11 @@ x-java-env: &java-env
   INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?}
   SPRINGDOC_API_DOCS_ENABLED: "false"
   SPRINGDOC_SWAGGER_UI_ENABLED: "false"
+  # Kafka wants a password (see the kafka service). spring.kafka.properties reaches every producer,
+  # consumer and admin client Boot builds; api-gateway has no Kafka and ignores it.
+  SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL: SASL_PLAINTEXT
+  SPRING_KAFKA_PROPERTIES_SASL_MECHANISM: PLAIN
+  SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required username="app" password="${KAFKA_PASSWORD:?}";'
 
 services:
 
@@ -88,20 +92,25 @@ services:
       - mongodb-data:/data/db
     healthcheck:
       test: [ "CMD-SHELL", "mongosh --quiet --eval 'db.runCommand(\"ping\").ok' localhost:27017/test" ]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
 
   # noeviction: Redis holds token revocations and rate-limit counters, not only cache.
   # See docker-compose.yml for the full reasoning.
+  # A password because every container on this network reaches it: one that can DEL auth:blacklist:*
+  # un-revokes every stolen token, and one that can FLUSHALL lifts every ban and rate limit.
   app-redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?}
+    command: [ "sh", "-c", "exec redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction --requirepass \"$$REDIS_PASSWORD\"" ]
     volumes:
       - redis-data:/data
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      # The reply, not the exit code: redis-cli exits 0 on NOAUTH too.
+      test: [ "CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -138,6 +147,23 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Baked into an image rather than bind-mounted (see cassandra-init). Fetches DB-IP's City Lite
+  # into geoip-data once the copy there is a month old. A failed download still exits 0, so a
+  # deploy never stops on db-ip.com; auth-service then runs without places and logs a WARN.
+  # auth-service starts only after this finishes, so download.sh bounds every attempt: under
+  # five minutes at worst, about a minute when db-ip.com hangs, seconds normally.
+  geoip-init:
+    build:
+      context: ./scripts/geoip
+      dockerfile_inline: |
+        FROM alpine:3.22
+        RUN apk add --no-cache curl
+        COPY download.sh /download.sh
+        ENTRYPOINT ["sh", "/download.sh", "/data"]
+    volumes:
+      - geoip-data:/data
+    restart: "no"
+
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.0
     restart: unless-stopped
@@ -148,7 +174,13 @@ services:
       - zookeeper-data:/var/lib/zookeeper/data
       - zookeeper-log:/var/lib/zookeeper/log
 
-  # One listener: every client is on this network, nothing on the host needs it.
+  # Two listeners. CLIENT is the only one other containers can reach, and it wants a password:
+  # without one, anything on this network could publish a ban or a takedown on
+  # admin.moderation-events as if admin-service had. LOCAL is plaintext on 127.0.0.1 inside this
+  # container only, for the broker's own controller connection and the healthcheck.
+  # KAFKA_PASSWORD: letters and digits only, it is spliced into a JAAS string.
+  # ponytail: one shared account and no ACLs, so any service can still write any topic, and
+  # ZooKeeper takes no password; per-service users + an authorizer if that matters.
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     restart: unless-stopped
@@ -157,7 +189,13 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
+      KAFKA_LISTENERS: CLIENT://0.0.0.0:29092,LOCAL://127.0.0.1:9092
+      KAFKA_ADVERTISED_LISTENERS: CLIENT://kafka:29092,LOCAL://127.0.0.1:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CLIENT:SASL_PLAINTEXT,LOCAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: LOCAL
+      KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_NAME_CLIENT_SASL_ENABLED_MECHANISMS: PLAIN
+      KAFKA_LISTENER_NAME_CLIENT_PLAIN_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.plain.PlainLoginModule required user_app="${KAFKA_PASSWORD:?}";'
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
@@ -167,7 +205,7 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
-      test: [ "CMD", "kafka-topics", "--bootstrap-server", "kafka:29092", "--list" ]
+      test: [ "CMD", "kafka-topics", "--bootstrap-server", "127.0.0.1:9092", "--list" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -188,9 +226,16 @@ services:
       timeout: 5s
       retries: 5
 
-  # Bucket + the rule expiring abandoned raw uploads. See docker-compose.yml.
+  # The bucket, its lifecycle and one MinIO account per service, each reaching only its own
+  # prefixes: scripts/minio/init.sh and scripts/minio/policies/. The root account above is left to
+  # this container; no service holds it. Secrets of at least 8 characters.
   minio-init:
-    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    build:
+      context: ./scripts/minio
+      dockerfile_inline: |
+        FROM pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+        COPY . /minio/
+        ENTRYPOINT ["bash", "/minio/init.sh"]
     depends_on:
       minio:
         condition: service_healthy
@@ -198,29 +243,41 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -e
-        mc alias set tt http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
-        mc mb --ignore-existing "tt/$$MINIO_BUCKET"
-        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}},{"ID":"expire-data-exports","Status":"Enabled","Filter":{"Prefix":"exports/"},"Expiration":{"Days":7}}]}' \
-          | mc ilm import "tt/$$MINIO_BUCKET"
+      MINIO_VIDEO_SECRET_KEY: ${MINIO_VIDEO_SECRET_KEY:?}
+      MINIO_STORY_SECRET_KEY: ${MINIO_STORY_SECRET_KEY:?}
+      MINIO_USER_SECRET_KEY: ${MINIO_USER_SECRET_KEY:?}
+      MINIO_WORKER_SECRET_KEY: ${MINIO_WORKER_SECRET_KEY:?}
+      MINIO_BACKUP_SECRET_KEY: ${MINIO_BACKUP_SECRET_KEY:?}
     restart: "no"
 
+  # Security on: otherwise any container on this network can rewrite the index, or delete it — and
+  # no job rebuilds it from the services that own the documents. One node, so transport TLS is not
+  # required; HTTP stays plain on this network like every other store here.
+  # ELASTIC_PASSWORD seeds the elastic user. Once the password has been changed through the security
+  # API, the API's value wins and this one is ignored (docs/operations.md).
+  # path.repo is where the nightly snapshots go (SLM, policy kept by the backup service). The
+  # directory is made in the image so the volume mounted on it is owned by elasticsearch, not root.
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.5
+    build:
+      context: ./scripts
+      dockerfile_inline: |
+        FROM docker.elastic.co/elasticsearch/elasticsearch:9.4.5
+        RUN mkdir /usr/share/elasticsearch/snapshots
     restart: unless-stopped
-    mem_limit: 2g
+    mem_limit: 4g
     environment:
       - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms1g -Xmx1g"
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:?}
+      - path.repo=/usr/share/elasticsearch/snapshots
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
+      - es-snapshots:/usr/share/elasticsearch/snapshots
     healthcheck:
-      test: [ "CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1" ]
+      test: [ "CMD-SHELL", "curl -sf -u \"elastic:$$ELASTIC_PASSWORD\" http://localhost:9200/_cluster/health || exit 1" ]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -260,11 +317,12 @@ services:
       timeout: 5s
       retries: 5
 
-  # NSFW frame + caption/comment classifier. First build downloads a few hundred MB of model.
+  # NSFW + violence/gore/drugs/accident/gambling frame classifiers, caption/comment classifier.
+  # Three models in one process; CLIP added ~0.3 GB, hence 3g rather than 2g.
   moderation-service:
     build: ./services/moderation-service
     restart: unless-stopped
-    mem_limit: 2g
+    mem_limit: 3g
     environment:
       MODERATION_REVIEW_THRESHOLD: ${MODERATION_REVIEW_THRESHOLD:-0.60}
       MODERATION_REJECT_THRESHOLD: ${MODERATION_REJECT_THRESHOLD:-0.90}
@@ -273,6 +331,10 @@ services:
       AZURE_CONTENT_SAFETY_KEY: ${AZURE_CONTENT_SAFETY_KEY:-}
       TEXT_HATE_HOLD_THRESHOLD: ${TEXT_HATE_HOLD_THRESHOLD:-0.90}
       TEXT_MODERATION_MODEL_VERSION: ${TEXT_MODERATION_MODEL_VERSION:-hsd-v1}
+      HARM_REVIEW_THRESHOLD: ${HARM_REVIEW_THRESHOLD:-0.55}
+      HARM_MIN_REVIEW_FRAMES: ${HARM_MIN_REVIEW_FRAMES:-2}
+      HARM_REVIEW_ALONE_THRESHOLD: ${HARM_REVIEW_ALONE_THRESHOLD:-0.80}
+      HARM_MODERATION_MODEL_VERSION: ${HARM_MODERATION_MODEL_VERSION:-harm-v2}
     healthcheck:
       test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health')\"" ]
       interval: 10s
@@ -294,6 +356,7 @@ services:
       SNOWFLAKE_NODE_ID: 1
       <<: *java-env
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       AUTH_SERVICE_URI: http://auth-service:8081
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
@@ -304,6 +367,7 @@ services:
       SEARCH_SERVICE_URI: http://search-service:8095
       ADMIN_SERVICE_URI: http://admin-service:8096
       ANALYTICS_SERVICE_URI: http://analytics-service:8097
+      STORY_SERVICE_URI: http://story-service:8086
 
   auth-service:
     <<: *java
@@ -314,6 +378,7 @@ services:
       postgres-auth: { condition: service_healthy }
       app-redis: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      geoip-init: { condition: service_completed_successfully }
     environment:
       SNOWFLAKE_NODE_ID: 2
       <<: *java-env
@@ -322,6 +387,7 @@ services:
       DB_USERNAME: ${DB_USERNAME:?}
       DB_PASSWORD: ${DB_PASSWORD:?}
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MAIL_HOST: smtp.resend.com
       MAIL_USERNAME: resend
@@ -336,13 +402,20 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:?}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      # Filled by geoip-init. Missing or unreadable, auth-service logs a WARN and records no places.
+      GEOIP_DATABASE: /geoip/dbip-city-lite.mmdb
+    volumes:
+      - geoip-data:/geoip:ro
 
   # MINIO_ENDPOINT, here and below, is the PUBLIC address: the services build the media URLs they
   # store and hand to browsers from it, and presigned uploads are signed for that host. Server-side
   # MinIO calls therefore go out through Cloudflare and back in. media-worker is the exception: it
   # moves whole videos, so it calls MinIO in-cluster and takes the public base from MEDIA_PUBLIC_URL.
-  # ponytail: user/video-service still hairpin their small server-side calls; give them a second,
-  # in-cluster MinioClient if those start failing.
+  # video-service has a second, in-cluster client for its own calls (MINIO_INTERNAL_ENDPOINT): its
+  # per-row statObject through Cloudflare held the admin dashboard at 6-13 s.
+  # ponytail: user-service and story-service still hairpin their server-side calls (story-service
+  # copies each story's media through it, StoryMedia.copyForStory); give them the same split if
+  # those start failing.
   user-service:
     <<: *java
     build:
@@ -351,6 +424,7 @@ services:
     depends_on:
       postgres-user: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
     environment:
       SNOWFLAKE_NODE_ID: 3
       <<: *java-env
@@ -360,8 +434,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      # Its own account (avatars/, exports/), made by minio-init.
+      MINIO_ACCESS_KEY: user-service
+      MINIO_SECRET_KEY: ${MINIO_USER_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
       MEDIA_ALLOWED_HOSTS: ${MEDIA_HOST:?}
       # "Download your data" reads these through their internal prefix.
@@ -378,6 +453,7 @@ services:
       mongodb: { condition: service_healthy }
       app-redis: { condition: service_healthy }
       kafka: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
     environment:
       SNOWFLAKE_NODE_ID: 4
       <<: *java-env
@@ -385,13 +461,16 @@ services:
       MONGO_USERNAME: ${MONGO_USERNAME:?}
       MONGO_PASSWORD: ${MONGO_PASSWORD:?}
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       MODERATION_SERVICE_URL: http://moderation-service:8099
       ADMIN_SERVICE_URL: http://admin-service:8096
       MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      MINIO_INTERNAL_ENDPOINT: http://minio:9000
+      # Its own account (raw/, read on quarantine/), made by minio-init.
+      MINIO_ACCESS_KEY: video-service
+      MINIO_SECRET_KEY: ${MINIO_VIDEO_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
       MEDIA_ALLOWED_HOSTS: ${MEDIA_HOST:?}
       # Where browsers POST raw uploads. Unset, the same public address as everything else. Set
@@ -401,6 +480,34 @@ services:
       # Cloudflare Free rejects request bodies over 100 MB, and the browser's upload is one POST.
       VIDEO_MAX_BYTES: ${VIDEO_MAX_BYTES:-94371840}
 
+  story-service:
+    <<: *java
+    build:
+      context: .
+      args: { SERVICE: story-service }
+    depends_on:
+      mongodb: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    environment:
+      SNOWFLAKE_NODE_ID: 13
+      <<: *java-env
+      MONGO_HOST: mongodb
+      MONGO_USERNAME: ${MONGO_USERNAME:?}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      USER_SERVICE_URI: http://user-service:8082
+      MODERATION_SERVICE_URL: http://moderation-service:8099
+      ADMIN_SERVICE_URL: http://admin-service:8096
+      # The public address, as for video-service: story media is read through presigned GETs, and
+      # SigV4 signs the host the browser will ask.
+      MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
+      # Its own account (stories/), made by minio-init.
+      MINIO_ACCESS_KEY: story-service
+      MINIO_SECRET_KEY: ${MINIO_STORY_SECRET_KEY:?}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+      MEDIA_UPLOAD_URL: ${MEDIA_UPLOAD_URL:-${MEDIA_PUBLIC_URL:?}}
+
   media-worker:
     <<: *java
     build:
@@ -409,7 +516,7 @@ services:
     mem_limit: 2g
     depends_on:
       kafka: { condition: service_healthy }
-      minio: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
     environment:
       <<: *java-env
       SNOWFLAKE_NODE_ID: 5
@@ -417,8 +524,10 @@ services:
       MODERATION_SERVICE_URL: http://moderation-service:8099
       MINIO_ENDPOINT: http://minio:9000
       MEDIA_PUBLIC_URL: ${MEDIA_PUBLIC_URL:?}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?}
+      # Its own account: the whole bucket, nothing else on the server. ffmpeg runs here on every
+      # upload, so this is the account a malicious file would get.
+      MINIO_ACCESS_KEY: media-worker
+      MINIO_SECRET_KEY: ${MINIO_WORKER_SECRET_KEY:?}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
       VIDEO_MAX_BYTES: ${VIDEO_MAX_BYTES:-94371840}
 
@@ -436,6 +545,7 @@ services:
       <<: *java-env
       CASSANDRA_CONTACT_POINTS: cassandra
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
@@ -455,6 +565,7 @@ services:
       SNOWFLAKE_NODE_ID: 7
       <<: *java-env
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       RANK_SERVICE_URL: http://rank-service:8098
@@ -475,6 +586,7 @@ services:
       MONGO_USERNAME: ${MONGO_USERNAME:?}
       MONGO_PASSWORD: ${MONGO_PASSWORD:?}
       REDIS_HOST: app-redis
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
@@ -500,6 +612,7 @@ services:
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
       INTERACTION_SERVICE_URI: http://interaction-service:8085
+      STORY_SERVICE_URI: http://story-service:8086
 
   search-service:
     <<: *java
@@ -513,6 +626,9 @@ services:
       SNOWFLAKE_NODE_ID: 10
       <<: *java-env
       ELASTICSEARCH_URIS: http://elasticsearch:9200
+      # ponytail: the superuser; a role limited to this service's indices if it ever runs untrusted code.
+      SPRING_ELASTICSEARCH_USERNAME: elastic
+      SPRING_ELASTICSEARCH_PASSWORD: ${ELASTIC_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       USER_SERVICE_URI: http://user-service:8082
 
@@ -534,6 +650,11 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       AUTH_SERVICE_URL: http://auth-service:8081
       MODERATION_SERVICE_URL: http://moderation-service:8099
+      # Read through their actuator for the console's System screens: outbox backlog, text moderation.
+      USER_SERVICE_URI: http://user-service:8082
+      VIDEO_SERVICE_URI: http://video-service:8083
+      INTERACTION_SERVICE_URI: http://interaction-service:8085
+      STORY_SERVICE_URI: http://story-service:8086
 
   analytics-service:
     <<: *java
@@ -551,6 +672,81 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
 
+  # ─────────────────────────────── operations ───────────────────────────────
+
+  # Scrapes every Java service and evaluates scripts/monitoring/alerts.yml. No domain: it has no
+  # login, so it stays on this network (docs/operations.md says how to reach it).
+  prometheus:
+    build:
+      context: ./scripts/monitoring
+      dockerfile_inline: |
+        FROM prom/prometheus:v3.5.0
+        COPY prometheus.yml alerts.yml /etc/prometheus/
+    restart: unless-stopped
+    mem_limit: 512m
+    command: [ "--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus", "--storage.tsdb.retention.time=15d" ]
+    volumes:
+      - prometheus-data:/prometheus
+
+  # Mails the alerts through the Resend account auth-service already uses. ALERT_EMAIL defaults to
+  # the admin account's address.
+  alertmanager:
+    build:
+      context: ./scripts/monitoring
+      dockerfile_inline: |
+        FROM prom/alertmanager:v0.28.1
+        COPY alertmanager.yml alertmanager-entrypoint.sh /etc/alertmanager/
+        ENTRYPOINT ["sh", "/etc/alertmanager/alertmanager-entrypoint.sh"]
+    restart: unless-stopped
+    mem_limit: 128m
+    environment:
+      ALERT_EMAIL: ${ALERT_EMAIL:-${ADMIN_EMAIL:?}}
+      MAIL_FROM: ${MAIL_FROM:?}
+      SMTP_PASSWORD: ${RESEND_API_KEY:?}
+    volumes:
+      - alertmanager-data:/alertmanager
+
+  # Daily dumps of every store nothing else can rebuild, then the off-site copy: scripts/backup/
+  # backup.sh, restore steps in docs/operations.md. Without BACKUP_S3_URL the copies sit on this
+  # disk, next to what they are copies of, and a lost disk takes both.
+  backup:
+    build: ./scripts/backup
+    restart: unless-stopped
+    mem_limit: 512m
+    depends_on:
+      postgres-auth: { condition: service_healthy }
+      postgres-user: { condition: service_healthy }
+      postgres-admin: { condition: service_healthy }
+      mongodb: { condition: service_healthy }
+      cassandra-init: { condition: service_completed_successfully }
+      elasticsearch: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    environment:
+      DB_USERNAME: ${DB_USERNAME:?}
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      MONGO_USERNAME: ${MONGO_USERNAME:?}
+      MONGO_PASSWORD: ${MONGO_PASSWORD:?}
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:?}
+      MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
+      MINIO_BACKUP_SECRET_KEY: ${MINIO_BACKUP_SECRET_KEY:?}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-7}
+      # Any S3-compatible bucket off this machine (R2, B2, S3). Give it a lifecycle rule of its own:
+      # nothing here deletes old copies there.
+      BACKUP_S3_URL: ${BACKUP_S3_URL:-}
+      BACKUP_S3_ACCESS_KEY: ${BACKUP_S3_ACCESS_KEY:-}
+      BACKUP_S3_SECRET_KEY: ${BACKUP_S3_SECRET_KEY:-}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-tiktok-backups}
+    volumes:
+      - backups:/backups
+      - es-snapshots:/es-snapshots:ro
+    healthcheck:
+      # Unhealthy once 26 hours pass without a run in which every step succeeded.
+      test: [ "CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /tmp/last-success 2>/dev/null || echo 0) )) -lt 93600" ]
+      interval: 10m
+      timeout: 10s
+      retries: 1
+      start_period: 2h
+
 volumes:
   postgres-auth-data:
   postgres-user-data:
@@ -565,3 +761,8 @@ volumes:
   zookeeper-log:
   kafka-data:
   minio-data:
+  es-snapshots:
+  backups:
+  prometheus-data:
+  alertmanager-data:
+  geoip-data:

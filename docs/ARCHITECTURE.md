@@ -113,7 +113,7 @@ kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
   ├── OutboxBacklog (MeterBinder — mỗi outbox một bean trong `config/OutboxMetricsConfig` của service)
   │   └── `outbox_pending_events{outbox}` + `outbox_oldest_pending_age_seconds{outbox}`, query lại mỗi lần scrape
   │   └── outbox: `outbox_events` (auth, admin, user); video có 5 slot: published, deleted, visibility, purge, purge-request
-  ├── DltReplay (`make dlt-list` / `make dlt-replay`: gửi lại record DLT về topic gốc, có kiểm tra thứ tự theo key — §5b)
+  ├── DeadLetters (đọc + replay DLT, có kiểm tra thứ tự theo key — §5b): dùng bởi DltReplay (`make dlt-list` / `make dlt-replay`) và console admin qua admin-service
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean khi service thêm dependency, không cần @Configuration cục bộ
 
@@ -149,15 +149,15 @@ recommendation-service, story-service, user-service, video-service
 
 ```
 auth, user, video, recommendation, media-worker, search,
-interaction, analytics, chat, notification                  ← consumer error handling (outage vs poison) → <topic>.DLT
-auth-service, admin-service, video-service, user-service    ← OutboxDispatcher (mark sau ack)
+interaction, analytics, chat, notification, story           ← consumer error handling (outage vs poison) → <topic>.DLT
+auth-service, admin-service, video-service, user-service,
+story-service                                               ← OutboxDispatcher (mark sau ack)
 ```
-
-**Không cần `kafka-lib`** — không có consumer lẫn outbox: `story-service`.
 
 **Chính sách lỗi consumer**: `KafkaConsumerAutoConfiguration.isOutage` đọc cả chuỗi cause. Lỗi dịch
 sang `TransientDataAccessException` / `DataAccessResourceFailureException`, không lấy được connection
-lúc mở transaction, socket/DNS, hay `RetriableException` của Kafka đều là **dependency chết**: partition
+lúc mở transaction, socket/DNS, timeout của HTTP client (`HttpTimeoutException`), hay `RetriableException`
+của Kafka đều là **dependency chết**: partition
 đứng chờ (thấy được qua consumer lag + WARN mỗi lần thử), không mất event. Mọi lỗi khác là của chính
 record → DLT sau 3 lần. Client báo "unavailable" theo kiểu khác thì service tự dịch sang transient chỗ
 nó bắt lỗi — search-service làm vậy với 429/502/503/504 của Elasticsearch (`ElasticsearchStatus.classify`),
@@ -173,6 +173,13 @@ không có gì tự đọc lại DLT. Sửa nguyên nhân và deploy trước, r
 thì không**: tool bỏ qua record nào mà partition gốc đã có record mới hơn cùng key (vd. replay một takedown
 sau khi video đã được restore sẽ gỡ nó lần nữa) và in lệnh `FORCE=1` để chạy lại sau khi người đã xem.
 
+Cùng việc đó có trên console admin (System → Queues & DLQ), qua admin-service
+`/api/v1/admin/system/dead-letters` — đường duy nhất trên prod, vì `make dlt-*` không có mật khẩu SASL. Console liệt
+kê các DLT, 50 record mới nhất mỗi topic (vị trí lỗi, group, nguyên nhân sâu nhất trong stack trace — không hiện
+payload), replay từng record (force được, sau khi đã thấy record nào đang giữ nó) hoặc replay theo lô 50 record pending
+(không bao giờ force, cùng consumer group `dlt-replay` với `ALL=1`). Mỗi record được xử lý ghi một row
+`dead_letter_replays` (ai, force hay không, kết quả).
+
 ### 5c. Kafka — bảng topic đầy đủ
 
 Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key của mọi topic video/interaction là `videoId` (giữ thứ tự per-video trong partition).
@@ -182,6 +189,7 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 | `auth.user-events` | auth-service (outbox) | — (1 shape) | `UserRegisteredEvent` | user-service, chat-service (`AdminFanout`: chỉ báo console admin tải lại, không đọc payload) |
 | `auth.social-avatar-events` | auth-service (fire-and-forget; tài khoản vừa tạo: outbox, ngay sau `UserRegisteredEvent`) | — | `SocialAvatarDiscoveredEvent` | media-worker |
 | `auth.username-events` | auth-service (outbox, key `userId`) | — (1 shape) | `UsernameChangedEvent` | user-service (bản sao `username` của profile) |
+| `auth.new-device-events` | auth-service (outbox, key `userId`, cùng transaction với refresh token) | — (1 shape) | `NewDeviceSignInEvent` | notification-service (thông báo `SYSTEM`, `referenceId` `account-security`) |
 | `video.video-events` | video-service (outbox per-doc) | `VideoPublishedEvent` / `VideoDeletedEvent` / `VideoPurgedEvent` / `VideoVisibilityChangedEvent` (vắng ⇒ Published) | `VideoPublishedEvent`, `VideoDeletedEvent` (ngay khi xoá — gỡ khỏi index), `VideoPurgedEvent` (hết hạn thùng rác — chỉ media-worker xoá media), `VideoVisibilityChangedEvent` | media-worker, search-service, recommendation-service, analytics-service, chat-service |
 | `media.video-transcoded-events` | media-worker (chờ ack 30s) | — | `VideoTranscodedEvent` | video-service, search-service, recommendation-service |
 | `media.video-moderation-events` | media-worker (chờ ack) | — (1 shape) | `VideoModerationCompletedEvent` (verdict của classifier; lỗi classifier vẫn phát REVIEW) | video-service, search-service, recommendation-service, chat-service (`VideoStateFanout`, `AdminFanout`) |
@@ -236,11 +244,15 @@ chỉ route `/api/v1/**`). Riêng api-gateway — port public duy nhất — đ�
 `MANAGEMENT_PORT` (mặc định **8180**), không publish ra ngoài. Cấu hình chung nằm ở
 `common-lib/ManagementDefaults` (service vẫn override được trong `application.yml`).
 
-Endpoint nội bộ (`/api/v1/users/internal/**`, `/api/v1/interactions/internal/**`, `/api/v1/videos/*/policy`)
-bị gateway `denyAll` **và** chỉ nhận request mang `X-Internal-Token` = `INTERNAL_API_TOKEN`: gateway không
-phải ranh giới duy nhất, vì service nào cũng nghe trên port riêng. Gateway chỉ gửi token sang auth-service
-(nơi duy nhất đọc `X-Client-Ip`), không gửi lên route khác. Khi deploy chỉ publish port gateway; chạy
-local, `make run-*` cho mọi service trừ gateway bind `127.0.0.1` (`make run-user BIND=0.0.0.0` để mở).
+Endpoint nội bộ (`/api/v1/users/internal/**`, `/api/v1/interactions/internal/**`,
+`/api/v1/videos/internal/**`, `/api/v1/conversations/internal/**`, `/api/v1/stories/internal/**`,
+`/api/v1/admin/internal/**`, `/api/v1/videos/*/policy`) bị gateway `denyAll` **và** chỉ nhận request mang
+`X-Internal-Token` = `INTERNAL_API_TOKEN`: gateway không phải ranh giới duy nhất, vì service nào cũng nghe
+trên port riêng. Matcher ở `SecurityConfig` KHÔNG mang `HttpMethod`: Spring MVC trả lời HEAD bằng handler
+GET, nên rule chỉ cho GET để một HEAD mang JWT của user lọt xuống rule sau. Gateway chỉ gửi token sang
+auth-service (nơi duy nhất đọc `X-Client-Ip`), không gửi lên route khác. Khi deploy chỉ publish port
+gateway; chạy local, `make run-*` cho mọi service trừ gateway bind `127.0.0.1`
+(`make run-user BIND=0.0.0.0` để mở).
 
 ## 6b. Vận hành
 

@@ -1,0 +1,5 @@
+{"Rules":[
+  {"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}},
+  {"ID":"expire-data-exports","Status":"Enabled","Filter":{"Prefix":"exports/"},"Expiration":{"Days":7}},
+  {"ID":"expire-stories","Status":"Enabled","Filter":{"Prefix":"stories/"},"Expiration":{"Days":3}}
+]}

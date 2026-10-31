@@ -43,6 +43,8 @@ Converter đọc header `Authorization: Bearer <token>`. Thiếu prefix `Bearer 
 Mọi request khác → **bắt buộc** token hợp lệ; thiếu/sai/hết hạn → `401` (envelope `ApiResponse`, `RestAuthenticationEntryPoint`). Không đủ quyền ở tầng gateway → `403` (`RestAccessDeniedHandler`) — hiếm, vì gateway không check role.
 
 > Lưu ý cho các path public: **không gửi token** thì là khách. **Gửi token hỏng** (hết hạn, bị thu hồi, sai chữ ký) thì vẫn `401`, kể cả trên path public — gateway không lặng lẽ hạ xuống khách. Client xử lý như mọi `401`: `/refresh` **một lần** rồi gửi lại; refresh thất bại thì xoá token và gọi lại như khách. Hạ xuống khách thì người đã đăng nhập nhận dữ liệu sai mà không có gì báo (tim rỗng, video private của chính mình biến mất).
+>
+> Ngoại lệ: các route đăng nhập mà auth-service tự `permitAll` (`POST /api/v1/auth/register|login|login/otp|refresh|logout|verify-email|resend-verification|forgot-password|reset-password/**|register/**|oauth/**`, xem `SecurityConfig.SIGN_IN_ROUTES`). Ở đó token hỏng bị bỏ qua và request đi tiếp như khách, vì credential nằm trong body; app mobile gửi kèm token đã hết hạn cả khi gọi `/refresh`. Các route cần phiên của auth-service (`/auth/me`, `/auth/email`, `/auth/account/**`) vẫn `401`: auth-service trả khách `403`, mà client không refresh khi gặp `403`. Thêm route đăng nhập mới ở auth-service thì thêm vào `SIGN_IN_ROUTES`.
 
 ## 3. `GET /api/v1/me` — view "tài khoản của tôi" gộp sẵn
 

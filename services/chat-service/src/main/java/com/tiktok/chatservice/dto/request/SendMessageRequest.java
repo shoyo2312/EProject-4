@@ -1,9 +1,77 @@
 package com.tiktok.chatservice.dto.request;
 
-import jakarta.validation.constraints.NotBlank;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.tiktok.chatservice.entity.MessageType;
+import com.tiktok.chatservice.validation.MessageContentSize;
 import jakarta.validation.constraints.Size;
 
+/**
+ * One request body for REST and STOMP alike. Which fields must be present depends on {@code type}, so
+ * that is checked in {@code MessagePayload} rather than with annotations that would have to be
+ * unconditional: a {@code @NotBlank} content would refuse every sticker.
+ *
+ * <ul>
+ *   <li>{@code TEXT} (or no type, which is what every older client sends): {@code content}, not blank,
+ *       at most 2000 characters; no {@code stickerId}.</li>
+ *   <li>{@code STICKER}: {@code stickerId} from the catalog; no {@code content}.</li>
+ *   <li>{@code STORY_REPLY}: {@code storyId} and a non-blank {@code content} of at most 1000 characters.
+ *       The server finds the story's owner and the conversation; nothing else about the story comes from the client.</li>
+ *   <li>{@code IMAGE}: {@code imageId} of a picture the sender uploaded to this conversation, with an optional
+ *       trimmed caption of at most 1000 characters.</li>
+ *   <li>{@code VIDEO}: {@code videoId}, with an optional trimmed caption of at most 300 UTF-16 units.</li>
+ * </ul>
+ *
+ * {@code replyToMessageId} makes either kind a reply. Only the id travels: the quote is read back
+ * from the stored original, never from anything the client says about it.
+ */
+@JsonIgnoreProperties(ignoreUnknown = true)
+@MessageContentSize
 public record SendMessageRequest(
-        @NotBlank @Size(max = 2000) String content
+        MessageType type,
+        String content,
+        String stickerId,
+        @Size(max = 64) String replyToMessageId,
+        @Size(max = 64) String videoId,
+        @Size(max = 64) String clientRequestId,
+        @Size(max = 64) String storyId,
+        @Size(max = 64) String imageId
 ) {
+
+    public SendMessageRequest(MessageType type, String content, String stickerId, String replyToMessageId,
+                              String videoId, String clientRequestId) {
+        this(type, content, stickerId, replyToMessageId, videoId, clientRequestId, null, null);
+    }
+
+    public static SendMessageRequest storyReply(String storyId, String text, String clientRequestId) {
+        return new SendMessageRequest(MessageType.STORY_REPLY, text, null, null, null, clientRequestId, storyId, null);
+    }
+
+    public SendMessageRequest(MessageType type, String content, String stickerId, String replyToMessageId) {
+        this(type, content, stickerId, replyToMessageId, null, null);
+    }
+
+    public static SendMessageRequest video(String videoId, String note, String clientRequestId) {
+        return new SendMessageRequest(MessageType.VIDEO, note, null, null, videoId, clientRequestId);
+    }
+
+    public SendMessageRequest(MessageType type, String content, String stickerId) {
+        this(type, content, stickerId, null);
+    }
+
+    /** The shape every client had before stickers: just text. */
+    public SendMessageRequest(String content) {
+        this(null, content, null, null);
+    }
+
+    public static SendMessageRequest image(String imageId, String caption, String clientRequestId) {
+        return new SendMessageRequest(MessageType.IMAGE, caption, null, null, null, clientRequestId, null, imageId);
+    }
+
+    public static SendMessageRequest sticker(String stickerId) {
+        return new SendMessageRequest(MessageType.STICKER, null, stickerId, null);
+    }
+
+    public SendMessageRequest replyingTo(String messageId) {
+        return new SendMessageRequest(type, content, stickerId, messageId, videoId, clientRequestId, storyId, imageId);
+    }
 }

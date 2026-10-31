@@ -196,6 +196,10 @@ Lỗi: `NOT_BLOCKED` (404), `CONCURRENT_MODIFICATION` (409 — xem mục 3.5).
 ### 3.10 `GET /me/blocked`
 Danh sách user mình đang block. Phân trang giống mục 3.6. Trả `200 OK`, `data` → `Page<UserProfileResponse>`.
 
+### 3.10a `GET /api/v1/users/internal/blocks/states?viewerId=&otherIds=1,2,3` (nội bộ)
+Chỉ chat-service gọi (header `X-Internal-Token`, gateway `denyAll`). Tối đa 100 id. Một query cho cả danh sách. Mỗi phần tử: `{userId, blockedByViewer, blockedViewer, version}`. `version` là epoch-millis lớn nhất trong mọi dòng block của cặp (kể cả đã gỡ), tăng ở **mỗi** lần block/unblock — client dùng nó để bỏ qua trả lời cũ. chat-service **không** lộ `blockedViewer`: người xem chỉ biết "tôi đã chặn" (`blockedByViewer`) và "không thể nhắn" (`messagingBlocked`, một trong hai chiều).
+
+
 ### 3.11 `POST /{userId}/mute`
 Mute 1 user (ẩn nội dung của họ khỏi feed/thông báo — tuỳ service khác dùng thông tin này, user-service chỉ lưu trạng thái). Trả `201 Created`.
 
@@ -204,6 +208,8 @@ Response `data` → `MuteResponse`: `{ "muterId": ..., "mutedId": ... }`.
 Lỗi: `CANNOT_MUTE_SELF` (400), `USER_PROFILE_NOT_FOUND` (404 — người bị mute không tồn tại), `ALREADY_MUTED` (409).
 
 > **Mute KHÔNG kiểm tra block, hoàn toàn độc lập với follow/block** (khác với `follow`, vốn bị chặn nếu có block). Có thể mute 1 người đang block mình (hoặc mình đang block họ) mà không lỗi — đây là thiết kế có chủ đích: (1) không dùng lỗi mute để dò xem ai đã block ai, (2) cho phép "hạ cấp" từ block xuống mute sau khi unblock. Flutter không nên giả định mute/block đồng bộ trạng thái với nhau — hiển thị UI 2 toggle độc lập.
+
+> **notification-service giờ là một nơi dùng mute: follower đã mute một tài khoản thì KHÔNG nhận thông báo story của tài khoản đó.** notification-service hỏi endpoint nội bộ `GET /api/v1/users/internal/story-audience?userId=&scope=FOLLOWERS|FRIENDS&after=&size=` (header `X-Internal-Token`, không phải JWT; gateway `denyAll` nên client không gọi được) và nhận `data` → `{ "userIds": [...], "next": ... }`: người theo dõi `userId` (`FOLLOWERS`, cho story PUBLIC) hoặc người theo dõi mà `userId` cũng theo dõi lại (`FRIENDS`, cho story FRIENDS), tăng dần theo id, đã loại block hai chiều, tài khoản đã đóng và người đã mute `userId`. `size` mặc định và tối đa 500; `next` là id cuối khi trang đầy — truyền làm `after` để lấy trang kế — còn trang không đầy thì `null` (trang cuối đúng bằng `size` thì trang kế rỗng). **Vòng story quanh avatar vẫn hiện** dù đã mute: mute chỉ tắt thông báo.
 
 ### 3.12 `DELETE /{userId}/mute`
 Bỏ mute. Trả `200 OK`, `data` rỗng/null.
@@ -382,6 +388,29 @@ Build lỗi (service nào đó chết) → giữ lease, thử lại sau `lease` 
 - `readyFiles`: file `READY` chưa quá hạn, tức đang chiếm chỗ trên MinIO.
 - `failed`: số yêu cầu thành `FAILED` trong 7 ngày gần nhất; `recentFailures` là 20 cái mới nhất. `failedAt` lấy từ `updated_at` — sau khi `FAILED` không còn gì cập nhật row nữa.
 
+### 3.23 `GET /me/suggested-accounts?limit=20` — gợi ý "người bạn có thể biết"
+**Cần token.** Danh sách phụ thuộc vào **người xem**, không phụ thuộc vào profile đang mở — mở trên profile nào cũng ra cùng một danh sách, client tự bỏ chủ profile nếu cần (xin `limit + 1`). `limit` mặc định 20, ngoài khoảng 1–50 thì bị **kẹp lại** (không 400).
+
+Ba tầng, nối theo đúng thứ tự, mỗi tài khoản chỉ xuất hiện **một lần** ở tầng đầu tiên tìm thấy nó:
+
+| `reason` | Ai | Thứ tự |
+|---|---|---|
+| `FOLLOWS_YOU` | Người đang follow bạn mà bạn chưa follow lại | follow mới nhất trước |
+| `FOLLOWED_BY` | Người được ít nhất một tài khoản bạn follow follow | nhiều người bạn follow cùng follow nhất trước, rồi `followerCount` giảm dần, rồi `userId` tăng dần |
+| `POPULAR` | Bù cho đủ `limit` bằng tài khoản nhiều follower nhất | `followerCount` giảm dần, rồi `userId` tăng dần |
+
+Không bao giờ gợi ý: chính bạn; người bạn đang follow hoặc đang có lời mời follow chờ duyệt; người có block với bạn ở bất kỳ chiều nào; người bạn đã mute; tài khoản đã xoá hoặc đã đóng (`deactivatedAt`). Nguồn của `FOLLOWED_BY` cũng phải là tài khoản còn mở — không bao giờ hiện "Followed by" một tài khoản đã đóng, và tài khoản đã đóng không được tính vào số người cùng follow.
+
+`followedBy` chỉ có với `FOLLOWED_BY`: `displayName` (không có thì `username`) của **một** người bạn follow mà đang follow tài khoản này — người bạn follow gần đây nhất. Các `reason` khác trả `null`.
+
+**Khoảng trống đã biết:** tài khoản **bị ban** vẫn có thể được gợi ý — user-service không giữ dữ liệu ban (danh sách follower/following cũng không lọc ban).
+
+```json
+[{ "profile": { "userId": 13, "username": "ann", "displayName": "Ann", "...": "…" },
+   "reason": "FOLLOWED_BY", "followedBy": "user11" },
+ { "profile": { "userId": 17, "...": "…" }, "reason": "POPULAR", "followedBy": null }]
+```
+
 ## 4. Enums
 
 | Enum | Giá trị | Dùng ở đâu |
@@ -391,6 +420,7 @@ Build lỗi (service nào đó chết) → giữ lease, thử lại sau `lease` 
 | `DataExportStatus` | `PROCESSING`, `READY`, `CANCELED`, `FAILED`, `EXPIRED` | mục 3.21 |
 | `SettingsAudience` | `EVERYONE`, `FRIENDS`, `NO_ONE` | `commentAudience` và `dmAudience` ở mục 3.14 / 3.15. `FRIENDS` nghĩa là **follow lẫn nhau** (mutual), không phải "người tôi follow" |
 | `FollowResponse.status` | `FOLLOWING`, `REQUESTED` | `status` ở mục 3.4 và 3.16 |
+| `SuggestedAccountResponse.reason` | `FOLLOWS_YOU`, `FOLLOWED_BY`, `POPULAR` | mục 3.23 |
 
 Ngoài các enum trên, follow/block/mute và lời mời follow đều là quan hệ có/không, xoá mềm qua `deletedAt`. Enum `UserRole`/`UserStatus` thuộc về `auth-service`, không lặp lại ở đây.
 
@@ -459,8 +489,9 @@ Ghi vào bảng `outbox_events` trong **cùng transaction** với thay đổi; `
 | `user.follow-events` | `UserFollowChangedEvent` | `followingId` | `eventId, occurredAt, followerId, followingId, followed, requestApproved` | Follow / unfollow / block cắt follow; duyệt lời mời (`requestApproved = true`). Event cũ không có `requestApproved` → đọc là `false` |
 | `user.follow-request-events` | `FollowRequestedEvent` | `targetId` | `eventId, occurredAt, requesterId, targetId` | Follow tài khoản riêng tư. Rút hay từ chối **không** phát gì |
 | `user.privacy-events` | `UserPrivacyChangedEvent` | `userId` | `eventId, occurredAt, userId, privateAccount` | `privateAccount` ở mục 3.15 thật sự đổi giá trị |
+| `user.block-events` | `UserBlockChangedEvent` | `min(a,b):max(a,b)` | `eventId, occurredAt, blockerId, blockedId, blocked` | Block (`blocked=true`) hoặc unblock (`false`), cùng transaction với thay đổi. Khoá theo **cặp** để mọi thay đổi của một cặp giữ thứ tự trên một partition. Consumer chỉ coi nó là tín hiệu "đọc lại trạng thái": không tin cờ `blocked` để suy ra trạng thái |
 
-Consumer: `user.follow-events` → notification-service (`NEW_FOLLOWER` / `FOLLOW_REQUEST_ACCEPTED`) và chat-service (counter realtime); `user.follow-request-events` → notification-service (`FOLLOW_REQUEST`); `user.privacy-events` → video-service (collection `owner_privacy` và đánh dấu lại video).
+Consumer: `user.follow-events` → notification-service (`NEW_FOLLOWER` / `FOLLOW_REQUEST_ACCEPTED`) và chat-service (counter realtime); `user.follow-request-events` → notification-service (`FOLLOW_REQUEST`); `user.privacy-events` → video-service (collection `owner_privacy` và đánh dấu lại video). `user.block-events` → chat-service (`BlockEventFanout`: đẩy khung `CONVERSATION` riêng cho từng người trong cuộc trò chuyện, tính lại từ trạng thái hiện tại nên event trùng/cũ vô hại).
 
 ### Tiêu thụ (consumer)
 

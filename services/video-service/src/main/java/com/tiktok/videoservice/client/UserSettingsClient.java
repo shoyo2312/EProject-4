@@ -51,7 +51,21 @@ public class UserSettingsClient {
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     private record SettingsPolicyView(Long userId, String commentAudience, Boolean filterSpamOffensive,
-                                      Boolean filterAllComments, List<String> commentKeywords) {
+                                      Boolean filterAllComments, List<String> commentKeywords,
+                                      List<String> forYouKeywords, List<String> followingKeywords,
+                                      List<String> friendsKeywords) {
+
+        /** Null when user-service sent none of the three: one from before them, so nothing is known. */
+        FeedKeywords feedKeywords() {
+            if (forYouKeywords == null && followingKeywords == null && friendsKeywords == null) {
+                return null;
+            }
+            return new FeedKeywords(orEmpty(forYouKeywords), orEmpty(followingKeywords), orEmpty(friendsKeywords));
+        }
+
+        private static List<String> orEmpty(List<String> keywords) {
+            return keywords == null ? List.of() : keywords;
+        }
     }
 
     /** The one audience that closes a video to everyone, its owner included. */
@@ -65,6 +79,15 @@ public class UserSettingsClient {
 
         OwnerCommentSettings cached = userSettingsCache.get(userId).orElse(null);
         return cached != null ? cached : fetch(List.of(userId)).get(userId);
+    }
+
+    /**
+     * The keywords {@code userId} filters out of each of their feeds, or null when nobody could say —
+     * the feed is then served unfiltered. Same read and same cache entry as {@link #commentSettings}.
+     */
+    public FeedKeywords feedKeywords(Long userId) {
+        OwnerCommentSettings settings = commentSettings(userId);
+        return settings == null ? null : settings.feedKeywords();
     }
 
     /**
@@ -123,7 +146,8 @@ public class UserSettingsClient {
                     .filter(Objects::nonNull)
                     .filter(view -> view.userId() != null && view.commentAudience() != null)
                     .forEach(view -> settings.put(view.userId(), new OwnerCommentSettings(view.commentAudience(),
-                            view.filterSpamOffensive(), view.filterAllComments(), view.commentKeywords())));
+                            view.filterSpamOffensive(), view.filterAllComments(), view.commentKeywords(),
+                            view.feedKeywords())));
             userSettingsCache.putAll(settings);
             return settings;
         } catch (RestClientException e) {

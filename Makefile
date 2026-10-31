@@ -17,14 +17,15 @@ endif
 	build-admin \
 	clean \
 	test test-auth test-user \
-	infra-up infra-down infra-reset infra-logs infra-status infra-check \
+	infra-up infra-down infra-reset infra-logs infra-status infra-check geoip \
 	run-gateway run-auth run-user run-video run-interaction run-story \
 	run-recommendation run-chat run-media run-notification \
 	run-admin run-analytics run-search \
 	migrate-auth migrate-user \
 	migrate-admin migrate-all \
 	moderation-up moderation-test moderation-score-texts \
-	dlt-list dlt-replay
+	dlt-list dlt-replay \
+	seed-media seed seed-backdate seed-refresh
 
 # Hiển thị help
 help:
@@ -58,6 +59,7 @@ help:
 	@echo "    make infra-reset        Stop containers + xoá data (volumes)"
 	@echo "    make infra-logs         Xem logs tất cả containers"
 	@echo "    make infra-status       Xem trạng thái containers"
+	@echo "    make geoip              Tải DB-IP City Lite vào data/geoip (bỏ qua nếu mới hơn 1 tháng)"
 	@echo ""
 	@echo "  Run services (local; trừ gateway, chỉ nghe 127.0.0.1 — BIND=0.0.0.0 để mở):"
 	@echo "    make run-gateway        Run api-gateway :8080"
@@ -76,7 +78,7 @@ help:
 	@echo "    make rank-up            Start rank-service :8098 (internal)"
 	@echo "    make rank-train         Train the feed ranking model from ClickHouse"
 	@echo "    make rank-test          Run rank-service tests"
-	@echo "    make moderation-up      Start moderation-service :8099 (NSFW screening)"
+	@echo "    make moderation-up      Start moderation-service :8099 (frame + text screening)"
 	@echo "    make moderation-test    Run moderation-service tests"
 	@echo "    make moderation-score-texts FILE=x  Precision of the text classifier on judged comments"
 	@echo ""
@@ -89,6 +91,12 @@ help:
 	@echo "  Dead letters (đọc javadoc kafka-lib DltReplay trước khi replay):"
 	@echo "    make dlt-list TOPIC=x.DLT               Liệt kê record trong DLT"
 	@echo "    make dlt-replay TOPIC=x.DLT OFFSET=p:o  Replay một record (FORCE=1 khi đã kiểm tra thứ tự)"
+	@echo ""
+	@echo "  Demo seed (scripts/seed/README.md):"
+	@echo "    make seed-media         Tải video/ảnh demo từ Pixabay vào SEED_MEDIA"
+	@echo "    make seed               Nạp 50 user, 200 video, 4 tháng tương tác qua API thật (~1.5h)"
+	@echo "    make seed-backdate      Lùi ngày giờ trong mọi store theo ledger"
+	@echo "    make seed-refresh       Tương tác mới cho trending, chạy trước giờ demo"
 	@echo "    make dlt-replay TOPIC=x.DLT ALL=1       Replay mọi record nhóm dlt-replay chưa đi qua"
 	@echo ""
 
@@ -178,6 +186,11 @@ infra-logs:
 
 infra-status:
 	docker-compose ps
+
+# The file auth-service turns a sign-in's address into a place with (GeoIpLocator). ~120 MB and
+# git-ignored; production fetches it through the geoip-init container instead.
+geoip:
+	sh scripts/geoip/download.sh data/geoip
 
 # ──────────────────────────────────────────────
 # Run services locally
@@ -314,3 +327,19 @@ migrate-admin:
 
 migrate-all:
 	./mvnw flyway:migrate -pl services/auth-service,services/user-service,services/admin-service
+# ============================================
+# Demo seed (scripts/seed/README.md)
+# ============================================
+SEED_MEDIA ?= $(HOME)/Projects/EProject/EProject4/seed-media
+
+seed-media:
+	python3 scripts/seed/fetch-pixabay.py $(SEED_MEDIA)
+
+seed:
+	SEED_AUTH_LOG=$(SEED_AUTH_LOG) python3 -I scripts/seed/seed.py $(SEED_MEDIA) --phase all
+
+seed-backdate:
+	python3 -I scripts/seed/backdate.py $(SEED_MEDIA)
+
+seed-refresh:
+	python3 -I scripts/seed/seed.py $(SEED_MEDIA) --refresh

@@ -1,0 +1,4 @@
+auth:
+  geoip:
+    # The MaxMind test database, never the downloaded file: tests assert exact places.
+    database: src/test/resources/geoip/GeoIP2-City-Test.mmdb

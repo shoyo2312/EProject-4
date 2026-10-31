@@ -1,5 +1,7 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.crypto.hash.HashUtils;
+import com.tiktok.userservice.dto.request.SaveKeywordFilterRequest;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
@@ -8,6 +10,7 @@ import com.tiktok.userservice.entity.SettingsAudience;
 import com.tiktok.userservice.exception.InvalidUserSettingsException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
+import com.tiktok.userservice.repository.FeedKeywordFilterRepository;
 import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.OutboxEventRepository;
 import com.tiktok.userservice.repository.UserFollowRepository;
@@ -29,7 +32,9 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.LocalTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.LongStream;
@@ -77,8 +82,15 @@ class UserSettingsServiceImplTest {
     @Autowired
     private OutboxEventRepository outboxEventRepository;
 
+    @Autowired
+    private FeedKeywordFilterService feedKeywordFilterService;
+
+    @Autowired
+    private FeedKeywordFilterRepository feedKeywordFilterRepository;
+
     @BeforeEach
     void setUp() {
+        feedKeywordFilterRepository.deleteAll();
         userSettingsRepository.deleteAll();
         outboxEventRepository.deleteAll();
         followRequestRepository.deleteAll();
@@ -126,6 +138,7 @@ class UserSettingsServiceImplTest {
     void write_absentKeyLeavesTheField_explicitNullClearsANullableOne() {
         UpdateUserSettingsRequest first = new UpdateUserSettingsRequest();
         first.setScreenTimeLimitMinutes(60);
+        first.setScreenTimePasscode("1234");
         first.setDmAudience("NO_ONE");
         userSettingsService.updateOwnSettings(1L, first);
 
@@ -158,45 +171,208 @@ class UserSettingsServiceImplTest {
                 .hasMessageContaining("commentAudience");
     }
 
+    /** As on TikTok: the end is not chosen, it is always eight hours after the start. */
     @Test
-    void sleepHours_mustBeSetOrClearedTogether() {
-        UpdateUserSettingsRequest onlyStart = new UpdateUserSettingsRequest();
-        onlyStart.setSleepHoursStart(LocalTime.of(22, 30));
+    void sleepHours_endIsAlwaysStartPlusEightHours() {
+        UpdateUserSettingsRequest late = new UpdateUserSettingsRequest();
+        late.setSleepHoursStart(LocalTime.of(23, 30));
 
-        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, onlyStart))
-                .isInstanceOf(InvalidUserSettingsException.class);
+        assertThat(userSettingsService.updateOwnSettings(1L, late).sleepHoursEnd()).isEqualTo(LocalTime.of(7, 30));
 
-        UpdateUserSettingsRequest both = new UpdateUserSettingsRequest();
-        both.setSleepHoursStart(LocalTime.of(22, 30));
-        both.setSleepHoursEnd(LocalTime.of(7, 0));
-        userSettingsService.updateOwnSettings(1L, both);
+        UpdateUserSettingsRequest earlier = new UpdateUserSettingsRequest();
+        earlier.setSleepHoursStart(LocalTime.of(22, 0));
+        userSettingsService.updateOwnSettings(1L, earlier);
 
-        // Clearing one end of a stored window leaves the other set, which is the same invalid
-        // state — the rule is checked against the merged result, not against the patch.
-        UpdateUserSettingsRequest clearOne = new UpdateUserSettingsRequest();
-        clearOne.setSleepHoursEnd(null);
-
-        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, clearOne))
-                .isInstanceOf(InvalidUserSettingsException.class);
+        assertThat(userSettingsService.getOwnSettings(1L).sleepHoursEnd()).isEqualTo(LocalTime.of(6, 0));
     }
 
-    /** A window that crosses midnight is the normal case, so only start == end is refused. */
     @Test
-    void sleepHours_acceptAWindowAcrossMidnightButNotAnEmptyOne() {
-        UpdateUserSettingsRequest crossesMidnight = new UpdateUserSettingsRequest();
-        crossesMidnight.setSleepHoursStart(LocalTime.of(23, 0));
-        crossesMidnight.setSleepHoursEnd(LocalTime.of(6, 30));
+    void sleepHours_clearingStartClearsBoth() {
+        UpdateUserSettingsRequest on = new UpdateUserSettingsRequest();
+        on.setSleepHoursStart(LocalTime.of(22, 0));
+        userSettingsService.updateOwnSettings(1L, on);
 
-        UserSettingsResponse stored = userSettingsService.updateOwnSettings(1L, crossesMidnight);
-        assertThat(stored.sleepHoursStart()).isEqualTo(LocalTime.of(23, 0));
-        assertThat(stored.sleepHoursEnd()).isEqualTo(LocalTime.of(6, 30));
+        UpdateUserSettingsRequest off = new UpdateUserSettingsRequest();
+        off.setSleepHoursStart(null);
+        UserSettingsResponse stored = userSettingsService.updateOwnSettings(1L, off);
 
-        UpdateUserSettingsRequest sameMinute = new UpdateUserSettingsRequest();
-        sameMinute.setSleepHoursStart(LocalTime.of(22, 0));
-        sameMinute.setSleepHoursEnd(LocalTime.of(22, 0));
+        assertThat(stored.sleepHoursStart()).isNull();
+        assertThat(stored.sleepHoursEnd()).isNull();
+    }
 
-        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, sameMinute))
-                .isInstanceOf(InvalidUserSettingsException.class);
+    private static final List<String> SWITCHES = List.of("pushLikes", "pushComments", "pushNewFollowers",
+            "inAppLikes", "inAppComments", "inAppNewFollowers", "inAppReposts");
+
+    private static Map<String, Boolean> switchesOf(UserSettingsResponse s) {
+        Map<String, Boolean> switches = new LinkedHashMap<>();
+        switches.put("pushLikes", s.pushLikes());
+        switches.put("pushComments", s.pushComments());
+        switches.put("pushNewFollowers", s.pushNewFollowers());
+        switches.put("inAppLikes", s.inAppLikes());
+        switches.put("inAppComments", s.inAppComments());
+        switches.put("inAppNewFollowers", s.inAppNewFollowers());
+        switches.put("inAppReposts", s.inAppReposts());
+        return switches;
+    }
+
+    private static UpdateUserSettingsRequest switchOff(String name) {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        switch (name) {
+            case "pushLikes" -> request.setPushLikes(false);
+            case "pushComments" -> request.setPushComments(false);
+            case "pushNewFollowers" -> request.setPushNewFollowers(false);
+            case "inAppLikes" -> request.setInAppLikes(false);
+            case "inAppComments" -> request.setInAppComments(false);
+            case "inAppNewFollowers" -> request.setInAppNewFollowers(false);
+            case "inAppReposts" -> request.setInAppReposts(false);
+            default -> throw new IllegalArgumentException(name);
+        }
+        return request;
+    }
+
+    @Test
+    void notificationSwitches_defaultOn() {
+        assertThat(switchesOf(userSettingsService.getOwnSettings(1L)).values()).containsOnly(true);
+    }
+
+    /** Seven look-alike merges: each switch has to land in its own column and nowhere else. */
+    @Test
+    void notificationSwitches_eachSavesWithoutTouchingTheOthers() {
+        long userId = 1;
+        for (String name : SWITCHES) {
+            userSettingsService.updateOwnSettings(userId, switchOff(name));
+
+            Map<String, Boolean> expected = new LinkedHashMap<>();
+            SWITCHES.forEach(s -> expected.put(s, !s.equals(name)));
+            assertThat(switchesOf(userSettingsService.getOwnSettings(userId))).as(name).isEqualTo(expected);
+            userId++;
+        }
+    }
+
+    @Test
+    void notificationSwitch_explicitNull_isRejected() {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        request.setInAppReposts(null);
+
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, request))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("inAppReposts");
+    }
+
+    private static UpdateUserSettingsRequest dailyLimit(Integer minutes, String passcode) {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        request.setScreenTimeLimitMinutes(minutes);
+        if (passcode != null) {
+            request.setScreenTimePasscode(passcode);
+        }
+        return request;
+    }
+
+    private String storedPasscodeHash() {
+        return userSettingsRepository.findByUserIdAndDeletedAtIsNull(1L).orElseThrow().getScreenTimePasscodeHash();
+    }
+
+    /** The limit is only worth something with a passcode behind it — the overlay could never be dismissed. */
+    @Test
+    void dailyLimit_turningOnWithoutAPasscodeIs400() {
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, dailyLimit(60, null)))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("screenTimePasscode");
+    }
+
+    @Test
+    void dailyLimit_withPasscodeStoresAHashAndNeverReturnsIt() {
+        UserSettingsResponse stored = userSettingsService.updateOwnSettings(1L, dailyLimit(60, "1234"));
+
+        assertThat(stored.screenTimeLimitMinutes()).isEqualTo(60);
+        assertThat(stored.hasScreenTimePasscode()).isTrue();
+        assertThat(storedPasscodeHash()).isNotEqualTo("1234");
+        assertThat(HashUtils.bcryptMatches("1234", storedPasscodeHash())).isTrue();
+    }
+
+    /** A forgotten passcode is fixed this way: off, then on again with a new one. */
+    @Test
+    void dailyLimit_turningOffClearsThePasscode() {
+        userSettingsService.updateOwnSettings(1L, dailyLimit(60, "1234"));
+
+        UserSettingsResponse off = userSettingsService.updateOwnSettings(1L, dailyLimit(null, null));
+
+        assertThat(off.hasScreenTimePasscode()).isFalse();
+        assertThat(storedPasscodeHash()).isNull();
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, dailyLimit(60, null)))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("screenTimePasscode");
+    }
+
+    @Test
+    void dailyLimit_changingTheLimitKeepsThePasscode() {
+        userSettingsService.updateOwnSettings(1L, dailyLimit(60, "1234"));
+
+        UserSettingsResponse changed = userSettingsService.updateOwnSettings(1L, dailyLimit(90, null));
+
+        assertThat(changed.screenTimeLimitMinutes()).isEqualTo(90);
+        assertThat(changed.hasScreenTimePasscode()).isTrue();
+        assertThat(HashUtils.bcryptMatches("1234", storedPasscodeHash())).isTrue();
+    }
+
+    @Test
+    void dailyLimit_bothShapesAtOnceIs400() {
+        UpdateUserSettingsRequest request = dailyLimit(60, "1234");
+        request.setScreenTimeLimitsByDay(List.of(30, 40, 50, 60, 70, 80, 90));
+
+        assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, request))
+                .isInstanceOf(InvalidUserSettingsException.class)
+                .hasMessageContaining("screenTimeLimitsByDay");
+    }
+
+    /** Switching from one limit for every day to one per day, the way the page saves it: the other shape null. */
+    @Test
+    void dailyLimit_perDayIsStoredMondayFirstAndKeepsThePasscode() {
+        userSettingsService.updateOwnSettings(1L, dailyLimit(60, "1234"));
+        UpdateUserSettingsRequest perDay = dailyLimit(null, null);
+        perDay.setScreenTimeLimitsByDay(List.of(30, 40, 50, 60, 70, 80, 90));
+
+        UserSettingsResponse stored = userSettingsService.updateOwnSettings(1L, perDay);
+
+        assertThat(stored.screenTimeLimitMinutes()).isNull();
+        assertThat(stored.screenTimeLimitsByDay()).containsExactly(30, 40, 50, 60, 70, 80, 90);
+        assertThat(stored.hasScreenTimePasscode()).isTrue();
+        assertThat(userSettingsService.getOwnSettings(1L).screenTimeLimitsByDay())
+                .containsExactly(30, 40, 50, 60, 70, 80, 90);
+    }
+
+    /** What video-service drops from each feed. An account with no filters has three empty lists, never nulls. */
+    @Test
+    void settingsPolicies_carryKeywordsPerFeed() {
+        feedKeywordFilterService.create(1L, new SaveKeywordFilterRequest("cat", true, false, false));
+        feedKeywordFilterService.create(1L, new SaveKeywordFilterRequest("dog", false, true, true));
+
+        List<UserSettingsPolicyResponse> policies = userSettingsService.getSettingsPolicies(List.of(1L, 2L));
+
+        assertThat(policies.get(0).forYouKeywords()).containsExactly("cat");
+        assertThat(policies.get(0).followingKeywords()).containsExactly("dog");
+        assertThat(policies.get(0).friendsKeywords()).containsExactly("dog");
+        assertThat(policies.get(1).forYouKeywords()).isEmpty();
+        assertThat(policies.get(1).followingKeywords()).isEmpty();
+        assertThat(policies.get(1).friendsKeywords()).isEmpty();
+    }
+
+    /** What notification-service needs to decide on a phone push. The time zone stays null until a heartbeat sends one. */
+    @Test
+    void settingsPolicies_carryPushSwitchesSleepHoursAndTimeZone() {
+        UpdateUserSettingsRequest request = new UpdateUserSettingsRequest();
+        request.setPushComments(false);
+        request.setSleepHoursStart(LocalTime.of(22, 0));
+        userSettingsService.updateOwnSettings(1L, request);
+
+        UserSettingsPolicyResponse policy = userSettingsService.getSettingsPolicies(List.of(1L)).getFirst();
+
+        assertThat(policy.pushLikes()).isTrue();
+        assertThat(policy.pushComments()).isFalse();
+        assertThat(policy.pushNewFollowers()).isTrue();
+        assertThat(policy.sleepHoursStart()).isEqualTo(LocalTime.of(22, 0));
+        assertThat(policy.sleepHoursEnd()).isEqualTo(LocalTime.of(6, 0));
+        assertThat(policy.timeZone()).isNull();
     }
 
     /**
@@ -351,7 +527,7 @@ class UserSettingsServiceImplTest {
     void privacy_inAPatchThatFailsValidation_changesNothing() {
         userProfileService.createFromRegisteredEvent(1L, "alice", null);
         UpdateUserSettingsRequest request = privacy(true);
-        request.setSleepHoursStart(LocalTime.of(22, 0));
+        request.setCommentKeywords(List.of("🔥🔥"));
 
         assertThatThrownBy(() -> userSettingsService.updateOwnSettings(1L, request))
                 .isInstanceOf(InvalidUserSettingsException.class);

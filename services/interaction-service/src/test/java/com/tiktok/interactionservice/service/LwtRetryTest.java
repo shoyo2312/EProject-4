@@ -1,8 +1,12 @@
 package com.tiktok.interactionservice.service;
 
+import com.datastax.oss.driver.api.core.DefaultConsistencyLevel;
+import com.datastax.oss.driver.api.core.metadata.Node;
+import com.datastax.oss.driver.api.core.servererrors.DefaultWriteType;
 import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
 import com.tiktok.interactionservice.exception.InteractionConflictException;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.cassandra.core.cql.CassandraExceptionTranslator;
 
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
@@ -13,7 +17,12 @@ import static org.mockito.Mockito.mock;
 
 class LwtRetryTest {
 
-    private final WriteTimeoutException timeout = mock(WriteTimeoutException.class);
+    /**
+     * What a repository call actually throws: Spring Data translates the driver's timeout before it
+     * reaches the service. A mocked driver exception here once hid that the retry caught nothing.
+     */
+    private final RuntimeException timeout = new CassandraExceptionTranslator().translateExceptionIfPossible(
+            new WriteTimeoutException(mock(Node.class), DefaultConsistencyLevel.SERIAL, 0, 1, DefaultWriteType.CAS));
 
     /** The timed-out attempt applied; the retry sees its row and says "not applied". */
     @Test

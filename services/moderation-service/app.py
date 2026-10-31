@@ -6,9 +6,10 @@ to /moderate/text, after their own word rules have run. It holds no state, no us
 auth — it is reachable only on the internal Docker network, like rank-service, and is not routed
 at the gateway.
 
-V1 scores one thing: NSFW imagery, with an off-the-shelf ViT classifier that runs on CPU. Adding
-violence or weapon detection later is a second entry in SCORERS; the severity ordering that
-combines them already lives in verdict.py.
+Frames are scored by two models. An off-the-shelf ViT classifier scores NSFW imagery, and is the
+only one allowed to reject. CLIP, zero-shot, scores violence, gore, drugs, accidents and gambling
+(harm_classifier.py), and can only send a video to a person. The severity ordering that combines
+them lives in verdict.py.
 
 The model is loaded once at startup, not per request: loading it is seconds and scoring a frame
 is milliseconds, so a lazy load would put the cost on whichever upload happened to arrive first
@@ -31,7 +32,7 @@ from pydantic import BaseModel, Field
 
 import escalation
 from text_verdict import TextThresholds, decide_text
-from verdict import Decision, Thresholds, decide, worst
+from verdict import REVIEW, Decision, Thresholds, decide, decide_together, review_only, worst
 
 log = logging.getLogger("moderation")
 logging.basicConfig(level=logging.INFO)
@@ -74,6 +75,31 @@ TEXT_THRESHOLDS = TextThresholds(
     hate_hold_at=float(os.getenv("TEXT_HATE_HOLD_THRESHOLD", "0.90")),
 )
 
+# The zero-shot scorer for violence, gore, drugs, accidents and gambling. Empty switches it off and
+# leaves the NSFW check exactly as it was. Baked in at build, like the other two.
+HARM_MODEL = os.getenv("HARM_MODERATION_MODEL", "openai/clip-vit-base-patch16")
+HARM_MODEL_REVISION = os.getenv("HARM_MODERATION_MODEL_REVISION", "57c216476eefef5ab752ec549e440a49ae4ae5f3")
+# Bumped by hand when the weights, the threshold or any description in harm_classifier changes:
+# the descriptions are the model, see that module.
+HARM_MODEL_VERSION = os.getenv("HARM_MODERATION_MODEL_VERSION", "harm-v2")
+
+# Nothing here rejects (review_only). A frame at or over the review line sends the video to a person
+# once a second frame agrees, or on its own at the alone line. In harm-v1 one frame was enough, and
+# five of its seven false holds were one odd frame — a pose, a mid-cut — while every harmful video in
+# the judged set crossed the line in two frames or more. See docs/moderation.md before moving any of
+# the three.
+HARM_THRESHOLDS = review_only(
+    float(os.getenv("HARM_REVIEW_THRESHOLD", "0.55")),
+    min_frames=int(os.getenv("HARM_MIN_REVIEW_FRAMES", "2")),
+    alone_at=float(os.getenv("HARM_REVIEW_ALONE_THRESHOLD", "0.80")),
+)
+
+# The labels Azure has an opinion on. A REVIEW caused by anything else must not be escalated:
+# Azure has no drugs or gambling category, answers severity 0, and that would approve the very
+# video the local model held back. Violence and gore too, despite Azure's Violence category: it
+# scored a bloody shirt, an armed robbery and an MMA fight 0 (docs/moderation.md).
+ESCALATABLE = frozenset({"nsfw"})
+
 # Caps, for the same reason as MAX_FRAMES: a CPU shared by every caller. A request over the text
 # cap is refused rather than trimmed — unlike frames, every text needs its own answer, and the
 # callers send one to three.
@@ -83,11 +109,12 @@ TEXT_MAX_WINDOWS = int(os.getenv("TEXT_MAX_WINDOWS", "32"))
 
 _classifier = None
 _text_scorer = None
+_harm_scorer = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    global _classifier, _text_scorer
+    global _classifier, _text_scorer, _harm_scorer
     from transformers import pipeline
 
     log.info("Loading %s", MODEL)
@@ -104,9 +131,17 @@ async def lifespan(_: FastAPI):
         _text_scorer = text_classifier.TextScorer(
             text_classifier.local_path(TEXT_MODEL, TEXT_MODEL_REVISION), TEXT_MAX_WINDOWS)
         log.info("Loaded %s@%s in %.1fs", TEXT_MODEL, TEXT_MODEL_REVISION[:7], time.monotonic() - started)
+
+    if HARM_MODEL:
+        import harm_classifier
+
+        started = time.monotonic()
+        _harm_scorer = harm_classifier.HarmScorer(harm_classifier.local_path(HARM_MODEL, HARM_MODEL_REVISION))
+        log.info("Loaded %s@%s in %.1fs", HARM_MODEL, HARM_MODEL_REVISION[:7], time.monotonic() - started)
     yield
     _classifier = None
     _text_scorer = None
+    _harm_scorer = None
 
 
 app = FastAPI(title="moderation-service", lifespan=lifespan)
@@ -156,17 +191,82 @@ def score_nsfw(images: list[Image.Image]) -> list[float]:
 SCORERS = {"nsfw": score_nsfw}
 
 
-def _decode(frames: list[str]) -> list[Image.Image]:
-    images = []
+# An animated image (GIF, APNG, animated WebP — a story image is the uploaded file itself) is scored
+# like a short video: frames spread from first to last. Read as one image it was its first frame,
+# so a clean frame 0 in front of anything at all was all that got looked at.
+# ponytail: spread by index, so a flash shorter than the gap between samples can slip, as it can
+# between a video's sampled frames; weigh by frame duration if that turns up.
+ANIMATION_FRAMES = 16
+# A still image's one frame is used as it is; sampled frames are kept, so each is shrunk on the spot
+# — sixteen full-size frames of a large canvas is gigabytes. Both models look at 224 pixels.
+ANIMATION_FRAME_SIDE = 512
+
+# Pixels in a frame, read off its header before anything is decoded. A story image is capped in
+# bytes, not pixels, and a single-colour PNG of a few hundred KB can declare 13000x13000: about
+# 0.7 GB decoded, then copied by convert() and by each model's processor, in a container holding
+# 2 GB of models under a 3 GB limit. Pillow's own check raises only past 179M. 64M still takes a
+# 50 MP phone photo (8160x6144), and decodes to 256 MB at most.
+MAX_IMAGE_PIXELS = 64_000_000
+
+# The formats a frame can be: media-worker's JPEG frames, a story upload (JPEG, PNG or WebP), or a
+# GIF under one of those names, since the upload's type is checked and its bytes are not. Pillow
+# opens many more, and an ICO decodes the image inside it before Image.open returns, at whatever
+# size that image declares.
+FORMATS = ("JPEG", "PNG", "WEBP", "GIF")
+
+
+def _decode(frames: list[str]) -> tuple[list[Image.Image], list[str]]:
+    """The images to score and, beside each, the base64 JPEG escalation would send for it.
+
+    The two lists stay aligned because escalation picks its frames by local score, index by index.
+    """
+    images, sources = [], []
     for index, encoded in enumerate(frames):
         try:
             raw = base64.b64decode(encoded, validate=True)
-            image = Image.open(io.BytesIO(raw))
-            image.load()
-            images.append(image.convert("RGB"))
-        except (binascii.Error, ValueError, UnidentifiedImageError, OSError) as error:
+            image = Image.open(io.BytesIO(raw), formats=FORMATS)
+            _check_size(index, image)
+            count = getattr(image, "n_frames", 1)
+            if count <= 1:
+                image.load()
+                images.append(image.convert("RGB"))
+                sources.append(encoded)
+                continue
+            sampled = set(_spread(count, ANIMATION_FRAMES))
+            # Every frame is checked, not only the sampled ones: a GIF frame can reach past the
+            # canvas, which grows it, and seeking past a frame decodes it.
+            for position in range(count):
+                image.seek(position)
+                _check_size(index, image)
+                if position not in sampled:
+                    continue
+                frame = image.convert("RGB")
+                frame.thumbnail((ANIMATION_FRAME_SIDE, ANIMATION_FRAME_SIDE))
+                images.append(frame)
+                sources.append(_jpeg(frame))
+        except (binascii.Error, ValueError, UnidentifiedImageError, OSError, EOFError,
+                Image.DecompressionBombError) as error:
             raise HTTPException(status_code=400, detail=f"frame {index} is not a decodable image: {error}")
-    return images
+    return images, sources
+
+
+def _check_size(index: int, image: Image.Image) -> None:
+    if image.width * image.height > MAX_IMAGE_PIXELS:
+        raise HTTPException(status_code=400, detail=f"frame {index} is {image.width}x{image.height}, "
+                                                    f"over the {MAX_IMAGE_PIXELS:,} pixel limit")
+
+
+def _spread(count: int, wanted: int) -> list[int]:
+    """Up to ``wanted`` frame positions, evenly from the first to the last."""
+    if count <= wanted:
+        return list(range(count))
+    return [round(i * (count - 1) / (wanted - 1)) for i in range(wanted)]
+
+
+def _jpeg(image: Image.Image) -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=90)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 @app.post("/moderate", response_model=ModerateResponse)
@@ -181,20 +281,32 @@ def moderate(request: ModerateRequest) -> ModerateResponse:
         frames = frames[:MAX_FRAMES]
 
     started = time.monotonic()
-    images = _decode(frames)
+    images, frames = _decode(frames)
+    # Again after decoding: every animated image is up to ANIMATION_FRAMES of them.
+    images, frames = images[:MAX_FRAMES], frames[:MAX_FRAMES]
     scored = {label: scorer(images) for label, scorer in SCORERS.items()}
     decisions: dict[str, Decision] = {
         label: decide(scores, THRESHOLDS) for label, scores in scored.items()
     }
+    if _harm_scorer is not None:
+        harm = _harm_scorer(images)
+        scored |= harm
+        harm_label, harm_decision = decide_together(harm, HARM_THRESHOLDS)
+        decisions[harm_label] = harm_decision
     label, decision = worst(decisions)
 
     verdict = decision.verdict
-    model_version = MODEL_VERSION
+    # Both versions whenever both models ran: an APPROVED video was cleared by each of them, and
+    # which one's label it carries says nothing about which setup let it through.
+    model_version = f"{MODEL_VERSION}+{HARM_MODEL_VERSION}" if _harm_scorer is not None else MODEL_VERSION
 
     # Only the band the local model is bad at, and only when a second opinion is configured.
     # An APPROVED or REJECTED video is already decided; paying quota to re-ask would spend the
-    # month's allowance on the cases that never needed it.
-    if verdict == "REVIEW" and escalation.enabled():
+    # month's allowance on the cases that never needed it. And only when every label asking for a
+    # person is one Azure can answer — an approval from Azure must not clear a video some other
+    # label held back.
+    reviewing = {held for held, held_decision in decisions.items() if held_decision.verdict == REVIEW}
+    if verdict == REVIEW and reviewing <= ESCALATABLE and escalation.enabled():
         opinion = escalation.second_opinion(
             escalation.top_frames(frames, scored[label])
         )
@@ -208,12 +320,15 @@ def moderate(request: ModerateRequest) -> ModerateResponse:
         # admin console, and a message carrying an endpoint URL and a socket error both leaks
         # where the service lives and makes the field ungroupable — which is the one thing it is
         # for. The words are in escalation's own log line.
-        model_version = f"{MODEL_VERSION}+{opinion.code}"
+        model_version = f"{model_version}+{opinion.code}"
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
 
-    log.info("videoFrames=%d verdict=%s label=%s max=%.3f suspicious=%d in %dms",
-             len(images), verdict, label, decision.max_score, decision.suspicious_frames, elapsed_ms)
+    # Every label's worst frame, not only the winner's: the response carries one label, and the
+    # harm threshold is tuned against how close ordinary videos come on the labels that lost.
+    log.info("videoFrames=%d verdict=%s label=%s max=%.3f suspicious=%d scores=%s in %dms",
+             len(images), verdict, label, decision.max_score, decision.suspicious_frames,
+             ",".join(f"{name}:{max(values, default=0.0):.3f}" for name, values in scored.items()), elapsed_ms)
 
     return ModerateResponse(
         verdict=verdict,
@@ -225,7 +340,8 @@ def moderate(request: ModerateRequest) -> ModerateResponse:
         suspiciousFrames=decision.suspicious_frames,
         totalFrames=len(images),
         processingTimeMs=elapsed_ms,
-        model=MODEL,
+        # The model that produced maxScore, so a score is never read against the wrong scale.
+        model=MODEL if label in SCORERS else HARM_MODEL,
         modelVersion=model_version,
     )
 
@@ -313,13 +429,31 @@ def config() -> dict:
         "textModelVersion": TEXT_MODEL_VERSION,
         "textHateHoldAt": TEXT_THRESHOLDS.hate_hold_at,
         "textMaxTexts": TEXT_MAX_TEXTS,
+        "harmEnabled": bool(HARM_MODEL),
+        "harmModel": HARM_MODEL,
+        "harmModelRevision": HARM_MODEL_REVISION,
+        "harmModelVersion": HARM_MODEL_VERSION,
+        "harmReviewAt": HARM_THRESHOLDS.review_at,
+        "harmMinReviewFrames": HARM_THRESHOLDS.min_review_frames,
+        "harmReviewAloneAt": HARM_THRESHOLDS.review_alone_at,
+        "harmLabels": list(_harm_labels()),
     }
+
+
+def _harm_labels() -> tuple[str, ...]:
+    """The labels the harm scorer reports, without importing torch when it is switched off."""
+    if not HARM_MODEL:
+        return ()
+    import harm_classifier
+
+    return tuple(harm_classifier.CATEGORIES)
 
 
 @app.get("/health")
 def health() -> dict:
     """Unhealthy until every configured model is in memory, so nothing is routed here mid-load."""
-    if _classifier is None or (TEXT_MODEL and _text_scorer is None):
+    if _classifier is None or (TEXT_MODEL and _text_scorer is None) or (HARM_MODEL and _harm_scorer is None):
         raise HTTPException(status_code=503, detail="model is still loading")
     return {"status": "up", "model": MODEL, "modelVersion": MODEL_VERSION,
-            "textModel": TEXT_MODEL or None, "textModelVersion": TEXT_MODEL_VERSION if TEXT_MODEL else None}
+            "textModel": TEXT_MODEL or None, "textModelVersion": TEXT_MODEL_VERSION if TEXT_MODEL else None,
+            "harmModel": HARM_MODEL or None, "harmModelVersion": HARM_MODEL_VERSION if HARM_MODEL else None}

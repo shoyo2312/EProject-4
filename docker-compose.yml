@@ -84,7 +84,6 @@ services:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongodb-data:/data/db
-      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/admin -u ${MONGO_USERNAME:-root} -p ${MONGO_PASSWORD:-password} --quiet
       interval: 10s
@@ -170,14 +169,24 @@ services:
     volumes:
       - zookeeper-data:/var/lib/zookeeper/data
       - zookeeper-log:/var/lib/zookeeper/log
+    healthcheck:
+      test: [ "CMD", "cub", "zk-ready", "localhost:2181", "5" ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
     networks:
       - tiktok-network
 
+  # Kafka gives up after zookeeper.connection.timeout.ms (18s) and exits; it also exits with
+  # NodeExists when restarted before zookeeper has expired its previous session. Both clear up
+  # on a later attempt, so wait for a healthy zookeeper and let docker retry.
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     container_name: tt-kafka
+    restart: unless-stopped
     depends_on:
-      - zookeeper
+      zookeeper:
+        condition: service_healthy
     ports:
       - "127.0.0.1:9092:9092"
     environment:
@@ -296,7 +305,7 @@ services:
       - tiktok-network
 
   # ─────────────────────────────────────────────────────────────────
-  # moderation-service (NSFW frame classifier — Python)
+  # moderation-service (frame + caption/comment classifiers — Python)
   # ─────────────────────────────────────────────────────────────────
 
   # No auth and no gateway route, like rank-service: it holds no user data and is only ever
@@ -305,7 +314,7 @@ services:
   # so with no mapping at all every upload would fail its check and land in the admin queue.
   #
   # The image bakes the model in at build time and runs with HF_HUB_OFFLINE=1, so the first build
-  # downloads a few hundred MB and every start after that is offline. Budget ~1.5 GB of RAM.
+  # downloads a couple of GB and every start after that is offline. Budget ~2 GB of RAM.
   #
   # The thresholds live here rather than in media-worker: they belong to the model, and tuning
   # them should be a restart of this container, not a rebuild of a Java service.
@@ -331,6 +340,14 @@ services:
       # build — see the Dockerfile.
       TEXT_HATE_HOLD_THRESHOLD: ${TEXT_HATE_HOLD_THRESHOLD:-0.90}
       TEXT_MODERATION_MODEL_VERSION: ${TEXT_MODERATION_MODEL_VERSION:-hsd-v1}
+      # Violence, gore, drugs, accidents, gambling (CLIP, zero-shot). Two frames at or over the
+      # review line, or one at or over the alone line, hold the video for a person; it never
+      # rejects. Bump HARM_MODERATION_MODEL_VERSION whenever one of these or a description in
+      # harm_classifier.py changes.
+      HARM_REVIEW_THRESHOLD: ${HARM_REVIEW_THRESHOLD:-0.55}
+      HARM_MIN_REVIEW_FRAMES: ${HARM_MIN_REVIEW_FRAMES:-2}
+      HARM_REVIEW_ALONE_THRESHOLD: ${HARM_REVIEW_ALONE_THRESHOLD:-0.80}
+      HARM_MODERATION_MODEL_VERSION: ${HARM_MODERATION_MODEL_VERSION:-harm-v2}
     healthcheck:
       # Unhealthy until the weights are in memory, which takes a few seconds on a cold start.
       test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8099/health')\"" ]
@@ -365,19 +382,17 @@ services:
     networks:
       - tiktok-network
 
-  # Creates the media bucket and its retention rule. Without this, video-service happily signs
-  # an upload URL for a bucket that does not exist -- presigning is a local signature and never
-  # contacts the server -- and the client only finds out when its PUT returns NoSuchBucket,
-  # mid-upload. media-worker creates the bucket on startup, but video-service can be run alone.
-  #
-  # The lifecycle rule expires abandoned uploads: /upload-url persists nothing, so a client that
-  # never calls /videos leaves an object no row references and nothing else would ever delete.
-  # Seven days is well past the point media-worker has read a raw file it was told about.
-  #
-  # ilm import replaces the whole config rather than appending, which is what makes re-running
-  # this container a no-op instead of a duplicate-rule error.
+  # The media bucket, its lifecycle rules and, in production, one MinIO account per service:
+  # scripts/minio/init.sh says why each exists. The same script as docker-compose.prod.yml, so the
+  # lifecycle is written down once. No per-service secrets here, so local services keep the root
+  # account they are configured with.
   minio-init:
-    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+    build:
+      context: ./scripts/minio
+      dockerfile_inline: |
+        FROM pgsty/mc:RELEASE.2026-09-16T00-00-00Z
+        COPY . /minio/
+        ENTRYPOINT ["bash", "/minio/init.sh"]
     container_name: tt-minio-init
     depends_on:
       minio:
@@ -386,16 +401,6 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin123}
       MINIO_BUCKET: ${MINIO_BUCKET:-video-media}
-    entrypoint:
-      - sh
-      - -c
-      - |
-        set -e
-        mc alias set tt http://minio:9000 "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
-        mc mb --ignore-existing "tt/$$MINIO_BUCKET"
-        echo '{"Rules":[{"ID":"expire-abandoned-raw-uploads","Status":"Enabled","Filter":{"Prefix":"raw/"},"Expiration":{"Days":7}},{"ID":"expire-data-exports","Status":"Enabled","Filter":{"Prefix":"exports/"},"Expiration":{"Days":7}}]}' \
-          | mc ilm import "tt/$$MINIO_BUCKET"
-        echo "minio-init: bucket $$MINIO_BUCKET ready"
     networks:
       - tiktok-network
 

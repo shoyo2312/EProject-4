@@ -1,12 +1,14 @@
 # Automatic Video Moderation
 
-Every uploaded video is screened for NSFW imagery before anyone can see it. The check runs after
-transcoding and before publication, so a video that fails it was never on a feed at any point.
-Its title, description and tags are read too, at publish, and so is every comment before it is
-posted — see [Text: captions and comments](#text-captions-and-comments).
+Every uploaded video is screened for NSFW imagery, and for violence, gore, drugs, accidents and
+gambling, before anyone can see it. The check runs after transcoding and before publication, so a
+video that fails it was never on a feed at any point. Its title, description and tags are read
+too, at publish, and so is every comment before it is posted — see
+[Text: captions and comments](#text-captions-and-comments).
 
-Nothing here costs money: both classifiers — frames and text — are open-weight models running on
-CPU inside a container this repo builds, and the text rules are a word list read in process.
+Nothing here costs money: all three classifiers — two for frames, one for text — are open-weight
+models running on CPU inside a container this repo builds, and the text rules are a word list read
+in process.
 
 ## The pipeline
 
@@ -17,6 +19,7 @@ VideoPublishedEvent ─► transcode ─► VideoTranscodedEvent ─────
                        │
                        └─ (second consumer group on the same topic)
                           sample 10 frames ─► POST /moderate ─► verdict
+                          APPROVED? thumbnail + preview ─► POST /moderate ─► hold-only
                                                                 │
                           VideoModerationCompletedEvent ◄───────┘
                                                 │
@@ -74,15 +77,162 @@ to agree costs almost nothing on genuinely explicit content, which is rarely exp
 one sampled frame out of ten.
 
 These are opening numbers, not settled ones. Tune them against `video.moderation.maxScore` on
-real uploads, which is why the scores are stored on the video document rather than only logged:
+real uploads, which is why the scores are stored on the video document rather than only logged.
+`maxScore` belongs to `moderation.label`, which since harm-v1 is not always `nsfw` — filter on it,
+or an NSFW threshold gets tuned against CLIP's numbers:
 
 ```javascript
-// videos the model was unsure about, worst first
-db.videos.find({ status: "PENDING_REVIEW" }).sort({ "moderation.maxScore": -1 })
+// videos the NSFW model was unsure about, worst first
+db.videos.find({ status: "PENDING_REVIEW", "moderation.label": "nsfw" }).sort({ "moderation.maxScore": -1 })
 
 // how confident was the model about videos an admin later restored?
 db.videos.find({ statusBeforeTakedown: "REJECTED" }, { "moderation.maxScore": 1 })
 ```
+
+## Violence, gore, drugs, accidents, gambling
+
+The NSFW model answers one question, and a fight is not explicit: ten test uploads of fights, drug
+use, blood, a burning car and a betting app all scored under 0.12 on it and were published. No
+open-weight classifier for these runs on CPU, so `harm_classifier.py` asks CLIP
+(`openai/clip-vit-base-patch16`) zero-shot: every frame is compared with a list of written
+descriptions — five harmful categories, plus a longer list of ordinary scenes — and the share of the
+match landing on a category's descriptions is that category's score.
+
+| Label | Described as (abridged) |
+|---|---|
+| `violence` | people fighting, punching, assault, a gun pointed at someone, a knife attack |
+| `gore` | a bloody wound, a person covered in blood, a dead body |
+| `drugs` | snorting cocaine, lines of powder, a syringe, a crack pipe |
+| `accident` | a car crash, a car on fire, a burning wreck |
+| `gambling` | a betting app on a phone, odds, a casino table, a slot machine |
+
+**It only ever holds a video.** Nothing it scores is `REJECTED` (`verdict.review_only`). An action
+film, a boxing match and a kitchen knife are each a description away from "violence", and a model
+that cannot tell them apart does not get to take a video down by itself. NSFW still rejects on its
+own lines, and a rejection outranks a harm hold.
+
+**One odd frame is not enough to hold it.** The video goes to `PENDING_REVIEW` when two frames are
+at or over `HARM_REVIEW_THRESHOLD` (0.55), or one is at or over `HARM_REVIEW_ALONE_THRESHOLD` (0.80)
+— the same guard NSFW rejections have had from the start. Frames are counted across all five labels
+(`verdict.decide_together`), not within one: CLIP splits a scene between neighbouring labels, and the
+syringe video below scored gambling on one frame and drugs on the next. harm-v1 held on a single
+frame at 0.55, and five of the seven ordinary videos in its queue were held on one frame — see
+[the second judged set](#the-second-judged-set). An image story is a single frame, so it needs only
+that one at 0.55: the count is capped at the frames there are. Without the cap, every image under
+0.80 was approved, including the powder (0.71) and syringe (0.71) that harm-v1 held.
+
+**An animated image is not one frame.** A story image reaches `/moderate` as the uploaded file
+itself, and a GIF, APNG or animated WebP opened as one image is its first frame — so a clean first
+frame cleared whatever came after it. The upload pins a content type, not the bytes, so a GIF sent
+as `image/png` is the same case. `app._decode` spreads up to `ANIMATION_FRAMES` (16) across the
+animation, first to last, shrinks each to 512px, and the rules above judge them as a video's frames.
+Spread by index: a flash shorter than the gap between two samples can still slip, as between a
+video's sampled frames.
+
+**A frame's size is checked before it is decoded.** A story image is capped at 10 MB but not in
+pixels: a 500 KB single-colour PNG can declare 13000×13000, about 1.3 GB once decoded and
+converted, in a container holding 2 GB of models under `mem_limit: 3g`. `app._decode` refuses any
+frame over `MAX_IMAGE_PIXELS` (64M; a 50 MP phone photo is 50.1M) from its header with a 400, which
+media-worker retries and then holds as REVIEW (a story goes HELD). The check runs after
+`Image.open` and again after every seek, not only at sampled frames: a GIF frame can grow the
+canvas, and Pillow decodes every frame it seeks past. Only JPEG (MPO included), PNG/APNG, WebP and
+GIF are opened: Pillow decodes the image inside an ICO before `Image.open` returns. Stills under the
+cap are scored at full size; shrinking them would change scores and needs a
+`MODERATION_MODEL_VERSION` bump.
+
+**The cover is checked on its own.** The thumbnail (`thumbnails/{id}.jpg`, the frame at 1s) and
+the hover preview (`previews/{id}.webp`, 3s from 1s at 8 fps) are what every feed card, profile
+grid and search hit shows, and the spread frames of a longer video step over the opening seconds
+they come from: on a 60s video the first sample is at 3s. When the spread frames are APPROVED,
+media-worker posts the two published objects to `/moderate` in a second call (`_decode` unpacks the
+animated WebP into up to 16 frames). That call can only hold: anything but APPROVED, REJECTED
+included, makes the video REVIEW, carrying the cover's label and scores with the reason `Thumbnail
+or preview held for review`. A clean cover leaves the spread verdict and its scores untouched. It
+is a separate call because the preview's frames are near-duplicates of one moment: mixed into the
+spread frames they would satisfy the "a second frame agrees" guards (`min_reject_frames`,
+`HARM_MIN_REVIEW_FRAMES`) by themselves. An object missing from both its public key and
+`quarantine/` is skipped; a failed download or call fails the attempt and ends in REVIEW like any
+other. When tuning thresholds against `moderation.maxScore`, leave out videos with that reason:
+their scores are the cover's, not the spread frames'.
+
+**Cigarettes and vapes are not drugs.** They have descriptions of their own in the ordinary list,
+so a vaping clip lands there instead of drifting into `drugs`. `test_harm.py` pins this.
+
+**Azure is only asked about NSFW holds.** Azure has no drug or gambling category: asked about a
+held drugs video it answers severity 0, and that would publish it. A REVIEW is escalated only when
+`nsfw` is the only label holding the video. Violence and gore stay out too, although Azure has a
+Violence category. For the 7 harmful videos of [the second judged set](#the-second-judged-set),
+Azure saw the 3 frames an escalation would send. It scored six of the videos 0 in every category,
+the bloody shirt, the armed robbery and the MMA fight among them; only the bleeding driver got 6.
+Azure's image policy counts wounds, combat sport, accidental injury and damaged objects as *safe*.
+Resolution is not the cause: sent at 1280×720 instead of the pipeline's 398×224, only the gun
+moved, to 2. Escalating violence and gore would have published three of their four holds and
+rejected the fourth.
+
+**The descriptions are the model.** The ordinary list matters as much as the harmful one — a
+softmax over "a car on fire" alone would give every frame 1.0 for it. Adding, removing or
+rewording any line moves every score: bump `HARM_MODERATION_MODEL_VERSION` and score a judged set
+(`score_samples.py`) before it ships.
+
+What it cannot see, by construction: a drug deal that only looks like a person holding money, a
+horror clip that is only dark and red, anything in the audio.
+
+### The first judged set
+
+Twenty-one production uploads, ten frames each, sampled the way media-worker samples them
+(2026-10-19, harm-v1 as shipped):
+
+| | Highest harm score | Verdict |
+|---|---|---|
+| burning car / bloody shirt / betting app | 0.99 / 0.99 / 1.00 | REVIEW |
+| fight in a club / armed robbery | 0.97 / 0.89 | REVIEW |
+| lines of powder / bleeding driver | 0.71 / 0.64 | REVIEW |
+| horror face in red light | 0.49 (gore) | APPROVED — not gore |
+| hooded man holding cash, titled "ma tuy" | 0.01 | APPROVED — no drug in frame |
+| vaping in the street | 0.37 | APPROVED, as intended |
+| 11 ordinary videos (anime, landscapes, a desk, city aerials) | 0.44 at most | APPROVED |
+
+0.55 sits between the highest ordinary video and the lowest harmful one caught, which is a thin
+margin on a small set with no hard negatives — cooking, sport, action films, games. Expect the
+first weeks of real uploads to move it; the log line `scores=nsfw:…,violence:…,…` carries every
+label's worst frame, including the labels that did not win.
+
+### The second judged set
+
+Forty-three uploads (2026-10-22): the fourteen harm-v1 held and every video it published, each
+judged by looking at its frames. harm-v1 held all seven harmful ones, and seven ordinary ones with
+them:
+
+| Ordinary, held by harm-v1 | harm-v1 | Read as | harm-v2 |
+|---|---|---|---|
+| a gym row on a T-bar machine | violence 0.75, 7 of 9 frames | "a person punching another person" | 0.33, APPROVED |
+| anime edit, a character making a peace sign | violence 0.74, 1 frame | "pointing a gun at someone" | 0.23, APPROVED |
+| anime fight edit | violence 0.66, 2 frames | "punching", "attacking with a knife" | 0.41, APPROVED |
+| horror clown face in red light | gore 0.64, 1 frame | "a person covered in blood" | 0.63, 1 frame — APPROVED |
+| anime edit over a tornado (uploaded twice) | violence 0.61, 1 frame | "punching" | 0.29, APPROVED |
+| a cat walking on a laptop keyboard | gambling 0.58, 1 frame | "online gambling odds" | 0.36, APPROVED |
+
+A cruise ship filmed from the air was published at gambling 0.54 — CLIP knows cruise ships for their
+casinos — and scores 0.03 now. The seven harmful videos are all still REVIEW: bloody shirt (gore
+1.00, 9 frames), burning car (accident 0.99, 10), betting app (gambling 1.00, 9), armed robbery
+(violence 0.86, 3), bleeding driver (gore 0.85, 5), an MMA cage fight (violence 0.79, 3), a syringe
+and drugs under purple light (gambling 0.71, 3 frames between gambling and drugs).
+
+Two causes, two fixes:
+
+- **Missing ordinary descriptions.** The softmax only chooses among the descriptions it has: a frame
+  that fits none of the ordinary ones puts its weight on whichever harmful one is least wrong. Five
+  near misses were added — a gym, an anime character, an anime action scene, a laptop, a ship at
+  sea — each kept only because taking it out brought a false hold back. Three more (a hand gesture,
+  a halloween costume, colourful decorations) changed nothing and stayed out. Broad ones are a trap:
+  "a photo lit by colorful neon lights" took the purple syringe video with it.
+- **A single frame decided.** With the five in, the clown still had one frame at 0.63. Requiring a
+  second frame clears it; every harmful video had three or more.
+
+Checked on the ten frames media-worker sends and on thirty per video at positions the ten never
+use: no false hold and no miss on either, at any alone line from 0.75 to 0.90. Still a small set — no
+anime gore, no street fight, one drugs scene. A drawn fight now counts as ordinary on purpose, so
+anime gore rests on the gore descriptions alone.
 
 ## Failure is never a pass
 
@@ -104,13 +254,16 @@ sitting there is a bug, and worth alerting on.
 ## Running it
 
 ```bash
-make moderation-up      # build + start (first build downloads both models' weights, ~2 GB image)
+make moderation-up      # build + start (first build downloads all three models' weights, ~3 GB image)
 make moderation-test    # the decision rules' tests — no model needed
 make moderation-score-texts FILE=comments.txt   # the text classifier's precision on judged comments
 ```
 
 The text model can be left out of an image with `--build-arg TEXT_MODERATION_MODEL=`;
-`/moderate/text` then answers 503 and the services screen text with the rules alone.
+`/moderate/text` then answers 503 and the services screen text with the rules alone. The harm
+model likewise with `--build-arg HARM_MODERATION_MODEL=`; frames are then screened for NSFW alone.
+CLIP's weights are a pickle (`pytorch_model.bin`, openai never published safetensors): pinned to a
+commit, checked against their SHA-256 at build, and read with `torch.load(weights_only=True)`.
 
 The container publishes `127.0.0.1:8099` only. That differs from rank-service, which publishes
 nothing: media-worker runs on the host via `make run-media` rather than in compose, and with no
@@ -130,16 +283,22 @@ restart of one container rather than a rebuild of a Java service:
 | `MODERATION_REVIEW_THRESHOLD` | `0.60` |
 | `MODERATION_REJECT_THRESHOLD` | `0.90` |
 | `MODERATION_MIN_REJECT_FRAMES` | `2` |
+| `HARM_REVIEW_THRESHOLD` | `0.55` — the harm labels only; there is no harm reject line |
+| `HARM_MIN_REVIEW_FRAMES` | `2` — frames at or over the harm line, counted across labels, to hold a video |
+| `HARM_REVIEW_ALONE_THRESHOLD` | `0.80` — one frame this high holds it without a second |
 
-Bump `MODERATION_MODEL_VERSION` whenever either the weights or the thresholds change. It travels
-on every verdict and onto the video document, and without it a decision made months ago cannot be
-attributed to the setup that made it.
+Bump `MODERATION_MODEL_VERSION` whenever either the weights or the thresholds change, and
+`HARM_MODERATION_MODEL_VERSION` (`harm-v2`) for any harm threshold or description. Both travel
+on every verdict and onto the video document (`nsfw-v1+harm-v2`), and without them a decision made
+months ago cannot be attributed to the setup that made it.
 
 ## Second opinion: Azure AI Content Safety
 
 The local classifier settles both ends on its own — an ordinary video scores about `0.01`, explicit
 content about `0.99`. The `0.60`–`0.90` band is the part it is genuinely bad at, and the part that
-costs a moderator their afternoon. That band, and only that band, is sent to Azure.
+costs a moderator their afternoon. That band, and only that band, is sent to Azure — and only when
+`nsfw` is the only label holding the video (see
+[Violence, gore, drugs, accidents, gambling](#violence-gore-drugs-accidents-gambling)).
 
 ```
 local verdict REVIEW ──▶ top 3 frames by local score ──▶ Azure image:analyze
@@ -206,6 +365,13 @@ it is wrong for Vietnamese — `cặc`/`các`, `lồn`/`lớn`, `buồi`/`buổi
 letters, and the second of each pair is an everyday word. Matching is by whole syllables, after
 look-alike letters, leetspeak, long repeats and spelled-out letters (`đ.m`) are undone. The file's
 header has the rest; read it before adding a term, and run `ShippedListRegressionTest` after.
+
+`TextNormalizer.prepare` reads look-alikes on the **decomposed** text and composes afterwards. The
+other order dropped the marks a Cyrillic `о` carried as loose — it has no composed form with a
+circumflex — so `lồn` written with one read `lon` and passed every accented term, severity 3
+included. Zero-width and other format characters (Cf) are dropped in the same pass; left in, they
+split a syllable in two. A change to the normalizer changes what matches, so it bumps the list's
+`version:` like a change to the list does.
 
 In code rather than the list, each severity 2: links (`SPAM`; in a caption, links to YouTube,
 Facebook, Instagram, TikTok, X and Threads pass — `moderation.text.caption-link-allowlist`),
@@ -373,10 +539,12 @@ can see while the ban lasts. The admin list shows everything.
 
 ### Upload limits
 
-Not text, but the same family: video-service limits `POST /videos/upload-url` (30/hour, 100/day) and
-`POST /videos` (10/hour, 30/day) per account — `app.upload.rate-limit`, `429 UPLOAD_RATE_LIMITED`
-with `Retry-After`. A publish refused for its caption spends budget too, so captions cannot be
-probed at speed.
+None. video-service used to cap upload URLs and publishes per account (`UploadRateLimiter`, removed
+on request). Without it a caption refused with 422 can be retried as fast as the gateway's per-IP
+limit allows (20/s), so the caption blocklist can be probed. Restore the class from git history if
+that starts to matter. What publish does check is that the raw file exists (`UPLOAD_NOT_FOUND`
+otherwise): a made-up key would otherwise cost media-worker's single listener thread seconds of
+retries each, and at 20/s that stalls every transcode.
 
 ### Measuring before enforcing
 

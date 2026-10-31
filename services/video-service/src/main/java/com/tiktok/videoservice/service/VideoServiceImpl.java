@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.common.exception.BadRequestException;
 import com.tiktok.common.storage.ObjectKeys;
 import com.tiktok.videoservice.client.BlockClient;
 import com.tiktok.videoservice.client.FollowClient;
@@ -9,12 +10,14 @@ import com.tiktok.videoservice.client.UserSettingsClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.dto.response.ViewableVideoResponse;
 import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.Video;
@@ -27,6 +30,7 @@ import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.PrivateAccountException;
 import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
+import com.tiktok.videoservice.exception.UploadNotFoundException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
 import com.tiktok.videoservice.mapper.VideoMapper;
@@ -36,21 +40,23 @@ import com.tiktok.videoservice.repository.UserVideoStats;
 import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
 import io.minio.PostPolicy;
+import io.minio.StatObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -122,7 +128,7 @@ public class VideoServiceImpl implements VideoService {
     private final OwnerPrivacyRepository ownerPrivacyRepository;
     private final OwnerBanRepository ownerBanRepository;
     private final CaptionModeration captionModeration;
-    private final UploadRateLimiter uploadRateLimiter;
+    private final FeedKeywordFilter feedKeywordFilter;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -139,7 +145,6 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
-        uploadRateLimiter.requireUploadUrl(userId);
         String contentType = mediaType(request.contentType());
         String extension = UPLOAD_EXTENSIONS.get(contentType);
         if (extension == null) {
@@ -174,10 +179,9 @@ public class VideoServiceImpl implements VideoService {
 
     @Override
     public VideoResponse publish(Long userId, CreateVideoRequest request) {
-        // First: a publish refused for anything after this — a foreign upload, its caption — still
-        // spends budget, so neither can be probed at speed.
-        uploadRateLimiter.requirePublish(userId);
-        String rawFileUrl = storedUrl(requireOwnUpload(userId, request.rawFileUrl()));
+        String key = requireOwnUpload(userId, request.rawFileUrl());
+        requireUploaded(key);
+        String rawFileUrl = storedUrl(key);
         List<String> tags = normalizeTags(request.tags(), request.description());
         // Before the insert: a caption refused here leaves nothing behind, so the same upload can
         // be published again once the text is fixed.
@@ -296,6 +300,25 @@ public class VideoServiceImpl implements VideoService {
     }
 
     /**
+     * The key's shape says whose upload it would be, not that one happened. Unchecked, a made-up
+     * key reached media-worker, which retried the missing file for seconds on its one listener
+     * thread, so a loop of them stalled every transcode.
+     */
+    private void requireUploaded(String key) {
+        try {
+            minioClient.statObject(StatObjectArgs.builder().bucket(minioProperties.bucket()).object(key).build());
+        } catch (ErrorResponseException e) {
+            if ("NoSuchKey".equals(e.errorResponse().code())) {
+                throw new UploadNotFoundException();
+            }
+            throw new UploadUrlUnavailableException(e);
+        } catch (Exception e) {
+            log.error("Could not check upload {} in bucket {}", key, minioProperties.bucket(), e);
+            throw new UploadUrlUnavailableException(e);
+        }
+    }
+
+    /**
      * The form a raw upload is stored in: the key under an {@code s3://} bucket authority, which is
      * what media-worker reads and what raw_file_idx compares.
      */
@@ -392,7 +415,7 @@ public class VideoServiceImpl implements VideoService {
      * string, and nothing else stops a caller asking for ten thousand documents in one hop.
      */
     @Override
-    public List<VideoResponse> getByIds(Long requesterId, List<String> videoIds) {
+    public List<VideoResponse> getByIds(Long requesterId, List<String> videoIds, FeedKind feed) {
         if (videoIds == null || videoIds.isEmpty()) {
             return List.of();
         }
@@ -433,9 +456,29 @@ public class VideoServiceImpl implements VideoService {
                 .toList();
         Set<Long> followed = followedPrivateOwners(requesterId, ordered);
         Set<Long> banned = hiddenAmong(ordered.stream().map(VideoResponse::userId).collect(Collectors.toSet()));
-        return withAccountComments(ordered.stream()
+        return withAccountComments(feedKeywordFilter.apply(requesterId, feed, ordered.stream()
                 .filter(video -> isVisibleTo(requesterId, video, followed, banned))
-                .toList());
+                .toList()));
+    }
+
+    /** Internal chat cards use the batch audience policy plus one block check per distinct owner. */
+    @Override
+    public List<ViewableVideoResponse> getViewable(Long viewerId, List<String> ids) {
+        if (ids == null || ids.isEmpty() || ids.size() > 50 || ids.stream().anyMatch(id -> id == null || id.isBlank())) {
+            throw new BadRequestException("VALIDATION_ERROR", "ids: 1 to 50 non-blank ids required");
+        }
+        List<VideoResponse> videos = getByIds(viewerId, ids, null);
+        Set<Long> hidden = hiddenAmong(videos.stream().map(VideoResponse::userId).collect(Collectors.toSet()));
+        Map<Long, Boolean> blocked = new HashMap<>();
+        Map<String, ViewableVideoResponse> available = new HashMap<>();
+        for (VideoResponse video : videos) {
+            // Even an owner cannot share unfinished, removed, or banned-owner content.
+            if (video.status() == VideoStatus.PUBLISHED && video.deletedAt() == null && !hidden.contains(video.userId())
+                    && !blocked.computeIfAbsent(video.userId(), owner -> blockClient.isBlockedBetween(owner, viewerId))) {
+                available.put(video.id(), ViewableVideoResponse.from(video));
+            }
+        }
+        return ids.stream().map(available::get).filter(Objects::nonNull).toList();
     }
 
     private int maxBatchSize() {
@@ -448,13 +491,21 @@ public class VideoServiceImpl implements VideoService {
      * grid is finite, gets jumped around in, and its owner has a use for a total.
      */
     @Override
-    public CursorPage<VideoResponse> getFeed(String cursor, Integer size) {
-        return feedPage(null, cursor, size);
+    public CursorPage<VideoResponse> getFeed(Long requesterId, String cursor, Integer size, FeedKind feed) {
+        return withoutFilteredKeywords(feedPage(null, cursor, size), requesterId, feed);
+    }
+
+    /**
+     * After the page is cut, so the cursor stays the one of the page as read: a shortened page is
+     * fine, the web already treats a short page as having successors.
+     */
+    private CursorPage<VideoResponse> withoutFilteredKeywords(CursorPage<VideoResponse> page, Long viewerId, FeedKind feed) {
+        return new CursorPage<>(feedKeywordFilter.apply(viewerId, feed, page.items()), page.nextCursor());
     }
 
     @Override
     public CursorPage<VideoResponse> getFollowingFeed(
-            Long requesterId, List<Long> followedUserIds, String cursor, Integer size) {
+            Long requesterId, List<Long> followedUserIds, String cursor, Integer size, FeedKind feed) {
         // Following nobody is an empty tab, not the public feed. Returning early also keeps an
         // empty $in — which matches nothing but still costs a query — off the wire.
         if (followedUserIds == null || followedUserIds.isEmpty()) {
@@ -476,7 +527,7 @@ public class VideoServiceImpl implements VideoService {
         if (authors.isEmpty()) {
             return new CursorPage<>(List.of(), null);
         }
-        return feedPage(authors, cursor, size);
+        return withoutFilteredKeywords(feedPage(authors, cursor, size), requesterId, feed);
     }
 
     /**

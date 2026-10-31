@@ -6,6 +6,7 @@ import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.userservice.config.SecurityConfig;
 import com.tiktok.userservice.dto.response.BlockResponse;
+import com.tiktok.userservice.dto.response.BlockStateResponse;
 import com.tiktok.userservice.dto.response.MuteResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.exception.AlreadyBlockedException;
@@ -39,6 +40,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -225,6 +227,19 @@ class BlockMuteControllerTest {
     }
 
     /**
+     * Spring MVC answers a HEAD with the GET handler, so an internal rule for GET alone lets a HEAD
+     * fall through to anyRequest().authenticated(): a user's JWT would ask who blocked whom.
+     */
+    @Test
+    void internalPrefix_refusesAHeadWithAUsersJwt() throws Exception {
+        mockMvc.perform(head("/api/v1/users/internal/blocks").param("userA", "1").param("userB", "2")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+
+        verify(blockService, never()).isBlockedBetween(any(), any());
+    }
+
+    /**
      * recommendation-service drops muted accounts out of the feed and has no read path into this
      * database. Same internal prefix as the block check, so the gateway keeps it off the internet.
      */
@@ -237,5 +252,45 @@ class BlockMuteControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data[0]").value(2))
                 .andExpect(jsonPath("$.data[1]").value(3));
+    }
+
+    @Test
+    void blockStates_returnsDirectionsAndVersionForInternalCallers() throws Exception {
+        when(blockService.states(1L, List.of(2L, 3L))).thenReturn(List.of(
+                new BlockStateResponse(2L, true, false, 1234),
+                new BlockStateResponse(3L, false, false, 0)));
+        mockMvc.perform(get("/api/v1/users/internal/blocks/states")
+                        .param("viewerId", "1").param("otherIds", "2,3")
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].userId").value(2))
+                .andExpect(jsonPath("$.data[0].blockedByViewer").value(true))
+                .andExpect(jsonPath("$.data[0].blockedViewer").value(false))
+                .andExpect(jsonPath("$.data[0].version").value(1234))
+                .andExpect(jsonPath("$.data[1].version").value(0));
+    }
+
+    @Test
+    void blockStates_requiresInternalToken() throws Exception {
+        mockMvc.perform(get("/api/v1/users/internal/blocks/states")
+                        .param("viewerId", "1").param("otherIds", "2")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+        verify(blockService, never()).states(any(), any());
+    }
+
+    @Test
+    void blockStates_capsTheRawListAt100() throws Exception {
+        String hundred = java.util.stream.LongStream.rangeClosed(1, 100).mapToObj(String::valueOf)
+                .collect(java.util.stream.Collectors.joining(","));
+        mockMvc.perform(get("/api/v1/users/internal/blocks/states")
+                        .param("viewerId", "1").param("otherIds", hundred)
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/users/internal/blocks/states")
+                        .param("viewerId", "1").param("otherIds", hundred + ",1")
+                        .header(InternalApiToken.HEADER, internalApiToken.value()))
+                .andExpect(status().isBadRequest());
+        verify(blockService, org.mockito.Mockito.times(1)).states(eq(1L), any());
     }
 }

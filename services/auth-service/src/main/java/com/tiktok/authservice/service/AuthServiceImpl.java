@@ -313,9 +313,11 @@ public class AuthServiceImpl implements AuthService {
         // between the read and here; only this UPDATE decides who rotates the token, and the
         // loser gets 0 rows back instead of quietly minting a second chain.
         if (refreshTokenRepository.claimForRotation(tokenHash, now) == 0) {
-            RefreshToken claimedByOther = refreshTokenRepository.findByTokenHash(tokenHash)
+            // Lost to a concurrent refresh, or to a logout or password reset that committed after
+            // the read. Only the first left a successor behind, so only it is judged as a replay.
+            RefreshToken current = refreshTokenRepository.findByTokenHash(tokenHash)
                     .orElseThrow(InvalidRefreshTokenException::new);
-            throw rejectAsReplay(claimedByOther, now);
+            throw current.isRotated() ? rejectAsReplay(current, now) : new InvalidRefreshTokenException();
         }
 
         // After the claim, so a token belonging to a deleted or suspended account is not rotated
@@ -396,15 +398,11 @@ public class AuthServiceImpl implements AuthService {
             return;
         }
 
-        refreshTokenRepository.findByTokenHash(HashUtils.sha256(refreshToken))
-                .ifPresent(storedToken -> {
-                    storedToken.revoke();
-                    refreshTokenRepository.save(storedToken);
-                    // Inside the ifPresent: an unknown token revokes nothing, and logging a
-                    // logout that ended no session would put sessions in the trail that never
-                    // existed.
-                    securityEventRecorder.record(owner, SecurityEventType.LOGOUT);
-                });
+        // Only when this call ended a session: an unknown or already revoked token ended none, and
+        // logging a logout that ended no session would put sessions in the trail that never existed.
+        if (refreshTokenRepository.revoke(HashUtils.sha256(refreshToken), Instant.now()) == 1) {
+            securityEventRecorder.record(owner, SecurityEventType.LOGOUT);
+        }
     }
 
     /** The user a refresh token was issued to, or null if it is not a refresh token of ours. */

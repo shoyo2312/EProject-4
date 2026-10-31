@@ -55,6 +55,7 @@ public class AdminSecurityEventController {
                 event.getUserAgent(),
                 event.getDeviceLabel(),
                 event.getDeviceModel(),
+                event.getLocation(),
                 event.getDetail(),
                 event.getCreatedAt());
     }

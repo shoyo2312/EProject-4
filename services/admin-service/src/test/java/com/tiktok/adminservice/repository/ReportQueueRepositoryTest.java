@@ -3,11 +3,13 @@ package com.tiktok.adminservice.repository;
 import com.tiktok.adminservice.entity.Report;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
+import org.hibernate.exception.ConstraintViolationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -18,8 +20,10 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The queue ordering and the auto-dismiss sweep are raw SQL against Postgres — a CASE of weights,
@@ -50,7 +54,7 @@ class ReportQueueRepositoryTest {
     @Autowired
     private TestEntityManager entityManager;
 
-    /** Each report needs its own reporter — the one-per-reporter-per-target index says so. */
+    /** Each pending report needs its own reporter — the index allows one per reporter per target. */
     private long nextReporterId = 1;
 
     private static final String SPAM = "Deceptive behavior and spam";
@@ -157,6 +161,46 @@ class ReportQueueRepositoryTest {
         assertThat(statusOf(sibling)).isEqualTo(ReportStatus.RESOLVED);
         assertThat(statusOf(resolvedByHand)).isEqualTo(ReportStatus.PENDING);
         assertThat(statusOf(elsewhere)).isEqualTo(ReportStatus.PENDING);
+    }
+
+    /**
+     * A harassment victim whose report was resolved with a warning, reporting the same account
+     * again. Nothing soft-deletes a closed report, so an index that counted it blocked this for
+     * good. Here, like the ledger tests, to share the container.
+     */
+    @Test
+    void aClosedReportDoesNotStopItsReporterReportingTheTargetAgain() {
+        Report first = filedBy(42L, "v1");
+        first.resolve(99L, ReportStatus.RESOLVED);
+        reportRepository.saveAndFlush(first);
+
+        assertThat(pendingReportOf(42L, "v1")).isEmpty();
+
+        Report again = filedBy(42L, "v1");
+
+        assertThat(pendingReportOf(42L, "v1")).map(Report::getId).contains(again.getId());
+    }
+
+    /** Closed reports aside, one reporter still cannot stack pending reports on one target. */
+    @Test
+    void aSecondPendingReportFromTheSameReporterStillCollides() {
+        Report dismissed = filedBy(42L, "v1");
+        dismissed.resolve(99L, ReportStatus.DISMISSED);
+        reportRepository.saveAndFlush(dismissed);
+        filedBy(42L, "v1");
+
+        // By name: submitReport turns exactly this constraint into a 409, and anything else into a 500.
+        assertThatThrownBy(() -> filedBy(42L, "v1"))
+                .isInstanceOf(DataIntegrityViolationException.class)
+                .cause()
+                .isInstanceOfSatisfying(ConstraintViolationException.class, violation ->
+                        assertThat(violation.getConstraintName())
+                                .isEqualToIgnoringCase("idx_reports_one_per_reporter_target"));
+    }
+
+    private Optional<Report> pendingReportOf(long reporterId, String targetId) {
+        return reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                reporterId, ReportTargetType.VIDEO, targetId, ReportStatus.PENDING);
     }
 
     /**

@@ -84,14 +84,6 @@ app:
     # Same env vars there — keep in step.
     max-bytes: ${VIDEO_MAX_BYTES:524288000}          # 500 MB
     max-duration-seconds: ${VIDEO_MAX_DURATION_SECONDS:600}  # 10 minutes
-    # Per account; 0 switches a tier off. See UploadRateLimitProperties.
-    rate-limit:
-      upload-url:
-        per-hour: ${UPLOAD_URL_PER_HOUR:30}
-        per-day: ${UPLOAD_URL_PER_DAY:100}
-      publish:
-        per-hour: ${VIDEO_PUBLISH_PER_HOUR:10}
-        per-day: ${VIDEO_PUBLISH_PER_DAY:30}
 
   media:
     # Where CreateVideoRequest.rawFileUrl is allowed to point. Buckets must match media-worker's
@@ -122,6 +114,10 @@ minio:
   # presigned uploads land in. endpoint is what the browser PUTs to, so in any deployment where
   # the client is not on the service network this is the public address, not the internal one.
   endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+  # Where the service's own calls go (statObject, the upload form's policy signature). In
+  # production this is the in-cluster MinIO; through the public endpoint every call goes out
+  # through Cloudflare and back in. See MinioConfig.
+  internal-endpoint: ${MINIO_INTERNAL_ENDPOINT:${minio.endpoint}}
   upload-url: ${MEDIA_UPLOAD_URL:${minio.endpoint}}
   access-key: ${MINIO_ACCESS_KEY:minioadmin}
   secret-key: ${MINIO_SECRET_KEY:minioadmin123}

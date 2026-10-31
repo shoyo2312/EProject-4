@@ -1,5 +1,6 @@
 package com.tiktok.adminservice.config;
 
+import com.tiktok.common.http.InternalApiToken;
 import com.tiktok.common.http.PooledRequestFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -35,6 +36,18 @@ public class DownstreamRestClientConfig {
             @Value("${downstream.timeout-millis:2000}") long timeoutMillis) {
         Duration timeout = Duration.ofMillis(timeoutMillis);
         return RestClient.builder().baseUrl(authServiceUri)
+                .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
+    }
+
+    /** chat-service's internal prefix: the messages a reporter picked, read as the reporter sees them. */
+    @Bean
+    public RestClient chatServiceRestClient(
+            @Value("${downstream.chat-service-uri:http://localhost:8088}") String chatServiceUri,
+            @Value("${downstream.timeout-millis:2000}") long timeoutMillis,
+            InternalApiToken internalApiToken) {
+        Duration timeout = Duration.ofMillis(timeoutMillis);
+        return RestClient.builder().baseUrl(chatServiceUri)
+                .defaultHeader(InternalApiToken.HEADER, internalApiToken.value())
                 .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
     }
 }
