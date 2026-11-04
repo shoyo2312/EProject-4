@@ -71,3 +71,6 @@ data/geoip/
 
 # Python bytecode (scripts/seed)
 __pycache__/
+
+# Local archive of db/, not for the repository
+/db.zip
