@@ -19,6 +19,7 @@ import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.WatchTo
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -28,7 +29,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -41,7 +44,33 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
     private static final WatchTotals NO_WATCHES = new WatchTotals(null, 0, 0, 0, 0);
     private static final EngagementTotals NO_ENGAGEMENT = new EngagementTotals(null, 0, 0, 0);
 
+    /** How long one answer is reused — Studio asks these on every tab switch, and each is several FINAL scans. */
+    private static final long TTL_NANOS = Duration.ofSeconds(60).toNanos();
+
     private final CreatorAnalyticsRepository repository;
+
+    /**
+     * ponytail: a per-instance memo, one entry per question asked. Nothing evicts — growth is bounded
+     * by creators × days × sorts, and an expired entry only goes when its question is asked again. A
+     * shared cache (Caffeine or Redis) is the upgrade when this runs on more than one instance or that
+     * growth shows in the heap.
+     */
+    private final ConcurrentHashMap<List<Object>, Memo> memo = new ConcurrentHashMap<>();
+
+    private record Memo(Object value, long expiresAtNanos) {
+    }
+
+    @SuppressWarnings("unchecked")
+    private <T> T memoised(Supplier<T> load, Object... key) {
+        List<Object> k = List.of(key);
+        Memo hit = memo.get(k);
+        if (hit != null && System.nanoTime() - hit.expiresAtNanos() < 0) {
+            return (T) hit.value();
+        }
+        T value = load.get();
+        memo.put(k, new Memo(value, System.nanoTime() + TTL_NANOS));
+        return value;
+    }
 
     /**
      * Viewers a creator needs before Studio breaks them down by hour and weekday. TikTok holds the
@@ -79,6 +108,25 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
 
     @Override
     public CreatorOverviewResponse overview(long creatorId, int days) {
+        return memoised(() -> loadOverview(creatorId, days), "overview", creatorId, days);
+    }
+
+    @Override
+    public List<CreatorVideoStatsResponse> topVideos(long creatorId, int days, CreatorVideoSort sort, int limit) {
+        return memoised(() -> loadTopVideos(creatorId, days, sort, limit), "topVideos", creatorId, days, sort, limit);
+    }
+
+    @Override
+    public CreatorVideoDetailResponse video(long creatorId, String videoId, int days) {
+        return memoised(() -> loadVideo(creatorId, videoId, days), "video", creatorId, videoId, days);
+    }
+
+    @Override
+    public CreatorViewersResponse viewers(long creatorId, int days) {
+        return memoised(() -> loadViewers(creatorId, days), "viewers", creatorId, days);
+    }
+
+    private CreatorOverviewResponse loadOverview(long creatorId, int days) {
         Window window = window(days);
         Scope scope = Scope.ownedBy(creatorId);
 
@@ -92,8 +140,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
         return new CreatorOverviewResponse(totals(current), totals(both.subList(0, days)), List.copyOf(current));
     }
 
-    @Override
-    public List<CreatorVideoStatsResponse> topVideos(long creatorId, int days, CreatorVideoSort sort, int limit) {
+    private List<CreatorVideoStatsResponse> loadTopVideos(long creatorId, int days, CreatorVideoSort sort, int limit) {
         Window window = window(days);
         Scope scope = Scope.ownedBy(creatorId);
         Map<String, WatchTotals> watches = byVideo(repository.watchTotals(scope, window.from(), window.to()),
@@ -115,8 +162,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                 .toList();
     }
 
-    @Override
-    public CreatorVideoDetailResponse video(long creatorId, String videoId, int days) {
+    private CreatorVideoDetailResponse loadVideo(long creatorId, String videoId, int days) {
         if (!repository.ownsVideo(creatorId, videoId)) {
             throw new CreatorVideoNotFoundException(videoId);
         }
@@ -145,8 +191,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                         List.of()));
     }
 
-    @Override
-    public CreatorViewersResponse viewers(long creatorId, int days) {
+    private CreatorViewersResponse loadViewers(long creatorId, int days) {
         Window window = window(days);
         long total = repository.viewers(creatorId, window.from(), window.to());
         long fresh = repository.newViewers(creatorId, window.from(), window.to());

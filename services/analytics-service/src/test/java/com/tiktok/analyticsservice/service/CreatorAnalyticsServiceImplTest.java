@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -159,5 +160,15 @@ class CreatorAnalyticsServiceImplTest {
         assertThat(viewers.breakdownAvailable()).isTrue();
         assertThat(viewers.activeHours()).hasSize(24);
         assertThat(viewers.activeDays()).hasSize(7);
+    }
+
+    /** Studio asks these on every tab switch, and each one is several FINAL scans: a minute's answer is reused. */
+    @Test
+    void theSameQuestionWithinAMinute_readsClickHouseOnce() {
+        service.overview(7L, 7);
+        service.overview(7L, 7);
+        service.overview(7L, 28);
+
+        verify(repository, times(2)).dailyViews(any(), any(), any());
     }
 }

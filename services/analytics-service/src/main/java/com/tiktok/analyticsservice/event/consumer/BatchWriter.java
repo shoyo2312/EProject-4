@@ -41,7 +41,10 @@ final class BatchWriter {
                 }
                 throw new BatchListenerFailedException("Unreadable record on " + record.topic(), e, record);
             }
-            rows.add(row);
+            // A parser that answers null has nothing to write for that record: skipped, not failed.
+            if (row != null) {
+                rows.add(row);
+            }
         }
         if (!rows.isEmpty()) {
             insert.accept(rows);
