@@ -6,6 +6,7 @@ import com.tiktok.authservice.repository.KnownDeviceRepository;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.RememberedDeviceRepository;
+import com.tiktok.authservice.repository.UserSessionRepository;
 import com.tiktok.authservice.repository.VerificationTokenRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -45,6 +46,7 @@ public class ExpiredRecordCleanup {
     private final OutboxEventRepository outboxEventRepository;
     private final AuthSecurityEventRepository authSecurityEventRepository;
     private final KnownDeviceRepository knownDeviceRepository;
+    private final UserSessionRepository userSessionRepository;
     private final RetentionProperties retention;
     private final TransactionTemplate transactionTemplate;
 
@@ -54,6 +56,9 @@ public class ExpiredRecordCleanup {
         int batchSize = retention.batchSize();
 
         sweep("refresh tokens", () -> refreshTokenRepository.deleteExpiredBefore(
+                now.minus(retention.refreshTokenGrace()), batchSize));
+        // Same grace as the tokens: a session is over once its last token expired or it was revoked.
+        sweep("ended sessions", () -> userSessionRepository.deleteEndedBefore(
                 now.minus(retention.refreshTokenGrace()), batchSize));
         sweep("verification tokens", () -> verificationTokenRepository.deleteExpiredBefore(
                 now.minus(retention.verificationTokenGrace()), batchSize));

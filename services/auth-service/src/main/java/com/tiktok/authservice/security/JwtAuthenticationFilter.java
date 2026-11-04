@@ -2,6 +2,7 @@ package com.tiktok.authservice.security;
 
 import com.tiktok.authservice.service.AccessTokenBlacklist;
 import com.tiktok.crypto.jwt.JwtProvider;
+import com.tiktok.crypto.jwt.RevocationKeys;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -57,6 +58,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         : List.<SimpleGrantedAuthority>of();
 
                 var authentication = new UsernamePasswordAuthenticationToken(userId, null, authorities);
+                // The device this token belongs to, so /sessions can mark "this device".
+                authentication.setDetails(RevocationKeys.sessionIdOf(claims));
                 SecurityContextHolder.getContext().setAuthentication(authentication);
             }
         }

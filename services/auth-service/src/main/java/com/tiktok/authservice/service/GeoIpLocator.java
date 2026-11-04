@@ -10,6 +10,8 @@ import java.io.IOException;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -132,10 +134,14 @@ public class GeoIpLocator implements AutoCloseable {
     }
 
     /**
-     * The two parts of a City record this reads. maxmind-db fills a record through its canonical
+     * The parts of a City record this reads. maxmind-db fills a record through its canonical
      * constructor, by component name, and skips every other key in the data.
+     *
+     * <p>The province ({@code subdivisions[0]}) sits between the city and the country, because in
+     * Vietnam the city alone is often a district town nobody recognises — "Bien Hoa" says less
+     * than "Bien Hoa, Dong Nai". Left out when the city already names it ("Hanoi, Hanoi").
      */
-    public record Place(Named city, Named country) {
+    public record Place(Named city, List<Named> subdivisions, Named country) {
 
         String describe() {
             String countryName = country == null ? null : country.english();
@@ -143,7 +149,24 @@ public class GeoIpLocator implements AutoCloseable {
                 return null;
             }
             String cityName = city == null ? null : city.english();
-            return cityName == null ? countryName : cityName + ", " + countryName;
+            String province = subdivisions == null || subdivisions.isEmpty() || subdivisions.get(0) == null
+                    ? null : subdivisions.get(0).english();
+
+            StringBuilder place = new StringBuilder();
+            if (cityName != null) {
+                place.append(cityName).append(", ");
+            }
+            if (province != null && (cityName == null || !sameName(cityName, province))) {
+                place.append(province).append(", ");
+            }
+            return place.append(countryName).toString();
+        }
+
+        /** "Ho Chi Minh City" and "Ho Chi Minh", "Hanoi" and "Ha Noi": the same place twice. */
+        private static boolean sameName(String city, String province) {
+            String a = city.toLowerCase(Locale.ROOT).replace(" ", "");
+            String b = province.toLowerCase(Locale.ROOT).replace(" ", "");
+            return a.startsWith(b) || b.startsWith(a);
         }
     }
 

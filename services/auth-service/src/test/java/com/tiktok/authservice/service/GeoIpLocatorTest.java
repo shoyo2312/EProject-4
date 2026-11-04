@@ -29,7 +29,7 @@ class GeoIpLocatorTest {
 
     @Test
     void anIpv4AddressResolvesToCityAndCountry() {
-        assertThat(locator.locate("81.2.69.160")).isEqualTo("London, United Kingdom");
+        assertThat(locator.locate("81.2.69.160")).isEqualTo("London, England, United Kingdom");
     }
 
     @Test
@@ -40,7 +40,7 @@ class GeoIpLocatorTest {
     /** How a dual-stack socket reports an IPv4 client. */
     @Test
     void anIpv4MappedAddressIsLookedUpAsIpv4() {
-        assertThat(locator.locate("::ffff:81.2.69.160")).isEqualTo("London, United Kingdom");
+        assertThat(locator.locate("::ffff:81.2.69.160")).isEqualTo("London, England, United Kingdom");
     }
 
     /** Every local request is one of these; none of them is anywhere. */
@@ -91,5 +91,22 @@ class GeoIpLocatorTest {
         try (GeoIpLocator disabled = new GeoIpLocator(junk.toString())) {
             assertThat(disabled.locate("81.2.69.160")).isNull();
         }
+    }
+
+    private static GeoIpLocator.Named en(String name) {
+        return new GeoIpLocator.Named(java.util.Map.of("en", name));
+    }
+
+    /** The province goes between the city and the country, unless the city already names it. */
+    @Test
+    void theProvinceIsNamedUnlessTheCityIsIt() {
+        assertThat(new GeoIpLocator.Place(en("Bien Hoa"), List.of(en("Dong Nai")), en("Vietnam")).describe())
+                .isEqualTo("Bien Hoa, Dong Nai, Vietnam");
+        assertThat(new GeoIpLocator.Place(en("Ho Chi Minh City"), List.of(en("Ho Chi Minh")), en("Vietnam")).describe())
+                .isEqualTo("Ho Chi Minh City, Vietnam");
+        assertThat(new GeoIpLocator.Place(null, List.of(en("Da Nang")), en("Vietnam")).describe())
+                .isEqualTo("Da Nang, Vietnam");
+        assertThat(new GeoIpLocator.Place(en("Hanoi"), null, en("Vietnam")).describe())
+                .isEqualTo("Hanoi, Vietnam");
     }
 }

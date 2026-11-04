@@ -24,6 +24,10 @@ public class RefreshToken {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
+    /** The device this token belongs to; null only on tokens issued before V20. */
+    @Column(name = "session_id", updatable = false)
+    private Long sessionId;
+
     @Column(name = "token_hash", nullable = false, unique = true)
     private String tokenHash;
 

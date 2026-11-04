@@ -28,6 +28,8 @@ final class DeviceLabel {
     }
 
     private static final List<Token> BROWSERS = List.of(
+            // The mobile app's own agent: "NowaApp/1.0.0 (Android; Mobile)".
+            new Token("nowaapp/", "Nowa app"),
             new Token("edg/", "Edge"),
             new Token("opr/", "Opera"),
             new Token("opera", "Opera"),
