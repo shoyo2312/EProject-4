@@ -11,6 +11,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.File;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.math.BigDecimal;
 import java.nio.file.Files;
@@ -133,6 +134,17 @@ class EventJsonCompatibilityTest {
         }
         if (component.getGenericType().getTypeName().equals("java.util.List<java.lang.String>")) {
             return List.of(component.getName() + "-a", component.getName() + "-b");
+        }
+        // A value object carried inside an event, such as VideoPublishedEvent.Edit: filled the same
+        // way, so its fields are pinned along with the event that carries them.
+        if (type.isRecord()) {
+            return sample(type);
+        }
+        if (type == List.class
+                && component.getGenericType() instanceof ParameterizedType list
+                && list.getActualTypeArguments()[0] instanceof Class<?> element
+                && element.isRecord()) {
+            return List.of(sample(element));
         }
         throw new IllegalArgumentException("No sample value for " + component + " of " + component.getDeclaringRecord());
     }

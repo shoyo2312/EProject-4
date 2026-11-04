@@ -1,5 +1,6 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.mediaworker.config.MediaVideoProperties;
 import com.tiktok.mediaworker.config.MinioProperties;
 import io.minio.DownloadObjectArgs;
@@ -23,6 +24,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
@@ -158,7 +160,7 @@ class TranscodeServiceImplTest {
         });
         stubAnimatedPreview(true);
 
-        TranscodeResult result = service().transcode("vid123", RAW_URL);
+        TranscodeResult result = service().transcode("vid123", RAW_URL, null);
 
         assertThat(result.width()).isEqualTo(1280);
         assertThat(result.height()).isEqualTo(720);
@@ -179,7 +181,7 @@ class TranscodeServiceImplTest {
         stubStillFrame(true);
         stubAnimatedPreview(true);
 
-        TranscodeResult result = service().transcode("vid123", RAW_URL);
+        TranscodeResult result = service().transcode("vid123", RAW_URL, null);
 
         assertThat(result.hlsUrl()).isEqualTo("https://media.example/video-media/hls/vid123/source.mp4");
         assertThat(result.thumbnailUrl()).isEqualTo("https://media.example/video-media/thumbnails/vid123.jpg");
@@ -203,7 +205,7 @@ class TranscodeServiceImplTest {
         stubStillFrame(true);
         stubAnimatedPreview(true);
 
-        TranscodeResult result = service().transcode("vid123", RAW_URL);
+        TranscodeResult result = service().transcode("vid123", RAW_URL, null);
 
         // Still playable at the same key — the fallback changes which file is uploaded, not where.
         assertThat(result.hlsUrl()).isEqualTo("https://media.example/video-media/hls/vid123/source.mp4");
@@ -221,7 +223,7 @@ class TranscodeServiceImplTest {
         stubStillFrame(false);
         stubAnimatedPreview(false);
 
-        TranscodeResult result = service().transcode("vid123", RAW_URL);
+        TranscodeResult result = service().transcode("vid123", RAW_URL, null);
 
         assertThat(result.thumbnailUrl()).isNull();
         assertThat(result.previewUrl()).isNull();
@@ -238,7 +240,7 @@ class TranscodeServiceImplTest {
         stubStillFrame(true);
         stubAnimatedPreview(true);
 
-        service().transcode("vid123", RAW_URL);
+        service().transcode("vid123", RAW_URL, null);
 
         verify(ffmpeg).stillFrame(any(), any(), eq(0));
     }
@@ -252,7 +254,7 @@ class TranscodeServiceImplTest {
         stubStillFrame(true);
         stubAnimatedPreview(true);
 
-        service().transcode("vid123", RAW_URL);
+        service().transcode("vid123", RAW_URL, null);
 
         ArgumentCaptor<DownloadObjectArgs> captor = ArgumentCaptor.forClass(DownloadObjectArgs.class);
         verify(minioClient).downloadObject(captor.capture());
@@ -264,7 +266,7 @@ class TranscodeServiceImplTest {
     void transcode_fileTooLarge_isRejectedWithoutDownloading() throws Exception {
         stubStat(524_288_001L);
 
-        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL))
+        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, null))
                 .isInstanceOf(MediaRejectedException.class)
                 .hasMessageContaining("500 MB");
 
@@ -278,7 +280,7 @@ class TranscodeServiceImplTest {
         stubDownload();
         stubProbe(601);
 
-        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL))
+        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, null))
                 .isInstanceOf(MediaRejectedException.class)
                 .hasMessageContaining("10m");
 
@@ -287,7 +289,7 @@ class TranscodeServiceImplTest {
 
     @Test
     void transcode_uploadNotInBucket_failsBeforeAnyMinioCall() {
-        assertThatThrownBy(() -> service().transcode("vid123", "s3://other-bucket/raw/7/vid123.mp4"))
+        assertThatThrownBy(() -> service().transcode("vid123", "s3://other-bucket/raw/7/vid123.mp4", null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -300,7 +302,7 @@ class TranscodeServiceImplTest {
         stubStillFrame(true);
         stubAnimatedPreview(true);
 
-        TranscodeResult result = service().transcode("vid123", RAW_URL);
+        TranscodeResult result = service().transcode("vid123", RAW_URL, null);
 
         assertThat(result.hlsUrl()).isEqualTo("https://media.example/video-media/hls/vid123/source.mp4");
         verify(ffmpeg, never()).faststart(any(), any());
@@ -316,8 +318,128 @@ class TranscodeServiceImplTest {
 
         // Falling back here would put an HEVC file at the playback key and hand the viewer a
         // video that silently does not play.
-        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL))
+        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, null))
                 .isInstanceOf(IllegalStateException.class);
+
+        verify(minioClient, never()).uploadObject(any());
+    }
+
+    private static VideoPublishedEvent.Edit edit(VideoPublishedEvent.Edit.Segment... segments) {
+        return new VideoPublishedEvent.Edit(1, List.of(segments));
+    }
+
+    private static VideoPublishedEvent.Edit.Segment segment(double start, double end, double speed) {
+        return new VideoPublishedEvent.Edit.Segment(start, end, speed);
+    }
+
+    private void stubEdit(boolean succeeds) {
+        when(ffmpeg.edit(any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
+            if (succeeds) {
+                Files.writeString(invocation.getArgument(1), "edited bytes");
+            }
+            return succeeds;
+        });
+    }
+
+    /**
+     * Everything after the edit — playback, still, preview, and the duration reported back — comes
+     * from the edited file, so the moderation that samples them checks what viewers will see.
+     */
+    @Test
+    void transcode_withEdits_buildsEverythingFromTheEditedCut() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        when(videoProbe.probe(any()))
+                .thenReturn(new ProbedVideo(42, "h264", "aac", 1280, 720))
+                .thenReturn(new ProbedVideo(6, "h264", "aac", 1280, 720));
+        stubEdit(true);
+        stubFaststart(true);
+        stubStillFrame(true);
+        stubAnimatedPreview(true);
+
+        TranscodeResult result = service().transcode("vid123", RAW_URL,
+                edit(segment(2, 6, 1), segment(10, 14, 2)));
+
+        ArgumentCaptor<Path> edited = ArgumentCaptor.forClass(Path.class);
+        verify(ffmpeg).edit(any(), edited.capture(),
+                eq(List.of(segment(2, 6, 1), segment(10, 14, 2))), eq(true));
+        verify(ffmpeg).faststart(eq(edited.getValue()), any());
+        verify(ffmpeg).stillFrame(eq(edited.getValue()), any(), anyInt());
+        verify(ffmpeg).animatedPreview(eq(edited.getValue()), any(), anyInt());
+        assertThat(result.durationSeconds()).isEqualTo(6);
+    }
+
+    @Test
+    void transcode_silentUploadWithEdits_editsWithoutAudio() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        when(videoProbe.probe(any())).thenReturn(new ProbedVideo(42, "h264", null, 1280, 720));
+        stubEdit(true);
+        stubFaststart(true);
+        stubStillFrame(true);
+        stubAnimatedPreview(true);
+
+        service().transcode("vid123", RAW_URL, edit(segment(0, 5, 1)));
+
+        verify(ffmpeg).edit(any(), any(), any(), eq(false));
+    }
+
+    /**
+     * Never the upload in the edit's place: the upload holds the parts the uploader cut out, and
+     * those are exactly what they chose not to publish.
+     */
+    @Test
+    void transcode_editThatFails_throwsInsteadOfPublishingTheUncutUpload() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbe(42);
+        stubEdit(false);
+
+        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, edit(segment(0, 5, 1))))
+                .isInstanceOf(IllegalStateException.class);
+
+        verify(minioClient, never()).uploadObject(any());
+    }
+
+    @Test
+    void transcode_editThatKeepsNothingOfTheVideo_isRejected() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbe(42);
+
+        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, edit(segment(50, 60, 1))))
+                .isInstanceOf(MediaRejectedException.class);
+
+        verify(ffmpeg, never()).edit(any(), any(), any(), anyBoolean());
+    }
+
+    /** Opening the editor and touching nothing must not cost a full re-encode. */
+    @Test
+    void transcode_editThatChangesNothing_skipsTheReencode() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbe(42);
+        stubFaststart(true);
+        stubStillFrame(true);
+        stubAnimatedPreview(true);
+
+        service().transcode("vid123", RAW_URL, edit(segment(0, 42, 1)));
+
+        verify(ffmpeg, never()).edit(any(), any(), any(), anyBoolean());
+    }
+
+    /** Slowing a clip down makes it longer, so the limit is checked again on what comes out. */
+    @Test
+    void transcode_editThatComesOutTooLong_isRejected() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        when(videoProbe.probe(any()))
+                .thenReturn(new ProbedVideo(400, "h264", "aac", 1280, 720))
+                .thenReturn(new ProbedVideo(800, "h264", "aac", 1280, 720));
+        stubEdit(true);
+
+        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, edit(segment(0, 400, 0.5))))
+                .isInstanceOf(MediaRejectedException.class);
 
         verify(minioClient, never()).uploadObject(any());
     }

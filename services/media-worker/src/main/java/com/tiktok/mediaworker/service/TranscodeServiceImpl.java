@@ -1,6 +1,7 @@
 package com.tiktok.mediaworker.service;
 
 import com.tiktok.common.storage.ObjectKeys;
+import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.mediaworker.config.MediaVideoProperties;
 import com.tiktok.mediaworker.config.MinioProperties;
 import io.minio.DownloadObjectArgs;
@@ -24,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -94,7 +96,7 @@ public class TranscodeServiceImpl implements TranscodeService {
 
     @Override
     @SneakyThrows
-    public TranscodeResult transcode(String videoId, String rawFileUrl) {
+    public TranscodeResult transcode(String videoId, String rawFileUrl, VideoPublishedEvent.Edit edit) {
         String bucket = minioProperties.bucket();
         String sourceKey = ObjectKeys.objectKey(rawFileUrl, bucket).orElseThrow(() -> new IllegalArgumentException(
                 "Raw upload %s of video %s is not in bucket %s".formatted(rawFileUrl, videoId, bucket)));
@@ -115,11 +117,17 @@ public class TranscodeServiceImpl implements TranscodeService {
                     .bucket(bucket).object(sourceKey).filename(source.toString()).build());
 
             ProbedVideo probed = videoProbe.probe(source.toUri().toString());
-            int durationSeconds = probed.durationSeconds();
-            if (durationSeconds > videoLimits.maxDurationSeconds()) {
-                throw new MediaRejectedException("Video is %s; the maximum is %s."
-                        .formatted(humanDuration(durationSeconds), humanDuration(videoLimits.maxDurationSeconds())));
+            // Checked on the upload as well as on the edited result: this one bounds the work the
+            // edit itself costs, the one below bounds what viewers get, since a slowed-down clip
+            // comes out longer than it went in.
+            requireWithinDuration(probed.durationSeconds());
+
+            if (edit != null && EditFilterGraph.changesAnything(edit, probed.durationSeconds())) {
+                source = applyEdit(videoId, source, work.resolve("edited.mp4"), edit, probed);
+                probed = videoProbe.probe(source.toUri().toString());
+                requireWithinDuration(probed.durationSeconds());
             }
+            int durationSeconds = probed.durationSeconds();
 
             String playbackKey = MediaKeys.playback(videoId);
             Path playback = work.resolve("playback.mp4");
@@ -165,6 +173,34 @@ public class TranscodeServiceImpl implements TranscodeService {
                     display.width, display.height);
         } finally {
             deleteRecursively(work);
+        }
+    }
+
+    /**
+     * The edited file replaces the upload for everything after this — playback, artwork and the
+     * moderation that samples them — so what is checked is what is shown.
+     *
+     * <p>A failed edit is thrown, never fallen back from. The upload is everything the uploader
+     * recorded, cuts included, and publishing it in place of the edit would show viewers exactly
+     * the parts the uploader chose to remove.
+     */
+    private Path applyEdit(String videoId, Path source, Path target, VideoPublishedEvent.Edit edit,
+                           ProbedVideo probed) {
+        List<VideoPublishedEvent.Edit.Segment> segments = EditFilterGraph.usable(edit, probed.durationSeconds());
+        if (segments.isEmpty()) {
+            throw new MediaRejectedException("The edit keeps nothing of the video.");
+        }
+        log.info("Editing video {} into {} segment(s)", videoId, segments.size());
+        if (!ffmpeg.edit(source, target, segments, probed.audioCodec() != null)) {
+            throw new IllegalStateException("Could not apply the edits to video " + videoId);
+        }
+        return target;
+    }
+
+    private void requireWithinDuration(int durationSeconds) {
+        if (durationSeconds > videoLimits.maxDurationSeconds()) {
+            throw new MediaRejectedException("Video is %s; the maximum is %s."
+                    .formatted(humanDuration(durationSeconds), humanDuration(videoLimits.maxDurationSeconds())));
         }
     }
 

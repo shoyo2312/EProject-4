@@ -187,7 +187,8 @@ public class VideoEventPublisher {
         VideoPublishedEvent event = VideoPublishedEvent.of(
                 video.getId(), video.getUserId(), video.getTitle(), video.getDescription(),
                 video.getRawFileUrl(), audience(video), video.getTags(),
-                CaptionModeration.eventVerdict(video.getTextModeration()));
+                CaptionModeration.eventVerdict(video.getTextModeration()),
+                video.getEdit() == null ? null : video.getEdit().toEvent());
         try {
             return record(video.getId(), "VideoPublishedEvent", objectMapper.writeValueAsString(event));
         } catch (JacksonException ex) {

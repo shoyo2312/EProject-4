@@ -1,7 +1,9 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoPublishedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ws.schild.jave.MultimediaObject;
 import ws.schild.jave.process.ffmpeg.DefaultFFMPEGLocator;
 
 import java.io.IOException;
@@ -121,6 +123,66 @@ class JaveFfmpegTest {
             return i;
         }
         return Integer.MAX_VALUE;
+    }
+
+    /**
+     * One second played straight, then one second at double speed: a second and a half of video,
+     * with the sound kept and in the shape the rest of the pipeline only has to remux.
+     */
+    @Test
+    void edit_trimsRetimesAndJoinsTheSegments(@TempDir Path work) throws Exception {
+        Path source = synthesize(work.resolve("source.mp4"), "320x240");
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(source, target, List.of(
+                new VideoPublishedEvent.Edit.Segment(0.5, 1.5, 1),
+                new VideoPublishedEvent.Edit.Segment(0, 1, 2)), true)).isTrue();
+
+        assertThat(new MultimediaObject(target.toFile()).getInfo().getDuration()).isBetween(1300L, 1700L);
+        ProbedVideo probed = probe.probe(target.toUri().toString());
+        assertThat(probed.audioCodec()).isEqualTo("aac");
+        assertThat(probed.needsNormalizing()).isFalse();
+    }
+
+    /** The cut works on the picture as it is shown, so a phone held upright stays portrait. */
+    @Test
+    void edit_bakesRotationInAndCapsTheSizeLikeNormalize(@TempDir Path work) throws Exception {
+        Path rotated = rotate90(synthesize(work.resolve("rotated.mp4"), "1920x1080"));
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(rotated, target,
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), true)).isTrue();
+
+        ProbedVideo probed = probe.probe(target.toUri().toString());
+        assertThat(probed.width()).isEqualTo(720);
+        assertThat(probed.height()).isEqualTo(1280);
+    }
+
+    /** Naming an audio stream the file does not have would fail the whole edit. */
+    @Test
+    void edit_silentClip_comesOutSilent(@TempDir Path work) throws Exception {
+        Path silent = work.resolve("silent.mp4");
+        Process process = new ProcessBuilder(List.of(
+                new DefaultFFMPEGLocator().getExecutablePath(), "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc=size=320x240:rate=15:duration=2",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", silent.toString()))
+                .redirectErrorStream(true).inheritIO().start();
+        assertThat(process.waitFor()).isZero();
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(silent, target,
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 0.5)), false)).isTrue();
+
+        assertThat(probe.probe(target.toUri().toString()).audioCodec()).isNull();
+    }
+
+    @Test
+    void edit_refusesInputItCannotDecode(@TempDir Path work) throws Exception {
+        Path notMedia = work.resolve("notes.txt");
+        Files.writeString(notMedia, "this is not a video");
+
+        assertThat(ffmpeg.edit(notMedia, work.resolve("edited.mp4"),
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), true)).isFalse();
     }
 
     @Test

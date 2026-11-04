@@ -238,7 +238,15 @@
     "rawFileUrl" : "rawFileUrl-7",
     "visibility" : "visibility-8",
     "tags" : [ "tags-a", "tags-b" ],
-    "textVerdict" : "REVIEW"
+    "textVerdict" : "REVIEW",
+    "edit" : {
+      "version" : 1,
+      "segments" : [ {
+        "start" : 1.25,
+        "end" : 2.25,
+        "speed" : 3.25
+      } ]
+    }
   },
   "VideoPurgeRequestedEvent" : {
     "eventId" : "eventId-1",

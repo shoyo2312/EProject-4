@@ -103,6 +103,9 @@ public class Video {
 
     private Integer durationSeconds;
 
+    /** Trim and speed from the app's editor, applied by media-worker. Null when not edited. */
+    private VideoEdit edit;
+
     /**
      * Display size of the playback file, rotation already applied — the shape a client lays the
      * player out to. Kept on the document because a feed cannot wait for the first frame to learn

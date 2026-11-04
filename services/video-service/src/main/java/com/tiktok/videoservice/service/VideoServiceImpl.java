@@ -21,6 +21,7 @@ import com.tiktok.videoservice.dto.response.ViewableVideoResponse;
 import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoEdit;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -197,6 +198,7 @@ public class VideoServiceImpl implements VideoService {
                 .ownerPrivate(isPrivateOwner(userId))
                 .tags(tags)
                 .commentsDisabled(request.startsWithCommentsDisabled())
+                .edit(VideoEdit.from(request.edit()))
                 .textModeration(textModeration)
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)

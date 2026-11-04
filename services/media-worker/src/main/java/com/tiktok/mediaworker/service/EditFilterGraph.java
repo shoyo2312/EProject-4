@@ -1,0 +1,145 @@
+package com.tiktok.mediaworker.service;
+
+import com.tiktok.event.video.VideoPublishedEvent.Edit;
+import com.tiktok.event.video.VideoPublishedEvent.Edit.Segment;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * Turns the app editor's recipe into one ffmpeg {@code -filter_complex} graph: each segment is
+ * trimmed out of the upload and retimed to its speed, then the segments are joined back to back.
+ *
+ * <p>Only numbers ever reach the graph, and only ones this class formatted itself. The recipe
+ * comes from a client, and a filter graph is a small language of its own, so a string taken from
+ * the recipe and pasted in would be a way to run any filter on any file this worker can open.
+ *
+ * <p>video-service validated the recipe without ever seeing the file, so a segment may run past
+ * the end of the upload. An end past it needs nothing — trim stops where the stream does — but a
+ * segment that starts past it is dropped rather than kept as an empty input, which concat would
+ * refuse. The length compared against is the probe's, rounded to the second, which is why no end
+ * is ever cut to it: a 10.4s clip probes as 10, and clamping to that would lose its last frames.
+ */
+public final class EditFilterGraph {
+
+    /** The video and audio pads the graph ends in, for {@code -map}. */
+    public static final String VIDEO_OUT = "[vout]";
+    public static final String AUDIO_OUT = "[aout]";
+
+    /** atempo takes 0.5 to 2 in one step on older builds; anything further is chained. */
+    private static final double ATEMPO_MIN = 0.5;
+    private static final double ATEMPO_MAX = 2.0;
+
+    /** Shorter than one frame at 30fps is a segment nobody could see, and trim may yield nothing. */
+    private static final double MIN_SEGMENT_SECONDS = 0.05;
+
+    /** The same cap as {@link JaveFfmpeg#normalize}: long side 1280, short side 720, never upscaled. */
+    private static final String SCALE = "scale='min(iw,if(gt(iw,ih),1280,720))':-2";
+
+    private EditFilterGraph() {
+    }
+
+    /**
+     * Whether applying {@code edit} to an upload of {@code durationSeconds} would change anything.
+     * A recipe of one full-length segment at normal speed is what an editor sends when the user
+     * opened it and touched nothing, and re-encoding for that is minutes of CPU for no difference.
+     */
+    public static boolean changesAnything(Edit edit, double durationSeconds) {
+        List<Segment> segments = usable(edit, durationSeconds);
+        if (segments.isEmpty()) {
+            return edit != null && !edit.segments().isEmpty();
+        }
+        if (segments.size() > 1) {
+            return true;
+        }
+        Segment only = segments.getFirst();
+        return only.start() > MIN_SEGMENT_SECONDS
+                || only.end() < durationSeconds - MIN_SEGMENT_SECONDS
+                || only.speed() != 1.0;
+    }
+
+    /**
+     * @return the segments left once clamped to the upload, in the recipe's order. Empty means the
+     *         recipe asks for nothing the upload holds, which the caller should refuse rather than
+     *         publish the unedited upload in its place
+     */
+    public static List<Segment> usable(Edit edit, double durationSeconds) {
+        if (edit == null) {
+            return List.of();
+        }
+        List<Segment> usable = new ArrayList<>();
+        for (Segment segment : edit.segments()) {
+            double start = Math.max(0, segment.start());
+            if (start < durationSeconds
+                    && segment.end() - start >= MIN_SEGMENT_SECONDS
+                    && segment.speed() > 0) {
+                usable.add(new Segment(start, segment.end(), segment.speed()));
+            }
+        }
+        return usable;
+    }
+
+    /**
+     * @param segments  from {@link #usable}, never empty
+     * @param withAudio whether the upload has an audio stream; a graph naming {@code [0:a]} on a
+     *                  silent file is an error, not silence
+     */
+    public static String build(List<Segment> segments, boolean withAudio) {
+        if (segments.isEmpty()) {
+            throw new IllegalArgumentException("An edit needs at least one segment");
+        }
+        StringBuilder graph = new StringBuilder();
+        StringBuilder joined = new StringBuilder();
+        for (int i = 0; i < segments.size(); i++) {
+            Segment segment = segments.get(i);
+            graph.append("[0:v]trim=start=").append(number(segment.start()))
+                    .append(":end=").append(number(segment.end()))
+                    .append(",setpts=(PTS-STARTPTS)*").append(number(1 / segment.speed()))
+                    .append("[v").append(i).append("];");
+            joined.append("[v").append(i).append(']');
+            if (withAudio) {
+                graph.append("[0:a]atrim=start=").append(number(segment.start()))
+                        .append(":end=").append(number(segment.end()))
+                        .append(",asetpts=PTS-STARTPTS");
+                for (String step : atempo(segment.speed())) {
+                    graph.append(",atempo=").append(step);
+                }
+                graph.append("[a").append(i).append("];");
+                joined.append("[a").append(i).append(']');
+            }
+        }
+        graph.append(joined)
+                .append("concat=n=").append(segments.size())
+                .append(":v=1:a=").append(withAudio ? 1 : 0)
+                .append("[vcat]").append(withAudio ? AUDIO_OUT : "").append(';')
+                .append("[vcat]").append(SCALE).append(VIDEO_OUT);
+        return graph.toString();
+    }
+
+    /**
+     * atempo changes speed without changing pitch, but only within a factor of two per filter on
+     * the builds this worker may run, so 3x is 2x then 1.5x and 0.3x is 0.5x then 0.6x.
+     */
+    static List<String> atempo(double speed) {
+        List<String> steps = new ArrayList<>();
+        double remaining = speed;
+        while (remaining > ATEMPO_MAX) {
+            steps.add(number(ATEMPO_MAX));
+            remaining /= ATEMPO_MAX;
+        }
+        while (remaining < ATEMPO_MIN) {
+            steps.add(number(ATEMPO_MIN));
+            remaining /= ATEMPO_MIN;
+        }
+        if (Math.abs(remaining - 1.0) > 1e-9) {
+            steps.add(number(remaining));
+        }
+        return steps;
+    }
+
+    /** ffmpeg parses its own arguments, so the decimal separator must not follow the locale. */
+    private static String number(double value) {
+        return String.format(Locale.ROOT, "%.6f", value);
+    }
+}

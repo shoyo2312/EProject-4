@@ -1,5 +1,6 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoPublishedEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import ws.schild.jave.process.ffmpeg.DefaultFFMPEGLocator;
@@ -85,6 +86,36 @@ public class JaveFfmpeg implements Ffmpeg {
                 "-movflags", "+faststart",
                 "-f", "mp4",
                 target.toString()));
+    }
+
+    @Override
+    public boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments,
+                        boolean withAudio) {
+        List<String> arguments = new ArrayList<>(List.of(
+                "-i", source.toString(),
+                // Rotation is applied to the decoded input before the graph sees it, so the trim,
+                // the joins and the size cap all work on the picture as it will be shown.
+                "-filter_complex", EditFilterGraph.build(segments, withAudio),
+                "-map", EditFilterGraph.VIDEO_OUT,
+                // The same encoder settings as normalize, so the result is already in the shape
+                // the rest of the pipeline wants and is only remuxed after this.
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "23",
+                "-profile:v", "high",
+                "-pix_fmt", "yuv420p"));
+        if (withAudio) {
+            arguments.addAll(List.of(
+                    "-map", EditFilterGraph.AUDIO_OUT,
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-ac", "2"));
+        }
+        arguments.addAll(List.of(
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                target.toString()));
+        return run("edit", ENCODE_TIMEOUT_SECONDS, arguments);
     }
 
     @Override

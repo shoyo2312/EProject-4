@@ -103,9 +103,23 @@ Request (`CreateVideoRequest`):
   "rawFileUrl": "s3://video-media/raw/123456789012345/7312.mp4",  // bắt buộc, tối đa 500 ký tự, xem ràng buộc bên dưới
   "visibility": "PUBLIC",                             // bắt buộc: PUBLIC | PRIVATE
   "tags": ["dance", "food"],                          // optional, tối đa 10 tag, mỗi tag tối đa 50 ký tự
-  "commentsDisabled": false                           // optional, mặc định false. true = đăng với comment tắt sẵn (cùng cờ mục 3.8)
+  "commentsDisabled": false,                          // optional, mặc định false. true = đăng với comment tắt sẵn (cùng cờ mục 3.8)
+  "edit": {                                           // optional, xem "Chỉnh sửa trong app" bên dưới
+    "segments": [
+      { "start": 1.2, "end": 4.5, "speed": 1.0 },
+      { "start": 6.0, "end": 12.5, "speed": 2.0 }
+    ]
+  }
 }
 ```
+
+**Chỉnh sửa trong app (`edit`).** App chỉ **xem trước** việc cắt và đổi tốc độ; file upload vẫn là bản quay gốc. `edit` là công thức để media-worker dựng video cuối cùng bằng ffmpeg trước khi transcode, nên mọi thứ người xem thấy (playback, thumbnail, preview) và mọi thứ kiểm duyệt chấm đều là **bản đã chỉnh**.
+- `segments`: các đoạn lấy từ file gốc, phát nối tiếp nhau **theo thứ tự gửi**. 1–20 đoạn.
+- `start`/`end`: giây tính trên file **gốc**, trước khi đổi tốc độ. `0 ≤ start < end ≤ 36000`. Không cần khớp chính xác độ dài video: `end` quá cuối video thì dừng ở cuối video, đoạn bắt đầu sau khi video đã hết thì bị bỏ.
+- `speed`: `0.25`–`4` (editor dùng 0.3x/0.5x/1x/2x/3x). Tiếng đổi tốc độ nhưng giữ cao độ.
+- Không chỉnh gì thì **bỏ hẳn `edit`** (hoặc `null`). Một đoạn duy nhất phủ cả video ở tốc độ 1 cũng được coi là không chỉnh, server không encode lại.
+- Sai giới hạn trên → `VALIDATION_ERROR` (400). Công thức không giữ lại được giây nào của video (mọi đoạn đều bắt đầu sau khi video hết) → video thành `FAILED`, giống file hỏng.
+- Giới hạn thời lượng áp cho **cả** file gốc lẫn bản đã chỉnh: làm chậm 0.5x khiến video dài gấp đôi.
 
 **Làm sạch trước khi kiểm tra độ dài.** Server chuẩn hoá NFC (tiếng Việt gõ kiểu tổ hợp được ghép lại), bỏ ký tự vô hình (zero-width, đảo chiều U+202E, ký tự "lấp chỗ" Hangul/Braille), gộp khoảng trắng, tối đa một dòng trống liên tiếp trong `description`, và đổi xuống dòng trong `title`/tag thành dấu cách. Mọi giới hạn ký tự tính theo **code point** sau khi làm sạch (emoji tính 1) — đếm phía client bằng `text.runes.length` (Dart) / `[...text].length` (JS). Tiêu đề chỉ toàn ký tự vô hình → `VALIDATION_ERROR` (400).
 

@@ -38,8 +38,40 @@ public record VideoPublishedEvent(
         // into the moderation verdict, so every consumer of that verdict holds the video the same
         // way. Null from a producer older than this field, or with text moderation not enforced;
         // either way it changes nothing.
-        ModerationVerdict textVerdict
+        ModerationVerdict textVerdict,
+        // The edits made on the uploader's phone — trim and speed — which media-worker applies to
+        // the raw upload before transcoding it. The app only previews them, so without this the
+        // video everyone sees is the untouched recording. Null when nothing was edited, and on
+        // events from a producer older than this field; both mean the upload plays as recorded.
+        Edit edit
 ) implements DomainEvent {
+
+    /**
+     * The recipe that turns the raw upload into the video everyone sees.
+     *
+     * <p>Times are seconds on the raw upload's own clock, before any speed change, so a segment
+     * means the same thing whatever else the recipe does.
+     *
+     * @param version  format of this recipe, so a later shape can be told apart from this one
+     * @param segments the parts of the raw upload that make the video, played back to back in
+     *                 this order. Never null; empty only on a recipe that edits nothing
+     */
+    public record Edit(int version, List<Segment> segments) {
+
+        public static final int CURRENT_VERSION = 1;
+
+        public Edit {
+            segments = segments == null ? List.of() : List.copyOf(segments);
+        }
+
+        /**
+         * @param start seconds into the raw upload where this part begins
+         * @param end   seconds into the raw upload where this part ends, after {@code start}
+         * @param speed playback rate: 2 plays this part twice as fast, 0.5 at half speed
+         */
+        public record Segment(double start, double end, double speed) {
+        }
+    }
 
     /**
      * The eventId is derived from the videoId rather than drawn at random, because this event is
@@ -55,11 +87,18 @@ public record VideoPublishedEvent(
      */
     public static VideoPublishedEvent of(
             String videoId, Long userId, String title, String description, String rawFileUrl,
-            String visibility, List<String> tags, ModerationVerdict textVerdict) {
+            String visibility, List<String> tags, ModerationVerdict textVerdict, Edit edit) {
         String eventId = UUID.nameUUIDFromBytes(
                 ("VideoPublishedEvent:" + videoId).getBytes(StandardCharsets.UTF_8)).toString();
         return new VideoPublishedEvent(eventId, Instant.now(), videoId, userId, title, description,
-                rawFileUrl, visibility, tags == null ? List.of() : List.copyOf(tags), textVerdict);
+                rawFileUrl, visibility, tags == null ? List.of() : List.copyOf(tags), textVerdict, edit);
+    }
+
+    /** Without edits: the upload plays as recorded. */
+    public static VideoPublishedEvent of(
+            String videoId, Long userId, String title, String description, String rawFileUrl,
+            String visibility, List<String> tags, ModerationVerdict textVerdict) {
+        return of(videoId, userId, title, description, rawFileUrl, visibility, tags, textVerdict, null);
     }
 
     /** Without a text verdict, for callers with nothing to say about the caption. */

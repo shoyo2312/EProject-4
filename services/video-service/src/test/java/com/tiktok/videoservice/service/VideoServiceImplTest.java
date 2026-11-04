@@ -2,6 +2,7 @@ package com.tiktok.videoservice.service;
 
 import com.tiktok.videoservice.client.FeedKeywords;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.VideoEditRequest;
 import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
@@ -12,6 +13,7 @@ import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoEdit;
 import com.tiktok.videoservice.entity.VideoModeration;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoTextModeration;
@@ -59,6 +61,7 @@ import java.util.Set;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
@@ -174,6 +177,30 @@ class VideoServiceImplTest {
         assertThat(response.userId()).isEqualTo(1L);
         // No switch sent: comments on, as for every client before the switch existed.
         assertThat(response.commentsDisabled()).isFalse();
+    }
+
+    /** The outbox poll builds the publication later, from the document, so the edits must be on it. */
+    @Test
+    void publish_withEdits_storesThemForThePublication() {
+        VideoEditRequest edit = new VideoEditRequest(List.of(
+                new VideoEditRequest.Segment(1.0, 5.5, 2.0),
+                new VideoEditRequest.Segment(7.0, 8.0, 0.5)));
+
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Edited", "desc",
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit));
+
+        VideoEdit stored = videoRepository.findById(response.id()).orElseThrow().getEdit();
+        assertThat(stored.getVersion()).isEqualTo(1);
+        assertThat(stored.getSegments()).extracting(VideoEdit.Segment::getStart, VideoEdit.Segment::getEnd, VideoEdit.Segment::getSpeed)
+                .containsExactly(tuple(1.0, 5.5, 2.0), tuple(7.0, 8.0, 0.5));
+    }
+
+    @Test
+    void publish_withoutEdits_storesNone() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Plain", "desc",
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of()));
+
+        assertThat(videoRepository.findById(response.id()).orElseThrow().getEdit()).isNull();
     }
 
     @Test

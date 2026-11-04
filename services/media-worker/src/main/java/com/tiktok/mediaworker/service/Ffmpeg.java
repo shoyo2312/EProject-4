@@ -1,5 +1,7 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoPublishedEvent;
+
 import java.nio.file.Path;
 import java.util.List;
 
@@ -33,6 +35,19 @@ public interface Ffmpeg {
      * @return false if the source could not be decoded or encoded
      */
     boolean normalize(Path source, Path target);
+
+    /**
+     * Applies the app editor's segments to {@code source}: each is trimmed out and retimed to its
+     * speed, the pieces are joined in order, and the result is encoded into {@code target} the
+     * same way {@link #normalize} encodes — H.264/AAC, 720p or below, rotation baked in, moov in
+     * front — so it needs no second encode. Re-encoding is unavoidable: a cut lands between key
+     * frames and a speed change rewrites every timestamp.
+     *
+     * @param segments  from {@link EditFilterGraph#usable}, never empty
+     * @param withAudio whether {@code source} has an audio stream
+     * @return false if the source could not be decoded or encoded
+     */
+    boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments, boolean withAudio);
 
     /**
      * Writes one decoded frame from {@code atSecond} into {@code target} as a JPEG, scaled to a

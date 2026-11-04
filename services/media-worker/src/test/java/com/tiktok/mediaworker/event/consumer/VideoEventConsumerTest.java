@@ -66,7 +66,7 @@ class VideoEventConsumerTest {
     @Test
     void onMessage_transcodeFinishingAfterATakedown_quarantinesWhatItJustWrote() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid9", 1L, "t", null, "s3://raw/vid9.mp4", "PUBLIC", List.of());
-        when(transcodeService.transcode("vid9", "s3://raw/vid9.mp4"))
+        when(transcodeService.transcode("vid9", "s3://raw/vid9.mp4", null))
                 .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
@@ -74,12 +74,27 @@ class VideoEventConsumerTest {
         verify(quarantine).enforce("vid9");
     }
 
+    /** The app's trim and speed ride on the publication; dropping them here publishes the uncut upload. */
+    @Test
+    void onMessage_passesTheEditorsRecipeToTheTranscode() throws Exception {
+        VideoPublishedEvent.Edit edit = new VideoPublishedEvent.Edit(1,
+                List.of(new VideoPublishedEvent.Edit.Segment(1, 4, 2)));
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid3", 1L, "t", null, "s3://raw/vid3.mp4",
+                "PUBLIC", List.of(), null, edit);
+        when(transcodeService.transcode("vid3", "s3://raw/vid3.mp4", edit))
+                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 2, 1, 1));
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        verify(transcodeService).transcode("vid3", "s3://raw/vid3.mp4", edit);
+    }
+
     /** The moderation step reads the transcode result, so the caption's verdict has to ride on it. */
     @Test
     void onMessage_successCarriesTheCaptionVerdictOfThePublication() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid5", 1L, "t", null, "s3://raw/vid5.mp4", "PUBLIC",
                 List.of(), ModerationVerdict.REVIEW);
-        when(transcodeService.transcode("vid5", "s3://raw/vid5.mp4"))
+        when(transcodeService.transcode("vid5", "s3://raw/vid5.mp4", null))
                 .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
@@ -92,7 +107,7 @@ class VideoEventConsumerTest {
     @Test
     void onMessage_failedTranscode_leavesTheQuarantineAlone() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid8", 1L, "t", null, "s3://raw/vid8.mp4", "PUBLIC", List.of());
-        when(transcodeService.transcode("vid8", "s3://raw/vid8.mp4"))
+        when(transcodeService.transcode("vid8", "s3://raw/vid8.mp4", null))
                 .thenThrow(new MediaRejectedException("not a video"));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
@@ -112,7 +127,7 @@ class VideoEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
-        verify(transcodeService, never()).transcode(anyString(), anyString());
+        verify(transcodeService, never()).transcode(anyString(), anyString(), any());
         verifyNoInteractions(eventProducer);
     }
 
@@ -123,7 +138,7 @@ class VideoEventConsumerTest {
     @Test
     void onMessage_transcodeReported_isRememberedAfterThePublish() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid6", 1L, "t", null, "s3://raw/vid6.mp4", "PUBLIC", List.of());
-        when(transcodeService.transcode("vid6", "s3://raw/vid6.mp4"))
+        when(transcodeService.transcode("vid6", "s3://raw/vid6.mp4", null))
                 .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
@@ -141,7 +156,7 @@ class VideoEventConsumerTest {
     void onMessage_transcodeSucceeds_publishesSuccessEvent() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid1", 1L, "My video", null, "s3://raw/vid1.mp4", "PUBLIC", List.of());
 
-        when(transcodeService.transcode("vid1", "s3://raw/vid1.mp4"))
+        when(transcodeService.transcode("vid1", "s3://raw/vid1.mp4", null))
                 .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/preview.webp", "http://minio/master.m3u8", 30, 1080, 1920));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
@@ -160,7 +175,7 @@ class VideoEventConsumerTest {
     void onMessage_transcodeKeepsThrowing_publishesFailureEvent() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid2", 1L, "Broken video", null, "s3://raw/vid2.mp4", "PUBLIC", List.of());
 
-        when(transcodeService.transcode(anyString(), anyString()))
+        when(transcodeService.transcode(anyString(), anyString(), any()))
                 .thenThrow(new RuntimeException("http://minio:9000/video-media/raw/7/vid2.mp4 unreachable"));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
@@ -176,7 +191,7 @@ class VideoEventConsumerTest {
         assertThat(result.failureReason())
                 .isEqualTo("Transcoding failed after 3 attempts. Try uploading the file again.");
         assertThat(result.failureReason()).doesNotContain("minio", "video-media");
-        verify(transcodeService, times(ATTEMPTS)).transcode(anyString(), anyString());
+        verify(transcodeService, times(ATTEMPTS)).transcode(anyString(), anyString(), any());
     }
 
     @Test
@@ -184,7 +199,7 @@ class VideoEventConsumerTest {
         VideoPublishedEvent published = VideoPublishedEvent.of(
                 "vid7", 1L, "Too long", null, "s3://raw/vid7.mp4", "PUBLIC", java.util.List.of());
 
-        when(transcodeService.transcode("vid7", "s3://raw/vid7.mp4"))
+        when(transcodeService.transcode("vid7", "s3://raw/vid7.mp4", null))
                 .thenThrow(new com.tiktok.mediaworker.service.MediaRejectedException(
                         "Video is 12m30s; the maximum is 10m00s."));
 
@@ -194,7 +209,7 @@ class VideoEventConsumerTest {
         verify(eventProducer).publish(captor.capture());
         assertThat(captor.getValue().success()).isFalse();
         assertThat(captor.getValue().failureReason()).isEqualTo("Video is 12m30s; the maximum is 10m00s.");
-        verify(transcodeService, times(1)).transcode(anyString(), anyString());
+        verify(transcodeService, times(1)).transcode(anyString(), anyString(), any());
     }
 
     /**
@@ -206,7 +221,7 @@ class VideoEventConsumerTest {
     void onMessage_transcodeRecoversOnASecondAttempt_publishesSuccess() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid5", 1L, "Flaky", null, "s3://raw/vid5.mp4", "PUBLIC", List.of());
 
-        when(transcodeService.transcode("vid5", "s3://raw/vid5.mp4"))
+        when(transcodeService.transcode("vid5", "s3://raw/vid5.mp4", null))
                 .thenThrow(new RuntimeException("MinIO unreachable"))
                 .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/preview.webp", "http://minio/master.m3u8", 30, 1080, 1920));
 
@@ -227,7 +242,7 @@ class VideoEventConsumerTest {
     void onMessage_publishFails_doesNotReportTheVideoAsFailed() throws Exception {
         VideoPublishedEvent published = VideoPublishedEvent.of("vid6", 1L, "Fine", null, "s3://raw/vid6.mp4", "PUBLIC", List.of());
 
-        when(transcodeService.transcode("vid6", "s3://raw/vid6.mp4"))
+        when(transcodeService.transcode("vid6", "s3://raw/vid6.mp4", null))
                 .thenReturn(new TranscodeResult("http://minio/thumb.jpg", "http://minio/preview.webp", "http://minio/master.m3u8", 30, 1080, 1920));
         doThrow(new IllegalStateException("broker refused")).when(eventProducer).publish(any());
 

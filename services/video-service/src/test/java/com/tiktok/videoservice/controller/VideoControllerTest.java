@@ -179,6 +179,28 @@ class VideoControllerTest {
         verify(videoService, never()).publish(any(), any());
     }
 
+    /** Every bound on the edit is a bound on ffmpeg work the client can ask media-worker for. */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{\"segments\":[]}",
+            "{\"segments\":[{\"start\":5,\"end\":5,\"speed\":1}]}",
+            "{\"segments\":[{\"start\":0,\"end\":5,\"speed\":10}]}",
+            "{\"segments\":[{\"start\":-1,\"end\":5,\"speed\":1}]}",
+            "{\"segments\":[{\"start\":0,\"end\":5}]}"
+    })
+    void publish_anEditOutOfBounds_returnsValidationError(String edit) throws Exception {
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"t","rawFileUrl":"s3://video-media/raw/1.mp4","visibility":"PUBLIC","edit":%s}
+                                """.formatted(edit)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verify(videoService, never()).publish(any(), any());
+    }
+
     /** Fillers and zero-width characters render as nothing; sanitized away, the title is blank. */
     @Test
     void publish_titleOfOnlyInvisibleCharacters_returnsValidationError() throws Exception {

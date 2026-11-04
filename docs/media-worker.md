@@ -43,6 +43,17 @@ Normalize bắt các trường hợp thật: HEVC từ iPhone, AV1, VP8/VP9 từ
 
 Đường rẻ **không** gỡ rotation — file giữ nguyên display matrix và trình duyệt tự xoay đúng (`<video>` honor matrix từ lâu). Thumbnail cũng được ffmpeg autorotate.
 
+### 2.1b. Chỉnh sửa từ app (`VideoPublishedEvent.edit`)
+
+App chỉ xem trước việc cắt + đổi tốc độ; `edit` trên event là công thức. Khi có `edit` và nó thật sự đổi gì đó (`EditFilterGraph.changesAnything`), `TranscodeServiceImpl` chạy `Ffmpeg.edit` **trước** hai đường ở trên:
+
+- `EditFilterGraph` dựng một `-filter_complex`: mỗi đoạn `trim` + `setpts` (và `atrim` + `asetpts` + chuỗi `atempo` nếu file có tiếng), rồi `concat`, rồi cùng `scale` cap như normalize. Chỉ **số do class này tự format** đi vào graph, không bao giờ chuỗi từ client: filter graph là một ngôn ngữ, ghép chuỗi lạ vào là cho client chạy filter tuỳ ý lên file worker đọc được.
+- Encoder giống hệt normalize, nên file đã chỉnh **thay thế file gốc** cho mọi bước sau (faststart, still, preview, frame kiểm duyệt) và chỉ còn bị remux. Encode lại là bắt buộc: điểm cắt rơi giữa keyframe, đổi tốc độ viết lại mọi timestamp.
+- **Edit lỗi thì throw, không fallback về file gốc.** File gốc chứa đúng những đoạn chủ video đã cắt bỏ; publish nó thay cho bản chỉnh là cho người xem thấy thứ chủ video chọn không đăng. Công thức không giữ được giây nào → `MediaRejectedException` (FAILED, không retry).
+- Không cắt `end` theo độ dài probe: probe làm tròn tới giây (clip 10.4s đọc ra 10), cắt theo đó là mất mấy frame cuối. `trim` tự dừng ở cuối stream; chỉ đoạn **bắt đầu** sau độ dài bị bỏ, vì `concat` từ chối input rỗng.
+- Giới hạn thời lượng kiểm hai lần: trên file gốc (chặn chi phí của chính bước edit) và trên bản đã chỉnh (làm chậm làm video dài ra).
+- Timeout của edit là 600s như normalize. Edit **thay** normalize chứ không cộng thêm (bản đã chỉnh đã đúng dạng), nên phép tính poll interval ở §Retry vẫn đúng.
+
 ### 2.2. Animated preview cho hover
 
 WebP động 3 giây, 8 fps, cao 240px, không audio. Con số nằm ở đó vì đây là thứ feed kéo về **mỗi card**, không phải thứ xem toàn màn hình: đủ chuyển động để biết video nói gì, đủ nhỏ để không cần loading state. Clip 3 giây test ra khoảng 8 KB.
