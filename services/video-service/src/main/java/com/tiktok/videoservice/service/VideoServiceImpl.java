@@ -196,6 +196,7 @@ public class VideoServiceImpl implements VideoService {
                 .visibility(request.visibility())
                 .ownerPrivate(isPrivateOwner(userId))
                 .tags(tags)
+                .commentsDisabled(request.startsWithCommentsDisabled())
                 .textModeration(textModeration)
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)

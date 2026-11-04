@@ -102,7 +102,8 @@ Request (`CreateVideoRequest`):
   "description": "Mô tả",                             // optional, tối đa 2000 ký tự
   "rawFileUrl": "s3://video-media/raw/123456789012345/7312.mp4",  // bắt buộc, tối đa 500 ký tự, xem ràng buộc bên dưới
   "visibility": "PUBLIC",                             // bắt buộc: PUBLIC | PRIVATE
-  "tags": ["dance", "food"]                           // optional, tối đa 10 tag, mỗi tag tối đa 50 ký tự
+  "tags": ["dance", "food"],                          // optional, tối đa 10 tag, mỗi tag tối đa 50 ký tự
+  "commentsDisabled": false                           // optional, mặc định false. true = đăng với comment tắt sẵn (cùng cờ mục 3.8)
 }
 ```
 

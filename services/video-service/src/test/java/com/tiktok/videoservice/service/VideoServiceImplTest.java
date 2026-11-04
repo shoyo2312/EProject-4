@@ -172,6 +172,18 @@ class VideoServiceImplTest {
 
         assertThat(response.status()).isEqualTo(VideoStatus.PROCESSING);
         assertThat(response.userId()).isEqualTo(1L);
+        // No switch sent: comments on, as for every client before the switch existed.
+        assertThat(response.commentsDisabled()).isFalse();
+    }
+
+    @Test
+    void publish_withCommentsOff_isStoredOffFromTheStart() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Quiet video", "desc",
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), true));
+
+        assertThat(response.commentsDisabled()).isTrue();
+        assertThat(response.commentCount()).isNull();
+        assertThat(videoRepository.findById(response.id()).orElseThrow().isCommentsDisabled()).isTrue();
     }
 
     /**
