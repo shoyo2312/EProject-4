@@ -11,6 +11,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -138,6 +139,46 @@ public class RecommendationServiceImpl implements RecommendationService {
         } else {
             redisTemplate.opsForSet().add(RecoKeys.VIDEO_PRIVATE, videoId);
             withdraw(videoId);
+        }
+    }
+
+    /**
+     * Only video.video-events writes the stash, ordered per video, so the tags read here cannot
+     * go stale before the write below.
+     *
+     * <p>ponytail: the stash lives {@link RecoKeys#PROFILE_TTL} from the upload or last edit.
+     * Edit a video older than that and its old tags are unknown, so it stays in their indexes
+     * until trimming or expiry drops it; keep the stash without a TTL if that ever matters.
+     */
+    @Override
+    public void recordTagsChanged(String videoId, List<String> tags) {
+        Set<String> next = tags == null ? Set.of() : new LinkedHashSet<>(tags);
+        String tagKey = RecoKeys.videoTags(videoId);
+        Set<String> previous = redisTemplate.opsForSet().members(tagKey);
+        List<String> dropped = previous == null ? List.of()
+                : previous.stream().filter(tag -> !next.contains(tag)).toList();
+
+        // The stash before the publish time is read, the order recordVideoUploaded keeps against
+        // recordVideoReady on the other topic: either the transcode result reads these tags, or
+        // it has already recorded the publish time read below. Added before removed, so a reader
+        // in between sees too many tags rather than none. Untagging needs no state check — a
+        // video does not belong under a tag it no longer carries, whatever state it is in.
+        RedisPipeline.run(redisTemplate, ops -> {
+            if (!next.isEmpty()) {
+                ops.opsForSet().add(tagKey, next.toArray(String[]::new));
+                ops.expire(tagKey, RecoKeys.PROFILE_TTL);
+            }
+            if (!dropped.isEmpty()) {
+                ops.opsForSet().remove(tagKey, dropped.toArray());
+            }
+            dropped.forEach(tag -> ops.opsForZSet().remove(RecoKeys.tagIndex(tag), videoId));
+        });
+
+        // Not ready, or hidden: it is in no tag index now, and whatever indexes it later reads
+        // the stash just written.
+        Double publishedAt = redisTemplate.opsForZSet().score(RecoKeys.VIDEO_PUBLISHED, videoId);
+        if (publishedAt != null && !next.isEmpty() && !isHidden(videoId)) {
+            indexTags(videoId, next, publishedAt);
         }
     }
 
