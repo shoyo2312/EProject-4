@@ -16,7 +16,12 @@ public interface CommentService {
      * @throws com.tiktok.interactionservice.exception.CommentingRestrictedException while the caller's
      *         strikes restrict them, checked before anything else
      */
-    CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId);
+    CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId,
+                               String stickerId);
+
+    default CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId) {
+        return addComment(videoId, currentUserId, content, parentId, null);
+    }
 
     default CommentResponse addComment(Long videoId, Long currentUserId, String content) {
         return addComment(videoId, currentUserId, content, null);
@@ -48,6 +53,18 @@ public interface CommentService {
      * the viewer run into the refusal.
      */
     CommentPermissionResponse commentPermission(Long videoId, Long currentUserId);
+
+    /**
+     * The author replaces the text of their own comment. The new text goes through the same screening
+     * as a new comment: refused (a strike) when a new comment would be refused, and not saved when a
+     * new comment would be held — see {@link com.tiktok.interactionservice.exception.CommentEditNeedsReviewException}.
+     * The sticker, if any, is left as posted. An unchanged text is answered without a write.
+     *
+     * @throws com.tiktok.interactionservice.exception.NotCommentOwnerException for anyone but the author
+     * @throws com.tiktok.interactionservice.exception.CommentNotFoundException when it is unknown,
+     *         deleted or held
+     */
+    CommentResponse editComment(Long videoId, Long commentId, Long currentUserId, String content);
 
     void deleteComment(Long videoId, Long commentId, Long currentUserId);
 

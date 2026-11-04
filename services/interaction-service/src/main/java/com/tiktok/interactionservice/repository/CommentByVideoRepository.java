@@ -111,4 +111,22 @@ public interface CommentByVideoRepository extends CassandraRepository<CommentByV
     boolean markDeletedIfHeld(@Param("videoId") Long videoId,
                               @Param("commentId") Long commentId,
                               @Param("deletedAt") Instant deletedAt);
+
+    /**
+     * The author's edit: new text, when, and what the rules said about it. Conditioned on the comment
+     * not having been deleted since the caller read it — an edit landing after a delete would
+     * otherwise write into a tombstoned row. The like tally is not named, so a like racing the edit
+     * is not overwritten.
+     *
+     * @return false when the comment was deleted in between
+     */
+    @Query("UPDATE comments_by_video SET content = :content, edited_at = :editedAt, "
+            + "mod_reason = :modReason, mod_version = :modVersion "
+            + "WHERE video_id = :videoId AND comment_id = :commentId IF deleted_at = null")
+    boolean editIfNotDeleted(@Param("videoId") Long videoId,
+                             @Param("commentId") Long commentId,
+                             @Param("content") String content,
+                             @Param("editedAt") Instant editedAt,
+                             @Param("modReason") String modReason,
+                             @Param("modVersion") String modVersion);
 }

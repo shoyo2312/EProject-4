@@ -551,6 +551,8 @@ services:
       VIDEO_SERVICE_URI: http://video-service:8083
       MODERATION_SERVICE_URL: http://moderation-service:8099
       ADMIN_SERVICE_URL: http://admin-service:8096
+      # Comment sticker URLs are built from it — the public address, as clients load the images.
+      MEDIA_PUBLIC_URL: ${MEDIA_PUBLIC_URL:?}
 
   recommendation-service:
     <<: *java

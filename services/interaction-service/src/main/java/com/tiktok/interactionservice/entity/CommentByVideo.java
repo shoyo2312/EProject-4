@@ -68,6 +68,15 @@ public class CommentByVideo {
     @Column("mod_version")
     private String modVersion;
 
+    /** A sticker from chat-service's pack, or null. {@code content} is empty for a sticker on its own. */
+    @Column("sticker_id")
+    private String stickerId;
+
+    /** When the author last edited the text; null for a comment never edited. */
+    @Column("edited_at")
+    @CassandraType(type = CassandraType.Name.TIMESTAMP)
+    private Instant editedAt;
+
     public static Long newId() {
         return SnowflakeIdGenerator.nextId();
     }

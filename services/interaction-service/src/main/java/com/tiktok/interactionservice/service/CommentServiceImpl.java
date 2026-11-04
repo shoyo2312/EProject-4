@@ -20,12 +20,15 @@ import com.tiktok.interactionservice.entity.CommentStatus;
 import com.tiktok.interactionservice.entity.HeldComment;
 import com.tiktok.interactionservice.entity.HeldCommentKey;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
+import com.tiktok.interactionservice.exception.CommentEditNeedsReviewException;
+import com.tiktok.interactionservice.exception.CommentEditRateLimitedException;
 import com.tiktok.interactionservice.exception.CommentNotFoundException;
 import com.tiktok.interactionservice.exception.CommentsDisabledException;
 import com.tiktok.interactionservice.exception.CommentsNotAllowedException;
 import com.tiktok.interactionservice.exception.CommentLikeRateLimitedException;
 import com.tiktok.interactionservice.exception.CommentRejectedException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
+import com.tiktok.interactionservice.exception.InvalidStickerException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.exception.NotVideoOwnerException;
 import com.tiktok.interactionservice.exception.ReplyNotAllowedException;
@@ -89,12 +92,19 @@ public class CommentServiceImpl implements CommentService {
     private final VideoOwnershipClient videoOwnershipClient;
     private final FriendshipClient friendshipClient;
     private final BlockClient blockClient;
+    private final CommentStickers commentStickers;
 
     @Override
-    public CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId) {
+    public CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId,
+                                      String stickerId) {
         // First of all: an account restricted for its strikes is refused before it spends rate-limit
         // budget or costs anyone a round trip, and is told when the restriction ends.
         commentStrikes.requireNotRestricted(currentUserId);
+        // A sticker on its own is a comment with empty text; null never reaches the table.
+        String text = content == null ? "" : content;
+        if (stickerId != null && !commentStickers.sendable(stickerId)) {
+            throw new InvalidStickerException(stickerId);
+        }
         // Ahead of both video-service calls, so a bot is refused in Redis without costing a round
         // trip; and ahead of the text rules, so a comment they refuse still spends budget and the
         // blocklist cannot be probed at speed. Nothing about a comment is idempotent — the row, the
@@ -145,7 +155,9 @@ public class CommentServiceImpl implements CommentService {
         // reviews held comments, so theirs is never held: they would only be approving themselves.
         // Refused like anyone's, though — severity 3 is abuse whoever writes it — and a refusal is a
         // strike against the author.
-        CommentScreening.Outcome outcome = commentScreening.screen(content, currentUserId, policy);
+        // A sticker alone has no text for the rules, but the owner's "hold every comment" still
+        // applies to it — screening empty text gives exactly that.
+        CommentScreening.Outcome outcome = commentScreening.screen(text, currentUserId, policy);
         if (outcome.decision() == Decision.REJECT) {
             commentStrikes.strike(currentUserId, "comment refused, "
                     + outcome.verdict().worst().map(Flag::toString).orElse("no flag"));
@@ -161,12 +173,13 @@ public class CommentServiceImpl implements CommentService {
         boolean owner = currentUserId.equals(policy.ownerId());
         DuplicateCommentGuard.Claim claim = owner
                 ? DuplicateCommentGuard.Claim.NONE
-                : duplicateCommentGuard.claim(currentUserId, videoId, parentId, content);
+                : duplicateCommentGuard.claim(currentUserId, videoId, parentId,
+                        stickerId == null ? text : text + " sticker " + stickerId);
         try {
             return held
-                    ? storeHeld(videoId, currentUserId, content, resolvedParentId, replyToUserId, verdict)
-                    : storeVisible(videoId, currentUserId, content, resolvedParentId, replyToUserId, parentAuthorId,
-                            verdict);
+                    ? storeHeld(videoId, currentUserId, text, stickerId, resolvedParentId, replyToUserId, verdict)
+                    : storeVisible(videoId, currentUserId, text, stickerId, resolvedParentId, replyToUserId,
+                            parentAuthorId, verdict);
         } catch (RuntimeException ex) {
             claim.release();
             throw ex;
@@ -178,8 +191,9 @@ public class CommentServiceImpl implements CommentService {
      * comment, an owner who waived the category, a classifier note — so the admin list shows what was
      * let through and why. That is how a filter's misses and the classifier's precision get seen.
      */
-    private CommentResponse storeVisible(Long videoId, Long currentUserId, String content, Long resolvedParentId,
-                                         Long replyToUserId, Long parentAuthorId, TextVerdict verdict) {
+    private CommentResponse storeVisible(Long videoId, Long currentUserId, String content, String stickerId,
+                                         Long resolvedParentId, Long replyToUserId, Long parentAuthorId,
+                                         TextVerdict verdict) {
         Long commentId = SnowflakeIdGenerator.nextId();
         CommentByVideoKey key = CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build();
 
@@ -188,6 +202,7 @@ public class CommentServiceImpl implements CommentService {
                 .key(key)
                 .userId(currentUserId)
                 .content(content)
+                .stickerId(stickerId)
                 .parentId(resolvedParentId)
                 .replyToUserId(replyToUserId)
                 .status(CommentStatus.VISIBLE)
@@ -217,8 +232,8 @@ public class CommentServiceImpl implements CommentService {
      * comment the owner's queue cannot find would wait for ever, so if that write fails the comment
      * goes too.
      */
-    private CommentResponse storeHeld(Long videoId, Long currentUserId, String content, Long resolvedParentId,
-                                      Long replyToUserId, TextVerdict verdict) {
+    private CommentResponse storeHeld(Long videoId, Long currentUserId, String content, String stickerId,
+                                      Long resolvedParentId, Long replyToUserId, TextVerdict verdict) {
         Long commentId = SnowflakeIdGenerator.nextId();
         CommentByVideoKey key = CommentByVideoKey.builder().videoId(videoId).commentId(commentId).build();
 
@@ -226,6 +241,7 @@ public class CommentServiceImpl implements CommentService {
                 .key(key)
                 .userId(currentUserId)
                 .content(content)
+                .stickerId(stickerId)
                 .parentId(resolvedParentId)
                 .replyToUserId(replyToUserId)
                 .status(CommentStatus.HELD)
@@ -304,12 +320,21 @@ public class CommentServiceImpl implements CommentService {
 
         commentIndexRepository.save(CommentIndex.of(videoId, parentId, commentId));
         try {
-            eventPublisher.publishCommentCreated(commentId, videoId, comment.getUserId(), comment.getContent(),
+            eventPublisher.publishCommentCreated(commentId, videoId, comment.getUserId(), announcedText(comment),
                     parentId, comment.getReplyToUserId(), parentAuthorId);
         } catch (RuntimeException ex) {
             commentIndexRepository.delete(CommentIndex.of(videoId, parentId, commentId));
             throw ex;
         }
+    }
+
+    /**
+     * What the event says the comment says — the notification body and the live panels draw it. The
+     * event carries text only, so a sticker on its own is named rather than announced as nothing.
+     */
+    private static String announcedText(CommentByVideo comment) {
+        String content = comment.getContent() == null ? "" : comment.getContent();
+        return content.isBlank() && comment.getStickerId() != null ? "[Sticker]" : content;
     }
 
     /**
@@ -645,6 +670,63 @@ public class CommentServiceImpl implements CommentService {
         } catch (RuntimeException ex) {
             log.warn("Held comment {} on video {} left in the review queue: {}", commentId, videoId, ex.getMessage());
         }
+    }
+
+    @Override
+    public CommentResponse editComment(Long videoId, Long commentId, Long currentUserId, String content) {
+        commentStrikes.requireNotRestricted(currentUserId);
+        // Keyed by comment: an author fixing a typo twice is normal, rewriting one comment all hour is not.
+        rateLimiter.require("comment-edit-rate", commentId, currentUserId, CommentEditRateLimitedException::new);
+        CommentByVideo comment = liveComment(videoId, commentId);
+        // The author only — not the video's owner, who may delete a comment but not put words in it.
+        if (!comment.getUserId().equals(currentUserId)) {
+            throw new NotCommentOwnerException(commentId);
+        }
+        if (content.equals(comment.getContent())) {
+            return respond(comment, currentUserId);
+        }
+
+        // Whatever would stop a new comment here stops an edit: comments switched off, an audience
+        // the author is no longer in.
+        videoOwnershipClient.requireVisible(videoId);
+        CommentPolicy policy = videoOwnershipClient.commentPolicy(videoId);
+        Restriction restriction = restrictionFor(policy, currentUserId);
+        if (restriction == Restriction.COMMENTS_DISABLED) {
+            throw new CommentsDisabledException(videoId);
+        }
+        if (restriction != null) {
+            throw new CommentsNotAllowedException(videoId);
+        }
+
+        // The same screening as a new comment, so editing is no way around it. A refusal is a strike,
+        // as on a new comment; a hold is a refusal to save, not a hold — see
+        // CommentEditNeedsReviewException.
+        CommentScreening.Outcome outcome = commentScreening.screen(content, currentUserId, policy);
+        if (outcome.decision() == Decision.REJECT) {
+            commentStrikes.strike(currentUserId, "comment edit refused, "
+                    + outcome.verdict().worst().map(Flag::toString).orElse("no flag"));
+            throw new CommentRejectedException();
+        }
+        if (outcome.decision() == Decision.HOLD) {
+            throw new CommentEditNeedsReviewException();
+        }
+
+        TextVerdict verdict = outcome.verdict();
+        boolean flagged = !verdict.flags().isEmpty();
+        Instant editedAt = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+        if (!commentByVideoRepository.editIfNotDeleted(videoId, commentId, content, editedAt,
+                flagged ? verdict.summary() : null, flagged ? verdict.version() : null)) {
+            throw new CommentNotFoundException(commentId);
+        }
+        return respond(liveComment(videoId, commentId), currentUserId);
+    }
+
+    /** One comment as its author sees it after a change: their like, and its reply count. */
+    private CommentResponse respond(CommentByVideo comment, Long currentUserId) {
+        List<CommentResponse> mapped = toResponses(List.of(comment), currentUserId);
+        return comment.getParentId() == null
+                ? attachReplyCounts(comment.getKey().getVideoId(), mapped).getFirst()
+                : mapped.getFirst();
     }
 
     @Override

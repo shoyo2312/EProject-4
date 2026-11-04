@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
     status      text,
     mod_reason  text,
     mod_version text,
+    -- A sticker from chat-service's pack (content is '' for a sticker on its own), and when the
+    -- author last edited the text. Both null on most rows.
+    sticker_id  text,
+    edited_at   timestamp,
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
 
@@ -77,6 +81,9 @@ ALTER TABLE comments_by_video ADD IF NOT EXISTS likes int;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS status text;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS mod_reason text;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS mod_version text;
+-- Same, for clusters that predate comment stickers and edits.
+ALTER TABLE comments_by_video ADD IF NOT EXISTS sticker_id text;
+ALTER TABLE comments_by_video ADD IF NOT EXISTS edited_at timestamp;
 
 -- A video owner's queue of held comments, newest first: ids only, one partition per video, the
 -- way comment_index serves the public threads. comments_by_video decides whether a row here still
