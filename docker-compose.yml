@@ -130,6 +130,12 @@ services:
       CASSANDRA_CLUSTER_NAME: tiktok-cluster
       CASSANDRA_DC: dc1
       CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      # Left alone, Cassandra sizes its heap from the Docker VM's memory (8 GB of 16 here), which
+      # makes it the first thing the VM's OOM killer takes once the services and a test run
+      # crowd it — and interaction-service cannot start without it. Dev data fits in far less.
+      MAX_HEAP_SIZE: 1G
+      HEAP_NEWSIZE: 256M
+    restart: unless-stopped
     ports:
       - "127.0.0.1:9042:9042"
     volumes:
