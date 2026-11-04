@@ -49,6 +49,13 @@ public class OutboxMetricsConfig {
                 "visibilityEventPendingAt", Video::getVisibilityEventPendingAt);
     }
 
+    @Bean
+    public OutboxBacklog captionOutboxBacklog(MongoTemplate mongoTemplate) {
+        return backlog(mongoTemplate, "caption",
+                () -> where("captionEventPendingAt").ne(null).and("eventPublishedAt").ne(null),
+                "captionEventPendingAt", Video::getCaptionEventPendingAt);
+    }
+
     /** Due when the trash window runs out. Counted from the deletion, every purge would read a month late. */
     @Bean
     public OutboxBacklog purgeOutboxBacklog(MongoTemplate mongoTemplate,

@@ -11,7 +11,7 @@ của người khác. Base URL qua gateway: `http://<host>:8080`. Envelope `ApiR
 | Trang chủ — 5 thẻ số liệu + biểu đồ | `GET /api/v1/analytics/creator/overview?days=7` | §2.1 |
 | Trang chủ — bài đăng gần đây | `GET /api/v1/videos/users/{myId}?size=5` | đã có sẵn, xem `video-service-api.md` |
 | Trang chủ — bình luận mới nhất | `GET /api/v1/interactions/users/me/comments?size=5` | `interaction-service-api.md` §3.16 |
-| Bài đăng — bảng mọi video | `GET /api/v1/videos/me?status=&visibility=&q=&sort=` | **mọi status** (đang xử lý, chờ duyệt, bị từ chối, bị gỡ) kèm `viewCount`/`likeCount`/`commentCount`; lọc, tìm, sắp xếp — `video-service-api.md` §3.5b |
+| Bài đăng — bảng mọi video | `GET /api/v1/videos/me?status=&visibility=&views=&likes=&comments=&q=&sort=&order=` | **mọi status** (đang xử lý, chờ duyệt, bị từ chối, bị gỡ) kèm `viewCount`/`likeCount`/`commentCount`; lọc, tìm, sắp xếp — `video-service-api.md` §3.5b |
 | Bài đăng — đổi quyền xem, tắt comment, xoá | `PATCH /videos/{id}/visibility`, `PATCH /videos/{id}/comments-setting`, `DELETE /videos/{id}` | đã có sẵn |
 | Phân tích › Tổng quan | `GET /api/v1/analytics/creator/overview?days=` | §2.1 |
 | Phân tích › Nội dung | `GET /api/v1/analytics/creator/videos/top?days=&sort=` | §2.2, hydrate bằng `GET /api/v1/videos/batch?ids=` |
@@ -88,7 +88,7 @@ Tổng là **trọn đời**; `daily` là theo cửa sổ (`followersGained`/`fo
 
 - Quyền sở hữu video lấy từ dòng `PUBLISHED` mà mọi lần upload ghi vào `engagement_events` (`user_id` = người upload). Không gọi sang video-service.
 - Follower ròng đến từ bảng `follow_events` mới, nạp từ topic `user.follow-events`. Follow xảy ra **trước khi deploy** không có trong biểu đồ.
-- Hộp bình luận dùng bảng Cassandra `comments_by_owner`, chỉ chứa id. Comment cũ hơn tính năng này không có trong hộp.
+- Hộp bình luận dùng bảng Cassandra `comments_by_owner`, chỉ chứa id. Comment cũ hơn tính năng này không có trong hộp — trừ khi lọc theo `videoId`: khi đó đọc thẳng `comments_by_video` của video đó (video phải là của người gọi, không thì 403), nên comment cũ vẫn thấy.
 
 ## 4. Chưa làm (giai đoạn sau)
 

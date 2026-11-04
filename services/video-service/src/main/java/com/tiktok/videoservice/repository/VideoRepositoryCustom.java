@@ -276,6 +276,14 @@ public interface VideoRepositoryCustom {
      */
     boolean clearVisibilityEventPending(String videoId, java.time.Instant announced);
 
+    /** The caption edit and its queued announcement, in one write — as {@link #updateVisibility}. */
+    void updateCaption(Video video);
+
+    /** As {@link #clearVisibilityEventPending}, for the caption slot. */
+    boolean clearCaptionEventPending(String videoId, java.time.Instant announced);
+
+    void updatePinned(Video video);
+
     /**
      * An owner's account switched between private and public: stamps the flag on every live video
      * they own and queues each one's visibility announcement, in one write.

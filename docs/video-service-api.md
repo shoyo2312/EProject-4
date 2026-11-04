@@ -246,12 +246,14 @@ Không có lỗi `USER_NOT_FOUND` — `userId` không tồn tại chỉ trả v�
 
 | Tham số | Giá trị | Ý nghĩa |
 |---|---|---|
-| `status` | một `VideoStatus` (mục 4) | chỉ video ở trạng thái đó |
-| `visibility` | `PUBLIC` / `FRIENDS` / `PRIVATE` | chỉ video có quyền xem đó |
-| `q` | chuỗi | có trong tiêu đề **hoặc** mô tả, không phân biệt hoa thường (có phân biệt dấu) |
-| `sort` | `NEWEST` (mặc định), `VIEWS`, `LIKES`, `COMMENTS` | giảm dần; trùng số thì video mới hơn trước |
+| `status` | một hoặc nhiều `VideoStatus` (mục 4), cách nhau bằng dấu phẩy | video ở **một trong** các trạng thái đó |
+| `visibility` | `PUBLIC` / `FRIENDS` / `PRIVATE`, có thể nhiều giá trị | video có **một trong** các quyền xem đó |
+| `views` / `likes` / `comments` | `UNDER_1K` (<1.000), `FROM_1K_TO_10K`, `FROM_10K_TO_100K`, `OVER_100K` (≥100.000), có thể nhiều giá trị | số đếm nằm trong **một trong** các khoảng; cận dưới tính, cận trên không tính |
+| `q` | chuỗi | có trong tiêu đề **hoặc** mô tả, không phân biệt hoa thường (có phân biệt dấu); tối đa 100 ký tự, quá → 400 |
+| `sort` | `NEWEST` (mặc định), `VIEWS`, `LIKES`, `COMMENTS` | cột để sắp xếp; trùng số thì xếp tiếp theo ngày tạo |
+| `order` | `DESC` (mặc định), `ASC` | chiều sắp xếp — `sort=NEWEST&order=ASC` là cũ nhất trước |
 
-Mọi tham số đều tuỳ chọn. Giá trị enum sai → 400.
+Mọi tham số đều tuỳ chọn; các bộ lọc khác nhau áp dụng cùng lúc (AND). Ví dụ `?views=UNDER_1K,OVER_100K&visibility=PUBLIC`. Giá trị enum sai → 400.
 
 ### 3.6 `DELETE /{videoId}`
 **Bắt buộc token.** Xoá mềm video của chính mình. Trả `200 OK`, `data` null.
@@ -275,6 +277,22 @@ Lỗi: `VALIDATION_ERROR` (400 — thiếu/sai giá trị), `NOT_VIDEO_OWNER` (4
 **Bắt buộc token, chỉ chủ video.** Request `{ "disabled": true }` (bắt buộc). Trả `200 OK`, `data` → `VideoResponse` với `commentsDisabled` mới. Đây là công tắc "Allow comments" của chủ video; interaction-service đọc cờ này mỗi lần có comment, nên có hiệu lực ngay. Comment cũ không bị xoá, chỉ bị ẩn (`GET /comments` trả trang rỗng).
 
 Lỗi: như 3.7.
+
+### 3.8b `PATCH /{videoId}/caption` — sửa tiêu đề/mô tả (trang Edit của Studio)
+**Bắt buộc token, chỉ chủ video.** Request `{ "title": "…", "description": "…" }` — `title` bắt buộc, tối đa 150 code point; `description` tuỳ chọn (bỏ trống = xoá), tối đa 2000. Trả `200 OK`, `data` → `VideoResponse` đã cập nhật.
+
+Tag tính lại: tag gõ tay lúc đăng được giữ, hashtag thì theo mô tả mới. Caption được kiểm duyệt chữ như lúc đăng (§ kiểm duyệt chữ): `VIDEO_TITLE_REJECTED` / `VIDEO_DESCRIPTION_REJECTED` / `VIDEO_TAGS_REJECTED` (422) với từ bị cấm; caption mà lúc đăng sẽ bị **giữ chờ duyệt** thì ở đây bị từ chối luôn — `VIDEO_CAPTION_HELD` (422) — vì video đã lên sóng, không có đường giữ lại. Caption cũ vẫn nguyên khi bị từ chối.
+
+Search và feed đề xuất nhận caption mới qua `VideoCaptionChangedEvent` (outbox, ~5 giây), nên trong vài giây video vẫn tìm thấy bằng chữ cũ.
+
+Lỗi khác: `NOT_VIDEO_OWNER` (403), `VIDEO_NOT_FOUND` (404), `VALIDATION_ERROR` (400), `401`.
+
+### 3.8c `PATCH /{videoId}/pin` — ghim lên đầu trang cá nhân
+**Bắt buộc token, chỉ chủ video.** Request `{ "pinned": true | false }`. Trả `200 OK`, `data` → `VideoResponse` với `pinnedAt` (thời điểm ghim, `null` khi không ghim). Ghim lại video đang ghim không đổi vị trí của nó.
+
+Tối đa **3** video ghim mỗi tài khoản — ghim cái thứ tư → `PIN_LIMIT_REACHED` (409). Danh sách `GET /users/{userId}` (mục 3.5) xếp video ghim lên đầu (ghim sau đứng trước), rồi mới tới mới nhất.
+
+Lỗi khác: như 3.7.
 
 ### 3.9 `GET /users/stats/batch?ids=1,2,3` — số liệu profile của nhiều người
 Không cần token. Trả `data` → `UserVideoStatsResponse[]` (`userId, videoCount, totalLikes, totalViews`), cùng con số công khai như `GET /users/{userId}/stats`. Tối đa 50 id (`max-page-size`), id trùng bị gộp.

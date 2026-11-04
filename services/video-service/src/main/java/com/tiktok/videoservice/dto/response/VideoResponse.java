@@ -72,14 +72,32 @@ public record VideoResponse(
          */
         boolean ownerPrivate,
         /** What the text rules made of the caption. Null on every public read path — admin console only. */
-        TextModerationResponse textModeration
+        TextModerationResponse textModeration,
+        /** When the owner pinned it to the top of their profile; null when not pinned. */
+        Instant pinnedAt
 ) {
+
+    /** Every field but the pin, which stays null — for responses built by hand without one. */
+    public VideoResponse(String id, Long userId, String title, String description, String thumbnailUrl,
+                         String previewUrl, String hlsUrl, Integer durationSeconds, Integer width, Integer height,
+                         VideoStatus status, VideoVisibility visibility, long viewCount, long likeCount,
+                         Long commentCount, boolean commentsDisabled, List<String> tags, Instant createdAt,
+                         Instant updatedAt, Instant publishedAt, String rawFileUrl, String failureReason,
+                         String takedownReason, Instant deletedAt, Instant purgeEventPublishedAt,
+                         ModerationResponse moderation, boolean accountCommentsOff, boolean ownerPrivate,
+                         TextModerationResponse textModeration) {
+        this(id, userId, title, description, thumbnailUrl, previewUrl, hlsUrl, durationSeconds, width, height,
+                status, visibility, viewCount, likeCount, commentCount, commentsDisabled, tags, createdAt,
+                updatedAt, publishedAt, rawFileUrl, failureReason, takedownReason, deletedAt,
+                purgeEventPublishedAt, moderation, accountCommentsOff, ownerPrivate, textModeration, null);
+    }
 
     /** This response for a video whose owner accepts comments from no one. */
     public VideoResponse withAccountCommentsOff() {
         return new VideoResponse(id, userId, title, description, thumbnailUrl, previewUrl, hlsUrl,
                 durationSeconds, width, height, status, visibility, viewCount, likeCount, null,
                 commentsDisabled, tags, createdAt, updatedAt, publishedAt, rawFileUrl, failureReason,
-                takedownReason, deletedAt, purgeEventPublishedAt, moderation, true, ownerPrivate, textModeration);
+                takedownReason, deletedAt, purgeEventPublishedAt, moderation, true, ownerPrivate, textModeration,
+                pinnedAt);
     }
 }

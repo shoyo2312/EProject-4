@@ -5,6 +5,7 @@ import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoPurgedEvent;
+import com.tiktok.event.video.VideoCaptionChangedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
@@ -183,6 +184,27 @@ public class VideoEventPublisher {
         }
     }
 
+    /**
+     * The owner edited the caption in Studio. Same shape as {@link #publishPendingVisibilityChanges}:
+     * only after the publication went out, the caption as it is now, the slot cleared only if no
+     * newer edit landed meanwhile.
+     */
+    @Scheduled(fixedDelay = 5000)
+    public void publishPendingCaptionChanges() {
+        List<Video> pending = videoRepository
+                .findTop100ByCaptionEventPendingAtIsNotNullAndEventPublishedAtIsNotNullOrderByCaptionEventPendingAtAsc();
+        if (pending.isEmpty()) {
+            return;
+        }
+
+        int published = outboxDispatcher.dispatch(pending, this::toCaptionRecord, this::markCaptionPublished);
+
+        if (published < pending.size()) {
+            log.warn("Published {}/{} video caption events, the rest stay pending for the next poll",
+                    published, pending.size());
+        }
+    }
+
     private ProducerRecord<String, String> toPublishedRecord(Video video) {
         VideoPublishedEvent event = VideoPublishedEvent.of(
                 video.getId(), video.getUserId(), video.getTitle(), video.getDescription(),
@@ -242,6 +264,14 @@ public class VideoEventPublisher {
         }
     }
 
+    /** No parking: strings and a list of strings, nothing Jackson can refuse. */
+    private ProducerRecord<String, String> toCaptionRecord(Video video) {
+        VideoCaptionChangedEvent event = VideoCaptionChangedEvent.of(
+                video.getId(), video.getUserId(), video.getTitle(), video.getDescription(), video.getTags(),
+                video.getCaptionEventPendingAt());
+        return record(video.getId(), "VideoCaptionChangedEvent", objectMapper.writeValueAsString(event));
+    }
+
     /**
      * Who may see the video, in the one word every consumer that keeps a copy understands: its
      * visibility, except that a private owner's PUBLIC video is FOLLOWERS. Consumers treat
@@ -288,6 +318,13 @@ public class VideoEventPublisher {
                 video.getId(), video.getVisibilityEventPendingAt());
         if (cleared) {
             video.markVisibilityEventPublished();
+        }
+    }
+
+    /** Conditional for the reason given on {@link #markVisibilityPublished}. */
+    private void markCaptionPublished(Video video) {
+        if (videoRepository.clearCaptionEventPending(video.getId(), video.getCaptionEventPendingAt())) {
+            video.markCaptionEventPublished();
         }
     }
 

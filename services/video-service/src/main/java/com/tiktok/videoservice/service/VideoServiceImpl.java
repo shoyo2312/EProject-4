@@ -23,11 +23,14 @@ import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.AlreadyPublishedException;
+import com.tiktok.videoservice.exception.CaptionHeldException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.PinLimitReachedException;
 import com.tiktok.videoservice.exception.PrivateAccountException;
 import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
@@ -103,6 +106,9 @@ public class VideoServiceImpl implements VideoService {
      * validated for length but says nothing about how many hashtags fit inside it.
      */
     private static final int MAX_TAGS = 10;
+
+    /** Pinned videos a profile shows at once, as on TikTok. */
+    private static final int PIN_LIMIT = 3;
 
     /**
      * Upload types accepted, and the extension each is stored under. Deliberately short: every
@@ -457,8 +463,10 @@ public class VideoServiceImpl implements VideoService {
                 .toList();
         Set<Long> followed = followedPrivateOwners(requesterId, ordered);
         Set<Long> banned = hiddenAmong(ordered.stream().map(VideoResponse::userId).collect(Collectors.toSet()));
+        // After the cache, never into it — see getById.
         return withAccountComments(feedKeywordFilter.apply(requesterId, feed, ordered.stream()
                 .filter(video -> isVisibleTo(requesterId, video, followed, banned))
+                .map(video -> isSelf(requesterId, video.userId()) ? quarantinedMediaUrls.forOwner(video) : video)
                 .toList()));
     }
 
@@ -587,7 +595,7 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public CursorPage<VideoResponse> listForExport(Long userId, int page, int size) {
-        Page<Video> videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+        Page<Video> videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(
                 userId, PageRequest.of(page, size));
         List<VideoResponse> items = videos.getContent().stream()
                 .map(videoMapper::toResponse)
@@ -607,7 +615,7 @@ public class VideoServiceImpl implements VideoService {
     public Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable) {
         if (isSelf(requesterId, userId)) {
             return withAccountComments(
-                    videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
+                    videoRepository.findByUserIdAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(userId, pageable)
                             .map(videoMapper::toResponse)
                             .map(quarantinedMediaUrls::forOwner));
         }
@@ -626,11 +634,11 @@ public class VideoServiceImpl implements VideoService {
         if (friendshipClient.areFriends(userId, requesterId)) {
             // One friendship check per page load, not per video: the answer is the same for every
             // video on this owner's grid.
-            videos = videoRepository.findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByCreatedAtDesc(
+            videos = videoRepository.findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(
                     userId, VideoStatus.PUBLISHED,
                     List.of(VideoVisibility.PUBLIC, VideoVisibility.FRIENDS), pageable);
         } else {
-            videos = videoRepository.findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
+            videos = videoRepository.findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(
                     userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
         }
 
@@ -709,7 +717,8 @@ public class VideoServiceImpl implements VideoService {
         videoRepository.updateVisibility(video);
         videoCache.evict(videoId);
 
-        return withAccountComments(videoMapper.toResponse(video));
+        // The studio swaps its row for this response, so it carries the owner's signed URLs too.
+        return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));
     }
 
     /**
@@ -730,7 +739,66 @@ public class VideoServiceImpl implements VideoService {
         videoRepository.updateCommentsDisabled(video);
         videoCache.evict(videoId);
 
-        return withAccountComments(videoMapper.toResponse(video));
+        return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));
+    }
+
+    /**
+     * Same owner gate and cache handling as {@link #updateVisibility}, screened as {@link #publish}
+     * screens. A caption the screen would hold is refused rather than stored — see
+     * {@link CaptionHeldException} for why an edit cannot be held the way a publish is.
+     */
+    @Override
+    public VideoResponse updateCaption(Long requesterId, String videoId, String title, String description) {
+        Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+
+        if (!isOwner(requesterId, video)) {
+            throw new NotVideoOwnerException(videoId);
+        }
+
+        // Typed tags survive the edit; a hashtag lives only as long as the description carrying it.
+        List<String> oldHashtags = normalizeTags(null, video.getDescription());
+        List<String> typed = video.getTags() == null ? List.of()
+                : video.getTags().stream().filter(tag -> !oldHashtags.contains(tag)).toList();
+        List<String> tags = normalizeTags(typed, description);
+        VideoTextModeration screening = captionModeration.screen(title, description, tags);
+        if (screening.isEnforced() && screening.getVerdict() != ModerationVerdict.APPROVED) {
+            throw new CaptionHeldException();
+        }
+
+        video.changeCaption(title, description, tags, screening);
+        videoRepository.updateCaption(video);
+        videoCache.evict(videoId);
+
+        return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));
+    }
+
+    /**
+     * Same owner gate and cache handling as {@link #updateVisibility}. Pinning one already pinned
+     * keeps its place rather than moving it to the front.
+     */
+    @Override
+    public VideoResponse updatePinned(Long requesterId, String videoId, boolean pinned) {
+        Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+
+        if (!isOwner(requesterId, video)) {
+            throw new NotVideoOwnerException(videoId);
+        }
+
+        if (pinned != (video.getPinnedAt() != null)) {
+            // ponytail: count then write, so two pins at the same instant can both pass and leave
+            // four pinned; a per-owner slot document would close it if that ever matters.
+            if (pinned && videoRepository.countByUserIdAndPinnedAtIsNotNullAndDeletedAtIsNull(video.getUserId())
+                    >= PIN_LIMIT) {
+                throw new PinLimitReachedException(PIN_LIMIT);
+            }
+            video.changePinned(pinned);
+            videoRepository.updatePinned(video);
+            videoCache.evict(videoId);
+        }
+
+        return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));
     }
 
     /**

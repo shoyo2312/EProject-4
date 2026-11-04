@@ -7,6 +7,7 @@ import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
@@ -28,7 +29,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -63,6 +66,10 @@ class VideoServiceImplCacheTest {
             mock(com.tiktok.videoservice.client.FollowClient.class);
 
     private final com.tiktok.videoservice.repository.OwnerBanRepository bans = mock(com.tiktok.videoservice.repository.OwnerBanRepository.class);
+    private final CaptionModeration captionModeration = mock(CaptionModeration.class);
+    private final QuarantinedMediaUrls quarantinedMediaUrls = new QuarantinedMediaUrls(quarantineClient,
+            new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret",
+                    "video-media", "us-east-1", Duration.ofMinutes(15)), quarantineClient);
 
     private final VideoService videoService = new VideoServiceImpl(
             videoRepository,
@@ -74,14 +81,13 @@ class VideoServiceImplCacheTest {
             videoCache,
             friendshipClient,
             new UploadLimitProperties(524_288_000L, 600),
-            new QuarantinedMediaUrls(quarantineClient, new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret",
-                    "video-media", "us-east-1", Duration.ofMinutes(15)), quarantineClient),
+            quarantinedMediaUrls,
                 blockClient,
                 userSettingsClient,
                 followClient,
                 mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class),
                 bans,
-                mock(CaptionModeration.class),
+                captionModeration,
                 new FeedKeywordFilter(userSettingsClient));
 
     @Test
@@ -321,6 +327,107 @@ class VideoServiceImplCacheTest {
 
         assertThat(videoService.getById(OWNER, "A").hlsUrl()).isEqualTo("signed");
         verify(videoCache, org.mockito.Mockito.never()).put(any());
+    }
+
+    /** A removed video keeps its tile for the owner: the thumbnail is signed, playback is not. */
+    @Test
+    void getById_ownersRejectedVideo_signsTheThumbnailOnly() throws Exception {
+        VideoResponse rejected = new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null,
+                "http://localhost:9000/video-media/hls/A/source.mp4",
+                10, 1080, 1920, VideoStatus.REJECTED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoCache.get("A")).thenReturn(Optional.of(rejected));
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        VideoResponse response = videoService.getById(OWNER, "A");
+
+        assertThat(response.thumbnailUrl()).isEqualTo("signed");
+        assertThat(response.hlsUrl()).isEqualTo("http://localhost:9000/video-media/hls/A/source.mp4");
+    }
+
+    /**
+     * Rejected before the transcode produced HLS: there is no playback object to look for, and the
+     * tile the owner keeps is the thumbnail, so that is the object whose move is checked.
+     */
+    @Test
+    void getById_ownersRejectedVideoWithoutHls_stillSignsTheThumbnail() throws Exception {
+        VideoResponse rejected = new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null, null,
+                10, 1080, 1920, VideoStatus.REJECTED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoCache.get("A")).thenReturn(Optional.of(rejected));
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        assertThat(videoService.getById(OWNER, "A").thumbnailUrl()).isEqualTo("signed");
+        verify(quarantineClient).statObject(argThat(args -> "quarantine/thumbnails/A.jpg".equals(args.object())));
+    }
+
+    /** A Studio page is up to fifty quarantined rows, each a blocking stat: the answer is kept for a while. */
+    @Test
+    void forOwner_twiceForTheSameVideo_asksMinioOnce() throws Exception {
+        VideoResponse rejected = new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null, null,
+                10, 1080, 1920, VideoStatus.REJECTED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        assertThat(quarantinedMediaUrls.forOwner(rejected).thumbnailUrl()).isEqualTo("signed");
+        assertThat(quarantinedMediaUrls.forOwner(rejected).thumbnailUrl()).isEqualTo("signed");
+
+        verify(quarantineClient, times(1)).statObject(any());
+    }
+
+    /**
+     * Studio lets the owner fix the caption of a video that is not live, but the read paths that
+     * copy captions only hold live videos: nothing to announce until it is published.
+     */
+    @Test
+    void updateCaption_onATakenDownVideo_stillQueuesTheAnnouncement() {
+        // The read paths flag a taken-down video rather than drop it, so an edit made while it is
+        // down has to reach them: once an admin restores it, the copy they show must be the new one.
+        when(captionModeration.screen(any(), any(), anyList())).thenReturn(VideoTextModeration.builder().build());
+        when(videoMapper.toResponse(any(Video.class))).thenReturn(publicVideo("A"));
+        Video takenDown = Video.builder().id("A").userId(OWNER).status(VideoStatus.TAKEN_DOWN).build();
+        when(videoRepository.findByIdAndDeletedAtIsNull("A")).thenReturn(Optional.of(takenDown));
+
+        videoService.updateCaption(OWNER, "A", "title", "description");
+
+        assertThat(takenDown.getTitle()).isEqualTo("title");
+        assertThat(takenDown.getCaptionEventPendingAt()).as("queued for the copies search and feeds hold").isNotNull();
+        verify(videoRepository).updateCaption(takenDown);
+    }
+
+    /** The studio swaps the row for this response, so it must carry the same signed URLs the list did. */
+    @Test
+    void updateCommentsDisabled_onAVideoInReview_returnsSignedUrls() throws Exception {
+        Video entity = Video.builder().id("A").userId(OWNER).build();
+        when(videoRepository.findByIdAndDeletedAtIsNull("A")).thenReturn(Optional.of(entity));
+        when(videoMapper.toResponse(entity)).thenReturn(new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null,
+                "http://localhost:9000/video-media/hls/A/source.mp4",
+                10, 1080, 1920, VideoStatus.PENDING_REVIEW, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null));
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        assertThat(videoService.updateCommentsDisabled(OWNER, "A", false).thumbnailUrl()).isEqualTo("signed");
+        assertThat(videoService.updateVisibility(OWNER, "A", VideoVisibility.PUBLIC).thumbnailUrl()).isEqualTo("signed");
+    }
+
+    /** Studio analytics hydrates its top posts through the batch read, so the owner's removed tile is signed there too. */
+    @Test
+    void getByIds_ownersRejectedVideo_signsTheThumbnail_butNotForAStranger() throws Exception {
+        VideoResponse rejected = new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null,
+                "http://localhost:9000/video-media/hls/A/source.mp4",
+                10, 1080, 1920, VideoStatus.REJECTED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", rejected));
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        assertThat(videoService.getByIds(OWNER, List.of("A"), null))
+                .extracting(VideoResponse::thumbnailUrl).containsExactly("signed");
+        assertThat(videoService.getByIds(999L, List.of("A"), null)).isEmpty();
     }
 
     @Test

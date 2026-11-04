@@ -117,4 +117,13 @@ public interface VideoService {
      * {@link #updateVisibility}; returns the updated video.
      */
     VideoResponse updateCommentsDisabled(Long requesterId, String videoId, boolean disabled);
+
+    /**
+     * The owner editing title and description from Studio. Owner-only; screened like a publish,
+     * and announced to search and recommendation. Returns the updated video.
+     */
+    VideoResponse updateCaption(Long requesterId, String videoId, String title, String description);
+
+    /** The owner pinning a video to the top of their profile, or unpinning it. At most three. */
+    VideoResponse updatePinned(Long requesterId, String videoId, boolean pinned);
 }
