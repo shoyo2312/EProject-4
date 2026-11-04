@@ -130,6 +130,9 @@ services:
       CASSANDRA_CLUSTER_NAME: tiktok-cluster
       CASSANDRA_DC: dc1
       CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      # Without a cap the heap is sized from the VM's RAM (~8 GB under WSL); 1 GB is plenty for dev.
+      MAX_HEAP_SIZE: 1G
+      HEAP_NEWSIZE: 200M
     ports:
       - "127.0.0.1:9042:9042"
     volumes:
