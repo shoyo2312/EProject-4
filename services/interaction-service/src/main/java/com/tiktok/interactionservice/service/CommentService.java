@@ -1,5 +1,6 @@
 package com.tiktok.interactionservice.service;
 
+import com.tiktok.interactionservice.dto.request.CommentInboxFilter;
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
 import com.tiktok.interactionservice.dto.response.CommentPermissionResponse;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
@@ -67,6 +68,13 @@ public interface CommentService {
      *         owner — and for the owner while video-service cannot confirm it (fails closed)
      */
     CommentPageResponse listHeld(Long videoId, String cursor, int size, Long currentUserId);
+
+    /**
+     * TikTok Studio's comment inbox: comments others left on any of the owner's videos, newest
+     * first, held ones included and marked HELD, narrowed by {@code filter}. Comments posted before
+     * the inbox existed are not in it. A cursor belongs to the filter it was issued under.
+     */
+    CommentPageResponse listForOwner(Long ownerId, CommentInboxFilter filter, String cursor, int size);
 
     /**
      * Publishes a held comment: indexed, counted and announced exactly as if it had just been

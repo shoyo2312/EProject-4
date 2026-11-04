@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.repository;
 
+import com.tiktok.videoservice.dto.request.StudioPostFilter;
 import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
 import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
@@ -9,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -96,6 +98,38 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         Query query = Query.query(criteria).with(pageable);
         List<Video> videos = mongoTemplate.find(query, Video.class);
         // The count repeats the match without the paging, which is what Page needs for its total.
+        long total = mongoTemplate.count(Query.query(criteria), Video.class);
+        return new PageImpl<>(videos, pageable, total);
+    }
+
+    @Override
+    public Page<Video> findStudioPosts(Long ownerId, StudioPostFilter filter, Pageable pageable) {
+        // userId + deletedAt lead user_videos_idx, so the match stays inside one owner's videos;
+        // sorting by a counter is in memory over those, which one owner's uploads never outgrow.
+        Criteria criteria = where("userId").is(ownerId).and("deletedAt").is(null);
+        if (filter.status() != null) {
+            criteria = criteria.and("status").is(filter.status());
+        }
+        if (filter.visibility() != null) {
+            criteria = criteria.and("visibility").is(filter.visibility());
+        }
+        if (filter.q() != null && !filter.q().isBlank()) {
+            // Quoted for the reason given in adminCriteria.
+            String quoted = Pattern.quote(filter.q().strip());
+            criteria = criteria.orOperator(where("title").regex(quoted, "i"), where("description").regex(quoted, "i"));
+        }
+
+        String field = switch (filter.sort() == null ? StudioPostFilter.Sort.NEWEST : filter.sort()) {
+            case NEWEST -> "createdAt";
+            case VIEWS -> "viewCount";
+            case LIKES -> "likeCount";
+            case COMMENTS -> "commentCount";
+        };
+        // createdAt then _id break ties, so a page boundary between equal counts cannot repeat a row.
+        Sort sort = Sort.by(Sort.Direction.DESC, field, "createdAt", "_id");
+        Query query = Query.query(criteria)
+                .with(PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort));
+        List<Video> videos = mongoTemplate.find(query, Video.class);
         long total = mongoTemplate.count(Query.query(criteria), Video.class);
         return new PageImpl<>(videos, pageable, total);
     }

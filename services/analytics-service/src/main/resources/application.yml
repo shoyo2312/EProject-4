@@ -40,6 +40,12 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
+analytics:
+  creator:
+    # Viewers a creator needs before Studio breaks them down by hour and weekday — see
+    # CreatorAnalyticsServiceImpl. Lower it only for a demo with a handful of test accounts.
+    min-audience: ${CREATOR_MIN_AUDIENCE:100}
+
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 

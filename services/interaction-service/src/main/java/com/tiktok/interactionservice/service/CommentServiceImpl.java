@@ -6,11 +6,13 @@ import com.tiktok.interactionservice.client.CommentAudience;
 import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.FriendshipClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
+import com.tiktok.interactionservice.dto.request.CommentInboxFilter;
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
 import com.tiktok.interactionservice.dto.response.CommentPermissionResponse;
 import com.tiktok.interactionservice.dto.response.CommentPermissionResponse.Restriction;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
+import com.tiktok.interactionservice.entity.CommentByOwner;
 import com.tiktok.interactionservice.entity.CommentByVideo;
 import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.entity.CommentCounters;
@@ -30,6 +32,7 @@ import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.exception.NotVideoOwnerException;
 import com.tiktok.interactionservice.exception.ReplyNotAllowedException;
 import com.tiktok.interactionservice.mapper.CommentMapper;
+import com.tiktok.interactionservice.repository.CommentByOwnerRepository;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
 import com.tiktok.interactionservice.repository.CommentCountersRepository;
 import com.tiktok.interactionservice.repository.CommentIndexRepository;
@@ -39,6 +42,7 @@ import com.tiktok.interactionservice.repository.VideoCountersRepository;
 import com.tiktok.moderation.Decision;
 import com.tiktok.moderation.Flag;
 import com.tiktok.moderation.TextVerdict;
+import com.tiktok.moderation.text.TextNormalizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.cassandra.CassandraInvalidQueryException;
@@ -48,8 +52,12 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -71,6 +79,10 @@ public class CommentServiceImpl implements CommentService {
     /** How many times a losing like-tally write re-reads and tries again — see moveLikes. */
     private static final int MAX_LIKE_CAS_RETRIES = 3;
 
+    /** {@link SnowflakeIdGenerator}'s epoch and how far up the time sits — see firstCommentIdAt. */
+    private static final long SNOWFLAKE_EPOCH_MILLIS = 1704067200000L;
+    private static final int SNOWFLAKE_TIME_SHIFT = 22;
+
     private final CommentByVideoRepository commentByVideoRepository;
     private final CommentIndexRepository commentIndexRepository;
     private final CommentCountersRepository commentCountersRepository;
@@ -79,6 +91,7 @@ public class CommentServiceImpl implements CommentService {
     private final CounterCacheService counterCacheService;
     private final CommentMapper commentMapper;
     private final HeldCommentRepository heldCommentRepository;
+    private final CommentByOwnerRepository commentByOwnerRepository;
     private final InteractionEventPublisher eventPublisher;
     private final InteractionRateLimiter rateLimiter;
     private final CommentRateLimiter commentRateLimiter;
@@ -162,14 +175,38 @@ public class CommentServiceImpl implements CommentService {
         DuplicateCommentGuard.Claim claim = owner
                 ? DuplicateCommentGuard.Claim.NONE
                 : duplicateCommentGuard.claim(currentUserId, videoId, parentId, content);
+        CommentResponse stored;
         try {
-            return held
+            stored = held
                     ? storeHeld(videoId, currentUserId, content, resolvedParentId, replyToUserId, verdict)
                     : storeVisible(videoId, currentUserId, content, resolvedParentId, replyToUserId, parentAuthorId,
                             verdict);
         } catch (RuntimeException ex) {
             claim.release();
             throw ex;
+        }
+        if (!owner) {
+            fileForOwner(policy.ownerId(), stored);
+        }
+        return stored;
+    }
+
+    /**
+     * Puts a stored comment in its video owner's Studio inbox. After the comment is stored, and never
+     * failing it: a comment missing from the inbox is still on its video for the owner to read, while
+     * undoing a stored, counted and announced comment over it would cost far more than it saves. Not
+     * filed when video-service could not name the owner — the policy read fails open, see
+     * {@link #addComment} — nor for the owner's own comments, which they need no inbox to know about.
+     */
+    private void fileForOwner(Long ownerId, CommentResponse comment) {
+        if (ownerId == null) {
+            return;
+        }
+        try {
+            commentByOwnerRepository.save(CommentByOwner.of(ownerId, comment.videoId(), comment.commentId()));
+        } catch (RuntimeException ex) {
+            log.warn("Comment {} on video {} not filed in owner {}'s inbox", comment.commentId(), comment.videoId(),
+                    ownerId, ex);
         }
     }
 
@@ -419,9 +456,9 @@ public class CommentServiceImpl implements CommentService {
      * not hand the client an empty page it might stop on — see {@link #page}. Shared by the public
      * threads and the owner's queue of held comments.
      */
-    private CommentPageResponse scan(String cursor, int size,
-                                     Function<CassandraPageRequest, Slice<Long>> ids,
-                                     Function<List<Long>, List<CommentResponse>> hydrate) {
+    private <T> CommentPageResponse scan(String cursor, int size,
+                                         Function<CassandraPageRequest, Slice<T>> ids,
+                                         Function<List<T>, List<CommentResponse>> hydrate) {
         CassandraPageRequest pageRequest = CassandraCursors.decode(cursor, size, InvalidCommentCursorException::new);
 
         List<CommentResponse> items = List.of();
@@ -430,7 +467,7 @@ public class CommentServiceImpl implements CommentService {
             // Base64 that decodes into bytes Cassandra will not accept as paging state is only
             // refused here, by the coordinator, not by the decoder — and only the first page can
             // be carrying the client's value, every page after it uses one this method issued.
-            Slice<Long> slice;
+            Slice<T> slice;
             try {
                 slice = ids.apply(pageRequest);
             } catch (CassandraInvalidQueryException e) {
@@ -550,6 +587,61 @@ public class CommentServiceImpl implements CommentService {
                 .map(rows::get)
                 .filter(Objects::nonNull)
                 .filter(comment -> comment.getParentId() == null || liveParents.contains(comment.getParentId()))
+                .map(commentMapper::toResponse)
+                .toList();
+    }
+
+    @Override
+    public CommentPageResponse listForOwner(Long ownerId, CommentInboxFilter filter, String cursor, int size) {
+        long fromId = filter.from() == null ? 0L : firstCommentIdAt(filter.from());
+        long toId = filter.to() == null ? Long.MAX_VALUE : firstCommentIdAt(filter.to());
+        String q = filter.q() == null || filter.q().isBlank() ? null : searchable(filter.q().strip());
+        return scan(cursor, size,
+                pageRequest -> commentByOwnerRepository.findNewestFirst(ownerId, fromId, toId, pageRequest),
+                page -> hydrateInbox(page.stream()
+                                .filter(row -> filter.videoId() == null || filter.videoId().equals(row.getVideoId()))
+                                .toList(),
+                        filter.status(), q));
+    }
+
+    /**
+     * The smallest Snowflake id {@link SnowflakeIdGenerator} can hand out at {@code at}: the time sits
+     * in the bits above node and sequence. Its epoch is private there, so it is repeated here and
+     * pinned by a test that generates a real id.
+     */
+    static long firstCommentIdAt(Instant at) {
+        return Math.max(0L, at.toEpochMilli() - SNOWFLAKE_EPOCH_MILLIS) << SNOWFLAKE_TIME_SHIFT;
+    }
+
+    /** Search ignores case and diacritics: creators type "hay qua" for "hay quá". */
+    private static String searchable(String text) {
+        return TextNormalizer.fold(text).toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * The inbox spans videos, so the page is read one video at a time — at most one query per video
+     * on the page. Visible and held comments both stay, the held ones marked HELD for the owner to
+     * approve; deleted ones and those whose author is banned right now are left out, as on the video.
+     * Status and text are only known once the comment is read, so those filters apply here; a page
+     * they empty is walked past by {@link #scan}.
+     */
+    private List<CommentResponse> hydrateInbox(List<CommentByOwner> page, CommentStatus status, String q) {
+        Map<Long, List<Long>> idsByVideo = new LinkedHashMap<>();
+        for (CommentByOwner row : page) {
+            idsByVideo.computeIfAbsent(row.getVideoId(), video -> new ArrayList<>())
+                    .add(row.getKey().getCommentId());
+        }
+        Map<Long, CommentByVideo> rows = new HashMap<>();
+        idsByVideo.forEach((videoId, ids) -> commentByVideoRepository.findAllByCommentIds(videoId, ids).stream()
+                .filter(comment -> !comment.isDeleted())
+                .filter(comment -> status == null || comment.effectiveStatus() == status)
+                .filter(comment -> q == null || searchable(comment.getContent()).contains(q))
+                .forEach(comment -> rows.put(comment.getKey().getCommentId(), comment)));
+
+        Map<Long, CommentByVideo> shown = withoutBannedAuthors(rows);
+        return page.stream()
+                .map(row -> shown.get(row.getKey().getCommentId()))
+                .filter(Objects::nonNull)
                 .map(commentMapper::toResponse)
                 .toList();
     }

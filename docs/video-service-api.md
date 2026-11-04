@@ -241,6 +241,18 @@ Danh sách video của 1 user. Không bắt buộc token. **Phân trang bằng `
 
 Không có lỗi `USER_NOT_FOUND` — `userId` không tồn tại chỉ trả về trang rỗng (`content: []`), vì video-service không giữ dữ liệu user.
 
+### 3.5b `GET /me` — bảng Bài đăng của TikTok Studio
+**Bắt buộc token** (thiếu token → 403 như mọi endpoint ghi). Luôn trả video của **chính người gọi**, mọi status trừ video đã xoá, giống mục 3.5 khi gọi chính mình. Phân trang offset `?page=0&size=20` (tối đa 50), `data` → `Page<VideoResponse>`.
+
+| Tham số | Giá trị | Ý nghĩa |
+|---|---|---|
+| `status` | một `VideoStatus` (mục 4) | chỉ video ở trạng thái đó |
+| `visibility` | `PUBLIC` / `FRIENDS` / `PRIVATE` | chỉ video có quyền xem đó |
+| `q` | chuỗi | có trong tiêu đề **hoặc** mô tả, không phân biệt hoa thường (có phân biệt dấu) |
+| `sort` | `NEWEST` (mặc định), `VIEWS`, `LIKES`, `COMMENTS` | giảm dần; trùng số thì video mới hơn trước |
+
+Mọi tham số đều tuỳ chọn. Giá trị enum sai → 400.
+
 ### 3.6 `DELETE /{videoId}`
 **Bắt buộc token.** Xoá mềm video của chính mình. Trả `200 OK`, `data` null.
 
