@@ -88,6 +88,18 @@ CREATE TABLE IF NOT EXISTS held_comments_by_video (
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
 
+-- A video owner's Studio inbox: every comment somebody else left on any video they own, newest
+-- first — ids only, one partition per owner, the way held_comments_by_video serves one video's
+-- queue. video_id names the comments_by_video partition the comment is in. comments_by_video
+-- decides whether a row here still means anything: a deleted comment's row is dropped when the
+-- owner was known at the time, and skipped by the reader if it was not.
+CREATE TABLE IF NOT EXISTS comments_by_owner (
+    owner_id   bigint,
+    comment_id bigint,
+    video_id   bigint,
+    PRIMARY KEY ((owner_id), comment_id)
+) WITH CLUSTERING ORDER BY (comment_id DESC);
+
 -- Who is banned, as admin-service decided — UserBannedEvent / UserUnbannedEvent on
 -- admin.moderation-events. The comment listings drop a banned author's comments while banned_until
 -- is in the future; changed_at keeps a late decision from undoing a newer one (an LWT on it).

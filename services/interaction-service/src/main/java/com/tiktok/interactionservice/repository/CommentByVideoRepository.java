@@ -17,6 +17,15 @@ public interface CommentByVideoRepository extends CassandraRepository<CommentByV
     Slice<CommentByVideo> findByVideoId(@Param("videoId") Long videoId, Pageable pageable);
 
     /**
+     * One video's comments newest first — the table's own clustering order — every status, between
+     * two ids: the owner's inbox narrowed to this video. Ids are Snowflakes, so the id range is a
+     * date range and a clustering slice, as in {@code CommentByOwnerRepository.findNewestFirst}.
+     */
+    @Query("SELECT * FROM comments_by_video WHERE video_id = :videoId AND comment_id >= :fromId AND comment_id < :toId")
+    Slice<CommentByVideo> findNewestFirst(@Param("videoId") Long videoId, @Param("fromId") long fromId,
+                                          @Param("toId") long toId, Pageable pageable);
+
+    /**
      * The rows behind one page of {@code comment_index} ids. A single-partition {@code IN}: the
      * video is fixed and the ids all cluster inside it, so this is one read however long the page.
      *

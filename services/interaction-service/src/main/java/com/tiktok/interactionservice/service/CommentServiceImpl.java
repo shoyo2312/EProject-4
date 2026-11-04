@@ -13,6 +13,7 @@ import com.tiktok.interactionservice.dto.response.CommentPermissionResponse.Rest
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.entity.CommentByOwner;
+import com.tiktok.interactionservice.entity.CommentByOwnerKey;
 import com.tiktok.interactionservice.entity.CommentByVideo;
 import com.tiktok.interactionservice.entity.CommentByVideoKey;
 import com.tiktok.interactionservice.entity.CommentCounters;
@@ -53,6 +54,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -82,6 +84,9 @@ public class CommentServiceImpl implements CommentService {
     /** {@link SnowflakeIdGenerator}'s epoch and how far up the time sits — see firstCommentIdAt. */
     private static final long SNOWFLAKE_EPOCH_MILLIS = 1704067200000L;
     private static final int SNOWFLAKE_TIME_SHIFT = 22;
+    private static final Instant SNOWFLAKE_EPOCH = Instant.ofEpochMilli(SNOWFLAKE_EPOCH_MILLIS);
+    /** The last millisecond the 41 time bits above the shift can name (in 2093); anything later reads as it. */
+    private static final Instant SNOWFLAKE_LAST = SNOWFLAKE_EPOCH.plusMillis((1L << (63 - SNOWFLAKE_TIME_SHIFT)) - 1);
 
     private final CommentByVideoRepository commentByVideoRepository;
     private final CommentIndexRepository commentIndexRepository;
@@ -205,9 +210,32 @@ public class CommentServiceImpl implements CommentService {
         try {
             commentByOwnerRepository.save(CommentByOwner.of(ownerId, comment.videoId(), comment.commentId()));
         } catch (RuntimeException ex) {
+            // TODO: a Micrometer counter once this service has a MeterRegistry — today this WARN is the only sign.
             log.warn("Comment {} on video {} not filed in owner {}'s inbox", comment.commentId(), comment.videoId(),
                     ownerId, ex);
         }
+    }
+
+    /**
+     * Takes a deleted comment out of its video owner's inbox — the reverse of {@link #fileForOwner},
+     * and best effort like it: the inbox reader checks the comment row and skips a deleted one, so a
+     * row left behind is a wasted read, not a deleted comment shown. Nothing to take out when nobody
+     * could name the owner.
+     */
+    private void unfileForOwner(Long ownerId, Long commentId) {
+        if (ownerId == null) {
+            return;
+        }
+        try {
+            commentByOwnerRepository.deleteById(CommentByOwnerKey.builder().ownerId(ownerId).commentId(commentId).build());
+        } catch (RuntimeException ex) {
+            log.warn("Deleted comment {} left in owner {}'s inbox: {}", commentId, ownerId, ex.getMessage());
+        }
+    }
+
+    /** Who owns the video as video-service names it, or null when it cannot — the fail-open read {@link #addComment} makes. */
+    private Long ownerOf(Long videoId) {
+        return videoOwnershipClient.commentPolicy(videoId).ownerId();
     }
 
     /**
@@ -571,18 +599,7 @@ public class CommentServiceImpl implements CommentService {
                         .filter(comment -> comment.isHeld() && !comment.isDeleted())
                         .collect(Collectors.toMap(comment -> comment.getKey().getCommentId(), Function.identity())));
 
-        List<Long> parentIds = rows.values().stream()
-                .map(CommentByVideo::getParentId)
-                .filter(Objects::nonNull)
-                .distinct()
-                .toList();
-        Set<Long> liveParents = parentIds.isEmpty()
-                ? Set.of()
-                : commentByVideoRepository.findAllByCommentIds(videoId, parentIds).stream()
-                        .filter(CommentByVideo::isLive)
-                        .map(comment -> comment.getKey().getCommentId())
-                        .collect(Collectors.toSet());
-
+        Set<Long> liveParents = liveParents(videoId, rows.values());
         return ids.stream()
                 .map(rows::get)
                 .filter(Objects::nonNull)
@@ -591,26 +608,58 @@ public class CommentServiceImpl implements CommentService {
                 .toList();
     }
 
+    /**
+     * Which of these comments' threads are still live — one read of the video's partition, none when
+     * no comment among them is a reply.
+     */
+    private Set<Long> liveParents(Long videoId, Collection<CommentByVideo> comments) {
+        List<Long> parentIds = comments.stream()
+                .map(CommentByVideo::getParentId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        return parentIds.isEmpty()
+                ? Set.of()
+                : commentByVideoRepository.findAllByCommentIds(videoId, parentIds).stream()
+                        .filter(CommentByVideo::isLive)
+                        .map(comment -> comment.getKey().getCommentId())
+                        .collect(Collectors.toSet());
+    }
+
     @Override
     public CommentPageResponse listForOwner(Long ownerId, CommentInboxFilter filter, String cursor, int size) {
         long fromId = filter.from() == null ? 0L : firstCommentIdAt(filter.from());
         long toId = filter.to() == null ? Long.MAX_VALUE : firstCommentIdAt(filter.to());
         String q = filter.q() == null || filter.q().isBlank() ? null : searchable(filter.q().strip());
+        if (filter.videoId() != null) {
+            // One video is one comments_by_video partition, read directly: sifting the owner's partition
+            // for it stops where scan gives up, and a busy account's other videos push it past that.
+            // It is the video's own list, not the inbox's, so it is the owner's video or nothing — the
+            // same fail-closed check as the queue, since the held comments on it are uncleared text —
+            // and the owner's own comments are left out here as the inbox never filed them.
+            requireOwner(filter.videoId(), ownerId);
+            return scan(cursor, size,
+                    pageRequest -> commentByVideoRepository.findNewestFirst(filter.videoId(), fromId, toId, pageRequest),
+                    rows -> hydrateInbox(rows.stream().filter(row -> !ownerId.equals(row.getUserId())).toList(),
+                            filter.status(), q));
+        }
         return scan(cursor, size,
                 pageRequest -> commentByOwnerRepository.findNewestFirst(ownerId, fromId, toId, pageRequest),
-                page -> hydrateInbox(page.stream()
-                                .filter(row -> filter.videoId() == null || filter.videoId().equals(row.getVideoId()))
-                                .toList(),
-                        filter.status(), q));
+                page -> hydrateInbox(inboxRows(page), filter.status(), q));
     }
 
     /**
      * The smallest Snowflake id {@link SnowflakeIdGenerator} can hand out at {@code at}: the time sits
      * in the bits above node and sequence. Its epoch is private there, so it is repeated here and
      * pinned by a test that generates a real id.
+     *
+     * <p>Clamped to the ids the generator can produce before converting: {@code toEpochMilli()} throws
+     * for {@link Instant#MAX}, and a time past {@link #SNOWFLAKE_LAST} would shift into the sign bit —
+     * so a far-off bound means "everything", not a 500 or a garbage range.
      */
     static long firstCommentIdAt(Instant at) {
-        return Math.max(0L, at.toEpochMilli() - SNOWFLAKE_EPOCH_MILLIS) << SNOWFLAKE_TIME_SHIFT;
+        Instant clamped = at.isAfter(SNOWFLAKE_LAST) ? SNOWFLAKE_LAST : at.isBefore(SNOWFLAKE_EPOCH) ? SNOWFLAKE_EPOCH : at;
+        return (clamped.toEpochMilli() - SNOWFLAKE_EPOCH_MILLIS) << SNOWFLAKE_TIME_SHIFT;
     }
 
     /** Search ignores case and diacritics: creators type "hay qua" for "hay quá". */
@@ -619,30 +668,56 @@ public class CommentServiceImpl implements CommentService {
     }
 
     /**
-     * The inbox spans videos, so the page is read one video at a time — at most one query per video
-     * on the page. Visible and held comments both stay, the held ones marked HELD for the owner to
-     * approve; deleted ones and those whose author is banned right now are left out, as on the video.
-     * Status and text are only known once the comment is read, so those filters apply here; a page
-     * they empty is walked past by {@link #scan}.
+     * The comment rows behind one page of the owner's inbox, in the page's order. The inbox spans
+     * videos, so the page is read one video at a time — at most one query per video on the page.
      */
-    private List<CommentResponse> hydrateInbox(List<CommentByOwner> page, CommentStatus status, String q) {
+    private List<CommentByVideo> inboxRows(List<CommentByOwner> page) {
         Map<Long, List<Long>> idsByVideo = new LinkedHashMap<>();
         for (CommentByOwner row : page) {
             idsByVideo.computeIfAbsent(row.getVideoId(), video -> new ArrayList<>())
                     .add(row.getKey().getCommentId());
         }
         Map<Long, CommentByVideo> rows = new HashMap<>();
-        idsByVideo.forEach((videoId, ids) -> commentByVideoRepository.findAllByCommentIds(videoId, ids).stream()
+        idsByVideo.forEach((videoId, ids) -> commentByVideoRepository.findAllByCommentIds(videoId, ids)
+                .forEach(comment -> rows.put(comment.getKey().getCommentId(), comment)));
+        return page.stream()
+                .map(row -> rows.get(row.getKey().getCommentId()))
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    /**
+     * An inbox page from its comment rows, in the order given. Visible and held comments both stay,
+     * the held ones marked HELD for the owner to approve. Left out, as on the video: deleted ones,
+     * those whose author is banned right now, and — as in the queue, see {@link #hydrateHeld} — a reply
+     * whose thread is gone, which approving would only 404 on. Status and text are only known once the
+     * comment is read, so those filters apply here; a page they empty is walked past by {@link #scan}.
+     * Reply counts come one counter read per video on the page.
+     *
+     * <p>{@code likedByMe} is not populated here: the inbox is the owner's own list, and a like lookup
+     * per video on the page for a flag Studio does not show is not worth its reads.
+     */
+    private List<CommentResponse> hydrateInbox(List<CommentByVideo> rows, CommentStatus status, String q) {
+        Map<Long, CommentByVideo> kept = withoutBannedAuthors(rows.stream()
                 .filter(comment -> !comment.isDeleted())
                 .filter(comment -> status == null || comment.effectiveStatus() == status)
                 .filter(comment -> q == null || searchable(comment.getContent()).contains(q))
-                .forEach(comment -> rows.put(comment.getKey().getCommentId(), comment)));
+                .collect(Collectors.toMap(comment -> comment.getKey().getCommentId(), Function.identity())));
 
-        Map<Long, CommentByVideo> shown = withoutBannedAuthors(rows);
-        return page.stream()
-                .map(row -> shown.get(row.getKey().getCommentId()))
+        Map<Long, CommentResponse> items = new HashMap<>();
+        kept.values().stream()
+                .collect(Collectors.groupingBy(comment -> comment.getKey().getVideoId()))
+                .forEach((videoId, comments) -> {
+                    Set<Long> liveParents = liveParents(videoId, comments);
+                    attachReplyCounts(videoId, comments.stream()
+                            .filter(comment -> comment.getParentId() == null || liveParents.contains(comment.getParentId()))
+                            .map(commentMapper::toResponse)
+                            .toList())
+                            .forEach(item -> items.put(item.commentId(), item));
+                });
+        return rows.stream()
+                .map(row -> items.get(row.getKey().getCommentId()))
                 .filter(Objects::nonNull)
-                .map(commentMapper::toResponse)
                 .toList();
     }
 
@@ -664,7 +739,7 @@ public class CommentServiceImpl implements CommentService {
             if (parent == null) {
                 // The thread it answers is gone, so it can never be shown; drop it rather than
                 // leave it in the queue for another try.
-                deleteHeld(comment);
+                deleteHeld(comment, currentUserId);
                 throw new CommentNotFoundException(commentId);
             }
             // Who the reply answers, as addComment worked it out: the reply it targeted if that is
@@ -674,7 +749,7 @@ public class CommentServiceImpl implements CommentService {
             // posted. Dropped like a reply to a deleted thread, and as quietly: a block between two
             // other people is not the owner's to learn of.
             if (blockClient.isBlockedBetween(parentAuthorId, comment.getUserId())) {
-                deleteHeld(comment);
+                deleteHeld(comment, currentUserId);
                 throw new CommentNotFoundException(commentId);
             }
         }
@@ -749,16 +824,19 @@ public class CommentServiceImpl implements CommentService {
         // Deleting your own comment never needs the extra lookup — only a caller reaching for
         // somebody else's comment falls through to asking video-service whether they own the video
         // it is on.
-        boolean allowed = comment.getUserId().equals(currentUserId)
-                || videoOwnershipClient.isOwnedBy(videoId, currentUserId);
-        if (!allowed) {
+        boolean own = comment.getUserId().equals(currentUserId);
+        if (!own && !videoOwnershipClient.isOwnedBy(videoId, currentUserId)) {
             throw new NotCommentOwnerException(commentId);
         }
+        // Whose inbox it comes out of: the caller's, when it was their ownership that allowed this;
+        // otherwise asked — a read the author's own delete never needed, spent so the owner's
+        // partition does not fill with rows of deleted comments.
+        Long ownerId = own ? ownerOf(videoId) : currentUserId;
 
-        if (!softDelete(comment, currentUserId)) {
+        if (!softDelete(comment, currentUserId, ownerId)) {
             throw new CommentNotFoundException(commentId);
         }
-        cascadeToReplies(comment);
+        cascadeToReplies(comment, ownerId);
     }
 
     @Override
@@ -780,12 +858,13 @@ public class CommentServiceImpl implements CommentService {
         // recommendation-service's tag profiles, which read the id as a participant in the video's
         // interactions. An admin id there would attribute the removal to somebody who never
         // interacted with the video at all.
-        if (softDelete(comment, comment.getUserId())) {
+        Long ownerId = ownerOf(videoId);
+        if (softDelete(comment, comment.getUserId(), ownerId)) {
             // A strike against the author — counted by the call that deleted it, so a redelivered
             // event does not strike twice. The replies the cascade takes down are not theirs to
             // answer for.
             commentStrikes.strike(comment.getUserId(), "comment " + commentId + " removed by an admin");
-            cascadeToReplies(comment);
+            cascadeToReplies(comment, ownerId);
         }
     }
 
@@ -799,7 +878,7 @@ public class CommentServiceImpl implements CommentService {
      * event, and a reply that fails rolls only itself back. Failing the caller here would be worse
      * than a stale count — the comment they asked to delete is already gone.
      */
-    private void cascadeToReplies(CommentByVideo parent) {
+    private void cascadeToReplies(CommentByVideo parent, Long ownerId) {
         if (parent.getParentId() != null) {
             return;
         }
@@ -821,7 +900,7 @@ public class CommentServiceImpl implements CommentService {
                 }
                 Long replyId = reply.getKey().getCommentId();
                 try {
-                    softDelete(reply, reply.getUserId());
+                    softDelete(reply, reply.getUserId(), ownerId);
                 } catch (RuntimeException ex) {
                     log.warn("Reply {} of deleted comment {} on video {} left behind: {}",
                             replyId, parentId, videoId, ex.getMessage());
@@ -847,10 +926,13 @@ public class CommentServiceImpl implements CommentService {
      * row: this caller is the only one allowed to decrement for this comment, so a failure here is
      * the one and only chance to apply it. Conditioned on the deletion still being ours, so a
      * restore cannot resurrect a comment somebody deleted in the meantime.
+     *
+     * <p>{@code ownerId} is whose inbox the comment comes out of afterwards — null when nobody could
+     * say, see {@link #unfileForOwner}.
      */
-    private boolean softDelete(CommentByVideo comment, Long userId) {
+    private boolean softDelete(CommentByVideo comment, Long userId, Long ownerId) {
         if (comment.isHeld()) {
-            if (deleteHeld(comment)) {
+            if (deleteHeld(comment, ownerId)) {
                 return true;
             }
             // Approved between the caller's read and this write, and counted by that approval:
@@ -892,6 +974,7 @@ public class CommentServiceImpl implements CommentService {
             commentByVideoRepository.restoreIfDeletedAt(videoId, commentId, deletedAt);
             throw ex;
         }
+        unfileForOwner(ownerId, commentId);
         return true;
     }
 
@@ -900,13 +983,14 @@ public class CommentServiceImpl implements CommentService {
      * tells nobody — the counters and the event are for comments that were visible. Conditioned on it
      * still being held: see {@link CommentByVideoRepository#markDeletedIfHeld}.
      */
-    private boolean deleteHeld(CommentByVideo comment) {
+    private boolean deleteHeld(CommentByVideo comment, Long ownerId) {
         Long videoId = comment.getKey().getVideoId();
         Long commentId = comment.getKey().getCommentId();
         if (!commentByVideoRepository.markDeletedIfHeld(videoId, commentId, Instant.now())) {
             return false;
         }
         dropFromQueue(videoId, commentId);
+        unfileForOwner(ownerId, commentId);
         return true;
     }
 

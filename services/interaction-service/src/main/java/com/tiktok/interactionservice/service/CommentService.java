@@ -72,7 +72,9 @@ public interface CommentService {
     /**
      * TikTok Studio's comment inbox: comments others left on any of the owner's videos, newest
      * first, held ones included and marked HELD, narrowed by {@code filter}. Comments posted before
-     * the inbox existed are not in it. A cursor belongs to the filter it was issued under.
+     * the inbox existed are not in it — except narrowed to one video, which reads that video's own
+     * comments and refuses a video the owner does not own (fails closed, like {@link #listHeld}).
+     * A cursor belongs to the filter it was issued under.
      */
     CommentPageResponse listForOwner(Long ownerId, CommentInboxFilter filter, String cursor, int size);
 
