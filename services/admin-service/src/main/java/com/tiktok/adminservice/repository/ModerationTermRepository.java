@@ -33,4 +33,14 @@ public interface ModerationTermRepository extends JpaRepository<ModerationTerm, 
               AND (:q IS NULL OR LOWER(t.term) LIKE LOWER(CONCAT('%', CAST(:q AS string), '%')))
             """)
     Page<ModerationTerm> search(@Param("q") String q, @Param("action") AdminTerm.Action action, Pageable pageable);
+
+    /** {@link #search}, over the removed terms instead: the list's history. */
+    @Query("""
+            SELECT t FROM ModerationTerm t
+            WHERE t.deletedAt IS NOT NULL
+              AND (:action IS NULL OR t.action = :action)
+              AND (:q IS NULL OR LOWER(t.term) LIKE LOWER(CONCAT('%', CAST(:q AS string), '%')))
+            """)
+    Page<ModerationTerm> searchRemoved(@Param("q") String q, @Param("action") AdminTerm.Action action,
+                                       Pageable pageable);
 }

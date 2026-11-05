@@ -13,6 +13,9 @@ public record ModerationTermResponse(
         AdminTerm.Action action,
         String note,
         Long createdBy,
-        Instant createdAt
+        Instant createdAt,
+        /** Who took it out, and when; null while it is live. */
+        Long deletedBy,
+        Instant deletedAt
 ) {
 }

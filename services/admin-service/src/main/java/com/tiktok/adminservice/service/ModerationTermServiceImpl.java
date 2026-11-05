@@ -40,6 +40,7 @@ public class ModerationTermServiceImpl implements ModerationTermService {
 
     /** Newest first, whatever the client asked for: the table has nothing else worth sorting by. */
     private static final Sort NEWEST_FIRST = Sort.by(Sort.Direction.DESC, "createdAt", "id");
+    private static final Sort RECENTLY_REMOVED_FIRST = Sort.by(Sort.Direction.DESC, "deletedAt", "id");
 
     private final ModerationTermRepository moderationTermRepository;
     private final ModerationTermRevisions moderationTermRevisions;
@@ -71,6 +72,14 @@ public class ModerationTermServiceImpl implements ModerationTermService {
         String query = q == null || q.isBlank() ? null : q.strip();
         Pageable page = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), NEWEST_FIRST);
         return moderationTermRepository.search(query, action, page).map(moderationTermMapper::toResponse);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ModerationTermResponse> listRemoved(String q, AdminTerm.Action action, Pageable pageable) {
+        String query = q == null || q.isBlank() ? null : q.strip();
+        Pageable page = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), RECENTLY_REMOVED_FIRST);
+        return moderationTermRepository.searchRemoved(query, action, page).map(moderationTermMapper::toResponse);
     }
 
     @Override

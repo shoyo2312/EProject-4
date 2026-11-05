@@ -41,6 +41,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * The term list against the real schema: the partial unique index on the key, the revision row,
@@ -188,6 +189,25 @@ class ModerationTermServiceIntegrationTest {
                 .extracting(ModerationTermResponse::term).containsExactly("đồ mất dạy");
         assertThat(service.list(null, AdminTerm.Action.EXEMPT, PageRequest.of(0, 10)).getContent())
                 .extracting(ModerationTermResponse::term).containsExactly("ngu như bò");
+    }
+
+    @Test
+    void removedTerms_keepWhoTookThemOut_mostRecentlyRemovedFirst() {
+        ModerationTermResponse first = add("cút đi cho khuất mắt", Category.INSULT, AdminTerm.Action.HOLD);
+        ModerationTermResponse second = add("đồ mất dạy", Category.INSULT, AdminTerm.Action.REJECT);
+        add("ngu như bò", null, AdminTerm.Action.EXEMPT);
+        service.delete(2L, first.id());
+        service.delete(3L, second.id());
+
+        assertThat(service.listRemoved(null, null, PageRequest.of(0, 10)).getContent())
+                .allSatisfy(term -> assertThat(term.deletedAt()).isNotNull())
+                .extracting(ModerationTermResponse::term, ModerationTermResponse::deletedBy)
+                .containsExactly(tuple("đồ mất dạy", 3L), tuple("cút đi cho khuất mắt", 2L));
+        assertThat(service.listRemoved("KHUẤT", AdminTerm.Action.HOLD, PageRequest.of(0, 10)).getContent())
+                .extracting(ModerationTermResponse::term).containsExactly("cút đi cho khuất mắt");
+        assertThat(service.list(null, null, PageRequest.of(0, 10)).getContent())
+                .extracting(ModerationTermResponse::term, ModerationTermResponse::deletedBy)
+                .containsExactly(tuple("ngu như bò", null));
     }
 
     @Test
