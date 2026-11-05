@@ -3,6 +3,7 @@ package com.tiktok.chatservice.sticker;
 import com.tiktok.chatservice.dto.response.StickerView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -46,6 +47,7 @@ public class StickerSuggestions {
     private final Map<String, ReentrantLock> locks = new ConcurrentHashMap<>();
     private final LongSupplier nanoTime;
 
+    @Autowired
     public StickerSuggestions(SuggestionTopics topics, GiphyClient giphy) {
         this(topics, giphy, System::nanoTime);
     }
