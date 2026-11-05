@@ -375,7 +375,7 @@ Phần tử: `{ id, format, categories, status, requestedAt, readyAt, expiresAt,
 
 | Category | Nội dung | Nguồn |
 |---|---|---|
-| `PROFILE_AND_SETTINGS` | Profile, cài đặt | user-service |
+| `PROFILE_AND_SETTINGS` | Profile (gồm ngày sinh), cài đặt | user-service |
 | `POSTS` | Mọi video chưa xoá, mọi status/visibility | video-service `GET /api/v1/videos/internal/users/{id}/videos` |
 | `LIKES_AND_FAVORITES` | Like, video đã lưu (kèm thời điểm) | interaction-service `GET /api/v1/interactions/internal/users/{id}/likes\|saves` |
 | `DIRECT_MESSAGES` | Mọi hội thoại và tin nhắn | chat-service `GET /api/v1/conversations/internal/users/{id}`, `.../internal/{conversationId}/messages` |

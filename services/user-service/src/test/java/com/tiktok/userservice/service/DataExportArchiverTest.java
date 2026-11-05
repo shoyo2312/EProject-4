@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -99,6 +100,18 @@ class DataExportArchiverTest {
         assertThat(sections).extracting(DataExportSection::title).containsExactly("Likes and Favorites", "Posts");
         assertThat(sections.getFirst().files()).extracting(DataExportSection.File::title)
                 .containsExactly("Like List", "Favorite Videos");
+    }
+
+    /** The birth date is personal data the account holds, so the export lists it. */
+    @Test
+    void profileInfoListsTheBirthday() {
+        when(userProfileRepository.findByUserIdAndDeletedAtIsNull(ALICE)).thenReturn(Optional.of(
+                UserProfile.builder().userId(ALICE).username("alice").birthDate(LocalDate.of(2001, 5, 9)).build()));
+
+        Map<String, String> info = archiver.collect(ALICE, List.of(DataExportCategory.PROFILE_AND_SETTINGS))
+                .getFirst().files().getFirst().records().getFirst();
+
+        assertThat(info).containsEntry("Birthday", "2001-05-09");
     }
 
     /** A per-day limit is a limit too: the export must not call it "Off". */
