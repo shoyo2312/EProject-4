@@ -61,9 +61,12 @@ Response `data` → `UserProfileResponse`:
   "followerCount": 10,
   "followingCount": 5,
   "privateAccount": false,
-  "displayNameChangeableAt": null
+  "displayNameChangeableAt": null,
+  "birthDate": "2001-05-09"
 }
 ```
+
+`birthDate`: ngày sinh (ISO `yyyy-MM-dd`) hoặc `null` khi chưa có. **Chỉ chủ tài khoản thấy**, trên profile của chính mình (cùng các chỗ như `displayNameChangeableAt` bên dưới); `null` trên profile người khác. Tài khoản đăng ký bằng email đã có sẵn từ lúc đăng ký; tài khoản Google/Facebook và tài khoản cũ thì `null` cho tới khi gửi qua `PATCH /me` (mục 3.2) — client hỏi một lần ngay sau đăng nhập khi thấy `null`.
 
 `displayNameChangeableAt`: khi nào được đổi `displayName` lần tới (mục 3.2). **Chỉ chủ tài khoản thấy**, trên profile của chính mình (`GET /me`, `PATCH /me`, `POST /me/avatar`, và `GET /{userId}` / `GET /by-username/{username}` khi người gọi là chủ); `null` ở mọi chỗ khác, và `null` với chủ khi đổi được ngay.
 
@@ -79,9 +82,12 @@ Request (mọi field đều optional, `UpdateProfileRequest`):
 {
   "displayName": "Tên mới",   // optional, 1-100 ký tự, không được toàn khoảng trắng
   "bio": "Bio mới",            // optional, tối đa 500 ký tự
-  "avatarUrl": "https://cdn.tiktok-clone.local/avatars/123.jpg"  // optional, tối đa 500 ký tự
+  "avatarUrl": "https://cdn.tiktok-clone.local/avatars/123.jpg",  // optional, tối đa 500 ký tự
+  "birthDate": "2001-05-09"    // optional, ISO yyyy-MM-dd — chỉ nhận khi profile chưa có ngày sinh, xem bên dưới
 }
 ```
+
+**`birthDate` chỉ đặt được một lần.** Gửi khi profile đã có ngày sinh → `409 BIRTH_DATE_ALREADY_SET` (cả request bị từ chối). Phải đủ **13 tuổi** tính đến hôm nay (múi giờ Asia/Ho_Chi_Minh), không ở tương lai, không trước 1900-01-01 → vi phạm trả `400 BIRTH_DATE_INVALID`. Không xoá được (`""` → `VALIDATION_ERROR`). Đặt xong, user-service phát `UserBirthDateSetEvent` (topic `user.profile-events`) cho analytics.
 
 **Quy tắc partial update — quan trọng, dễ làm sai phía client:**
 - **Không gửi field** (field vắng mặt trong JSON, hoặc `null`) → giữ nguyên giá trị cũ trên server.
@@ -107,7 +113,7 @@ Bước 3 **chỉ** ghi đè khi `avatarUrl` đang trống hoặc vẫn đúng U
 
 Client hiển thị đúng URL server trả về, không suy đoán host. Next.js phải khai báo host trong `images.remotePatterns` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, và origin MinIO) mới render được qua `next/image`. Ảnh render bằng `<img>` thường thì phải có `referrerPolicy="no-referrer"`: Google trả lỗi (503) thay vì ảnh khi request mang `Referer` là trang của client.
 
-Lỗi: `VALIDATION_ERROR` (400), `DISPLAY_NAME_CHANGE_TOO_SOON` (429).
+Lỗi: `VALIDATION_ERROR` (400), `BIRTH_DATE_INVALID` (400), `BIRTH_DATE_ALREADY_SET` (409), `DISPLAY_NAME_CHANGE_TOO_SOON` (429).
 
 ### 3.2b `POST /me/avatar`
 

@@ -44,6 +44,6 @@ public class UserRegisteredEventConsumer {
         }
 
         userProfileService.createFromRegisteredEvent(
-                event.userId(), event.username(), event.avatarUrl());
+                event.userId(), event.username(), event.avatarUrl(), event.birthDate());
     }
 }

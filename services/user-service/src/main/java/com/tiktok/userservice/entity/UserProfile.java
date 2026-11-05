@@ -12,6 +12,7 @@ import lombok.experimental.SuperBuilder;
 import org.hibernate.annotations.DynamicUpdate;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 @Getter
 @SuperBuilder
@@ -85,6 +86,13 @@ public class UserProfile extends BaseEntity {
     @Column(name = "account_state_changed_at")
     private Instant accountStateChangedAt;
 
+    /**
+     * Set once — at sign-up or by the one-time prompt afterwards — and never edited (see
+     * {@code UserProfileServiceImpl.updateOwnProfile}). Null until then. Shown to the owner only.
+     */
+    @Column(name = "birth_date")
+    private LocalDate birthDate;
+
     public boolean isDeactivated() {
         return deactivatedAt != null;
     }
@@ -96,6 +104,10 @@ public class UserProfile extends BaseEntity {
 
     public void changeUsername(String newUsername) {
         this.username = newUsername;
+    }
+
+    public void setBirthDate(LocalDate birthDate) {
+        this.birthDate = birthDate;
     }
 
     /**

@@ -6,6 +6,7 @@ import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.time.LocalDate;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -124,6 +125,9 @@ public interface UserProfileService {
      * <p>Any other profile still showing the handle loses it, as in {@link #applyUsernameChange}.
      */
     void createFromRegisteredEvent(Long userId, String username, String avatarUrl);
+
+    /** The same, with the birth date a password sign-up collected; null for a social one. */
+    void createFromRegisteredEvent(Long userId, String username, String avatarUrl, LocalDate birthDate);
 
     /**
      * Follows a rename made in auth-service, which owns the handle and has already checked it.

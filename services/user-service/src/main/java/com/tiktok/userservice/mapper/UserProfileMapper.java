@@ -13,9 +13,10 @@ public interface UserProfileMapper {
 
     /** Anyone's view of a profile, the owner's included when it is reached through a list. */
     @Mapping(target = "displayNameChangeableAt", ignore = true)
+    @Mapping(target = "birthDate", ignore = true)
     UserProfileResponse toResponse(UserProfile profile);
 
-    /** The owner looking at their own profile: also says when their name may next change. */
+    /** The owner looking at their own profile: also says when their name may next change, and their birth date. */
     @Mapping(target = "displayNameChangeableAt",
             expression = "java(DisplayNameCooldown.changeableAt(profile.getDisplayNameChangedAt(), Instant.now()))")
     UserProfileResponse toOwnResponse(UserProfile profile);

@@ -4,6 +4,7 @@ import tools.jackson.databind.ObjectMapper;
 import com.tiktok.event.DomainEvent;
 import com.tiktok.event.user.FollowRequestedEvent;
 import com.tiktok.event.user.UserFollowChangedEvent;
+import com.tiktok.event.user.UserBirthDateSetEvent;
 import com.tiktok.event.user.UserBlockChangedEvent;
 import com.tiktok.userservice.service.UserPairLock;
 import com.tiktok.event.user.UserPrivacyChangedEvent;
@@ -35,6 +36,7 @@ public class UserEventPublisher {
     static final String PRIVACY_AGGREGATE = "USER_PRIVACY";
     static final String SCREEN_TIME_SUMMARY_AGGREGATE = "SCREEN_TIME_SUMMARY";
     static final String BLOCK_AGGREGATE = "USER_BLOCK";
+    static final String PROFILE_AGGREGATE = "USER_PROFILE";
 
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -65,6 +67,11 @@ public class UserEventPublisher {
     public void publishWeeklyScreenTimeSummary(Long userId, LocalDate weekStart, long totalSeconds) {
         save(SCREEN_TIME_SUMMARY_AGGREGATE, userId,
                 WeeklyScreenTimeSummaryEvent.of(userId, weekStart.toString(), totalSeconds));
+    }
+
+    /** Must be called in the transaction that stored the date, so the row and the event commit together. */
+    public void publishBirthDateSet(Long userId, LocalDate birthDate) {
+        save(PROFILE_AGGREGATE, userId, UserBirthDateSetEvent.of(userId, birthDate));
     }
 
     public void publishBlockChanged(Long blockerId, Long blockedId, boolean blocked) {

@@ -1,6 +1,7 @@
 package com.tiktok.userservice.dto.response;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 public record UserProfileResponse(
         Long userId,
@@ -24,6 +25,19 @@ public record UserProfileResponse(
          * null for everyone else, and for the owner when it may change now. When somebody last
          * renamed themselves is not something another account needs to know.
          */
-        Instant displayNameChangeableAt
+        Instant displayNameChangeableAt,
+        /**
+         * The owner's birth date, on their own profile only; null on anyone else's and for an
+         * owner who has not given one yet (the client then asks once).
+         */
+        LocalDate birthDate
 ) {
+
+    /** Someone else's view: no birth date. */
+    public UserProfileResponse(Long userId, String username, String displayName, String bio, String avatarUrl,
+                               long followerCount, long followingCount, boolean privateAccount,
+                               Instant displayNameChangeableAt) {
+        this(userId, username, displayName, bio, avatarUrl, followerCount, followingCount, privateAccount,
+                displayNameChangeableAt, null);
+    }
 }

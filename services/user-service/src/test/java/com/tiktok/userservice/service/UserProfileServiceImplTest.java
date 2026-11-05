@@ -3,7 +3,11 @@ package com.tiktok.userservice.service;
 import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
+import com.tiktok.userservice.entity.OutboxEvent;
+import com.tiktok.userservice.exception.BirthDateAlreadySetException;
 import com.tiktok.userservice.exception.DisplayNameChangeTooSoonException;
+import com.tiktok.userservice.exception.InvalidBirthDateException;
+import com.tiktok.userservice.repository.OutboxEventRepository;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.repository.InboxEventRepository;
@@ -27,6 +31,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.stream.LongStream;
@@ -83,12 +89,16 @@ class UserProfileServiceImplTest {
     @Autowired
     private AccountStateService accountStateService;
 
+    @Autowired
+    private OutboxEventRepository outboxEventRepository;
+
     @BeforeEach
     void cleanUp() {
         userFollowRepository.deleteAll();
         userBlockRepository.deleteAll();
         userProfileRepository.deleteAll();
         inboxEventRepository.deleteAll();
+        outboxEventRepository.deleteAll();
         // The follow-changed realtime publish (confirmed send) needs a non-null future to
         // .get() on, same as every other confirmed-send test in this codebase.
         when(kafkaTemplate.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(null));
@@ -703,5 +713,74 @@ class UserProfileServiceImplTest {
 
         // The release is rolled back with the rest, so nothing has moved before the retry.
         assertThat(userProfileService.getByUsername(2L, "johndoe").userId()).isEqualTo(1L);
+    }
+
+    private static UpdateProfileRequest birthDateOf(LocalDate birthDate) {
+        return new UpdateProfileRequest(null, null, null, birthDate);
+    }
+
+    @Test
+    @Transactional
+    void aBirthDateCanBeSetOnce() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+
+        UserProfileResponse set = userProfileService.updateOwnProfile(1L, birthDateOf(LocalDate.of(2001, 5, 9)));
+
+        assertThat(set.birthDate()).isEqualTo(LocalDate.of(2001, 5, 9));
+        assertThatThrownBy(() -> userProfileService.updateOwnProfile(1L, birthDateOf(LocalDate.of(2000, 1, 1))))
+                .isInstanceOf(BirthDateAlreadySetException.class);
+        assertThat(userProfileService.getByUserId(1L, 1L).birthDate()).isEqualTo(LocalDate.of(2001, 5, 9));
+    }
+
+    @Test
+    @Transactional
+    void anUnderageBirthDateIsRejected() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        LocalDate oneDayShort = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).minusYears(13).plusDays(1);
+
+        assertThatThrownBy(() -> userProfileService.updateOwnProfile(1L, birthDateOf(oneDayShort)))
+                .isInstanceOf(InvalidBirthDateException.class);
+
+        assertThat(userProfileService.getByUserId(1L, 1L).birthDate()).isNull();
+        assertThat(outboxEventRepository.findAll()).isEmpty();
+    }
+
+    @Test
+    @Transactional
+    void settingABirthDateIsAnnounced() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+
+        userProfileService.updateOwnProfile(1L, birthDateOf(LocalDate.of(2001, 5, 9)));
+
+        assertThat(outboxEventRepository.findAll())
+                .filteredOn(e -> "UserBirthDateSetEvent".equals(e.getEventType()))
+                .singleElement()
+                .satisfies(e -> {
+                    assertThat(e.getAggregateType()).isEqualTo("USER_PROFILE");
+                    assertThat(e.getAggregateId()).isEqualTo("1");
+                    assertThat(e.getPayload()).contains("\"birthDate\":\"2001-05-09\"").contains("\"userId\":1");
+                });
+    }
+
+    @Test
+    @Transactional
+    void theBirthDateIsTheOwnersOnly() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null);
+        userProfileService.createFromRegisteredEvent(2L, "viewer", null);
+        userProfileService.updateOwnProfile(1L, birthDateOf(LocalDate.of(2001, 5, 9)));
+
+        assertThat(userProfileService.getByUserId(2L, 1L).birthDate()).isNull();
+        assertThat(userProfileService.getByUserId(null, 1L).birthDate()).isNull();
+        assertThat(userProfileService.getByUserId(1L, 1L).birthDate()).isEqualTo(LocalDate.of(2001, 5, 9));
+    }
+
+    @Test
+    @Transactional
+    void aRegistrationCarriesTheBirthDate() {
+        userProfileService.createFromRegisteredEvent(1L, "johndoe", null, LocalDate.of(2001, 5, 9));
+
+        assertThat(userProfileRepository.findByUserIdAndDeletedAtIsNull(1L).orElseThrow().getBirthDate())
+                .isEqualTo(LocalDate.of(2001, 5, 9));
+        assertThat(userProfileService.getByUserId(1L, 1L).birthDate()).isEqualTo(LocalDate.of(2001, 5, 9));
     }
 }
