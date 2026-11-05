@@ -68,3 +68,14 @@ SETTINGS index_granularity = 8192
 ;
 
 ALTER TABLE analytics_db.follow_events ADD COLUMN IF NOT EXISTS source_video_id String DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS analytics_db.viewer_profiles
+(
+    `user_id` Int64,
+    `birth_date` Nullable(Date),
+    `updated_at` DateTime64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY user_id
+SETTINGS index_granularity = 8192
+;
