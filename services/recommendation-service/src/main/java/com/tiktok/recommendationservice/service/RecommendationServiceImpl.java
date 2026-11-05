@@ -110,6 +110,10 @@ public class RecommendationServiceImpl implements RecommendationService {
             return;
         }
         addEngagement(videoId, PUBLISH_SCORE);
+        // Now rather than at the next scheduled rebuild: chat-service tells open pages about the
+        // approval at once (/topic/feed), and a page that refetches then should find the video
+        // already ranked, not up to a minute later. One ZUNIONSTORE per approval.
+        rebuildTrending();
 
         Set<String> tags = redisTemplate.opsForSet().members(RecoKeys.videoTags(videoId));
         if (tags == null || tags.isEmpty()) {
