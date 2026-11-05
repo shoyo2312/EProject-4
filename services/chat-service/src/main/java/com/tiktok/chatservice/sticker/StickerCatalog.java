@@ -15,7 +15,7 @@ import java.util.Optional;
 
 /**
  * The sticker pack, read from the same manifest the importer uploads from
- * ({@code stickers/fluent-3d-v1.json}), so the backend and the images in MinIO cannot disagree about
+ * ({@code stickers/fluent-3d-v1.json}, when one is on the classpath), so the backend and the images in MinIO cannot disagree about
  * which ids exist. Messages store only an id; this is where an id becomes something a client can draw.
  *
  * <p>Two questions, deliberately separate: {@link #sendable} (may a client send this now?) and
@@ -26,6 +26,17 @@ import java.util.Optional;
 public final class StickerCatalog {
 
     public static final String MANIFEST = "stickers/fluent-3d-v1.json";
+
+    /** A GIPHY sticker is named {@code giphy:<id>}; its picture is always served from this one host. */
+    public static final String GIPHY_PREFIX = "giphy:";
+    private static final java.util.regex.Pattern GIPHY_ID = java.util.regex.Pattern.compile("giphy:[A-Za-z0-9]{5,40}");
+    private static final String GIPHY_MEDIA = "https://media.giphy.com/media/";
+    private static final int GIPHY_SIZE = 200;
+
+    /** The view of a GIPHY sticker. Only the id comes from a client, never a URL. */
+    public static StickerView giphy(String giphyId, String name) {
+        return new StickerView(GIPHY_PREFIX + giphyId, name, GIPHY_MEDIA + giphyId + "/giphy.webp", GIPHY_SIZE, GIPHY_SIZE);
+    }
 
     private record Source(String repository, String commit, String license, String licenseFile, String copyright) {
     }
@@ -44,6 +55,12 @@ public final class StickerCatalog {
     private final String packName;
     private final Map<String, StickerView> all = new LinkedHashMap<>();
     private final Map<String, Boolean> retired = new LinkedHashMap<>();
+
+    /** No manifest on the classpath: nothing is offered and no id resolves. */
+    private StickerCatalog() {
+        this.packId = "none";
+        this.packName = "Stickers";
+    }
 
     private StickerCatalog(Manifest manifest, String publicBaseUrl, String bucket) {
         this.packId = manifest.packId();
@@ -69,7 +86,7 @@ public final class StickerCatalog {
     public static StickerCatalog load(String publicBaseUrl, String bucket) {
         try (InputStream in = StickerCatalog.class.getClassLoader().getResourceAsStream(MANIFEST)) {
             if (in == null) {
-                throw new IllegalStateException("Sticker manifest not found on the classpath: " + MANIFEST);
+                return new StickerCatalog();
             }
             return new StickerCatalog(MAPPER.readValue(in, Manifest.class), publicBaseUrl, bucket);
         } catch (IOException e) {
@@ -84,12 +101,19 @@ public final class StickerCatalog {
 
     /** Any sticker that ever existed, retired or not — what drawing a stored message needs. */
     public Optional<StickerView> find(String stickerId) {
+        if (isGiphy(stickerId)) {
+            return Optional.of(giphy(stickerId.substring(GIPHY_PREFIX.length()), "GIPHY sticker"));
+        }
         return stickerId == null ? Optional.empty() : Optional.ofNullable(all.get(stickerId));
     }
 
     /** Whether a client may send this sticker now. */
     public boolean sendable(String stickerId) {
-        return stickerId != null && all.containsKey(stickerId) && !retired.get(stickerId);
+        return isGiphy(stickerId) || stickerId != null && all.containsKey(stickerId) && !retired.get(stickerId);
+    }
+
+    private static boolean isGiphy(String stickerId) {
+        return stickerId != null && GIPHY_ID.matcher(stickerId).matches();
     }
 
     /** The pack as offered for sending: retired stickers left out. */

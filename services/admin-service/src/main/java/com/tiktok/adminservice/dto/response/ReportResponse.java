@@ -1,5 +1,6 @@
 package com.tiktok.adminservice.dto.response;
 
+import com.tiktok.adminservice.entity.ReportSource;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 
@@ -14,6 +15,10 @@ public record ReportResponse(
         ReportStatus status,
         Long resolvedBy,
         Instant resolvedAt,
-        Instant createdAt
+        Instant createdAt,
+        ReportSource source,
+        String conversationId,
+        int evidenceCount
 ) {
+
 }

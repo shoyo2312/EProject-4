@@ -175,7 +175,7 @@ class AdminServiceImplTest {
                 10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.empty());
         when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
-                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "spam content", ReportStatus.PENDING, null, null, null));
+                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "spam content", ReportStatus.PENDING, null, null, null, com.tiktok.adminservice.entity.ReportSource.PROFILE, null, 0));
 
         ReportResponse response = adminService.submitReport(10L, request);
 
@@ -222,7 +222,7 @@ class AdminServiceImplTest {
                 .build();
         when(reportRepository.findByIdAndDeletedAtIsNull(7L)).thenReturn(Optional.of(pending));
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
-                new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "nudity", ReportStatus.RESOLVED, 2L, null, null));
+                new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "nudity", ReportStatus.RESOLVED, 2L, null, null, com.tiktok.adminservice.entity.ReportSource.PROFILE, null, 0));
 
         ReportResponse response = adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation", null));
 
@@ -250,7 +250,7 @@ class AdminServiceImplTest {
         when(reportRepository.findByIdAndDeletedAtIsNull(8L)).thenReturn(Optional.of(pending));
         when(adminMapper.toResponse(any(Report.class))).thenAnswer(inv -> {
             Report r = inv.getArgument(0);
-            return new ReportResponse(r.getId(), r.getReporterId(), r.getTargetType(), r.getTargetId(), r.getReason(), r.getStatus(), r.getResolvedBy(), r.getResolvedAt(), null);
+            return new ReportResponse(r.getId(), r.getReporterId(), r.getTargetType(), r.getTargetId(), r.getReason(), r.getStatus(), r.getResolvedBy(), r.getResolvedAt(), null, com.tiktok.adminservice.entity.ReportSource.PROFILE, null, 0);
         });
 
         ReportResponse response = adminService.resolveReport(2L, 8L, new ResolveReportRequest(ModerationActionType.DISMISS_REPORT, "not a violation", null));
@@ -283,7 +283,7 @@ class AdminServiceImplTest {
         when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
                 10L, ReportTargetType.VIDEO, "v1", ReportStatus.PENDING)).thenReturn(Optional.of(existing));
         when(adminMapper.toResponse(existing)).thenReturn(
-                new ReportResponse(3L, 10L, ReportTargetType.VIDEO, "v1", "spam content", ReportStatus.PENDING, null, null, null));
+                new ReportResponse(3L, 10L, ReportTargetType.VIDEO, "v1", "spam content", ReportStatus.PENDING, null, null, null, com.tiktok.adminservice.entity.ReportSource.PROFILE, null, 0));
 
         assertThat(adminService.submitReport(10L, request).id()).isEqualTo(3L);
         // Never attempted: the insert would abort the transaction, and the SELECT that would
@@ -482,7 +482,7 @@ class AdminServiceImplTest {
         standingAction(ModerationActionType.TAKEDOWN_VIDEO);
         when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
-                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "Nudity and sexual content", ReportStatus.RESOLVED, null, null, null));
+                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "Nudity and sexual content", ReportStatus.RESOLVED, null, null, null, com.tiktok.adminservice.entity.ReportSource.PROFILE, null, 0));
 
         adminService.submitReport(10L, request);
 
@@ -506,7 +506,7 @@ class AdminServiceImplTest {
         standingAction(ModerationActionType.RESTORE_VIDEO);
         when(reportRepository.saveAndFlush(any(Report.class))).thenAnswer(inv -> inv.getArgument(0));
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
-                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "Hate and harassment", ReportStatus.PENDING, null, null, null));
+                new ReportResponse(1L, 10L, ReportTargetType.VIDEO, "v1", "Hate and harassment", ReportStatus.PENDING, null, null, null, com.tiktok.adminservice.entity.ReportSource.PROFILE, null, 0));
 
         adminService.submitReport(10L, request);
 
@@ -625,7 +625,7 @@ class AdminServiceImplTest {
                 .build();
         when(reportRepository.findByIdAndDeletedAtIsNull(7L)).thenReturn(Optional.of(pending));
         when(adminMapper.toResponse(any(Report.class))).thenReturn(
-                new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "x", ReportStatus.RESOLVED, 2L, null, null));
+                new ReportResponse(7L, 1L, ReportTargetType.VIDEO, "v1", "x", ReportStatus.RESOLVED, 2L, null, null, com.tiktok.adminservice.entity.ReportSource.PROFILE, null, 0));
 
         adminService.resolveReport(2L, 7L, new ResolveReportRequest(ModerationActionType.TAKEDOWN_VIDEO, "policy violation", null));
 

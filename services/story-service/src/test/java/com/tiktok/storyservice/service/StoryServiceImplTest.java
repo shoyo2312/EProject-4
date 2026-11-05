@@ -3,6 +3,7 @@ package com.tiktok.storyservice.service;
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
 import com.tiktok.storyservice.dto.response.StoryAnnouncementResponse;
+import com.tiktok.storyservice.dto.response.StoryCardResponse;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryRingResponse;
@@ -657,5 +658,37 @@ class StoryServiceImplTest {
             assertThatThrownBy(() -> storyService.announcement(storyId))
                     .as(storyId).isInstanceOf(StoryNotFoundException.class);
         }
+    }
+
+    // --- viewable (internal, for chat) --------------------------------------------------------
+
+    @Test
+    void viewableReturnsOnlyStoriesInTheViewersAudienceAndSignsEachForThem() {
+        Story visible = active("visible", 7L);
+        Story outside = active("outside", 8L);
+        Story held = story("held", 7L, StoryStatus.HELD, StoryVisibility.PUBLIC, Instant.now());
+        Story expired = Story.builder().id("expired").userId(7L).status(StoryStatus.ACTIVE)
+                .visibility(StoryVisibility.PUBLIC).expiresAt(Instant.now().minusSeconds(1)).build();
+        when(storyRepository.findAllById(any())).thenReturn(List.of(visible, outside, held, expired));
+        when(storyAudience.resolve(eq(1L), any())).thenReturn(Map.of(7L, Set.of(StoryVisibility.PUBLIC), 8L, Set.of()));
+        when(storyMedia.signedGet(any())).thenReturn("https://signed");
+
+        List<StoryCardResponse> cards = storyService.viewable(1L, List.of("visible", "outside", "held", "expired", "gone"));
+
+        assertThat(cards).extracting(StoryCardResponse::id).containsExactly("visible");
+        assertThat(cards.get(0).userId()).isEqualTo(7L);
+        assertThat(cards.get(0).mediaUrl()).isEqualTo("https://signed");
+    }
+
+    @Test
+    void viewableLetsTheOwnerSeeTheirOwnActiveStoryButNotAHeldOne() {
+        Story own = active("own", 1L);
+        Story heldOwn = story("heldOwn", 1L, StoryStatus.HELD, StoryVisibility.PUBLIC, Instant.now());
+        when(storyRepository.findAllById(any())).thenReturn(List.of(own, heldOwn));
+        when(storyMedia.signedGet(any())).thenReturn("https://signed");
+
+        assertThat(storyService.viewable(1L, List.of("own", "heldOwn")))
+                .extracting(StoryCardResponse::id).containsExactly("own");
+        verifyNoInteractions(storyAudience);
     }
 }

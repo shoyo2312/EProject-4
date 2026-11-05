@@ -7,6 +7,7 @@ import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.experimental.SuperBuilder;
@@ -33,6 +34,21 @@ public class Report extends BaseEntity {
 
     @Column(name = "reason", nullable = false, length = 1000)
     private String reason;
+
+    @Builder.Default
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source", nullable = false)
+    private ReportSource source = ReportSource.PROFILE;
+
+    @Column(name = "conversation_id")
+    private String conversationId;
+
+    @Column(name = "request_id")
+    private String requestId;
+
+    @Builder.Default
+    @Column(name = "evidence_count", nullable = false)
+    private int evidenceCount = 0;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)

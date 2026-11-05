@@ -95,7 +95,8 @@ class ConversationPrefsMongoTest {
         messageService = new MessageServiceImpl(conversationService, conversationRepository, messageRepository,
                 new MessageMapperImpl(), mock(SimpMessagingTemplate.class), blockClient, publisher, catalog, prefsRepository,
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
-                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class), mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
     }
 
     /** Conversation {@code id} between A and a different partner each time. */
