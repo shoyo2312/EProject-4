@@ -17,7 +17,11 @@ final class CommentMentions {
     /** ponytail: fixed cap so one comment cannot page a crowd; the rest stay plain text. */
     static final int MAX_MENTIONS = 10;
 
-    private static final Pattern MENTION = Pattern.compile("(?<![^\\s])@([\\p{L}\\p{N}_.]+)");
+    /**
+     * The handle never ends on a period: in "thanks @bob." the period ends the sentence. A username
+     * may still end on one (UsernameRule), so such an account cannot be tagged — none does today.
+     */
+    private static final Pattern MENTION = Pattern.compile("(?<![^\\s])@([\\p{L}\\p{N}_.]*[\\p{L}\\p{N}_])");
 
     private CommentMentions() {
     }

@@ -308,4 +308,22 @@ class CreatorAnalyticsServiceImplTest {
                 .containsExactly("13-17", "18-24", "25-34", "35-44", "45-54", "55+", "UNKNOWN");
         assertThat(viewers.ageGroups()).containsEntry("18-24", 4L).containsEntry("55+", 0L);
     }
+
+    /** Two teenagers among 150 viewers is close to naming them: a group that small counts as UNKNOWN. */
+    @Test
+    void anAgeGroupTooSmallToStandAloneIsCountedAsUnknown() {
+        CreatorAnalyticsServiceImpl atDefaults = new CreatorAnalyticsServiceImpl(repository, 100, 3);
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+        when(repository.watchTotals(any(), any(), any())).thenReturn(List.of(new WatchTotals("v1", 300, 150, 0, 0)));
+        when(repository.viewersByAge(any(), any(), any()))
+                .thenReturn(Map.of("13-17", 2L, "18-24", 140L, "UNKNOWN", 8L));
+
+        CreatorVideoViewersResponse viewers = atDefaults.video(7L, "v1", 7).audience();
+
+        assertThat(viewers.ageGroups())
+                .containsEntry("13-17", 0L)
+                .containsEntry("18-24", 140L)
+                .containsEntry("UNKNOWN", 10L);
+    }
 }

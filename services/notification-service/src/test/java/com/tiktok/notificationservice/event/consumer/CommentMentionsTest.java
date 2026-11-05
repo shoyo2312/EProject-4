@@ -22,6 +22,13 @@ class CommentMentionsTest {
         assertThat(CommentMentions.handlesIn(null)).isEmpty();
     }
 
+    /** A period after the handle ends the sentence; one inside it is part of the handle. */
+    @Test
+    void handlesIn_leavesATrailingPeriodOut() {
+        assertThat(CommentMentions.handlesIn("thanks @bob. and @bob.builder... and @..."))
+                .containsExactly("bob", "bob.builder");
+    }
+
     /** One comment cannot page a crowd: past the cap the rest are plain text. */
     @Test
     void handlesIn_stopsAtTheCap() {

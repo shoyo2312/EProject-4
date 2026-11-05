@@ -709,6 +709,20 @@ public class CommentServiceImpl implements CommentService {
      * that reply's author. Follower counts come from user-service, only as far down as the page reaches,
      * so with that filter {@code hasMore} means at least one more match, not a count of them.
      */
+    /** One video's comments in {@code [fromId, toId)}, newest first, up to {@link #RANK_MAX_ROWS} or a page past it. */
+    private List<CommentByVideo> newestFirst(Long videoId, long fromId, long toId) {
+        List<CommentByVideo> rows = new ArrayList<>();
+        CassandraPageRequest pageRequest = CassandraPageRequest.first(RANK_PAGE_SIZE);
+        while (true) {
+            Slice<CommentByVideo> slice = commentByVideoRepository.findNewestFirst(videoId, fromId, toId, pageRequest);
+            rows.addAll(slice.getContent());
+            if (!slice.hasNext() || rows.size() >= RANK_MAX_ROWS) {
+                return rows;
+            }
+            pageRequest = (CassandraPageRequest) slice.nextPageable();
+        }
+    }
+
     private CommentPageResponse rankedForVideo(Long ownerId, CommentInboxFilter filter, long fromId, long toId,
                                                String q, String cursor, int size) {
         int offset = 0;
@@ -723,20 +737,19 @@ public class CommentServiceImpl implements CommentService {
             }
         }
 
-        List<CommentByVideo> rows = new ArrayList<>();
-        CassandraPageRequest pageRequest = CassandraPageRequest.first(RANK_PAGE_SIZE);
-        while (true) {
-            Slice<CommentByVideo> slice = commentByVideoRepository.findNewestFirst(filter.videoId(), fromId, toId, pageRequest);
-            rows.addAll(slice.getContent());
-            if (!slice.hasNext() || rows.size() >= RANK_MAX_ROWS) {
-                break;
-            }
-            pageRequest = (CassandraPageRequest) slice.nextPageable();
+        List<CommentByVideo> rows = newestFirst(filter.videoId(), fromId, toId);
+
+        // The owner may answer after the period ends, and that answer sits past toId.
+        // ponytail: also capped at RANK_MAX_ROWS, so an answer more than that many comments later is missed.
+        List<CommentByVideo> answers = rows;
+        if (filter.replied() != null && toId != Long.MAX_VALUE) {
+            answers = new ArrayList<>(newestFirst(filter.videoId(), toId, Long.MAX_VALUE));
+            answers.addAll(rows);
         }
 
         Set<Long> answeredThreads = new HashSet<>();
         Set<String> answeredReplies = new HashSet<>();
-        for (CommentByVideo row : rows) {
+        for (CommentByVideo row : answers) {
             if (ownerId.equals(row.getUserId()) && row.getParentId() != null && row.isLive()) {
                 answeredThreads.add(row.getParentId());
                 if (row.getReplyToUserId() != null) {

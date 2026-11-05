@@ -288,6 +288,20 @@ class CommentInboxTest extends AbstractInteractionServiceIT {
                 .extracting(CommentResponse::commentId).containsExactly(unanswered.commentId());
     }
 
+    /** A period that ended before the owner got round to answering still counts the thread as answered. */
+    @Test
+    void anAnswerPostedAfterThePeriodEnds_stillAnswersTheThread() throws InterruptedException {
+        CommentResponse asked = commentService.addComment(100L, AUTHOR, "câu hỏi hôm qua");
+        Thread.sleep(5);
+        Instant end = Instant.now();
+        Thread.sleep(5);
+        commentService.addComment(100L, OWNER, "trả lời muộn", asked.commentId());
+
+        assertThat(inbox(new CommentInboxFilter(100L, null, null, null, end, null, true, null)))
+                .extracting(CommentResponse::commentId).containsExactly(asked.commentId());
+        assertThat(inbox(new CommentInboxFilter(100L, null, null, null, end, null, false, null))).isEmpty();
+    }
+
     @Test
     void narrowedToOneVideo_theInboxKeepsOnlyAuthorsInAFollowerRange() {
         CommentResponse byBig = commentService.addComment(100L, AUTHOR, "từ tài khoản lớn");

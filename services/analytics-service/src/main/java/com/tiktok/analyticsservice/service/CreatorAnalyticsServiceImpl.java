@@ -90,6 +90,15 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
      */
     private final long minAudience;
 
+    /**
+     * Fewest viewers an age group needs to be shown on its own; a smaller one is counted under
+     * UNKNOWN, so a handful of teenagers among a video's viewers does not point at them. A tenth of
+     * the audience floor, so a demo that lowers that floor lowers this too.
+     * ponytail: suppression, not noise — two overlapping windows can still move one viewer across
+     * the line; add noise to the counts if that matters.
+     */
+    private final long minAgeGroup;
+
     /** Distinct searchers a query needs before the video page lists it; under that it names them. */
     private final int searchQueryMinViewers;
 
@@ -98,12 +107,14 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
 
     /** Every age group the video page reports, in order, so the client never meets a missing key. */
     static final List<String> AGE_GROUPS = List.of("13-17", "18-24", "25-34", "35-44", "45-54", "55+", "UNKNOWN");
+    private static final String UNKNOWN_AGE = "UNKNOWN";
 
     public CreatorAnalyticsServiceImpl(CreatorAnalyticsRepository repository,
                                        @Value("${analytics.creator.min-audience:100}") long minAudience,
                                        @Value("${analytics.creator.search-query-min-viewers:3}") int searchQueryMinViewers) {
         this.repository = repository;
         this.minAudience = minAudience;
+        this.minAgeGroup = Math.max(1, minAudience / 10);
         this.searchQueryMinViewers = searchQueryMinViewers;
     }
 
@@ -239,7 +250,14 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
         long followers = repository.followerViewers(creatorId, videoId, window.from(), window.to());
         Map<String, Long> byAge = repository.viewersByAge(videoId, window.from(), window.to());
         Map<String, Long> ageGroups = new LinkedHashMap<>();
-        AGE_GROUPS.forEach(group -> ageGroups.put(group, byAge.getOrDefault(group, 0L)));
+        long withheld = 0;
+        for (String group : AGE_GROUPS) {
+            long count = byAge.getOrDefault(group, 0L);
+            boolean tooSmall = count < minAgeGroup && !UNKNOWN_AGE.equals(group);
+            withheld += tooSmall ? count : 0;
+            ageGroups.put(group, tooSmall ? 0L : count);
+        }
+        ageGroups.merge(UNKNOWN_AGE, withheld, Long::sum);
         return new CreatorVideoViewersResponse(total, fresh, previousTotal, previousFresh, true,
                 total - fresh, followers, total - followers, ageGroups);
     }
