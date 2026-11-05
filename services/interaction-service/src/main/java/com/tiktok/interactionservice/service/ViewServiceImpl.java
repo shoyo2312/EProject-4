@@ -3,6 +3,7 @@ package com.tiktok.interactionservice.service;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.request.ViewRequest;
 import com.tiktok.interactionservice.dto.request.WatchRequest;
+import com.tiktok.interactionservice.dto.request.WatchSource;
 import com.tiktok.interactionservice.dto.response.ViewResponse;
 import com.tiktok.interactionservice.dto.response.WatchResponse;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
@@ -15,6 +16,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.util.Locale;
 
 @Slf4j
 @Service
@@ -120,8 +122,15 @@ public class ViewServiceImpl implements ViewService {
         long watchedMs = Math.min(request.watchedMs(), durationMs);
         boolean completed = watchedMs >= durationMs * COMPLETION_RATIO;
 
+        // Where the view came from is the client's word; a report without one is OTHER. The
+        // query is only meaningful for a search, so it is dropped with any other source.
+        String source = request.source() == null ? "OTHER" : request.source().name();
+        String query = request.source() == WatchSource.SEARCH && request.searchQuery() != null
+                ? request.searchQuery().strip().toLowerCase(Locale.ROOT)
+                : "";
+
         rateLimiter.require("watch-rate", videoId, currentUserId, WatchRateLimitedException::new);
-        eventPublisher.publishWatch(videoId, currentUserId, watchedMs, durationMs, completed);
+        eventPublisher.publishWatch(videoId, currentUserId, watchedMs, durationMs, completed, source, query);
 
         return new WatchResponse(videoId, watchedMs, completed);
     }

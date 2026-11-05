@@ -158,8 +158,10 @@ public class InteractionEventPublisher {
      * returned by the time it runs.
      */
     @SneakyThrows
-    public void publishWatch(Long videoId, Long userId, long watchedMs, long durationMs, boolean completed) {
-        VideoWatchEvent event = VideoWatchEvent.of(videoId, userId, watchedMs, durationMs, completed);
+    public void publishWatch(Long videoId, Long userId, long watchedMs, long durationMs, boolean completed,
+                             String source, String searchQuery) {
+        VideoWatchEvent event = VideoWatchEvent.of(videoId, userId, watchedMs, durationMs, completed,
+                source, searchQuery);
         kafkaTemplate.send(WATCH_TOPIC, String.valueOf(videoId), objectMapper.writeValueAsString(event))
                 .whenComplete((result, failure) -> {
                     if (failure != null) {

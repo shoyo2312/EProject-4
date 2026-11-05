@@ -317,9 +317,13 @@ Request (`WatchRequest`):
 ```json
 {
   "watchedMs": 12500,    // bắt buộc, >= 0. Tổng thời gian ĐÃ PHÁT trong phiên, cộng dồn cả các lần lặp lại
-  "durationMs": 15000    // bắt buộc, > 0. Độ dài video theo player — chỉ là tham khảo, xem bên dưới
+  "durationMs": 15000,   // bắt buộc, > 0. Độ dài video theo player — chỉ là tham khảo, xem bên dưới
+  "source": "SEARCH",    // tuỳ chọn — màn hình đang phát video, xem bên dưới
+  "searchQuery": "tiny house" // tuỳ chọn, ≤ 100 ký tự — từ khoá đã tìm; chỉ có nghĩa khi source = SEARCH
 }
 ```
+
+`source` là **nguồn xem** cho TikTok Studio (mục "Traffic source" của trang phân tích video), một trong `FOR_YOU` (trang chủ), `FOLLOWING`, `FRIENDS`, `EXPLORE`, `PROFILE` (lưới video trên trang cá nhân), `SEARCH` (kết quả tìm kiếm), `MESSAGE` (video chia sẻ trong tin nhắn), `DIRECT` (mở bằng link). Thiếu `source` → ghi là `OTHER` (app Flutter hiện chưa gửi, vẫn được chấp nhận). Gửi giá trị không có trong danh sách → `400 BAD_REQUEST` ("Invalid request content."). `searchQuery` được server cắt khoảng trắng hai đầu và chuyển về chữ thường; gửi kèm `source` khác `SEARCH`, hoặc toàn khoảng trắng, thì bị bỏ (không lỗi). Chỉ từ khoá có **từ 3 lượt xem** trở lên mới hiện cho chủ video.
 
 `watchedMs` là **thời gian phát thật**, không phải vị trí con trỏ và không phải thời gian mở màn hình: tua tới không làm nó tăng, tạm dừng không làm nó tăng, xem lặp lại 3 vòng một video 15 giây thì gửi `45000`.
 
