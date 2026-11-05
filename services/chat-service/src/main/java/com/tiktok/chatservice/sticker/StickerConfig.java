@@ -5,7 +5,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
-@EnableConfigurationProperties(StickerProperties.class)
+@EnableConfigurationProperties({StickerProperties.class, GiphyProperties.class})
 public class StickerConfig {
 
     /** Built once at startup: a manifest that is missing or incomplete stops the service rather than failing on a send. */
