@@ -37,6 +37,7 @@ public class UserEventPublisher {
     static final String SCREEN_TIME_SUMMARY_AGGREGATE = "SCREEN_TIME_SUMMARY";
     static final String BLOCK_AGGREGATE = "USER_BLOCK";
     static final String PROFILE_AGGREGATE = "USER_PROFILE";
+    static final String FOLLOW_BACKFILL_AGGREGATE = "USER_FOLLOW_BACKFILL";
 
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -58,6 +59,11 @@ public class UserEventPublisher {
         // on a single partition.
         save(FOLLOW_AGGREGATE, followingId,
                 UserFollowChangedEvent.of(followerId, followingId, followed, requestApproved, sourceVideoId));
+    }
+
+    /** A replayed edge for analytics only — its own topic, so no notification or chat consumer sees it. */
+    public void publishFollowBackfill(UserFollowChangedEvent event) {
+        save(FOLLOW_BACKFILL_AGGREGATE, event.followingId(), event);
     }
 
     public void publishFollowRequested(Long requesterId, Long targetId) {

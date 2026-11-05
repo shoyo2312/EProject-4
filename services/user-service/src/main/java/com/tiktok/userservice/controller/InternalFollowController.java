@@ -2,14 +2,17 @@ package com.tiktok.userservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.userservice.dto.request.StoryAudienceScope;
+import com.tiktok.userservice.dto.response.FollowBackfillResponse;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
 import com.tiktok.userservice.dto.response.RelationshipResponse;
 import com.tiktok.userservice.dto.response.StoryAudienceResponse;
+import com.tiktok.userservice.service.FollowGraphBackfillService;
 import com.tiktok.userservice.service.FollowService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -32,6 +35,17 @@ import java.util.List;
 public class InternalFollowController {
 
     private final FollowService followService;
+    private final FollowGraphBackfillService followGraphBackfillService;
+
+    /** An operator's one-off, run after analytics-service starts reading user.follow-backfill-events. */
+    @Operation(summary = "Internal: replay every live follow edge to analytics",
+            description = "Writes one UserFollowChangedEvent per live edge to the outbox for "
+                    + "user.follow-backfill-events, with a deterministic eventId so re-running is "
+                    + "idempotent in ClickHouse. Answers how many were written.")
+    @PostMapping("/api/v1/users/internal/follow-backfill")
+    public ApiResponse<FollowBackfillResponse> followBackfill() {
+        return ApiResponse.success(new FollowBackfillResponse(followGraphBackfillService.publishAll()));
+    }
 
     /**
      * Why this exists at all: {@code FRIENDS} on either settings audience needs a mutual-follow

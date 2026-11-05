@@ -232,3 +232,22 @@ khi thiếu một trong bốn biến bắt buộc.
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | có | thiếu thì form đăng ký / quên mật khẩu không bao giờ submit được |
 | `MEDIA_CDN_HOST` | không | host CDN https nếu có, khớp `media.allowed-hosts` của video-service |
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID`, `NEXT_PUBLIC_FACEBOOK_APP_ID` | không | rỗng thì ẩn nút social sign-in |
+
+## 9. Analytics: backfill đồ thị follow
+
+ClickHouse `follow_events` chỉ có follow phát sinh từ khi analytics-service bắt đầu đọc `user.follow-events`
+(2026-10-23) và **không nằm trong bộ seed** `~/seed-export/clickhouse/`. Thiếu nó, mục "Followers / Non-followers"
+trong trang phân tích video của Studio coi mọi follower cũ là người lạ. Chạy **một lần** sau khi deploy
+analytics-service bản có topic `user.follow-backfill-events`, và sau mỗi lần restore seed ClickHouse cũ hơn
+`follow_events.native`:
+
+```bash
+curl -X POST http://user-service:8082/api/v1/users/internal/follow-backfill \
+  -H "X-Internal-Token: $INTERNAL_API_TOKEN"
+# → {"success":true,"data":{"published":12345}}
+```
+
+Chạy lại không sao: `eventId` suy từ id của edge nên `ReplacingMergeTree` gộp trùng. Outbox của user-service sẽ
+chứa thêm chừng ấy dòng mỗi lần chạy. Import seed ClickHouse: file `.native` cũ (thiếu cột `source`,
+`search_query`, `source_video_id`) vẫn insert được, các cột mới nhận giá trị mặc định (`OTHER`, `''`) — không
+cần cờ gì thêm.
