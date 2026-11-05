@@ -47,11 +47,19 @@ public interface Ffmpeg {
      * @param colour    from {@link EditFilterGraph#colour}, or null to leave the colour alone
      * @param overlays  the text and sticker layers, lowest first, each a PNG already passed through
      *                  {@link OverlayImage#requireUsable}; empty for none
+     * @param music     the track mixed under the video, or null
      * @param withAudio whether {@code source} has an audio stream
      * @return false if the source could not be decoded or encoded
      */
     boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments, double[] colour,
-                 List<Overlay> overlays, boolean withAudio);
+                 List<Overlay> overlays, Music music, boolean withAudio);
+
+    /**
+     * A downloaded catalogue track, already checked to start like an MP3, and how it is mixed.
+     * See {@link EditFilterGraph.Mix}.
+     */
+    record Music(Path file, double start, double volume, double originalVolume, double editedSeconds) {
+    }
 
     /**
      * A downloaded overlay layer and when it shows, in seconds on the edited video's clock.

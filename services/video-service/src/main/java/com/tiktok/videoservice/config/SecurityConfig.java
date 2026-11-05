@@ -40,6 +40,9 @@ public class SecurityConfig {
                         // Any method: a HEAD is answered by the GET handler, so a GET-only rule lets a JWT in.
                         .requestMatchers("/api/v1/videos/*/policy", "/api/v1/videos/internal/**")
                         .access(new InternalCallerAuthorization(internalApiToken))
+                        // Also before it: every music search spends this service's catalogue quota,
+                        // so only signed-in users may.
+                        .requestMatchers("/api/v1/videos/music", "/api/v1/videos/music/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .anyRequest().authenticated()
                 )

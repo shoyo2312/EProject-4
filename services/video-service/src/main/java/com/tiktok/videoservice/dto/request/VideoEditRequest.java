@@ -7,6 +7,7 @@ import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.util.List;
@@ -25,7 +26,8 @@ public record VideoEditRequest(
         // changes the colour.
         @Size(max = MAX_SEGMENTS) List<@Valid @NotNull Segment> segments,
         @Valid Filter filter,
-        @Size(max = MAX_OVERLAYS) List<@Valid @NotNull Overlay> overlays
+        @Size(max = MAX_OVERLAYS) List<@Valid @NotNull Overlay> overlays,
+        @Valid Music music
 ) {
 
     public static final int MAX_SEGMENTS = 20;
@@ -39,19 +41,53 @@ public record VideoEditRequest(
 
     /** Trim and speed only. */
     public VideoEditRequest(List<Segment> segments) {
-        this(segments, null, null);
+        this(segments, null, null, null);
     }
 
     /** Without text or stickers. */
     public VideoEditRequest(List<Segment> segments, Filter filter) {
-        this(segments, filter, null);
+        this(segments, filter, null, null);
+    }
+
+    /** Without music. */
+    public VideoEditRequest(List<Segment> segments, Filter filter, List<Overlay> overlays) {
+        this(segments, filter, overlays, null);
     }
 
     /** An edit that is neither a cut, a colour nor an overlay is a client bug, not a no-op to store. */
-    @AssertTrue(message = "an edit needs segments, a filter or overlays")
+    @AssertTrue(message = "an edit needs segments, a filter, overlays or music")
     public boolean isNotEmpty() {
         return (segments != null && !segments.isEmpty()) || filter != null
-                || (overlays != null && !overlays.isEmpty());
+                || (overlays != null && !overlays.isEmpty()) || music != null;
+    }
+
+    /**
+     * A track from GET /videos/music mixed under the video.
+     *
+     * @param trackId        the catalogue's id; looked up again at publish, so a track that has
+     *                       since gone, or never was one the picker offers, is a 400
+     * @param start          seconds into the track the video's first frame plays against
+     * @param volume         0 to 1, the track's level; absent is full
+     * @param originalVolume 0 to 1, the video's own sound; absent is full, 0 replaces it
+     */
+    public record Music(
+            @NotBlank @Pattern(regexp = "\\d{1,12}") String trackId,
+            @DecimalMin("0") @DecimalMax("3600") Double start,
+            @DecimalMin("0") @DecimalMax("1") Double volume,
+            @DecimalMin("0") @DecimalMax("1") Double originalVolume
+    ) {
+
+        public double startOrZero() {
+            return start == null ? 0 : start;
+        }
+
+        public double volumeOrFull() {
+            return volume == null ? 1 : volume;
+        }
+
+        public double originalVolumeOrFull() {
+            return originalVolume == null ? 1 : originalVolume;
+        }
     }
 
     /** Every overlay's words, in layer order — what caption moderation reads. */

@@ -70,6 +70,7 @@ public class TranscodeServiceImpl implements TranscodeService {
     private final MediaVideoProperties videoLimits;
     private final VideoProbe videoProbe;
     private final Ffmpeg ffmpeg;
+    private final MusicDownloader musicDownloader;
 
     @Override
     @SneakyThrows
@@ -206,11 +207,19 @@ public class TranscodeServiceImpl implements TranscodeService {
             overlays.add(new Ffmpeg.Overlay(downloadOverlay(videoId, overlay, work.resolve("overlay-" + i + ".png")),
                     overlay.start(), overlay.end()));
         }
-        log.info("Editing video {} into {} segment(s){}{}", videoId, segments.size(),
+        Ffmpeg.Music music = null;
+        if (edit.music() != null) {
+            VideoPublishedEvent.Edit.Music track = edit.music();
+            music = new Ffmpeg.Music(musicDownloader.download(track.audioUrl(), work.resolve("music.mp3")),
+                    Math.max(0, track.start()), clampVolume(track.volume()), clampVolume(track.originalVolume()),
+                    editedSeconds(segments, probed.durationSeconds()));
+        }
+        log.info("Editing video {} into {} segment(s){}{}{}", videoId, segments.size(),
                 colour == null ? "" : " with filter " + edit.filter().id(),
-                overlays.isEmpty() ? "" : " with " + overlays.size() + " text and sticker layer(s)");
+                overlays.isEmpty() ? "" : " with " + overlays.size() + " text and sticker layer(s)",
+                music == null ? "" : " with music");
         Path target = work.resolve("edited.mp4");
-        if (!ffmpeg.edit(source, target, segments, colour, overlays, probed.audioCodec() != null)) {
+        if (!ffmpeg.edit(source, target, segments, colour, overlays, music, probed.audioCodec() != null)) {
             throw new IllegalStateException("Could not apply the edits to video " + videoId);
         }
         return target;
@@ -237,6 +246,27 @@ public class TranscodeServiceImpl implements TranscodeService {
                 .bucket(bucket).object(key).filename(file.toString()).build());
         OverlayImage.requireUsable(file);
         return file;
+    }
+
+    /** video-service bounds these to 0..1; a stray value from elsewhere is held to that too. */
+    private static double clampVolume(double volume) {
+        return Math.min(1, Math.max(0, volume));
+    }
+
+    /**
+     * How long the edited video plays: each segment's stretch of the upload, at its speed. The
+     * probe rounds to the second, so this can come out a little short — the music then ends a
+     * moment before the picture rather than running past it.
+     */
+    static double editedSeconds(List<VideoPublishedEvent.Edit.Segment> segments, int durationSeconds) {
+        double seconds = 0;
+        for (VideoPublishedEvent.Edit.Segment segment : segments) {
+            double end = Math.min(segment.end(), durationSeconds);
+            if (end > segment.start()) {
+                seconds += (end - segment.start()) / segment.speed();
+            }
+        }
+        return seconds;
     }
 
     /** The same cap as video-service's: each layer is one more input decoded for every frame. */

@@ -25,6 +25,7 @@ public interface VideoMapper {
     // Not the video's own state: the owner's account setting, laid on per request after the
     // cache by VideoServiceImpl.withAccountComments.
     @Mapping(target = "accountCommentsOff", ignore = true)
+    @Mapping(target = "music", expression = "java(com.tiktok.videoservice.dto.response.MusicCredit.of(video.getEdit()))")
     VideoResponse toResponse(Video video);
 
     /**
@@ -35,5 +36,6 @@ public interface VideoMapper {
     @Mapping(target = "commentCount",
             expression = "java(video.isCommentsDisabled() ? null : video.getCommentCount())")
     @Mapping(target = "accountCommentsOff", ignore = true)
+    @Mapping(target = "music", expression = "java(com.tiktok.videoservice.dto.response.MusicCredit.of(video.getEdit()))")
     VideoResponse toAdminResponse(Video video);
 }

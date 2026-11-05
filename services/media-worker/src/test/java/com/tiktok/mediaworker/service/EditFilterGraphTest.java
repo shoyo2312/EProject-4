@@ -144,6 +144,42 @@ class EditFilterGraphTest {
                 .endsWith("[vb3][ov3]overlay=x=0:y=0:enable='lte(t,3.000000)'[vout]");
     }
 
+    /**
+     * Mixed on the edited clock, after the join: the video's own sound at its level, the track
+     * from its start offset at its level, as long as the video's sound lasts, neither normalised.
+     */
+    @Test
+    void build_mixesTheMusicUnderTheVideosOwnSound() {
+        String graph = EditFilterGraph.build(List.of(new Segment(0, 5, 1)), null, List.of(),
+                new EditFilterGraph.Mix(1, 12.5, 0.8, 0.3, 5), true);
+
+        assertThat(graph)
+                .contains("concat=n=1:v=1:a=1[vcat][acat];")
+                .endsWith("[vout];[acat]volume=0.300000[aorig];"
+                        + "[1:a]atrim=start=12.500000,asetpts=PTS-STARTPTS,volume=0.800000[amus];"
+                        + "[aorig][amus]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]");
+    }
+
+    /** A silent video has no sound to end the mix with, so the track is cut at the video's length. */
+    @Test
+    void build_putsTheMusicAloneUnderASilentVideo() {
+        String graph = EditFilterGraph.build(List.of(new Segment(0, 5, 1)), null, List.of(),
+                new EditFilterGraph.Mix(2, 0, 1, 1, 4.5), false);
+
+        assertThat(graph)
+                .doesNotContain("[0:a]")
+                .endsWith("[vout];[2:a]atrim=start=0.000000:duration=4.500000,asetpts=PTS-STARTPTS,volume=1.000000[aout]");
+        assertThat(EditFilterGraph.hasAudio(false, new EditFilterGraph.Mix(2, 0, 1, 1, 4.5))).isTrue();
+        assertThat(EditFilterGraph.hasAudio(false, null)).isFalse();
+    }
+
+    @Test
+    void changesAnything_musicAloneIsAChange() {
+        Edit musicOnly = new Edit(1, List.of(), null, List.of(), new Edit.Music("https://x.jamendo.com/t", 0, 1, 1));
+
+        assertThat(EditFilterGraph.changesAnything(musicOnly, 10)).isTrue();
+    }
+
     @Test
     void changesAnything_anOverlayAloneIsAChange() {
         Edit textOnly = new Edit(1, List.of(), null, List.of(new Edit.Overlay("s3://video-media/raw/1/t.png")));

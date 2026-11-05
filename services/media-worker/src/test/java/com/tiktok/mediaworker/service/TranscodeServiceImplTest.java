@@ -48,9 +48,10 @@ class TranscodeServiceImplTest {
     @Mock private MinioClient minioClient;
     @Mock private VideoProbe videoProbe;
     @Mock private Ffmpeg ffmpeg;
+    @Mock private MusicDownloader musicDownloader;
 
     private TranscodeServiceImpl service() {
-        return new TranscodeServiceImpl(minioClient, MINIO, LIMITS, videoProbe, ffmpeg);
+        return new TranscodeServiceImpl(minioClient, MINIO, LIMITS, videoProbe, ffmpeg, musicDownloader);
     }
 
     private void stubStat(long size) throws Exception {
@@ -335,7 +336,7 @@ class TranscodeServiceImplTest {
     }
 
     private void stubEdit(boolean succeeds) {
-        when(ffmpeg.edit(any(), any(), any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
+        when(ffmpeg.edit(any(), any(), any(), any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
             if (succeeds) {
                 Files.writeString(invocation.getArgument(1), "edited bytes");
             }
@@ -364,7 +365,7 @@ class TranscodeServiceImplTest {
 
         ArgumentCaptor<Path> edited = ArgumentCaptor.forClass(Path.class);
         verify(ffmpeg).edit(any(), edited.capture(),
-                eq(List.of(segment(2, 6, 1), segment(10, 14, 2))), isNull(), eq(List.of()), eq(true));
+                eq(List.of(segment(2, 6, 1), segment(10, 14, 2))), isNull(), eq(List.of()), isNull(), eq(true));
         verify(ffmpeg).faststart(eq(edited.getValue()), any());
         verify(ffmpeg).stillFrame(eq(edited.getValue()), any(), anyInt());
         verify(ffmpeg).animatedPreview(eq(edited.getValue()), any(), anyInt());
@@ -383,7 +384,7 @@ class TranscodeServiceImplTest {
 
         service().transcode("vid123", RAW_URL, edit(segment(0, 5, 1)));
 
-        verify(ffmpeg).edit(any(), any(), any(), any(), any(), eq(false));
+        verify(ffmpeg).edit(any(), any(), any(), any(), any(), any(), eq(false));
     }
 
     /**
@@ -412,7 +413,7 @@ class TranscodeServiceImplTest {
         assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, edit(segment(50, 60, 1))))
                 .isInstanceOf(MediaRejectedException.class);
 
-        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), anyBoolean());
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), any(), anyBoolean());
     }
 
     /** Opening the editor and touching nothing must not cost a full re-encode. */
@@ -427,7 +428,7 @@ class TranscodeServiceImplTest {
 
         service().transcode("vid123", RAW_URL, edit(segment(0, 42, 1)));
 
-        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), anyBoolean());
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), any(), anyBoolean());
     }
 
     /** Slowing a clip down makes it longer, so the limit is checked again on what comes out. */
@@ -461,7 +462,7 @@ class TranscodeServiceImplTest {
                 new VideoPublishedEvent.Edit.Filter("mono", 1)));
 
         ArgumentCaptor<double[]> colour = ArgumentCaptor.forClass(double[].class);
-        verify(ffmpeg).edit(any(), any(), eq(List.of(segment(0, 43, 1))), colour.capture(), eq(List.of()), eq(true));
+        verify(ffmpeg).edit(any(), any(), eq(List.of(segment(0, 43, 1))), colour.capture(), eq(List.of()), isNull(), eq(true));
         assertThat(colour.getValue()).containsExactly(VideoFilter.MONO.matrix(1));
     }
 
@@ -503,12 +504,63 @@ class TranscodeServiceImplTest {
                 .containsExactly("raw/7/vid123.mp4", "raw/7/text.png");
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<Ffmpeg.Overlay>> overlays = ArgumentCaptor.forClass(List.class);
-        verify(ffmpeg).edit(any(), any(), eq(List.of(segment(0, 43, 1))), isNull(), overlays.capture(), eq(true));
+        verify(ffmpeg).edit(any(), any(), eq(List.of(segment(0, 43, 1))), isNull(), overlays.capture(), isNull(), eq(true));
         assertThat(overlays.getValue()).singleElement().satisfies(overlay -> {
             assertThat(overlay.file().getFileName().toString()).isEqualTo("overlay-0.png");
             assertThat(overlay.start()).isEqualTo(1.0);
             assertThat(overlay.end()).isEqualTo(3.5);
         });
+    }
+
+    /**
+     * The track is fetched from the URL the event carries and mixed at the levels it names, cut
+     * on a silent video at the edited length: 2–6s at 1x plus 10–14s at 2x plays for six seconds.
+     */
+    @Test
+    void transcode_withMusic_downloadsTheTrackAndMixesItAtTheEditedLength() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbe(42);
+        stubEdit(true);
+        stubFaststart(true);
+        stubStillFrame(true);
+        stubAnimatedPreview(true);
+        when(musicDownloader.download(any(), any())).thenAnswer(invocation -> invocation.getArgument(1));
+
+        service().transcode("vid123", RAW_URL, new VideoPublishedEvent.Edit(1,
+                List.of(segment(2, 6, 1), segment(10, 14, 2)), null, List.of(),
+                new VideoPublishedEvent.Edit.Music("https://prod-1.storage.jamendo.com/download/track/42/mp32/",
+                        12.5, 0.8, 0.0)));
+
+        verify(musicDownloader).download(eq("https://prod-1.storage.jamendo.com/download/track/42/mp32/"), any());
+        ArgumentCaptor<Ffmpeg.Music> music = ArgumentCaptor.forClass(Ffmpeg.Music.class);
+        verify(ffmpeg).edit(any(), any(), any(), isNull(), eq(List.of()), music.capture(), eq(true));
+        assertThat(music.getValue().file().getFileName().toString()).isEqualTo("music.mp3");
+        assertThat(music.getValue().start()).isEqualTo(12.5);
+        assertThat(music.getValue().volume()).isEqualTo(0.8);
+        assertThat(music.getValue().originalVolume()).isEqualTo(0.0);
+        assertThat(music.getValue().editedSeconds()).isEqualTo(6.0);
+    }
+
+    /** Music the catalogue no longer has is a failed edit, as any other part of the recipe would be. */
+    @Test
+    void transcode_musicThatCannotBeFetched_isRejectedNotPublishedSilent() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbe(42);
+        when(musicDownloader.download(any(), any()))
+                .thenThrow(new MediaRejectedException("The video's music is no longer available."));
+
+        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, new VideoPublishedEvent.Edit(1,
+                List.of(), null, List.of(), new VideoPublishedEvent.Edit.Music("https://x.jamendo.com/t", 0, 1, 1))))
+                .isInstanceOf(MediaRejectedException.class);
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), any(), anyBoolean());
+    }
+
+    @Test
+    void editedSeconds_countsEachSegmentAtItsSpeedUpToTheEndOfTheUpload() {
+        assertThat(TranscodeServiceImpl.editedSeconds(List.of(segment(0, 4, 2), segment(8, 20, 1)), 10))
+                .isEqualTo(4.0);
     }
 
     /** Whatever the client uploaded under an image type, ffmpeg only ever decodes a checked PNG. */
@@ -521,7 +573,7 @@ class TranscodeServiceImplTest {
         assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, overlayOnly()))
                 .isInstanceOf(MediaRejectedException.class);
 
-        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), anyBoolean());
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), any(), anyBoolean());
         verify(minioClient, never()).uploadObject(any());
     }
 
@@ -538,7 +590,7 @@ class TranscodeServiceImplTest {
         TranscodeResult result = service().transcode("vid123", RAW_URL, new VideoPublishedEvent.Edit(1, List.of(),
                 new VideoPublishedEvent.Edit.Filter("from-the-future", 1)));
 
-        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), anyBoolean());
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), any(), anyBoolean());
         assertThat(result.durationSeconds()).isEqualTo(42);
     }
 }

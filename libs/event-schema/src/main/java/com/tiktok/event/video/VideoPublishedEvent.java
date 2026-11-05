@@ -59,7 +59,7 @@ public record VideoPublishedEvent(
      * @param filter   the colour filter over the whole video, or null for none. Added after
      *                 segments, so recipes written before it read as unfiltered
      */
-    public record Edit(int version, List<Segment> segments, Filter filter, List<Overlay> overlays) {
+    public record Edit(int version, List<Segment> segments, Filter filter, List<Overlay> overlays, Music music) {
 
         public static final int CURRENT_VERSION = 1;
 
@@ -70,12 +70,30 @@ public record VideoPublishedEvent(
 
         /** Trim and speed only. */
         public Edit(int version, List<Segment> segments) {
-            this(version, segments, null, null);
+            this(version, segments, null, null, null);
         }
 
         /** Without text or stickers. */
         public Edit(int version, List<Segment> segments, Filter filter) {
-            this(version, segments, filter, null);
+            this(version, segments, filter, null, null);
+        }
+
+        /** Without music. */
+        public Edit(int version, List<Segment> segments, Filter filter, List<Overlay> overlays) {
+            this(version, segments, filter, overlays, null);
+        }
+
+        /**
+         * A track from the music catalogue mixed under the video, from its first frame.
+         *
+         * @param audioUrl       where the worker downloads the track: an {@code https} address on
+         *                       the catalogue's own host, resolved by video-service from the
+         *                       track id the app sent — never a URL a client wrote
+         * @param start          seconds into the track the video's first frame plays against
+         * @param volume         0 to 1, the track's level in the mix
+         * @param originalVolume 0 to 1, the video's own sound in the mix; 0 replaces it
+         */
+        public record Music(String audioUrl, double start, double volume, double originalVolume) {
         }
 
         /**

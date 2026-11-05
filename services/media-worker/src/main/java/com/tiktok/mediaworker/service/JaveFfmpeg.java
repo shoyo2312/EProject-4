@@ -90,7 +90,7 @@ public class JaveFfmpeg implements Ffmpeg {
 
     @Override
     public boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments,
-                        double[] colour, List<Overlay> overlays, boolean withAudio) {
+                        double[] colour, List<Overlay> overlays, Music music, boolean withAudio) {
         List<EditFilterGraph.Layer> layers = new ArrayList<>();
         for (Overlay overlay : overlays) {
             try {
@@ -111,10 +111,20 @@ public class JaveFfmpeg implements Ffmpeg {
                     "-f", "png_pipe",
                     "-i", overlay.file().toString()));
         }
+        EditFilterGraph.Mix mix = null;
+        if (music != null) {
+            // Last input, its demuxer named for the same reason as the overlays'.
+            mix = new EditFilterGraph.Mix(1 + overlays.size(), music.start(), music.volume(),
+                    music.originalVolume(), music.editedSeconds());
+            arguments.addAll(List.of(
+                    "-protocol_whitelist", "file",
+                    "-f", "mp3",
+                    "-i", music.file().toString()));
+        }
         arguments.addAll(List.of(
                 // Rotation is applied to the decoded input before the graph sees it, so the trim,
                 // the joins and the size cap all work on the picture as it will be shown.
-                "-filter_complex", EditFilterGraph.build(segments, colour, layers, withAudio),
+                "-filter_complex", EditFilterGraph.build(segments, colour, layers, mix, withAudio),
                 "-map", EditFilterGraph.VIDEO_OUT,
                 // The same encoder settings as normalize, so the result is already in the shape
                 // the rest of the pipeline wants and is only remuxed after this.
@@ -123,7 +133,7 @@ public class JaveFfmpeg implements Ffmpeg {
                 "-crf", "23",
                 "-profile:v", "high",
                 "-pix_fmt", "yuv420p"));
-        if (withAudio) {
+        if (EditFilterGraph.hasAudio(withAudio, mix)) {
             arguments.addAll(List.of(
                     "-map", EditFilterGraph.AUDIO_OUT,
                     "-c:a", "aac",

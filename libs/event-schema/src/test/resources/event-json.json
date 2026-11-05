@@ -254,7 +254,13 @@
         "imageUrl" : "imageUrl-1",
         "start" : 2.25,
         "end" : 3.25
-      } ]
+      } ],
+      "music" : {
+        "audioUrl" : "audioUrl-1",
+        "start" : 2.25,
+        "volume" : 3.25,
+        "originalVolume" : 4.25
+      }
     }
   },
   "VideoPurgeRequestedEvent" : {

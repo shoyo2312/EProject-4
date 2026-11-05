@@ -30,6 +30,19 @@ public final class EditFilterGraph {
     public static final String AUDIO_OUT = "[aout]";
 
     /**
+     * The catalogue track mixed under the edited video.
+     *
+     * @param input          its ffmpeg input index, after the upload and every overlay
+     * @param start          seconds into the track the edited video's first frame plays against
+     * @param volume         the track's level, 0 to 1
+     * @param originalVolume the video's own sound, 0 to 1
+     * @param editedSeconds  how long the edited video plays: where the track is cut on a video
+     *                       with no sound of its own to end with
+     */
+    public record Mix(int input, double start, double volume, double originalVolume, double editedSeconds) {
+    }
+
+    /**
      * One layer of the editor's text and stickers: a PNG input after the upload, in order — the
      * first layer is input 1.
      *
@@ -64,7 +77,7 @@ public final class EditFilterGraph {
      * opened it and touched nothing, and re-encoding for that is minutes of CPU for no difference.
      */
     public static boolean changesAnything(Edit edit, double durationSeconds) {
-        if (colour(edit).isPresent() || (edit != null && !edit.overlays().isEmpty())) {
+        if (colour(edit).isPresent() || (edit != null && (!edit.overlays().isEmpty() || edit.music() != null))) {
             return true;
         }
         List<Segment> segments = usable(edit, durationSeconds);
@@ -147,6 +160,23 @@ public final class EditFilterGraph {
      */
     public static String build(List<Segment> segments, double[] colour, List<Layer> overlays,
                                boolean withAudio) {
+        return build(segments, colour, overlays, null, withAudio);
+    }
+
+    /** Whether the graph built with these ends in {@link #AUDIO_OUT}: the video's sound, music, or both. */
+    public static boolean hasAudio(boolean withAudio, Mix music) {
+        return withAudio || music != null;
+    }
+
+    /**
+     * @param music the track mixed under the result, or null. Mixed on the edited clock — after
+     *              the join and the speed changes, at normal speed itself — so it plays as the
+     *              app previewed it, however the picture was cut. With the video's own sound, the
+     *              mix lasts as long as that sound does; without, the track is cut at the video's
+     *              length. Neither is normalised: the levels are the two the uploader set
+     */
+    public static String build(List<Segment> segments, double[] colour, List<Layer> overlays, Mix music,
+                               boolean withAudio) {
         if (segments.isEmpty()) {
             throw new IllegalArgumentException("An edit needs at least one segment");
         }
@@ -173,7 +203,7 @@ public final class EditFilterGraph {
         graph.append(joined)
                 .append("concat=n=").append(segments.size())
                 .append(":v=1:a=").append(withAudio ? 1 : 0)
-                .append("[vcat]").append(withAudio ? AUDIO_OUT : "").append(';')
+                .append("[vcat]").append(withAudio ? (music == null ? AUDIO_OUT : "[acat]") : "").append(';')
                 .append("[vcat]");
         if (colour != null) {
             graph.append(colourChannelMixer(colour)).append(',');
@@ -192,6 +222,20 @@ public final class EditFilterGraph {
             below = "[vo" + i + "]";
         }
         graph.append(VIDEO_OUT);
+        if (music != null) {
+            String track = "[" + music.input() + ":a]atrim=start=" + number(music.start());
+            if (withAudio) {
+                graph.append(";[acat]volume=").append(number(music.originalVolume())).append("[aorig];")
+                        .append(track).append(",asetpts=PTS-STARTPTS,volume=").append(number(music.volume()))
+                        .append("[amus];")
+                        .append("[aorig][amus]amix=inputs=2:duration=first:dropout_transition=0:normalize=0")
+                        .append(AUDIO_OUT);
+            } else {
+                graph.append(';').append(track).append(":duration=").append(number(music.editedSeconds()))
+                        .append(",asetpts=PTS-STARTPTS,volume=").append(number(music.volume()))
+                        .append(AUDIO_OUT);
+            }
+        }
         return graph.toString();
     }
 

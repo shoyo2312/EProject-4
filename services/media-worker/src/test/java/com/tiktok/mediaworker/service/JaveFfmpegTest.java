@@ -139,7 +139,7 @@ class JaveFfmpegTest {
 
         assertThat(ffmpeg.edit(source, target, List.of(
                 new VideoPublishedEvent.Edit.Segment(0.5, 1.5, 1),
-                new VideoPublishedEvent.Edit.Segment(0, 1, 2)), null, List.of(), true)).isTrue();
+                new VideoPublishedEvent.Edit.Segment(0, 1, 2)), null, List.of(), null, true)).isTrue();
 
         assertThat(new MultimediaObject(target.toFile()).getInfo().getDuration()).isBetween(1300L, 1700L);
         ProbedVideo probed = probe.probe(target.toUri().toString());
@@ -154,7 +154,7 @@ class JaveFfmpegTest {
         Path target = work.resolve("edited.mp4");
 
         assertThat(ffmpeg.edit(rotated, target,
-                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, List.of(), true)).isTrue();
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, List.of(), null, true)).isTrue();
 
         ProbedVideo probed = probe.probe(target.toUri().toString());
         assertThat(probed.width()).isEqualTo(720);
@@ -174,7 +174,7 @@ class JaveFfmpegTest {
         Path target = work.resolve("edited.mp4");
 
         assertThat(ffmpeg.edit(silent, target,
-                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 0.5)), null, List.of(), false)).isTrue();
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 0.5)), null, List.of(), null, false)).isTrue();
 
         assertThat(probe.probe(target.toUri().toString()).audioCodec()).isNull();
     }
@@ -189,7 +189,7 @@ class JaveFfmpegTest {
         Path target = work.resolve("edited.mp4");
 
         assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)),
-                VideoFilter.MONO.matrix(1), List.of(), true)).isTrue();
+                VideoFilter.MONO.matrix(1), List.of(), null, true)).isTrue();
 
         Path still = work.resolve("still.jpg");
         assertThat(ffmpeg.stillFrame(target, still, 0)).isTrue();
@@ -224,7 +224,7 @@ class JaveFfmpegTest {
         Path target = work.resolve("edited.mp4");
 
         assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0, 1.5, 1)),
-                null, List.of(new Ffmpeg.Overlay(overlay, null, null)), true)).isTrue();
+                null, List.of(new Ffmpeg.Overlay(overlay, null, null)), null, true)).isTrue();
 
         assertThat(new MultimediaObject(target.toFile()).getInfo().getDuration()).isBetween(1300L, 1700L);
         Path still = work.resolve("still.jpg");
@@ -244,6 +244,45 @@ class JaveFfmpegTest {
         assertThat(other).as("pattern samples on the transparent half").isGreaterThan(samples / 2);
     }
 
+    /**
+     * The real mix: a silent clip gets the track as its only sound, cut at the clip's length; a
+     * clip with sound keeps its length and gains the track under it.
+     */
+    @Test
+    void edit_mixesMusicUnderTheVideo(@TempDir Path work) throws Exception {
+        Path music = work.resolve("music.mp3");
+        Process tone = new ProcessBuilder(List.of(
+                new DefaultFFMPEGLocator().getExecutablePath(), "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=880:duration=10", "-c:a", "libmp3lame", music.toString()))
+                .redirectErrorStream(true).inheritIO().start();
+        assertThat(tone.waitFor()).isZero();
+        MusicDownloader.requireMp3(music);
+
+        Path silent = work.resolve("silent.mp4");
+        Process process = new ProcessBuilder(List.of(
+                new DefaultFFMPEGLocator().getExecutablePath(), "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc=size=320x240:rate=15:duration=2",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", silent.toString()))
+                .redirectErrorStream(true).inheritIO().start();
+        assertThat(process.waitFor()).isZero();
+        Path mixedSilent = work.resolve("mixed-silent.mp4");
+
+        assertThat(ffmpeg.edit(silent, mixedSilent, List.of(new VideoPublishedEvent.Edit.Segment(0, 2, 1)),
+                null, List.of(), new Ffmpeg.Music(music, 3, 0.8, 1, 2), false)).isTrue();
+
+        assertThat(probe.probe(mixedSilent.toUri().toString()).audioCodec()).isEqualTo("aac");
+        assertThat(new MultimediaObject(mixedSilent.toFile()).getInfo().getDuration()).isBetween(1800L, 2300L);
+
+        Path voiced = synthesize(work.resolve("voiced.mp4"), "320x240");
+        Path mixedVoiced = work.resolve("mixed-voiced.mp4");
+
+        assertThat(ffmpeg.edit(voiced, mixedVoiced, List.of(new VideoPublishedEvent.Edit.Segment(0, 1.5, 1)),
+                null, List.of(), new Ffmpeg.Music(music, 0, 1, 0, 1.5), true)).isTrue();
+
+        assertThat(probe.probe(mixedVoiced.toUri().toString()).audioCodec()).isEqualTo("aac");
+        assertThat(new MultimediaObject(mixedVoiced.toFile()).getInfo().getDuration()).isBetween(1300L, 1800L);
+    }
+
     /** A layer timed to the edited video's clock is absent before its start and there after it. */
     @Test
     void edit_showsATimedLayerOnlyFromItsStart(@TempDir Path work) throws Exception {
@@ -260,7 +299,7 @@ class JaveFfmpegTest {
 
         // The cut starts half a second into the upload, so "1 second" is the edited clock's.
         assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0.5, 2, 1)),
-                null, List.of(new Ffmpeg.Overlay(overlay, 1.0, null)), true)).isTrue();
+                null, List.of(new Ffmpeg.Overlay(overlay, 1.0, null)), null, true)).isTrue();
 
         assertThat(redShare(stillAt(work, target, "0.4"))).as("before the start").isLessThan(0.3);
         assertThat(redShare(stillAt(work, target, "1.3"))).as("after the start").isGreaterThan(0.9);
@@ -298,7 +337,7 @@ class JaveFfmpegTest {
         Files.writeString(notMedia, "this is not a video");
 
         assertThat(ffmpeg.edit(notMedia, work.resolve("edited.mp4"),
-                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, List.of(), true)).isFalse();
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, List.of(), null, true)).isFalse();
     }
 
     @Test

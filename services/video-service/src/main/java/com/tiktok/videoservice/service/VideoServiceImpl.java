@@ -13,6 +13,7 @@ import com.tiktok.videoservice.dto.request.CreateVideoRequest;
 import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.request.VideoEditRequest;
+import com.tiktok.videoservice.client.MusicTrack;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
@@ -145,6 +146,7 @@ public class VideoServiceImpl implements VideoService {
     private final OwnerBanRepository ownerBanRepository;
     private final CaptionModeration captionModeration;
     private final FeedKeywordFilter feedKeywordFilter;
+    private final MusicService musicService;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -203,6 +205,10 @@ public class VideoServiceImpl implements VideoService {
         requireUploaded(key);
         String rawFileUrl = storedUrl(key);
         List<String> overlayUrls = checkedOverlays(userId, request.edit());
+        // Looked up again rather than trusted from the picker: the track's download URL, title
+        // and licence come from the catalogue, never from the client.
+        MusicTrack track = request.edit() == null || request.edit().music() == null ? null
+                : musicService.requireTrack(request.edit().music().trackId());
         List<String> tags = normalizeTags(request.tags(), request.description());
         // Before the insert: a caption refused here leaves nothing behind, so the same upload can
         // be published again once the text is fixed.
@@ -219,7 +225,7 @@ public class VideoServiceImpl implements VideoService {
                 .ownerPrivate(isPrivateOwner(userId))
                 .tags(tags)
                 .commentsDisabled(request.startsWithCommentsDisabled())
-                .edit(VideoEdit.from(request.edit(), overlayUrls))
+                .edit(VideoEdit.from(request.edit(), overlayUrls, track))
                 .textModeration(textModeration)
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)

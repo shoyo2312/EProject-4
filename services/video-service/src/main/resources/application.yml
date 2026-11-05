@@ -79,6 +79,14 @@ app:
       enabled: ${USER_SETTINGS_CACHE_ENABLED:true}
       ttl: ${USER_SETTINGS_CACHE_TTL:3s}
 
+  music:
+    jamendo:
+      # The Client ID from devportal.jamendo.com → Applications. Only the id: the catalogue is
+      # read without the secret. Blank turns music off (GET /videos/music answers 503).
+      client-id: ${JAMENDO_CLIENT_ID:}
+      base-url: ${JAMENDO_BASE_URL:https://api.jamendo.com/v3.0}
+      timeout: ${JAMENDO_TIMEOUT:5s}
+
   upload:
     # max-bytes is signed into the upload POST policy; media-worker enforces both as a backstop.
     # Same env vars there — keep in step.

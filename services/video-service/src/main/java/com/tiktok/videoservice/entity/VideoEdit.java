@@ -1,6 +1,7 @@
 package com.tiktok.videoservice.entity;
 
 import com.tiktok.event.video.VideoPublishedEvent;
+import com.tiktok.videoservice.client.MusicTrack;
 import com.tiktok.videoservice.dto.request.VideoEditRequest;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -26,6 +27,27 @@ public class VideoEdit {
 
     /** Null when the colour is left alone. */
     private Filter filter;
+
+    /** The track under the video, or null. */
+    private Music music;
+
+    @Getter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Music {
+        private String trackId;
+        /** Title, artist, licence and link: the credit every Creative Commons licence asks for. */
+        private String title;
+        private String artist;
+        private String licenseUrl;
+        private String shareUrl;
+        /** The catalogue's download address, as it described the track at publish. */
+        private String audioUrl;
+        private double start;
+        private double volume;
+        private double originalVolume;
+    }
 
     /** The text and sticker layers, lowest first. Empty or null without any. */
     private List<Overlay> overlays;
@@ -67,14 +89,22 @@ public class VideoEdit {
         return from(request, List.of());
     }
 
+    /** Without music. */
+    public static VideoEdit from(VideoEditRequest request, List<String> overlayUrls) {
+        return from(request, overlayUrls, null);
+    }
+
     /**
      * Null in, null out: no edits is the common case and stores nothing.
      *
      * @param overlayUrls the request's overlays' URLs in canonical form and in order, once the
      *                    caller has checked them. Taken separately so an unchecked URL is never
      *                    stored
+     * @param track       the request's music as the catalogue describes it, once looked up; null
+     *                    for none. Its title, artist and licence are kept for the credit, and its
+     *                    download URL is what media-worker fetches — never one a client sent
      */
-    public static VideoEdit from(VideoEditRequest request, List<String> overlayUrls) {
+    public static VideoEdit from(VideoEditRequest request, List<String> overlayUrls, MusicTrack track) {
         if (request == null) {
             return null;
         }
@@ -86,6 +116,10 @@ public class VideoEdit {
                 .filter(request.filter() == null ? null
                         : new Filter(request.filter().id(), request.filter().intensityOrFull()))
                 .overlays(overlays(request.overlays(), overlayUrls))
+                .music(request.music() == null || track == null ? null : new Music(track.id(), track.title(),
+                        track.artist(), track.licenseUrl(), track.shareUrl(), track.downloadUrl(),
+                        request.music().startOrZero(), request.music().volumeOrFull(),
+                        request.music().originalVolumeOrFull()))
                 .build();
     }
 
@@ -112,6 +146,8 @@ public class VideoEdit {
                 filter == null ? null : new VideoPublishedEvent.Edit.Filter(filter.getId(), filter.getIntensity()),
                 overlays == null ? List.of() : overlays.stream()
                         .map(o -> new VideoPublishedEvent.Edit.Overlay(o.getImageUrl(), o.getStart(), o.getEnd()))
-                        .toList());
+                        .toList(),
+                music == null ? null : new VideoPublishedEvent.Edit.Music(music.getAudioUrl(), music.getStart(),
+                        music.getVolume(), music.getOriginalVolume()));
     }
 }

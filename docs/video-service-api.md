@@ -113,7 +113,8 @@ Request (`CreateVideoRequest`):
     "overlays": [
       { "imageUrl": "s3://video-media/raw/123456789012345/7313.png" },
       { "imageUrl": "s3://video-media/raw/123456789012345/7314.png", "start": 1.5, "end": 4.0, "texts": ["Xin chào"] }
-    ]
+    ],
+    "music": { "trackId": "1214935", "start": 12.5, "volume": 0.8, "originalVolume": 0.2 }
   }
 }
 ```
@@ -125,7 +126,8 @@ Request (`CreateVideoRequest`):
   - `start`/`end`: giây trên đồng hồ của video **đã chỉnh** — sau khi cắt và đổi tốc độ, đúng thứ người xem thấy — khác với `segments` (giây trên file gốc). Bỏ `start` = từ đầu, bỏ `end` = tới hết. `0–36000`, `end > start`. App gom các item liền nhau có cùng khoảng thời gian vào một lớp.
   - `texts`: chữ đã vẽ trong lớp, nguyên văn (tối đa 20, mỗi cái 150 ký tự). Ảnh thì không bộ kiểm duyệt chữ nào đọc được, nên đây là thứ được kiểm duyệt **như caption** (đọc liền nhau như tag, `Surface.VIDEO_OVERLAY`): từ bị cấm hẳn → `422 VIDEO_OVERLAY_REJECTED`, từ đáng ngờ → video vào hàng chờ admin (flag `OVERLAY:...`). Lưu lại trên document để admin xem; không đi theo event. Giới hạn: server tin app vẽ đúng chữ đã khai — client sửa đổi có thể vẽ chữ khác, chỉ kiểm duyệt khung hình (ảnh nhạy cảm) còn chặn được.
   - Ràng buộc `imageUrl` giống `rawFileUrl`: upload của chính mình (`FOREIGN_UPLOAD`), là `.png` (`UNSUPPORTED_UPLOAD_TYPE`), đã upload xong (`UPLOAD_NOT_FOUND`). Ngược lại `rawFileUrl` trỏ vào một `.png` → `UNSUPPORTED_UPLOAD_TYPE`. PNG không đọc được hoặc header khai quá 4096 px một cạnh → video `FAILED`.
-- Phải có ít nhất một trong `segments`, `filter`, `overlays` (không rỗng); `edit: {}` → 400.
+- `music`: nhạc nền, optional. `trackId` là `id` lấy từ `GET /music` (mục 3.10), chỉ gồm chữ số. `start`: giây trong bài hát ứng với khung hình đầu của video (0–3600, bỏ trống = 0). `volume` (nhạc) và `originalVolume` (tiếng gốc của video) 0–1, bỏ trống = 1; `originalVolume: 0` là thay hẳn tiếng gốc. Server **tra lại** bài hát lúc publish — URL tải, tên bài, nghệ sĩ, giấy phép đều lấy từ catalogue, không lấy từ client — bài không còn hoặc không dùng được → `400 MUSIC_NOT_FOUND`; catalogue không trả lời → `503 MUSIC_UNAVAILABLE`, sửa request không giúp gì. Nhạc trộn trên đồng hồ của video **đã chỉnh** (sau cắt/đổi tốc độ), bài hát luôn ở tốc độ 1. Video có tiếng: dài bằng tiếng gốc; video câm: nhạc cắt đúng độ dài video. Video có nhạc trả về `music` (mục 3.10) để hiện credit.
+- Phải có ít nhất một trong `segments`, `filter`, `overlays` (không rỗng) hoặc `music`; `edit: {}` → 400.
 - `start`/`end`: giây tính trên file **gốc**, trước khi đổi tốc độ. `0 ≤ start < end ≤ 36000`. Không cần khớp chính xác độ dài video: `end` quá cuối video thì dừng ở cuối video, đoạn bắt đầu sau khi video đã hết thì bị bỏ.
 - `speed`: `0.25`–`4` (editor dùng 0.3x/0.5x/1x/2x/3x). Tiếng đổi tốc độ nhưng giữ cao độ.
 - Không chỉnh gì thì **bỏ hẳn `edit`** (hoặc `null`). Một đoạn duy nhất phủ cả video ở tốc độ 1 cũng được coi là không chỉnh, server không encode lại.
@@ -293,6 +295,15 @@ Lỗi: như 3.7.
 ### 3.9 `GET /users/stats/batch?ids=1,2,3` — số liệu profile của nhiều người
 Không cần token. Trả `data` → `UserVideoStatsResponse[]` (`userId, videoCount, totalLikes, totalViews`), cùng con số công khai như `GET /users/{userId}/stats`. Tối đa 50 id (`max-page-size`), id trùng bị gộp.
 
+### 3.10 `GET /music?q=&page=0&size=20` — nhạc cho editor
+**Bắt buộc token** (khác các GET khác của service này: mỗi lần gọi tiêu quota của client id chung). Danh sách bài hát từ catalogue Jamendo (nhạc Creative Commons), đã lọc chỉ còn bài **được phép ghép vào video**: cho tải về, và giấy phép không có NoDerivatives (`-nd`) — đặt nhạc vào hình là một bản phái sinh.
+
+- `q`: từ khoá (≤ 100 ký tự), bỏ trống = bài phổ biến nhất. `page` 0–20, `size` 1–50.
+- Response `data`: mảng `{ id, title, artist, durationSeconds, audioUrl, imageUrl, licenseUrl, shareUrl }`. `audioUrl` là stream để **nghe thử ngay** — có token ngắn hạn, đừng lưu lại. `licenseUrl`/`shareUrl` để hiện credit.
+- Server gọi Jamendo bằng `JAMENDO_CLIENT_ID` (chỉ client id, không cần secret) và cache mỗi trang 10 phút trong bộ nhớ; trang rỗng không cache (Jamendo đôi khi trả rỗng nhất thời, server tự hỏi lại 3 lần). Thiếu client id → `503 MUSIC_UNAVAILABLE`.
+
+`VideoResponse.music` (mọi đường đọc): `{ trackId, title, artist, licenseUrl, shareUrl }` hoặc `null`. Mọi giấy phép CC đều đòi ghi công (BY): app hiện "♫ title · artist" ở chỗ sound pill của feed. Lưu ý giấy phép `-nc` (NonCommercial): dùng được cho dự án phi thương mại; bán quảng cáo trên video có nhạc `-nc` cần license thương mại riêng của Jamendo.
+
 ## 4. Enums
 
 ### `VideoStatus`
@@ -342,6 +353,8 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `VIDEO_DESCRIPTION_REJECTED` | 422 | Như trên, cho `description` |
 | `VIDEO_TAGS_REJECTED` | 422 | Như trên, cho tag (đọc liền nhau, nên một cụm bị cấm tách ra nhiều tag vẫn bị bắt) |
 | `VIDEO_OVERLAY_REJECTED` | 422 | Như trên, cho chữ vẽ trên video (`edit.overlays[].texts`, đọc liền nhau) |
+| `MUSIC_NOT_FOUND` | 400 | `edit.music.trackId` không còn trong catalogue hoặc không được phép ghép vào video (mục 3.2) |
+| `MUSIC_UNAVAILABLE` | 503 | Không đọc được catalogue nhạc (mục 3.10, và lúc publish có `edit.music`): chưa cấu hình `JAMENDO_CLIENT_ID`, Jamendo không trả lời hoặc từ chối |
 | `PRIVATE_ACCOUNT` | 403 | Lưới video (mục 3.5) của tài khoản riêng tư mà người gọi không follow |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |

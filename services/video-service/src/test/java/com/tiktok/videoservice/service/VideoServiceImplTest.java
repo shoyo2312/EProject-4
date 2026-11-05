@@ -103,6 +103,10 @@ class VideoServiceImplTest {
     @MockitoBean
     private com.tiktok.videoservice.client.UserSettingsClient userSettingsClient;
 
+    // Mocked so no test reaches the real music catalogue.
+    @MockitoBean
+    private MusicService musicService;
+
     // Spied so a test can make owner_privacy answer differently from one read to the next.
     @MockitoSpyBean
     private OwnerPrivacyRepository ownerPrivacyRepository;
@@ -238,6 +242,40 @@ class VideoServiceImplTest {
         assertThat(stored.toEvent().overlays()).containsExactly(
                 new VideoPublishedEvent.Edit.Overlay("s3://video-media/raw/1/all.png", null, null),
                 new VideoPublishedEvent.Edit.Overlay("s3://video-media/raw/1/later.png", 1.5, 4.0));
+    }
+
+    /**
+     * The track is looked up again at publish: what is stored — and what media-worker downloads —
+     * is the catalogue's description of it, with the credit its licence asks for.
+     */
+    @Test
+    void publish_withMusic_storesTheCataloguesTrackAndItsCredit() {
+        when(musicService.requireTrack("42")).thenReturn(new com.tiktok.videoservice.client.MusicTrack("42", "Calm",
+                "Someone", 120, "https://stream/42", "https://prod-1.storage.jamendo.com/download/track/42/mp32/",
+                "https://img/42", "http://creativecommons.org/licenses/by/3.0/", "https://www.jamendo.com/track/42"));
+        VideoEditRequest edit = new VideoEditRequest(null, null, null,
+                new VideoEditRequest.Music("42", 12.5, 0.8, 0.0));
+
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("With a song", null,
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit));
+
+        assertThat(response.music().title()).isEqualTo("Calm");
+        assertThat(response.music().artist()).isEqualTo("Someone");
+        assertThat(response.music().licenseUrl()).contains("/by/");
+        VideoEdit stored = videoRepository.findById(response.id()).orElseThrow().getEdit();
+        assertThat(stored.toEvent().music()).isEqualTo(new VideoPublishedEvent.Edit.Music(
+                "https://prod-1.storage.jamendo.com/download/track/42/mp32/", 12.5, 0.8, 0.0));
+    }
+
+    @Test
+    void publish_withATrackTheCatalogueWillNotOffer_storesNothing() {
+        when(musicService.requireTrack("9")).thenThrow(new com.tiktok.videoservice.exception.MusicNotFoundException());
+        VideoEditRequest edit = new VideoEditRequest(null, null, null, new VideoEditRequest.Music("9", null, null, null));
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest("Gone", null,
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit)))
+                .isInstanceOf(com.tiktok.videoservice.exception.MusicNotFoundException.class);
+        assertThat(videoRepository.count()).isZero();
     }
 
     /** The picture reaches no text check, so the words the app says it drew are screened like a caption. */
