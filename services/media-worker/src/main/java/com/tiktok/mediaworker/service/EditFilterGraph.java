@@ -1,11 +1,13 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoFilter;
 import com.tiktok.event.video.VideoPublishedEvent.Edit;
 import com.tiktok.event.video.VideoPublishedEvent.Edit.Segment;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 /**
  * Turns the app editor's recipe into one ffmpeg {@code -filter_complex} graph: each segment is
@@ -46,6 +48,9 @@ public final class EditFilterGraph {
      * opened it and touched nothing, and re-encoding for that is minutes of CPU for no difference.
      */
     public static boolean changesAnything(Edit edit, double durationSeconds) {
+        if (colour(edit).isPresent()) {
+            return true;
+        }
         List<Segment> segments = usable(edit, durationSeconds);
         if (segments.isEmpty()) {
             return edit != null && !edit.segments().isEmpty();
@@ -68,6 +73,11 @@ public final class EditFilterGraph {
         if (edit == null) {
             return List.of();
         }
+        // No segments is a recipe that only changes the colour: the whole upload, as recorded. A
+        // second past the probed length, since the probe rounds and trim stops at the end anyway.
+        if (edit.segments().isEmpty()) {
+            return durationSeconds > 0 ? List.of(new Segment(0, durationSeconds + 1, 1.0)) : List.of();
+        }
         List<Segment> usable = new ArrayList<>();
         for (Segment segment : edit.segments()) {
             double start = Math.max(0, segment.start());
@@ -81,11 +91,32 @@ public final class EditFilterGraph {
     }
 
     /**
+     * The colour matrix the recipe's filter stands for, or empty for none. An id this build does
+     * not know — the app and video-service can be newer than this worker — is no filter rather
+     * than a failed video: unlike a cut, a missing colour shows nothing the uploader meant to hide.
+     *
+     * @return nine entries, row-major, from {@link VideoFilter#matrix}
+     */
+    public static Optional<double[]> colour(Edit edit) {
+        if (edit == null || edit.filter() == null || edit.filter().intensity() <= 0) {
+            return Optional.empty();
+        }
+        return VideoFilter.byId(edit.filter().id()).map(filter -> filter.matrix(edit.filter().intensity()));
+    }
+
+    /** Without a colour filter. */
+    public static String build(List<Segment> segments, boolean withAudio) {
+        return build(segments, null, withAudio);
+    }
+
+    /**
      * @param segments  from {@link #usable}, never empty
+     * @param colour    from {@link #colour}, or null to leave the colour alone. Applied after the
+     *                  join and before the size cap, in the same pass as everything else
      * @param withAudio whether the upload has an audio stream; a graph naming {@code [0:a]} on a
      *                  silent file is an error, not silence
      */
-    public static String build(List<Segment> segments, boolean withAudio) {
+    public static String build(List<Segment> segments, double[] colour, boolean withAudio) {
         if (segments.isEmpty()) {
             throw new IllegalArgumentException("An edit needs at least one segment");
         }
@@ -113,8 +144,28 @@ public final class EditFilterGraph {
                 .append("concat=n=").append(segments.size())
                 .append(":v=1:a=").append(withAudio ? 1 : 0)
                 .append("[vcat]").append(withAudio ? AUDIO_OUT : "").append(';')
-                .append("[vcat]").append(SCALE).append(VIDEO_OUT);
+                .append("[vcat]");
+        if (colour != null) {
+            graph.append(colourChannelMixer(colour)).append(',');
+        }
+        graph.append(SCALE).append(VIDEO_OUT);
         return graph.toString();
+    }
+
+    /**
+     * ffmpeg's colorchannelmixer takes the same row-major matrix as the app's ColorFilter: rr, rg
+     * and rb are how much of the input's red, green and blue go into the output's red.
+     */
+    private static String colourChannelMixer(double[] m) {
+        if (m.length != 9) {
+            throw new IllegalArgumentException("A colour matrix has nine entries, not " + m.length);
+        }
+        String[] names = {"rr", "rg", "rb", "gr", "gg", "gb", "br", "bg", "bb"};
+        StringBuilder mixer = new StringBuilder("colorchannelmixer=");
+        for (int i = 0; i < 9; i++) {
+            mixer.append(i == 0 ? "" : ":").append(names[i]).append('=').append(number(m[i]));
+        }
+        return mixer.toString();
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoFilter;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.mediaworker.config.MediaVideoProperties;
 import com.tiktok.mediaworker.config.MinioProperties;
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
@@ -333,7 +335,7 @@ class TranscodeServiceImplTest {
     }
 
     private void stubEdit(boolean succeeds) {
-        when(ffmpeg.edit(any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
+        when(ffmpeg.edit(any(), any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
             if (succeeds) {
                 Files.writeString(invocation.getArgument(1), "edited bytes");
             }
@@ -362,7 +364,7 @@ class TranscodeServiceImplTest {
 
         ArgumentCaptor<Path> edited = ArgumentCaptor.forClass(Path.class);
         verify(ffmpeg).edit(any(), edited.capture(),
-                eq(List.of(segment(2, 6, 1), segment(10, 14, 2))), eq(true));
+                eq(List.of(segment(2, 6, 1), segment(10, 14, 2))), isNull(), eq(true));
         verify(ffmpeg).faststart(eq(edited.getValue()), any());
         verify(ffmpeg).stillFrame(eq(edited.getValue()), any(), anyInt());
         verify(ffmpeg).animatedPreview(eq(edited.getValue()), any(), anyInt());
@@ -381,7 +383,7 @@ class TranscodeServiceImplTest {
 
         service().transcode("vid123", RAW_URL, edit(segment(0, 5, 1)));
 
-        verify(ffmpeg).edit(any(), any(), any(), eq(false));
+        verify(ffmpeg).edit(any(), any(), any(), any(), eq(false));
     }
 
     /**
@@ -410,7 +412,7 @@ class TranscodeServiceImplTest {
         assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, edit(segment(50, 60, 1))))
                 .isInstanceOf(MediaRejectedException.class);
 
-        verify(ffmpeg, never()).edit(any(), any(), any(), anyBoolean());
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), anyBoolean());
     }
 
     /** Opening the editor and touching nothing must not cost a full re-encode. */
@@ -425,7 +427,7 @@ class TranscodeServiceImplTest {
 
         service().transcode("vid123", RAW_URL, edit(segment(0, 42, 1)));
 
-        verify(ffmpeg, never()).edit(any(), any(), any(), anyBoolean());
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), anyBoolean());
     }
 
     /** Slowing a clip down makes it longer, so the limit is checked again on what comes out. */
@@ -442,5 +444,41 @@ class TranscodeServiceImplTest {
                 .isInstanceOf(MediaRejectedException.class);
 
         verify(minioClient, never()).uploadObject(any());
+    }
+
+    /** A colour on its own still re-encodes, over the whole upload at normal speed. */
+    @Test
+    void transcode_editThatOnlyChangesTheColour_filtersTheWholeVideo() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbe(42);
+        stubEdit(true);
+        stubFaststart(true);
+        stubStillFrame(true);
+        stubAnimatedPreview(true);
+
+        service().transcode("vid123", RAW_URL, new VideoPublishedEvent.Edit(1, List.of(),
+                new VideoPublishedEvent.Edit.Filter("mono", 1)));
+
+        ArgumentCaptor<double[]> colour = ArgumentCaptor.forClass(double[].class);
+        verify(ffmpeg).edit(any(), any(), eq(List.of(segment(0, 43, 1))), colour.capture(), eq(true));
+        assertThat(colour.getValue()).containsExactly(VideoFilter.MONO.matrix(1));
+    }
+
+    /** The app can be newer than this worker; a colour it cannot name is no reason to fail. */
+    @Test
+    void transcode_filterThisWorkerDoesNotKnow_publishesWithoutIt() throws Exception {
+        stubStat(10_000_000L);
+        stubDownload();
+        stubProbe(42);
+        stubFaststart(true);
+        stubStillFrame(true);
+        stubAnimatedPreview(true);
+
+        TranscodeResult result = service().transcode("vid123", RAW_URL, new VideoPublishedEvent.Edit(1, List.of(),
+                new VideoPublishedEvent.Edit.Filter("from-the-future", 1)));
+
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), anyBoolean());
+        assertThat(result.durationSeconds()).isEqualTo(42);
     }
 }

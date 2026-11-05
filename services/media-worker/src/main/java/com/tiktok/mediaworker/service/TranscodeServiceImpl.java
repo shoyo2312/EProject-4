@@ -190,8 +190,14 @@ public class TranscodeServiceImpl implements TranscodeService {
         if (segments.isEmpty()) {
             throw new MediaRejectedException("The edit keeps nothing of the video.");
         }
-        log.info("Editing video {} into {} segment(s)", videoId, segments.size());
-        if (!ffmpeg.edit(source, target, segments, probed.audioCodec() != null)) {
+        double[] colour = EditFilterGraph.colour(edit).orElse(null);
+        if (colour == null && edit.filter() != null) {
+            log.warn("Video {} asks for filter {}, which this worker does not know; leaving the colour alone",
+                    videoId, edit.filter().id());
+        }
+        log.info("Editing video {} into {} segment(s){}", videoId, segments.size(),
+                colour == null ? "" : " with filter " + edit.filter().id());
+        if (!ffmpeg.edit(source, target, segments, colour, probed.audioCodec() != null)) {
             throw new IllegalStateException("Could not apply the edits to video " + videoId);
         }
         return target;

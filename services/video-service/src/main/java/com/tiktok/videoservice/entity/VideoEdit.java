@@ -24,6 +24,18 @@ public class VideoEdit {
 
     private List<Segment> segments;
 
+    /** Null when the colour is left alone. */
+    private Filter filter;
+
+    @Getter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Filter {
+        private String id;
+        private double intensity;
+    }
+
     @Getter
     @Builder
     @NoArgsConstructor
@@ -41,15 +53,18 @@ public class VideoEdit {
         }
         return VideoEdit.builder()
                 .version(VideoPublishedEvent.Edit.CURRENT_VERSION)
-                .segments(request.segments().stream()
+                .segments(request.segments() == null ? List.of() : request.segments().stream()
                         .map(s -> new Segment(s.start(), s.end(), s.speed()))
                         .toList())
+                .filter(request.filter() == null ? null
+                        : new Filter(request.filter().id(), request.filter().intensityOrFull()))
                 .build();
     }
 
     public VideoPublishedEvent.Edit toEvent() {
         return new VideoPublishedEvent.Edit(version, segments == null ? List.of() : segments.stream()
                 .map(s -> new VideoPublishedEvent.Edit.Segment(s.getStart(), s.getEnd(), s.getSpeed()))
-                .toList());
+                .toList(),
+                filter == null ? null : new VideoPublishedEvent.Edit.Filter(filter.getId(), filter.getIntensity()));
     }
 }

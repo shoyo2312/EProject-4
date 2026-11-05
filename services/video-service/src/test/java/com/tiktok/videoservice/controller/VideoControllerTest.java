@@ -186,7 +186,11 @@ class VideoControllerTest {
             "{\"segments\":[{\"start\":5,\"end\":5,\"speed\":1}]}",
             "{\"segments\":[{\"start\":0,\"end\":5,\"speed\":10}]}",
             "{\"segments\":[{\"start\":-1,\"end\":5,\"speed\":1}]}",
-            "{\"segments\":[{\"start\":0,\"end\":5}]}"
+            "{\"segments\":[{\"start\":0,\"end\":5}]}",
+            "{}",
+            "{\"filter\":{\"id\":\"sepia\"}}",
+            "{\"filter\":{\"id\":\"warm\",\"intensity\":2}}",
+            "{\"filter\":{\"id\":\"\"}}"
     })
     void publish_anEditOutOfBounds_returnsValidationError(String edit) throws Exception {
         mockMvc.perform(post("/api/v1/videos")
@@ -199,6 +203,23 @@ class VideoControllerTest {
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 
         verify(videoService, never()).publish(any(), any());
+    }
+
+    /** Only a colour, no cut: the whole upload at normal speed with the filter over it. */
+    @Test
+    void publish_anEditThatOnlyChangesTheColour_isAccepted() throws Exception {
+        VideoResponse response = new VideoResponse("v1", 1L, "t", null, null, null, null, null, null, null,
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoService.publish(eq(1L), any())).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"t","rawFileUrl":"s3://video-media/raw/1.mp4","visibility":"PUBLIC",
+                                 "edit":{"filter":{"id":"vintage","intensity":0.5}}}
+                                """))
+                .andExpect(status().isCreated());
     }
 
     /** Fillers and zero-width characters render as nothing; sanitized away, the title is blank. */

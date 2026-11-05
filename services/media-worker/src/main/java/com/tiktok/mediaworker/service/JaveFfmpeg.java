@@ -90,12 +90,12 @@ public class JaveFfmpeg implements Ffmpeg {
 
     @Override
     public boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments,
-                        boolean withAudio) {
+                        double[] colour, boolean withAudio) {
         List<String> arguments = new ArrayList<>(List.of(
                 "-i", source.toString(),
                 // Rotation is applied to the decoded input before the graph sees it, so the trim,
                 // the joins and the size cap all work on the picture as it will be shown.
-                "-filter_complex", EditFilterGraph.build(segments, withAudio),
+                "-filter_complex", EditFilterGraph.build(segments, colour, withAudio),
                 "-map", EditFilterGraph.VIDEO_OUT,
                 // The same encoder settings as normalize, so the result is already in the shape
                 // the rest of the pipeline wants and is only remuxed after this.

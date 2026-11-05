@@ -379,6 +379,26 @@ class VideoEventPublisherTest {
         assertThat(second.edit()).isNull();
     }
 
+    @Test
+    void publishPending_carriesTheColourFilterOnThePublication() {
+        Video filtered = Video.builder()
+                .id(Video.newId()).userId(1L).title("Warm").rawFileUrl("s3://video-media/raw/3.mp4")
+                .visibility(VideoVisibility.PUBLIC).tags(List.of()).status(VideoStatus.PROCESSING)
+                .edit(VideoEdit.builder().version(1).segments(List.of())
+                        .filter(new VideoEdit.Filter("warm", 0.7)).build())
+                .build();
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(filtered));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPending();
+
+        VideoPublishedEvent event = objectMapper.readValue(captureRecord().value(), VideoPublishedEvent.class);
+        assertThat(event.edit()).isEqualTo(new VideoPublishedEvent.Edit(1, List.of(),
+                new VideoPublishedEvent.Edit.Filter("warm", 0.7)));
+    }
+
     private ProducerRecord<String, String> captureRecord() {
         ArgumentCaptor<ProducerRecord<String, String>> captor =
                 ArgumentCaptor.forClass(ProducerRecord.class);

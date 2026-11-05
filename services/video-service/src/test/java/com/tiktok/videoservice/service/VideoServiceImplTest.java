@@ -196,6 +196,19 @@ class VideoServiceImplTest {
     }
 
     @Test
+    void publish_withAFilter_storesItWithFullIntensityWhenNoneWasSent() {
+        VideoEditRequest edit = new VideoEditRequest(null, new VideoEditRequest.Filter("mono", null));
+
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Grey", "desc",
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit));
+
+        VideoEdit stored = videoRepository.findById(response.id()).orElseThrow().getEdit();
+        assertThat(stored.getSegments()).isEmpty();
+        assertThat(stored.getFilter().getId()).isEqualTo("mono");
+        assertThat(stored.getFilter().getIntensity()).isEqualTo(1.0);
+    }
+
+    @Test
     void publish_withoutEdits_storesNone() {
         VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Plain", "desc",
                 "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of()));

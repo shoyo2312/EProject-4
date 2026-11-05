@@ -54,14 +54,30 @@ public record VideoPublishedEvent(
      *
      * @param version  format of this recipe, so a later shape can be told apart from this one
      * @param segments the parts of the raw upload that make the video, played back to back in
-     *                 this order. Never null; empty only on a recipe that edits nothing
+     *                 this order. Never null; empty means the whole upload at normal speed —
+     *                 a recipe that only changes the colour
+     * @param filter   the colour filter over the whole video, or null for none. Added after
+     *                 segments, so recipes written before it read as unfiltered
      */
-    public record Edit(int version, List<Segment> segments) {
+    public record Edit(int version, List<Segment> segments, Filter filter) {
 
         public static final int CURRENT_VERSION = 1;
 
         public Edit {
             segments = segments == null ? List.of() : List.copyOf(segments);
+        }
+
+        /** Trim and speed only. */
+        public Edit(int version, List<Segment> segments) {
+            this(version, segments, null);
+        }
+
+        /**
+         * @param id        a {@link VideoFilter#id()}. A worker that does not know it — an id
+         *                  newer than its build — leaves the colour alone rather than fail
+         * @param intensity 0 to 1, how far from the original the colour goes
+         */
+        public record Filter(String id, double intensity) {
         }
 
         /**

@@ -1,5 +1,6 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoFilter;
 import com.tiktok.event.video.VideoPublishedEvent.Edit;
 import com.tiktok.event.video.VideoPublishedEvent.Edit.Segment;
 import org.junit.jupiter.api.Test;
@@ -93,5 +94,46 @@ class EditFilterGraphTest {
                 edit(new Segment(0, 5, 1), new Segment(5, 10, 1)), 10)).isTrue();
         // Nothing usable is still a change: the caller refuses it rather than publish the upload.
         assertThat(EditFilterGraph.changesAnything(edit(new Segment(20, 30, 1)), 10)).isTrue();
+    }
+
+    @Test
+    void build_putsTheColourAfterTheJoinAndBeforeTheSizeCap() {
+        String graph = EditFilterGraph.build(List.of(new Segment(0, 2, 1)),
+                new double[]{1.08, 0, 0, 0, 1, 0, 0, 0, 0.86}, false);
+
+        assertThat(graph).endsWith("[vcat]colorchannelmixer="
+                + "rr=1.080000:rg=0.000000:rb=0.000000:"
+                + "gr=0.000000:gg=1.000000:gb=0.000000:"
+                + "br=0.000000:bg=0.000000:bb=0.860000,"
+                + "scale='min(iw,if(gt(iw,ih),1280,720))':-2[vout]");
+    }
+
+    @Test
+    void colour_isTheCataloguedMatrixAtTheRequestedIntensity() {
+        assertThat(EditFilterGraph.colour(new Edit(1, List.of(), new Edit.Filter("warm", 0.5))))
+                .hasValueSatisfying(m -> assertThat(m).containsExactly(VideoFilter.WARM.matrix(0.5)));
+    }
+
+    @Test
+    void colour_noneForNoFilterZeroIntensityOrAnUnknownId() {
+        assertThat(EditFilterGraph.colour(null)).isEmpty();
+        assertThat(EditFilterGraph.colour(edit(new Segment(0, 2, 1)))).isEmpty();
+        assertThat(EditFilterGraph.colour(new Edit(1, List.of(), new Edit.Filter("warm", 0)))).isEmpty();
+        assertThat(EditFilterGraph.colour(new Edit(1, List.of(), new Edit.Filter("nope", 1)))).isEmpty();
+    }
+
+    /** No segments is the whole upload at normal speed: a recipe that only changes the colour. */
+    @Test
+    void usable_noSegmentsIsTheWholeUpload() {
+        assertThat(EditFilterGraph.usable(new Edit(1, List.of(), new Edit.Filter("mono", 1)), 10))
+                .containsExactly(new Segment(0, 11, 1));
+    }
+
+    @Test
+    void changesAnything_aColourAloneIsAChange() {
+        assertThat(EditFilterGraph.changesAnything(new Edit(1, List.of(), new Edit.Filter("mono", 1)), 10)).isTrue();
+        assertThat(EditFilterGraph.changesAnything(new Edit(1, List.of(new Segment(0, 10, 1)),
+                new Edit.Filter("mono", 1)), 10)).isTrue();
+        assertThat(EditFilterGraph.changesAnything(new Edit(1, List.of(), new Edit.Filter("nope", 1)), 10)).isFalse();
     }
 }

@@ -245,7 +245,11 @@
         "start" : 1.25,
         "end" : 2.25,
         "speed" : 3.25
-      } ]
+      } ],
+      "filter" : {
+        "id" : "id-1",
+        "intensity" : 2.25
+      }
     }
   },
   "VideoPurgeRequestedEvent" : {

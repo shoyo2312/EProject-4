@@ -44,10 +44,12 @@ public interface Ffmpeg {
      * frames and a speed change rewrites every timestamp.
      *
      * @param segments  from {@link EditFilterGraph#usable}, never empty
+     * @param colour    from {@link EditFilterGraph#colour}, or null to leave the colour alone
      * @param withAudio whether {@code source} has an audio stream
      * @return false if the source could not be decoded or encoded
      */
-    boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments, boolean withAudio);
+    boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments, double[] colour,
+                 boolean withAudio);
 
     /**
      * Writes one decoded frame from {@code atSecond} into {@code target} as a JPEG, scaled to a

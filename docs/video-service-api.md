@@ -108,13 +108,16 @@ Request (`CreateVideoRequest`):
     "segments": [
       { "start": 1.2, "end": 4.5, "speed": 1.0 },
       { "start": 6.0, "end": 12.5, "speed": 2.0 }
-    ]
+    ],
+    "filter": { "id": "warm", "intensity": 0.8 }
   }
 }
 ```
 
 **Chỉnh sửa trong app (`edit`).** App chỉ **xem trước** việc cắt và đổi tốc độ; file upload vẫn là bản quay gốc. `edit` là công thức để media-worker dựng video cuối cùng bằng ffmpeg trước khi transcode, nên mọi thứ người xem thấy (playback, thumbnail, preview) và mọi thứ kiểm duyệt chấm đều là **bản đã chỉnh**.
-- `segments`: các đoạn lấy từ file gốc, phát nối tiếp nhau **theo thứ tự gửi**. 1–20 đoạn.
+- `segments`: các đoạn lấy từ file gốc, phát nối tiếp nhau **theo thứ tự gửi**. 0–20 đoạn; bỏ trống = cả video ở tốc độ 1 (edit chỉ đổi màu).
+- `filter`: filter màu phủ cả video, optional. `id` là một trong `warm`, `cool`, `vivid`, `muted`, `mono`, `vintage` (danh mục ở `event-schema/VideoFilter`, ma trận màu 3x3 — app giữ một bản sao ở `video_filters.dart`, đổi bên này thì đổi bên kia). `intensity` 0–1, bỏ trống = 1. `id` lạ hoặc `intensity` ngoài 0–1 → `VALIDATION_ERROR` (400).
+- Phải có ít nhất một trong `segments` (không rỗng) hoặc `filter`; `edit: {}` → 400.
 - `start`/`end`: giây tính trên file **gốc**, trước khi đổi tốc độ. `0 ≤ start < end ≤ 36000`. Không cần khớp chính xác độ dài video: `end` quá cuối video thì dừng ở cuối video, đoạn bắt đầu sau khi video đã hết thì bị bỏ.
 - `speed`: `0.25`–`4` (editor dùng 0.3x/0.5x/1x/2x/3x). Tiếng đổi tốc độ nhưng giữ cao độ.
 - Không chỉnh gì thì **bỏ hẳn `edit`** (hoặc `null`). Một đoạn duy nhất phủ cả video ở tốc độ 1 cũng được coi là không chỉnh, server không encode lại.

@@ -1,11 +1,14 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoFilter;
 import com.tiktok.event.video.VideoPublishedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ws.schild.jave.MultimediaObject;
 import ws.schild.jave.process.ffmpeg.DefaultFFMPEGLocator;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -136,7 +139,7 @@ class JaveFfmpegTest {
 
         assertThat(ffmpeg.edit(source, target, List.of(
                 new VideoPublishedEvent.Edit.Segment(0.5, 1.5, 1),
-                new VideoPublishedEvent.Edit.Segment(0, 1, 2)), true)).isTrue();
+                new VideoPublishedEvent.Edit.Segment(0, 1, 2)), null, true)).isTrue();
 
         assertThat(new MultimediaObject(target.toFile()).getInfo().getDuration()).isBetween(1300L, 1700L);
         ProbedVideo probed = probe.probe(target.toUri().toString());
@@ -151,7 +154,7 @@ class JaveFfmpegTest {
         Path target = work.resolve("edited.mp4");
 
         assertThat(ffmpeg.edit(rotated, target,
-                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), true)).isTrue();
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, true)).isTrue();
 
         ProbedVideo probed = probe.probe(target.toUri().toString());
         assertThat(probed.width()).isEqualTo(720);
@@ -171,9 +174,35 @@ class JaveFfmpegTest {
         Path target = work.resolve("edited.mp4");
 
         assertThat(ffmpeg.edit(silent, target,
-                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 0.5)), false)).isTrue();
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 0.5)), null, false)).isTrue();
 
         assertThat(probe.probe(target.toUri().toString()).audioCodec()).isNull();
+    }
+
+    /**
+     * The colour lands in the published pixels: mono over a test pattern full of colour leaves
+     * every pixel with red, green and blue equal, give or take what JPEG does to them.
+     */
+    @Test
+    void edit_appliesTheColourFilterToThePicture(@TempDir Path work) throws Exception {
+        Path source = synthesize(work.resolve("source.mp4"), "320x240");
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)),
+                VideoFilter.MONO.matrix(1), true)).isTrue();
+
+        Path still = work.resolve("still.jpg");
+        assertThat(ffmpeg.stillFrame(target, still, 0)).isTrue();
+        BufferedImage frame = ImageIO.read(still.toFile());
+        int worst = 0;
+        for (int y = 0; y < frame.getHeight(); y += 7) {
+            for (int x = 0; x < frame.getWidth(); x += 7) {
+                int rgb = frame.getRGB(x, y);
+                int r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+                worst = Math.max(worst, Math.max(Math.abs(r - g), Math.max(Math.abs(g - b), Math.abs(r - b))));
+            }
+        }
+        assertThat(worst).as("largest channel spread in a mono frame").isLessThan(16);
     }
 
     @Test
@@ -182,7 +211,7 @@ class JaveFfmpegTest {
         Files.writeString(notMedia, "this is not a video");
 
         assertThat(ffmpeg.edit(notMedia, work.resolve("edited.mp4"),
-                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), true)).isFalse();
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, true)).isFalse();
     }
 
     @Test
