@@ -5,6 +5,8 @@ import jakarta.validation.Validator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -14,6 +16,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * it well inside the 100-character cap.
  */
 class FitsBcryptTest {
+
+    private static final LocalDate BIRTH = LocalDate.of(2001, 5, 9);
 
     private static Validator validator;
 
@@ -27,7 +31,7 @@ class FitsBcryptTest {
         assertThat(validator.validate(register("a".repeat(72)))).isEmpty();
         assertThat(validator.validate(register("a".repeat(73)))).isNotEmpty();
         assertThat(validator.validate(new ResetPasswordRequest("a@b.co", "123456", "a".repeat(73)))).isNotEmpty();
-        assertThat(validator.validate(new CompleteSignupRequest("ticket", "minh_hung", "a".repeat(73)))).isNotEmpty();
+        assertThat(validator.validate(new CompleteSignupRequest("ticket", "minh_hung", "a".repeat(73), BIRTH))).isNotEmpty();
     }
 
     @Test

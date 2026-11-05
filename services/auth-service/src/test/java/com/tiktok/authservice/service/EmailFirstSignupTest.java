@@ -8,6 +8,7 @@ import com.tiktok.authservice.dto.request.VerifySignupRequest;
 import com.tiktok.authservice.dto.response.TokenResponse;
 import com.tiktok.authservice.entity.User;
 import com.tiktok.authservice.exception.EmailAlreadyExistsException;
+import com.tiktok.authservice.exception.InvalidBirthDateException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidSignupTokenException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
@@ -33,6 +34,9 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -51,6 +55,8 @@ import static org.mockito.Mockito.verify;
 @Testcontainers
 @ActiveProfiles("test")
 class EmailFirstSignupTest {
+
+    private static final LocalDate BIRTH = LocalDate.of(2001, 5, 9);
 
     private static final String EMAIL = "new@example.com";
     private static final String TURNSTILE = "test-turnstile-token";
@@ -127,7 +133,7 @@ class EmailFirstSignupTest {
         String ticket = ticketFor(EMAIL);
 
         TokenResponse tokens = authService.completeSignup(
-                new CompleteSignupRequest(ticket, "newcomer", "Password1!"));
+                new CompleteSignupRequest(ticket, "newcomer", "Password1!", BIRTH));
 
         assertThat(tokens.accessToken()).isNotBlank();
         assertThat(tokens.refreshToken()).isNotBlank();
@@ -193,20 +199,20 @@ class EmailFirstSignupTest {
         String ticket = ticketFor(EMAIL);
 
         assertThatThrownBy(() -> authService.completeSignup(
-                new CompleteSignupRequest(ticket, "TAKEN", "Password1!")))
+                new CompleteSignupRequest(ticket, "TAKEN", "Password1!", BIRTH)))
                 .isInstanceOf(UsernameAlreadyExistsException.class);
 
-        assertThat(authService.completeSignup(new CompleteSignupRequest(ticket, "fresh", "Password1!"))
+        assertThat(authService.completeSignup(new CompleteSignupRequest(ticket, "fresh", "Password1!", BIRTH))
                 .accessToken()).isNotBlank();
     }
 
     @Test
     void complete_ticketIsSingleUse() {
         String ticket = ticketFor(EMAIL);
-        authService.completeSignup(new CompleteSignupRequest(ticket, "first", "Password1!"));
+        authService.completeSignup(new CompleteSignupRequest(ticket, "first", "Password1!", BIRTH));
 
         assertThatThrownBy(() -> authService.completeSignup(
-                new CompleteSignupRequest(ticket, "second", "Password1!")))
+                new CompleteSignupRequest(ticket, "second", "Password1!", BIRTH)))
                 .isInstanceOf(InvalidSignupTokenException.class);
         assertThat(userRepository.count()).isEqualTo(1);
     }
@@ -214,7 +220,41 @@ class EmailFirstSignupTest {
     @Test
     void complete_withUnknownTicket_isRefused() {
         assertThatThrownBy(() -> authService.completeSignup(
-                new CompleteSignupRequest("not-a-ticket", "someone", "Password1!")))
+                new CompleteSignupRequest("not-a-ticket", "someone", "Password1!", BIRTH)))
                 .isInstanceOf(InvalidSignupTokenException.class);
+    }
+
+    @Test
+    void theRegistrationEventCarriesTheBirthDate() {
+        String ticket = ticketFor(EMAIL);
+
+        authService.completeSignup(new CompleteSignupRequest(ticket, "newcomer", "Password1!", BIRTH));
+
+        assertThat(outboxEventRepository.findAll())
+                .singleElement()
+                .satisfies(event -> assertThat(event.getPayload()).contains("\"birthDate\":\"2001-05-09\""));
+    }
+
+    @Test
+    void anUnderageSignupIsRejectedAndTheTicketSurvives() {
+        String ticket = ticketFor(EMAIL);
+        LocalDate oneDayShort = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).minusYears(13).plusDays(1);
+
+        assertThatThrownBy(() -> authService.completeSignup(
+                new CompleteSignupRequest(ticket, "newcomer", "Password1!", oneDayShort)))
+                .isInstanceOf(InvalidBirthDateException.class);
+        assertThat(userRepository.count()).isZero();
+
+        assertThat(authService.completeSignup(new CompleteSignupRequest(ticket, "newcomer", "Password1!", BIRTH))
+                .accessToken()).isNotBlank();
+    }
+
+    @Test
+    void exactlyThirteenIsAccepted() {
+        String ticket = ticketFor(EMAIL);
+        LocalDate thirteenToday = LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")).minusYears(13);
+
+        assertThat(authService.completeSignup(new CompleteSignupRequest(ticket, "newcomer", "Password1!", thirteenToday))
+                .accessToken()).isNotBlank();
     }
 }

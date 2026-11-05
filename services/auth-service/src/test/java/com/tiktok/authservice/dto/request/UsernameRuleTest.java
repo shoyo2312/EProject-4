@@ -10,6 +10,8 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.Set;
 
+import java.time.LocalDate;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -17,6 +19,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * to take any 3-50 characters, so "victim@example.com" was a username anyone could register.
  */
 class UsernameRuleTest {
+
+    private static final LocalDate BIRTH = LocalDate.of(2001, 5, 9);
 
     private static Validator validator;
 
@@ -31,7 +35,7 @@ class UsernameRuleTest {
         assertThat(usernameViolations(validator.validate(
                 new RegisterRequest(username, "someone@example.com", "password123", null)))).isNotEmpty();
         assertThat(usernameViolations(validator.validate(
-                new CompleteSignupRequest("ticket", username, "password123")))).isNotEmpty();
+                new CompleteSignupRequest("ticket", username, "password123", BIRTH)))).isNotEmpty();
     }
 
     @Test
@@ -39,7 +43,7 @@ class UsernameRuleTest {
         assertThat(validator.validate(
                 new RegisterRequest("minh_hung", "someone@example.com", "password123", null))).isEmpty();
         assertThat(validator.validate(
-                new CompleteSignupRequest("ticket", "minh_hung", "password123"))).isEmpty();
+                new CompleteSignupRequest("ticket", "minh_hung", "password123", BIRTH))).isEmpty();
     }
 
     private static <T> Set<ConstraintViolation<T>> usernameViolations(Set<ConstraintViolation<T>> violations) {

@@ -39,7 +39,9 @@ import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
 import com.tiktok.authservice.exception.InvalidResetTokenException;
+import com.tiktok.authservice.exception.InvalidBirthDateException;
 import com.tiktok.authservice.exception.InvalidSignupTokenException;
+import com.tiktok.common.validation.BirthDateRule;
 import com.tiktok.authservice.exception.MfaRequiredException;
 import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
@@ -61,6 +63,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -113,7 +117,7 @@ public class AuthServiceImpl implements AuthService {
         // casing the user chose, and only its uniqueness check is case-insensitive.
         String email = request.email().toLowerCase(Locale.ROOT);
 
-        User saved = createPasswordAccount(request.username(), email, request.password(), false);
+        User saved = createPasswordAccount(request.username(), email, request.password(), false, null);
 
         otpService.issue(saved, VerificationTokenType.EMAIL_VERIFICATION, otpProperties.emailVerificationExpiryMillis(),
                 otp -> new EmailVerificationRequestedEvent(saved.getEmail(), otp));
@@ -178,12 +182,19 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public TokenResponse completeSignup(CompleteSignupRequest request) {
+        // Before anything is spent: a date that fails the gate costs the user a corrected form,
+        // not a new verification round.
+        if (!BirthDateRule.isAllowed(request.birthDate(), LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")))) {
+            throw new InvalidBirthDateException();
+        }
+
         String email = signupChallenge.emailFor(request.signupToken())
                 .orElseThrow(InvalidSignupTokenException::new);
 
         // Verified from the start: the address was proven before the row existed — that is what
         // the ticket is.
-        User saved = createPasswordAccount(request.username(), email, request.password(), true);
+        User saved = createPasswordAccount(request.username(), email, request.password(), true,
+                request.birthDate());
 
         if (!signupChallenge.spendTicket(request.signupToken())) {
             throw new InvalidSignupTokenException();
@@ -669,9 +680,12 @@ public class AuthServiceImpl implements AuthService {
      * is the line behind them for a request that raced past.
      *
      * @param emailVerified true when the address was proven before the account existed
+     * @param birthDate     what the sign-up form collected; null on the legacy one-step register,
+     *                      which the mobile app still uses. Not stored here — user-service owns it
+     *                      and reads it off the registration event.
      */
     private User createPasswordAccount(String username, String email, String password,
-                                       boolean emailVerified) {
+                                       boolean emailVerified, LocalDate birthDate) {
         if (userRepository.existsByUsernameIgnoreCaseAndDeletedAtIsNull(username)) {
             throw new UsernameAlreadyExistsException(username);
         }
@@ -692,7 +706,7 @@ public class AuthServiceImpl implements AuthService {
 
         User saved = saveUnique(user, username, email);
         userEventProducer.publishUserRegistered(
-                UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail()));
+                UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail(), null, birthDate));
         return saved;
     }
 

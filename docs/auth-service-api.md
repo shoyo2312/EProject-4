@@ -362,15 +362,18 @@ Request:
 {
   "signupToken": "...",       // từ mục 3.14
   "username": "minh_hung",    // cùng quy tắc với mục 3.1
-  "password": "P@ssw0rd!"     // 8-100 ký tự
+  "password": "P@ssw0rd!",    // 8-100 ký tự
+  "birthDate": "2001-05-09"   // bắt buộc, ISO yyyy-MM-dd — phải đủ 13 tuổi tính đến hôm nay (Asia/Ho_Chi_Minh), không ở tương lai, không trước 1900
 }
 ```
 
 Không có `email` trong request: địa chỉ là cái mà vé đã chứng minh, nên không đổi được sang một địa chỉ chưa verify.
 
+`birthDate` được kiểm tra **trước khi tiêu vé**: sai thì trả `400 BIRTH_DATE_INVALID` và vé vẫn dùng được, client sửa ngày rồi gửi lại. auth-service không lưu ngày sinh — nó đi theo `UserRegisteredEvent` sang user-service (`user-service-api.md` mục 3.1, chỉ chủ tài khoản thấy). Tài khoản Google/Facebook không có bước này: client hỏi ngày sinh một lần sau đăng nhập khi `GET /me` trả `birthDate: null`.
+
 Response `data` → `TokenResponse` (giống mục 3.2). Tài khoản được tạo **đã verify email** và đăng nhập luôn — lưu cặp token như sau `/login`, không cần gọi `/login` nữa.
 
-Lỗi: `VALIDATION_ERROR` (400), `USERNAME_ALREADY_EXISTS` (409 — vé **vẫn dùng được**, cho user chọn username khác), `SIGNUP_SESSION_EXPIRED` (400 — vé sai, hết hạn, hoặc đã dùng: quay lại mục 3.13), `EMAIL_ALREADY_EXISTS` (409 — địa chỉ bị tài khoản khác lấy mất trong lúc đăng ký: cũng quay lại mục 3.13).
+Lỗi: `VALIDATION_ERROR` (400), `BIRTH_DATE_INVALID` (400 — vé vẫn dùng được), `USERNAME_ALREADY_EXISTS` (409 — vé **vẫn dùng được**, cho user chọn username khác), `SIGNUP_SESSION_EXPIRED` (400 — vé sai, hết hạn, hoặc đã dùng: quay lại mục 3.13), `EMAIL_ALREADY_EXISTS` (409 — địa chỉ bị tài khoản khác lấy mất trong lúc đăng ký: cũng quay lại mục 3.13).
 
 ### 3.16 `PUT /me/username`
 **Cần Bearer token.** Trả `200 OK`. Đổi username (TikTok ID) — **tối đa 1 lần mỗi 30 ngày**.
