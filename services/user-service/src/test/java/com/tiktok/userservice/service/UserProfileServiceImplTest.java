@@ -280,6 +280,24 @@ class UserProfileServiceImplTest {
                 .isInstanceOf(TooManyProfileIdsException.class);
     }
 
+    /**
+     * What a comment's "@handle"s resolve to for notification-service. Keyed by the lowercased
+     * handle, so the caller can match whatever case the comment used; closed and unknown handles
+     * are absent rather than failing the batch.
+     */
+    @Test
+    @Transactional
+    void idsByUsername_resolvesHandlesIgnoringCase_andSkipsClosedOrUnknownOnes() {
+        userProfileService.createFromRegisteredEvent(1L, "alice", null);
+        userProfileService.createFromRegisteredEvent(2L, "Bob.Builder", null);
+        userProfileService.createFromRegisteredEvent(3L, "carol", null);
+        accountStateService.applyDeactivated(3L, true, Instant.now());
+
+        assertThat(userProfileService.idsByUsername(List.of("ALICE", " bob.builder ", "carol", "nobody")))
+                .containsExactlyInAnyOrderEntriesOf(java.util.Map.of("alice", 1L, "bob.builder", 2L));
+        assertThat(userProfileService.idsByUsername(List.of())).isEmpty();
+    }
+
     /** The console still has to name a closed account — and a moderator's own blocks hide nothing. */
     @Test
     @Transactional

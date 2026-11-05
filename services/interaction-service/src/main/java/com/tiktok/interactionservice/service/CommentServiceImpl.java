@@ -5,6 +5,7 @@ import com.tiktok.interactionservice.client.BlockClient;
 import com.tiktok.interactionservice.client.CommentAudience;
 import com.tiktok.interactionservice.client.CommentPolicy;
 import com.tiktok.interactionservice.client.FriendshipClient;
+import com.tiktok.interactionservice.client.UserStatsClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.request.CommentInboxFilter;
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
@@ -28,6 +29,7 @@ import com.tiktok.interactionservice.exception.CommentsDisabledException;
 import com.tiktok.interactionservice.exception.CommentsNotAllowedException;
 import com.tiktok.interactionservice.exception.CommentLikeRateLimitedException;
 import com.tiktok.interactionservice.exception.CommentRejectedException;
+import com.tiktok.interactionservice.exception.InboxFilterNeedsVideoException;
 import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotCommentOwnerException;
 import com.tiktok.interactionservice.exception.NotVideoOwnerException;
@@ -61,6 +63,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Comparator;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -72,8 +75,17 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class CommentServiceImpl implements CommentService {
 
-    /** How many all-deleted pages to skip past before handing the client a cursor and giving up. */
+    /** How many raw pages one request sifts through before handing the client a cursor and giving up. */
     private static final int MAX_PAGES_SCANNED = 5;
+    /**
+     * How much of one video the ranked inbox reads before ranking it in memory. ponytail: a video
+     * with more comments than this ranks its newest RANK_MAX_ROWS only; a sortable index per video
+     * (likes, replies) is the upgrade if creators with bigger threads turn up.
+     */
+    static final int RANK_MAX_ROWS = 5_000;
+    private static final int RANK_PAGE_SIZE = 500;
+    /** Authors whose follower counts are asked for at once — user-service's batch limit. */
+    private static final int FOLLOWER_BATCH = 100;
 
     /** How many replies one cascade delete takes off the index at a time. */
     private static final int CASCADE_PAGE_SIZE = 100;
@@ -106,6 +118,7 @@ public class CommentServiceImpl implements CommentService {
     private final UserBanRegistry userBanRegistry;
     private final VideoOwnershipClient videoOwnershipClient;
     private final FriendshipClient friendshipClient;
+    private final UserStatsClient userStatsClient;
     private final BlockClient blockClient;
 
     @Override
@@ -489,7 +502,11 @@ public class CommentServiceImpl implements CommentService {
                                          Function<List<T>, List<CommentResponse>> hydrate) {
         CassandraPageRequest pageRequest = CassandraCursors.decode(cursor, size, InvalidCommentCursorException::new);
 
-        List<CommentResponse> items = List.of();
+        // Rows are sifted in memory (deleted, the owner's own, a word), so one raw page can hold a
+        // single hit: pages are read until this one is full of hits, hands back nothing more, or the
+        // scan budget is spent. A page may run a little over size — a raw page is never cut, or its
+        // cursor would skip the rest of it.
+        List<CommentResponse> items = new ArrayList<>();
 
         for (int page = 0; page < MAX_PAGES_SCANNED; page++) {
             // Base64 that decodes into bytes Cassandra will not accept as paging state is only
@@ -505,12 +522,12 @@ public class CommentServiceImpl implements CommentService {
                 throw e;
             }
 
-            items = hydrate.apply(slice.getContent());
+            items.addAll(hydrate.apply(slice.getContent()));
 
             boolean hasMore = slice.hasNext();
             String nextCursor = hasMore ? CassandraCursors.encode((CassandraPageRequest) slice.nextPageable()) : null;
 
-            if (!items.isEmpty() || !hasMore) {
+            if (items.size() >= size || !hasMore) {
                 return new CommentPageResponse(items, nextCursor, hasMore);
             }
             pageRequest = (CassandraPageRequest) slice.nextPageable();
@@ -628,6 +645,9 @@ public class CommentServiceImpl implements CommentService {
 
     @Override
     public CommentPageResponse listForOwner(Long ownerId, CommentInboxFilter filter, String cursor, int size) {
+        if (filter.ranks() && filter.videoId() == null) {
+            throw new InboxFilterNeedsVideoException();
+        }
         long fromId = filter.from() == null ? 0L : firstCommentIdAt(filter.from());
         long toId = filter.to() == null ? Long.MAX_VALUE : firstCommentIdAt(filter.to());
         String q = filter.q() == null || filter.q().isBlank() ? null : searchable(filter.q().strip());
@@ -638,6 +658,9 @@ public class CommentServiceImpl implements CommentService {
             // same fail-closed check as the queue, since the held comments on it are uncleared text —
             // and the owner's own comments are left out here as the inbox never filed them.
             requireOwner(filter.videoId(), ownerId);
+            if (filter.ranks()) {
+                return rankedForVideo(ownerId, filter, fromId, toId, q, cursor, size);
+            }
             return scan(cursor, size,
                     pageRequest -> commentByVideoRepository.findNewestFirst(filter.videoId(), fromId, toId, pageRequest),
                     rows -> hydrateInbox(rows.stream().filter(row -> !ownerId.equals(row.getUserId())).toList(),
@@ -646,6 +669,108 @@ public class CommentServiceImpl implements CommentService {
         return scan(cursor, size,
                 pageRequest -> commentByOwnerRepository.findNewestFirst(ownerId, fromId, toId, pageRequest),
                 page -> hydrateInbox(inboxRows(page), filter.status(), q));
+    }
+
+    /**
+     * The ranked items whose author's follower count falls in one of {@code ranges}, in order, up to
+     * {@code wanted} of them. Counts are asked for one batch of authors at a time, as far down the
+     * list as the page reaches — asking for every author of the video made each page wait on up to
+     * fifty sequential user-service calls. An author with no profile (deleted, closed) is left out.
+     */
+    private List<CommentResponse> byFollowerRange(List<CommentResponse> ranked,
+                                                  Set<CommentInboxFilter.FollowerRange> ranges, int wanted) {
+        List<CommentResponse> kept = new ArrayList<>();
+        Map<Long, Long> counts = new HashMap<>();
+        for (int from = 0; from < ranked.size() && kept.size() < wanted; from += FOLLOWER_BATCH) {
+            List<CommentResponse> batch = ranked.subList(from, Math.min(from + FOLLOWER_BATCH, ranked.size()));
+            Set<Long> unknown = batch.stream().map(CommentResponse::userId)
+                    .filter(id -> !counts.containsKey(id)).collect(Collectors.toSet());
+            if (!unknown.isEmpty()) {
+                counts.putAll(userStatsClient.followerCounts(unknown));
+            }
+            for (CommentResponse item : batch) {
+                Long count = counts.get(item.userId());
+                if (count != null && ranges.stream().anyMatch(range -> range.contains(count))) {
+                    kept.add(item);
+                }
+            }
+        }
+        return kept;
+    }
+
+    /**
+     * One video's inbox in an order Cassandra cannot give, or narrowed by something only the whole
+     * thread knows: the partition is read up to {@link #RANK_MAX_ROWS}, filtered, sorted, and paged
+     * by offset — the cursor is the offset, so it is only good with the filters it was issued under.
+     * Only the owner's video gets here, and these filters only make sense per video: across videos
+     * the owner's partition is read newest first and stops after a few pages.
+     *
+     * <p>"Answered" is the owner having a live reply in the thread; for a reply row, one aimed at
+     * that reply's author. Follower counts come from user-service, only as far down as the page reaches,
+     * so with that filter {@code hasMore} means at least one more match, not a count of them.
+     */
+    private CommentPageResponse rankedForVideo(Long ownerId, CommentInboxFilter filter, long fromId, long toId,
+                                               String q, String cursor, int size) {
+        int offset = 0;
+        if (cursor != null && !cursor.isBlank()) {
+            try {
+                offset = Integer.parseInt(cursor);
+            } catch (NumberFormatException e) {
+                throw new InvalidCommentCursorException();
+            }
+            if (offset < 0) {
+                throw new InvalidCommentCursorException();
+            }
+        }
+
+        List<CommentByVideo> rows = new ArrayList<>();
+        CassandraPageRequest pageRequest = CassandraPageRequest.first(RANK_PAGE_SIZE);
+        while (true) {
+            Slice<CommentByVideo> slice = commentByVideoRepository.findNewestFirst(filter.videoId(), fromId, toId, pageRequest);
+            rows.addAll(slice.getContent());
+            if (!slice.hasNext() || rows.size() >= RANK_MAX_ROWS) {
+                break;
+            }
+            pageRequest = (CassandraPageRequest) slice.nextPageable();
+        }
+
+        Set<Long> answeredThreads = new HashSet<>();
+        Set<String> answeredReplies = new HashSet<>();
+        for (CommentByVideo row : rows) {
+            if (ownerId.equals(row.getUserId()) && row.getParentId() != null && row.isLive()) {
+                answeredThreads.add(row.getParentId());
+                if (row.getReplyToUserId() != null) {
+                    answeredReplies.add(row.getParentId() + ":" + row.getReplyToUserId());
+                }
+            }
+        }
+
+        List<CommentResponse> items = hydrateInbox(
+                rows.stream().filter(row -> !ownerId.equals(row.getUserId())).toList(), filter.status(), q);
+
+        if (filter.replied() != null) {
+            items = items.stream()
+                    .filter(item -> filter.replied() == (item.parentId() == null
+                            ? answeredThreads.contains(item.commentId())
+                            : answeredReplies.contains(item.parentId() + ":" + item.userId())))
+                    .toList();
+        }
+        Comparator<CommentResponse> newest = Comparator.comparing(CommentResponse::commentId).reversed();
+        Comparator<CommentResponse> order = switch (filter.sort() == null ? CommentInboxFilter.Sort.NEWEST : filter.sort()) {
+            case MOST_LIKED -> Comparator.comparingInt(CommentResponse::likeCount).reversed().thenComparing(newest);
+            case MOST_REPLIED -> Comparator.comparingInt(CommentResponse::replyCount).reversed().thenComparing(newest);
+            case NEWEST -> newest;
+        };
+        items = items.stream().sorted(order).toList();
+
+        if (filter.followers() != null && !filter.followers().isEmpty()) {
+            items = byFollowerRange(items, filter.followers(), offset + size + 1);
+        }
+
+        int end = Math.min(offset + size, items.size());
+        boolean hasMore = end < items.size();
+        return new CommentPageResponse(items.subList(Math.min(offset, items.size()), end),
+                hasMore ? String.valueOf(end) : null, hasMore);
     }
 
     /**

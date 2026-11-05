@@ -9,8 +9,10 @@ import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
+import com.tiktok.common.id.SnowflakeIdGenerator;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
+import com.tiktok.crypto.jwt.RevocationKeys;
 import com.tiktok.event.user.NewDeviceSignInEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -76,7 +78,7 @@ public class TokenIssuer {
     public TokenResponse issue(User user, SecurityEventType signIn) {
         RequestOrigin origin = requestOrigins.current();
         Minted minted = transactionTemplate.execute(status -> {
-            TokenResponse tokens = mint(user);
+            TokenResponse tokens = mint(user, SnowflakeIdGenerator.nextId());
             return new Minted(tokens, alertIfNewDevice(user, origin));
         });
         securityEventRecorder.record(user.getId(), signIn, minted.newDevice() ? NEW_DEVICE_DETAIL : null, origin);
@@ -115,15 +117,16 @@ public class TokenIssuer {
      * be the account's "first device" and pass in silence.
      */
     @Transactional
-    public TokenResponse reissue(User user) {
-        TokenResponse tokens = mint(user);
+    public TokenResponse reissue(User user, Long familyId) {
+        // A row from before families existed starts one here, so its descendants are scoped.
+        TokenResponse tokens = mint(user, familyId != null ? familyId : SnowflakeIdGenerator.nextId());
         if (user.getRole() != UserRole.ADMIN) {
             knownDevices.refreshed(user.getId(), requestOrigins.current().deviceId());
         }
         return tokens;
     }
 
-    private TokenResponse mint(User user) {
+    private TokenResponse mint(User user, long familyId) {
         String subject = String.valueOf(user.getId());
 
         // The one place every sign-in path ends, so the one place last_login_at is stamped. A bulk
@@ -135,6 +138,7 @@ public class TokenIssuer {
                 subject,
                 Map.of(CLAIM_ROLE, user.getRole().name(),
                         CLAIM_JTI, UUID.randomUUID().toString(),
+                        RevocationKeys.CLAIM_FAMILY, String.valueOf(familyId),
                         JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS),
                 jwtProperties.accessTokenExpiryMillis());
 
@@ -147,6 +151,7 @@ public class TokenIssuer {
         RefreshToken tokenRecord = RefreshToken.builder()
                 .userId(user.getId())
                 .tokenHash(HashUtils.sha256(refreshToken))
+                .familyId(familyId)
                 .expiresAt(Instant.now().plusMillis(jwtProperties.refreshTokenExpiryMillis()))
                 .build();
         refreshTokenRepository.save(tokenRecord);

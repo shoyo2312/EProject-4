@@ -37,6 +37,7 @@ import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.UploadNotFoundException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
+import com.tiktok.videoservice.exception.VideoNotPinnableException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.OwnerBanRepository;
 import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
@@ -787,8 +788,10 @@ public class VideoServiceImpl implements VideoService {
         }
 
         if (pinned != (video.getPinnedAt() != null)) {
-            // ponytail: count then write, so two pins at the same instant can both pass and leave
-            // four pinned; a per-owner slot document would close it if that ever matters.
+            if (pinned && (video.getStatus() != VideoStatus.PUBLISHED
+                    || video.getVisibility() == VideoVisibility.PRIVATE)) {
+                throw new VideoNotPinnableException(videoId);
+            }
             if (pinned && videoRepository.countByUserIdAndPinnedAtIsNotNullAndDeletedAtIsNull(video.getUserId())
                     >= PIN_LIMIT) {
                 throw new PinLimitReachedException(PIN_LIMIT);
@@ -796,6 +799,17 @@ public class VideoServiceImpl implements VideoService {
             video.changePinned(pinned);
             videoRepository.updatePinned(video);
             videoCache.evict(videoId);
+            // Two pins at once both pass the count above. Once both are written, the later one
+            // sees the limit already filled ahead of it and takes itself back off.
+            // ponytail: two pins in the same millisecond both stay; a per-owner slot document
+            // closes that if it ever matters.
+            if (pinned && videoRepository.countByUserIdAndPinnedAtBeforeAndDeletedAtIsNull(
+                    video.getUserId(), video.getPinnedAt()) >= PIN_LIMIT) {
+                video.changePinned(false);
+                videoRepository.updatePinned(video);
+                videoCache.evict(videoId);
+                throw new PinLimitReachedException(PIN_LIMIT);
+            }
         }
 
         return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));

@@ -5,10 +5,16 @@ import com.tiktok.interactionservice.AbstractInteractionServiceIT;
 import com.tiktok.interactionservice.client.BlockClient;
 import com.tiktok.interactionservice.client.CommentAudience;
 import com.tiktok.interactionservice.client.CommentPolicy;
+import com.tiktok.interactionservice.client.UserStatsClient;
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.request.CommentInboxFilter;
+import com.tiktok.interactionservice.dto.request.CommentInboxFilter.FollowerRange;
+import com.tiktok.interactionservice.dto.request.CommentInboxFilter.Sort;
+import com.tiktok.interactionservice.dto.response.CommentPageResponse;
 import com.tiktok.interactionservice.dto.response.CommentResponse;
 import com.tiktok.interactionservice.entity.CommentStatus;
+import com.tiktok.interactionservice.exception.InboxFilterNeedsVideoException;
+import com.tiktok.interactionservice.exception.InvalidCommentCursorException;
 import com.tiktok.interactionservice.exception.NotVideoOwnerException;
 import com.tiktok.interactionservice.repository.CommentByOwnerRepository;
 import com.tiktok.interactionservice.repository.CommentByVideoRepository;
@@ -23,11 +29,17 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** TikTok Studio's comment inbox: every comment on every video an owner has, in one list. */
@@ -63,6 +75,9 @@ class CommentInboxTest extends AbstractInteractionServiceIT {
 
     @MockitoBean
     private BlockClient blockClient;
+
+    @MockitoBean
+    private UserStatsClient userStatsClient;
 
     @BeforeEach
     void cleanUp() {
@@ -213,6 +228,26 @@ class CommentInboxTest extends AbstractInteractionServiceIT {
                 .containsExactly(second.commentId(), first.commentId());
     }
 
+    /**
+     * A word is sifted out of the owner's partition in memory, so one raw page may hold a single hit:
+     * the scan keeps reading until the page is full of hits, not just non-empty.
+     */
+    @Test
+    void narrowedToAWord_aPageFillsUpAcrossRawPages() {
+        List<Long> hits = new java.util.ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            String text = i % 10 == 0 ? "phía xa có xe " + i : "bình luận " + i;
+            CommentResponse comment = commentService.addComment(100L, AUTHOR, text);
+            if (i % 10 == 0) hits.add(comment.commentId());
+        }
+
+        CommentPageResponse page = commentService.listForOwner(OWNER,
+                new CommentInboxFilter(null, null, "phia", null, null), null, 10);
+
+        assertThat(page.items()).extracting(CommentResponse::commentId)
+                .containsExactlyInAnyOrderElementsOf(hits);
+    }
+
     /** That read is of the video, not the owner's partition, so it is the owner's video or nothing. */
     @Test
     void narrowedToSomeoneElsesVideo_theInboxIsRefused() {
@@ -220,6 +255,104 @@ class CommentInboxTest extends AbstractInteractionServiceIT {
 
         assertThatThrownBy(() -> inbox(new CommentInboxFilter(300L, null, null, null, null)))
                 .isInstanceOf(NotVideoOwnerException.class);
+    }
+
+    @Test
+    void narrowedToOneVideo_theInboxRanksByLikesOrReplies() {
+        CommentResponse plain = commentService.addComment(100L, AUTHOR, "bình thường");
+        CommentResponse liked = commentService.addComment(100L, 2L, "được thích");
+        CommentResponse discussed = commentService.addComment(100L, 3L, "được bàn tán");
+        commentService.likeComment(100L, liked.commentId(), 4L);
+        commentService.likeComment(100L, liked.commentId(), 5L);
+        commentService.addComment(100L, 4L, "đồng ý", discussed.commentId());
+        commentService.addComment(100L, 5L, "chuẩn", discussed.commentId());
+
+        assertThat(inbox(ranked(Sort.MOST_LIKED, null, null)))
+                .extracting(CommentResponse::commentId)
+                .startsWith(liked.commentId());
+        assertThat(inbox(ranked(Sort.MOST_REPLIED, null, null)))
+                .extracting(CommentResponse::commentId)
+                .startsWith(discussed.commentId());
+        assertThat(inbox(ranked(Sort.NEWEST, null, null)).getLast().commentId()).isEqualTo(plain.commentId());
+    }
+
+    @Test
+    void narrowedToOneVideo_theInboxKeepsOnlyAnsweredOrUnansweredThreads() {
+        CommentResponse answered = commentService.addComment(100L, AUTHOR, "câu hỏi");
+        CommentResponse unanswered = commentService.addComment(100L, 2L, "câu khác");
+        commentService.addComment(100L, OWNER, "trả lời đây", answered.commentId());
+
+        assertThat(inbox(ranked(null, true, null)))
+                .extracting(CommentResponse::commentId).containsExactly(answered.commentId());
+        assertThat(inbox(ranked(null, false, null)))
+                .extracting(CommentResponse::commentId).containsExactly(unanswered.commentId());
+    }
+
+    @Test
+    void narrowedToOneVideo_theInboxKeepsOnlyAuthorsInAFollowerRange() {
+        CommentResponse byBig = commentService.addComment(100L, AUTHOR, "từ tài khoản lớn");
+        commentService.addComment(100L, 2L, "từ tài khoản nhỏ");
+        when(userStatsClient.followerCounts(any())).thenReturn(Map.of(AUTHOR, 50_000L, 2L, 10L));
+
+        assertThat(inbox(ranked(null, null, Set.of(FollowerRange.FROM_10K_TO_100K))))
+                .extracting(CommentResponse::commentId).containsExactly(byBig.commentId());
+        assertThat(inbox(ranked(null, null, Set.of(FollowerRange.OVER_100K)))).isEmpty();
+    }
+
+    @Test
+    void aRankedInbox_pagesByOffsetAndRefusesACursorItNeverIssued() {
+        for (int i = 0; i < 3; i++) {
+            commentService.addComment(100L, AUTHOR, "bình luận " + i);
+        }
+
+        CommentPageResponse first = commentService.listForOwner(OWNER, ranked(Sort.MOST_LIKED, null, null), null, 2);
+        assertThat(first.items()).hasSize(2);
+        assertThat(first.hasMore()).isTrue();
+        CommentPageResponse second = commentService.listForOwner(OWNER, ranked(Sort.MOST_LIKED, null, null), first.nextCursor(), 2);
+        assertThat(second.items()).hasSize(1);
+        assertThat(second.hasMore()).isFalse();
+        assertThat(second.nextCursor()).isNull();
+
+        assertThatThrownBy(() -> commentService.listForOwner(OWNER, ranked(Sort.MOST_LIKED, null, null), "abc", 2))
+                .isInstanceOf(InvalidCommentCursorException.class);
+    }
+
+    /**
+     * Ranking reads one video's whole thread; across the inbox there is no such read, and the
+     * filters used to be dropped in silence — "over 100k followers" answered with every comment.
+     */
+    @Test
+    void aRankedFilterWithoutAVideo_isRefused() {
+        for (CommentInboxFilter filter : List.of(
+                new CommentInboxFilter(null, null, null, null, null, Sort.MOST_LIKED, null, null),
+                new CommentInboxFilter(null, null, null, null, null, null, false, null),
+                new CommentInboxFilter(null, null, null, null, null, null, null, Set.of(FollowerRange.OVER_100K)))) {
+            assertThatThrownBy(() -> commentService.listForOwner(OWNER, filter, null, 20))
+                    .isInstanceOf(InboxFilterNeedsVideoException.class);
+        }
+    }
+
+    /** Follower counts are asked for as far down the ranked list as the page reaches, not for the whole video. */
+    @Test
+    void theFollowerFilter_asksOnlyForTheAuthorsThePageNeeds() {
+        for (long author = 1_000; author < 1_150; author++) {
+            commentService.addComment(100L, author, "bình luận của " + author);
+        }
+        when(userStatsClient.followerCounts(any())).thenAnswer(call -> {
+            java.util.Collection<Long> ids = call.getArgument(0);
+            return ids.stream().collect(java.util.stream.Collectors.toMap(id -> id, id -> 50_000L));
+        });
+
+        CommentPageResponse page = commentService.listForOwner(OWNER,
+                ranked(null, null, Set.of(FollowerRange.FROM_10K_TO_100K)), null, 2);
+
+        assertThat(page.items()).hasSize(2);
+        assertThat(page.hasMore()).isTrue();
+        verify(userStatsClient, times(1)).followerCounts(argThat(ids -> ids.size() <= 100));
+    }
+
+    private static CommentInboxFilter ranked(Sort sort, Boolean replied, Set<FollowerRange> followers) {
+        return new CommentInboxFilter(100L, null, null, null, null, sort, replied, followers);
     }
 
     private List<CommentResponse> inbox(CommentInboxFilter filter) {

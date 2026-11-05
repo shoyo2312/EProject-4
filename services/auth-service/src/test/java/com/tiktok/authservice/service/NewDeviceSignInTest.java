@@ -177,7 +177,7 @@ class NewDeviceSignInTest {
         tokenIssuer.issue(user, SecurityEventType.LOGIN_SUCCEEDED);
 
         arrive("device-cccccccccccc", Map.of());
-        tokenIssuer.reissue(user);
+        tokenIssuer.reissue(user, null);
         tokenIssuer.issue(user, SecurityEventType.LOGIN_SUCCEEDED);
 
         assertThat(alerts()).isEmpty();

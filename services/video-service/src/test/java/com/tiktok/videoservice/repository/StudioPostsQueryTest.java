@@ -101,6 +101,42 @@ class StudioPostsQueryTest {
                 .containsExactly("viral", "big", "medium", "small");
     }
 
+    @Test
+    void theDefaultOrderPutsPinnedVideosFirstLikeTheProfile() {
+        pin("small", 1);
+        pin("medium", 2);
+        assertThat(titles(filter(null, null, null, null)))
+                .as("the latest pin first, then the rest newest first")
+                .containsExactly("medium", "small", "viral", "big");
+    }
+
+    /** NEWEST is the documented default, so asking for it by name answers the same as not asking. */
+    @Test
+    void newestByNameIsTheDefaultOrder_andOldestFirstIgnoresPins() {
+        pin("small", 1);
+        assertThat(titles(filter(null, null, StudioPostFilter.Sort.NEWEST, null)))
+                .containsExactly("small", "viral", "big", "medium");
+        assertThat(titles(filter(null, null, StudioPostFilter.Sort.NEWEST, StudioPostFilter.Order.DESC)))
+                .containsExactly("small", "viral", "big", "medium");
+        assertThat(titles(filter(null, null, null, StudioPostFilter.Order.ASC)))
+                .as("oldest first is a plain date order")
+                .containsExactly("small", "medium", "big", "viral");
+    }
+
+    @Test
+    void aColumnTheOwnerSortsByIgnoresPins() {
+        pin("medium", 1);
+        assertThat(titles(filter(null, null, StudioPostFilter.Sort.LIKES, null)))
+                .containsExactly("viral", "big", "medium", "small");
+        assertThat(titles(filter(null, null, StudioPostFilter.Sort.NEWEST, StudioPostFilter.Order.ASC)))
+                .containsExactly("small", "medium", "big", "viral");
+    }
+
+    private void pin(String title, int minute) {
+        mongoTemplate.updateFirst(Query.query(where("title").is(title)),
+                Update.update("pinnedAt", Instant.parse("2026-02-01T00:00:00Z").plusSeconds(minute * 60L)), Video.class);
+    }
+
     private static StudioPostFilter filter(List<CountRange> views, List<CountRange> likes,
                                            StudioPostFilter.Sort sort, StudioPostFilter.Order order) {
         return new StudioPostFilter(null, null, null, views, likes, null, sort, order);

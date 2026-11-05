@@ -7,6 +7,7 @@ import com.tiktok.event.interaction.VideoLikeEvent;
 import com.tiktok.event.interaction.VideoRepostedEvent;
 import com.tiktok.event.interaction.VideoSharedEvent;
 import com.tiktok.notificationservice.client.BlockClient;
+import com.tiktok.notificationservice.client.UserHandleClient;
 import com.tiktok.notificationservice.client.VideoOwnerClient;
 import com.tiktok.notificationservice.entity.NotificationType;
 import com.tiktok.notificationservice.service.NotificationService;
@@ -20,6 +21,9 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Turns the interaction streams into inbox entries for the account that owns the video.
@@ -35,6 +39,11 @@ public class InteractionEventConsumer {
 
     private static final String COMMENT_CREATED = "CommentCreatedEvent";
 
+    /** What tells a mention from a comment on the owner's video; the web matches it exactly. */
+    static final String MENTION_TITLE = "New mention";
+
+    private static final String MENTION_EVENT_TYPE = "CommentMention";
+
     /**
      * Older than this, a repost is not news. This group first met {@code interaction.repost-events}
      * with no committed offset, and reads from the earliest one, so without a cutoff that first start
@@ -48,6 +57,7 @@ public class InteractionEventConsumer {
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
     private final BlockClient blockClient;
+    private final UserHandleClient userHandleClient;
 
     @KafkaListener(topics = "interaction.like-events", groupId = "notification-service")
     @SneakyThrows
@@ -85,12 +95,12 @@ public class InteractionEventConsumer {
         }
 
         CommentCreatedEvent event = objectMapper.readValue(payload, CommentCreatedEvent.class);
+        // A reply is news for the person being replied to, not for the video's owner — who
+        // already heard about the thread when it started. replyToUserId covers events from a
+        // producer older than parentAuthorId, which only knew the author of a nested target.
+        Long repliedTo = event.parentAuthorId() != null ? event.parentAuthorId() : event.replyToUserId();
 
         idempotentEventProcessor.runOnce(event.eventId(), event.getClass().getSimpleName(), () -> {
-            // A reply is news for the person being replied to, not for the video's owner — who
-            // already heard about the thread when it started. replyToUserId covers events from a
-            // producer older than parentAuthorId, which only knew the author of a nested target.
-            Long repliedTo = event.parentAuthorId() != null ? event.parentAuthorId() : event.replyToUserId();
             if (repliedTo != null) {
                 notify(repliedTo, event.userId(), NotificationType.COMMENT,
                         "New reply", event.content(),
@@ -101,6 +111,38 @@ public class InteractionEventConsumer {
             notifyVideoOwner(event.videoId(), event.userId(), NotificationType.COMMENT,
                     "New comment", event.content());
         });
+
+        notifyMentioned(event, repliedTo);
+    }
+
+    /**
+     * Everyone the comment tags, as a {@code COMMENT} titled {@link #MENTION_TITLE} — not a type of
+     * its own: the mobile app parses the type into an enum with no fallback and would fail its
+     * whole inbox. The web keys "mentioned you in a comment" on the title, as it keys the
+     * new-device notice on SYSTEM's reference.
+     *
+     * <p>One claim per recipient, after the comment's own: a lookup that fails redelivers the
+     * event, and the claims already taken keep anyone from hearing it twice. Whoever the comment
+     * itself was addressed to already heard about it.
+     */
+    private void notifyMentioned(CommentCreatedEvent event, Long repliedTo) {
+        List<String> handles = CommentMentions.handlesIn(event.content());
+        if (handles.isEmpty()) {
+            return;
+        }
+        Collection<Long> tagged = userHandleClient.idsByUsername(handles).values();
+        if (tagged.isEmpty()) {
+            return;
+        }
+        Long alreadyTold = repliedTo != null ? repliedTo : videoOwnerClient.ownerOf(String.valueOf(event.videoId()));
+        for (Long recipientId : Set.copyOf(tagged)) {
+            if (recipientId.equals(alreadyTold)) {
+                continue;
+            }
+            idempotentEventProcessor.runOnce(event.eventId() + ":mention:" + recipientId, MENTION_EVENT_TYPE, () ->
+                    notify(recipientId, event.userId(), NotificationType.COMMENT, MENTION_TITLE,
+                            event.content(), String.valueOf(event.videoId())));
+        }
     }
 
     /**

@@ -74,7 +74,9 @@ public interface CommentService {
      * first, held ones included and marked HELD, narrowed by {@code filter}. Comments posted before
      * the inbox existed are not in it — except narrowed to one video, which reads that video's own
      * comments and refuses a video the owner does not own (fails closed, like {@link #listHeld}).
-     * A cursor belongs to the filter it was issued under.
+     * A cursor belongs to the filter it was issued under. With a video, the filter may also rank
+     * (most liked, most replied), keep only answered or unanswered threads, or keep only authors in
+     * a follower-count range — then the video is read whole, up to a cap, and paged by offset.
      */
     CommentPageResponse listForOwner(Long ownerId, CommentInboxFilter filter, String cursor, int size);
 

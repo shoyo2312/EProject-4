@@ -102,6 +102,20 @@ class UserProfileControllerTest {
                 Map.of(JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS, "role", "ADMIN"), 60_000L);
     }
 
+    /** Handle → id is for notification-service only: a user token is not an internal caller. */
+    @Test
+    void idsByUsername_answersAnInternalCaller_andRefusesAUserToken() throws Exception {
+        when(userProfileService.idsByUsername(List.of("alice", "bob"))).thenReturn(Map.of("alice", 1L));
+
+        mockMvc.perform(get("/api/v1/users/internal/ids-by-username").param("usernames", "alice,bob")
+                        .header("X-Internal-Token", "internal-token-for-tests-0123456789abcdef"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.alice").value(1));
+        mockMvc.perform(get("/api/v1/users/internal/ids-by-username").param("usernames", "alice")
+                        .header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+    }
+
     /** The admin batch names closed accounts, so it is the console's alone. */
     @Test
     void adminBatch_answersAnAdmin_andRefusesEveryoneElse() throws Exception {

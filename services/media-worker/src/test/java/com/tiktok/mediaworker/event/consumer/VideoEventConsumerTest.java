@@ -15,6 +15,7 @@ import com.tiktok.mediaworker.service.TranscodeService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -88,16 +90,40 @@ class VideoEventConsumerTest {
                 && event.textVerdict() == ModerationVerdict.REVIEW));
     }
 
-    /** A failed transcode wrote nothing public, so there is nothing to hold. */
+    /**
+     * Nothing has cleared a fresh transcode, so its output is held from before it is written:
+     * the publication's id is guessable and the bucket serves those prefixes to anyone.
+     */
     @Test
-    void onMessage_failedTranscode_leavesTheQuarantineAlone() throws Exception {
-        VideoPublishedEvent published = VideoPublishedEvent.of("vid8", 1L, "t", null, "s3://raw/vid8.mp4", "PUBLIC", List.of());
-        when(transcodeService.transcode("vid8", "s3://raw/vid8.mp4"))
-                .thenThrow(new MediaRejectedException("not a video"));
+    void onMessage_transcode_holdsItsOutputUntilAVerdict() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid7", 1L, "t", null, "s3://raw/vid7.mp4", "PUBLIC", List.of());
+        when(transcodeService.transcode("vid7", "s3://raw/vid7.mp4"))
+                .thenReturn(new TranscodeResult("t.jpg", null, "m.mp4", 3, 1, 1));
 
         consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
 
-        verifyNoInteractions(quarantine);
+        InOrder order = inOrder(quarantine, transcodeService, eventProducer);
+        order.verify(quarantine).hold("vid7", MediaQuarantineService.Hold.PENDING);
+        order.verify(transcodeService).transcode("vid7", "s3://raw/vid7.mp4");
+        order.verify(quarantine).enforce("vid7");
+        order.verify(eventProducer).publish(argThat(VideoTranscodedEvent::success));
+    }
+
+    /**
+     * A transcode that fails part-way has already written some of its output, and a FAILED video
+     * is never moderated, so whatever it wrote has to go under quarantine too.
+     */
+    @Test
+    void onMessage_failedTranscode_keepsWhatItWroteOffThePublicPath() throws Exception {
+        VideoPublishedEvent published = VideoPublishedEvent.of("vid8", 1L, "t", null, "s3://raw/vid8.mp4", "PUBLIC", List.of());
+        when(transcodeService.transcode("vid8", "s3://raw/vid8.mp4"))
+                .thenThrow(new IllegalStateException("thumbnail upload failed"));
+
+        consumer().onMessage(objectMapper.writeValueAsString(published), header("VideoPublishedEvent"));
+
+        InOrder order = inOrder(quarantine, eventProducer);
+        order.verify(quarantine).enforce("vid8");
+        order.verify(eventProducer).publish(argThat(event -> !event.success()));
     }
 
     /**

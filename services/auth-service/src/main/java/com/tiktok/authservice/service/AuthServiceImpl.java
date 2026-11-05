@@ -63,11 +63,15 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
+
+    /** What a sign-in with no password to check is verified against, at the cost real hashes have. */
+    private static final String NO_ACCOUNT_HASH = HashUtils.bcryptHash(UUID.randomUUID().toString());
 
     private static final String CLAIM_JTI = "jti";
     private static final String PURPOSE_EMAIL_VERIFICATION = "email-verification";
@@ -218,14 +222,20 @@ public class AuthServiceImpl implements AuthService {
         // bcrypt verification per attempt — the work an attacker would otherwise get for free.
         // A closed account checks its password like an open one: what happened to it is told only
         // to someone who proved they may open it, further down.
+        // bcrypt runs for every attempt, against a stand-in hash when there is no password to check:
+        // the answer is the same for an unknown name and a wrong password, and skipping the ~100ms
+        // verification made the clock say which names are real.
+        String passwordHash = user == null ? null : user.getPasswordHash();
+        boolean matches = HashUtils.bcryptMatches(request.password(),
+                passwordHash != null ? passwordHash : NO_ACCOUNT_HASH);
         boolean valid = user != null
                 && (user.getStatus() == UserStatus.ACTIVE || user.getStatus() == UserStatus.DEACTIVATED)
                 // An account created by a social login has no password to match. Stated rather
                 // than left to bcrypt — which does answer false for a null hash, after logging a
                 // warning about it on every attempt — because "there is no password" is a fact
                 // about the account, not an encoder edge case.
-                && user.getPasswordHash() != null
-                && HashUtils.bcryptMatches(request.password(), user.getPasswordHash());
+                && passwordHash != null
+                && matches;
 
         if (!valid) {
             // Null for an identifier matching no account, which the recorder drops: an attempt
@@ -327,12 +337,12 @@ public class AuthServiceImpl implements AuthService {
                 .filter(u -> !u.isDeleted() && u.getStatus() == UserStatus.ACTIVE)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        return tokenIssuer.reissue(user);
+        return tokenIssuer.reissue(user, storedToken.getFamilyId());
     }
 
     /**
-     * Rejects a token whose successor was already handed out, ending every session for the user
-     * if the timing says theft rather than a retry.
+     * Rejects a token whose successor was already handed out, ending its chain if the timing says
+     * theft rather than a retry.
      *
      * <p>Two parties holding one chain is indistinguishable from one party asking twice: a mobile
      * client that double-submits, or retries after a response is lost in flight, presents exactly
@@ -340,15 +350,26 @@ public class AuthServiceImpl implements AuthService {
      * still in flight; the victim's own client only refreshes when its access token runs out,
      * fifteen minutes later, and an attacker walking a stolen chain is later still. So inside the
      * grace window the loser is simply rejected — it will retry the refresh and get a fresh chain
-     * — and outside it, every session for the user dies and both sides re-authenticate.
+     * — and outside it the chain dies and both sides re-authenticate.
+     *
+     * <p>Only the chain — the family of tokens descended from that one sign-in — because the
+     * user's other sign-ins never shared it: ending every session let one stale tab or one lost
+     * response sign the user out of every device. A row from before families existed carries
+     * none, so it still ends every session.
      *
      * <p>Returned rather than thrown so the call sites read as {@code throw rejectAsReplay(...)},
      * which keeps the compiler aware that control does not continue past them.
      */
     private RuntimeException rejectAsReplay(RefreshToken token, Instant now) {
         if (token.wasRotatedBefore(now.minusMillis(jwtProperties.rotationGraceMillis()))) {
-            log.warn("Refresh token replay detected for user {} — revoking all sessions", token.getUserId());
-            sessionRevoker.revokeAllSessions(token.getUserId());
+            if (token.getFamilyId() != null) {
+                log.warn("Refresh token replay detected for user {} — revoking family {}",
+                        token.getUserId(), token.getFamilyId());
+                sessionRevoker.revokeFamily(token.getFamilyId());
+            } else {
+                log.warn("Refresh token replay detected for user {} — revoking all sessions", token.getUserId());
+                sessionRevoker.revokeAllSessions(token.getUserId());
+            }
             securityEventRecorder.record(token.getUserId(), SecurityEventType.SESSIONS_REVOKED,
                     "refresh token replay detected");
         }

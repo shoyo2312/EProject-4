@@ -36,6 +36,9 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
     /** How many of an owner's videos are pinned, for the limit of three. */
     long countByUserIdAndPinnedAtIsNotNullAndDeletedAtIsNull(Long userId);
 
+    /** Pins placed before this instant — the ones a pin made at it has to fit behind. */
+    long countByUserIdAndPinnedAtBeforeAndDeletedAtIsNull(Long userId, Instant pinnedAt);
+
     /**
      * Someone else's listing. Carries the same status+visibility filter the feed applies in
      * {@link VideoRepositoryCustom#findFeedPage}, because this endpoint is reachable without a

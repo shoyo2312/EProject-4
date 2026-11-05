@@ -105,12 +105,12 @@ public class VideoEventConsumer {
             log.info("Video {} was already transcoded, skipping the redelivered publication", event.videoId());
             return;
         }
+        // Nothing has cleared this video yet, and its id is guessable: the output waits under
+        // quarantine for the verdict (VideoModerationConsumer lifts it). The marker goes first so
+        // the enforce below moves whatever the transcode wrote, a partial output included.
+        quarantine.hold(event.videoId(), MediaQuarantineService.Hold.PENDING);
         VideoTranscodedEvent result = transcodeWithRetries(event);
-        // A hold that landed while this was encoding had nothing to move yet, and the output
-        // was just written to the public prefixes. Its marker is still there, so finish its job.
-        if (result.success()) {
-            quarantine.enforce(event.videoId());
-        }
+        quarantine.enforce(event.videoId());
         eventProducer.publish(result);
         transcodeService.recordTranscoded(event.videoId());
     }

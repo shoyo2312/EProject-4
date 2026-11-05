@@ -62,6 +62,9 @@ public class VideoModerationConsumer {
         if (verdict.verdict() != ModerationVerdict.APPROVED) {
             quarantine.hold(event.videoId(), MediaQuarantineService.Hold.MODERATION);
         }
+        // The transcode held the media until now; on APPROVED this is what makes it playable,
+        // so it too runs before the verdict that turns the video PUBLISHED goes out.
+        quarantine.release(event.videoId(), MediaQuarantineService.Hold.PENDING);
         eventProducer.publish(verdict);
     }
 }

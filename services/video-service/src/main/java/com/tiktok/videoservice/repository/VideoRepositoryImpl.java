@@ -138,6 +138,13 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         Sort sort = field.equals("createdAt")
                 ? Sort.by(direction, "createdAt", "_id")
                 : Sort.by(direction, field, "createdAt", "_id");
+        // The default view leads with pinned videos, latest pin first, as the profile does: pinning
+        // from the ⋯ menu moves the row to the top. A missing pinnedAt sorts lowest, so DESC leaves
+        // unpinned videos after them. NEWEST is that view whether named or not; oldest first and
+        // a column the owner picks are that order alone.
+        if (field.equals("createdAt") && direction == Sort.Direction.DESC) {
+            sort = Sort.by(Sort.Direction.DESC, "pinnedAt").and(sort);
+        }
         Query query = Query.query(criteria)
                 .with(PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort));
         List<Video> videos = mongoTemplate.find(query, Video.class);

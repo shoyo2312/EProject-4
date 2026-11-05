@@ -251,7 +251,7 @@ Không có lỗi `USER_NOT_FOUND` — `userId` không tồn tại chỉ trả v�
 | `views` / `likes` / `comments` | `UNDER_1K` (<1.000), `FROM_1K_TO_10K`, `FROM_10K_TO_100K`, `OVER_100K` (≥100.000), có thể nhiều giá trị | số đếm nằm trong **một trong** các khoảng; cận dưới tính, cận trên không tính |
 | `q` | chuỗi | có trong tiêu đề **hoặc** mô tả, không phân biệt hoa thường (có phân biệt dấu); tối đa 100 ký tự, quá → 400 |
 | `sort` | `NEWEST` (mặc định), `VIEWS`, `LIKES`, `COMMENTS` | cột để sắp xếp; trùng số thì xếp tiếp theo ngày tạo |
-| `order` | `DESC` (mặc định), `ASC` | chiều sắp xếp — `sort=NEWEST&order=ASC` là cũ nhất trước |
+| `order` | `DESC` (mặc định), `ASC` | chiều sắp xếp — `sort=NEWEST&order=ASC` là cũ nhất trước. Mới nhất trước (bỏ trống hay `NEWEST`, `DESC`) đưa video ghim lên đầu như trang cá nhân; cũ nhất trước và các cột khác thì không |
 
 Mọi tham số đều tuỳ chọn; các bộ lọc khác nhau áp dụng cùng lúc (AND). Ví dụ `?views=UNDER_1K,OVER_100K&visibility=PUBLIC`. Giá trị enum sai → 400.
 
@@ -290,7 +290,7 @@ Lỗi khác: `NOT_VIDEO_OWNER` (403), `VIDEO_NOT_FOUND` (404), `VALIDATION_ERROR
 ### 3.8c `PATCH /{videoId}/pin` — ghim lên đầu trang cá nhân
 **Bắt buộc token, chỉ chủ video.** Request `{ "pinned": true | false }`. Trả `200 OK`, `data` → `VideoResponse` với `pinnedAt` (thời điểm ghim, `null` khi không ghim). Ghim lại video đang ghim không đổi vị trí của nó.
 
-Tối đa **3** video ghim mỗi tài khoản — ghim cái thứ tư → `PIN_LIMIT_REACHED` (409). Danh sách `GET /users/{userId}` (mục 3.5) xếp video ghim lên đầu (ghim sau đứng trước), rồi mới tới mới nhất.
+Tối đa **3** video ghim mỗi tài khoản — ghim cái thứ tư → `PIN_LIMIT_REACHED` (409), kể cả khi hai lần ghim đến cùng lúc. Chỉ ghim được video `PUBLISHED` và không `PRIVATE` → khác đi là `VIDEO_NOT_PINNABLE` (409); bỏ ghim thì luôn được. Danh sách `GET /users/{userId}` (mục 3.5) xếp video ghim lên đầu (ghim sau đứng trước), rồi mới tới mới nhất.
 
 Lỗi khác: như 3.7.
 

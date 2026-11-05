@@ -21,8 +21,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * Points the admin console at the quarantined copy of a video's media.
  *
  * <p>media-worker moves a video's objects under {@code quarantine/}, outside the bucket's
- * anonymous-read policy, when moderation holds it back (REVIEW or REJECTED), when an admin takes it
- * down, and when its owner deletes it. The URLs stored on the document stop resolving for
+ * anonymous-read policy, while it waits for its moderation verdict, when moderation holds it back
+ * (REVIEW or REJECTED), when an admin takes it down, and when its owner deletes it. The URLs stored on the document stop resolving for
  * everyone. That is the point for viewers and a problem for the moderator who has to watch the
  * video to decide it, so the console, and only the console, gets short-lived signed URLs to the
  * quarantined copies.
@@ -35,9 +35,12 @@ public class QuarantinedMediaUrls {
     /** Must match media-worker's MediaQuarantineService.PREFIX. */
     private static final String PREFIX = "quarantine/";
 
-    /** The statuses media-worker quarantines on. A deletion does too, whatever the status. */
-    private static final Set<VideoStatus> QUARANTINED =
-            Set.of(VideoStatus.PENDING_REVIEW, VideoStatus.REJECTED, VideoStatus.TAKEN_DOWN);
+    /**
+     * The statuses media-worker quarantines on. A deletion does too, whatever the status, and a
+     * fresh transcode waits there for its verdict (PENDING_MODERATION).
+     */
+    private static final Set<VideoStatus> QUARANTINED = Set.of(VideoStatus.PENDING_MODERATION,
+            VideoStatus.PENDING_REVIEW, VideoStatus.REJECTED, VideoStatus.TAKEN_DOWN);
 
     private static final Duration MEMO = Duration.ofSeconds(60);
 
@@ -68,7 +71,7 @@ public class QuarantinedMediaUrls {
      */
     public VideoResponse forOwner(VideoResponse video) {
         return switch (video.status()) {
-            case PENDING_REVIEW -> signedIfMoved(video, true);
+            case PENDING_MODERATION, PENDING_REVIEW -> signedIfMoved(video, true);
             case REJECTED, TAKEN_DOWN -> signedIfMoved(video, false);
             default -> video;
         };

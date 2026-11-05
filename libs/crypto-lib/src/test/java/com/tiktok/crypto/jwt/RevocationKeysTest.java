@@ -44,6 +44,21 @@ class RevocationKeysTest {
     }
 
     @Test
+    void keysOf_andIsRevoked_includeTheTokensFamily() {
+        Claims claims = provider.extractClaims(
+                provider.generateToken("7", Map.of("jti", "abc", "fid", "42"), 60_000));
+
+        assertThat(RevocationKeys.forFamily("42")).isEqualTo("auth:blacklist:family:42");
+        assertThat(RevocationKeys.keysOf(claims))
+                .containsExactly("auth:blacklist:user:7", "auth:blacklist:abc", "auth:blacklist:family:42");
+
+        assertThat(RevocationKeys.isRevoked(claims, java.util.Arrays.asList(null, null, null))).isFalse();
+        assertThat(RevocationKeys.isRevoked(claims, java.util.Arrays.asList(null, null, "1")))
+                .as("a revoked family kills its access tokens")
+                .isTrue();
+    }
+
+    @Test
     void jtiOf_readsTheJtiClaim() {
         Claims claims = provider.extractClaims(provider.generateToken("7", Map.of("jti", "abc"), 60_000));
 

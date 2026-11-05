@@ -149,13 +149,16 @@ Bucket cho đọc ẩn danh `hls/`, `thumbnails/`, `previews/` (player đi theo 
 
 | Hold | Đặt khi | Gỡ khi |
 |---|---|---|
+| `PENDING` | trước khi transcode (xem "Chờ verdict" dưới) | có verdict, trước khi phát nó |
 | `MODERATION` | verdict không phải `APPROVED` (`REVIEW` lẫn `REJECTED`) — đặt **trước** khi phát verdict | admin duyệt (restore một video không bị takedown) |
 | `TAKEN_DOWN` | `VideoTakenDownEvent` | `VideoRestoredEvent` trên video đang có hold này |
 | `DELETED` | `VideoDeletedEvent` | không bao giờ — chờ purge |
 
 Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown của video đang chờ review thì media vẫn ở quarantine, như video-service trả nó về `PENDING_REVIEW`. Marker cũ `quarantine/markers/{id}` (trước khi có hold) vẫn được tính, và restore gỡ nó. Admin console xem media bị quarantine qua URL ký ngắn hạn (`video-service/QuarantinedMediaUrls`); chủ video cũng nhận URL ký cho video của chính mình đang `PENDING_REVIEW` (trước đây họ vẫn xem được vì media còn public).
 
-**Chưa che:** video `PRIVATE`/`FRIENDS` (media vẫn public theo URL — cần URL ký hoặc CDN signed cookie cho người xem hợp lệ), và khoảng giữa transcode xong và có verdict (`PENDING_MODERATION`, thường vài giây, gồm cả lượt chấm cover ở §2.6): trong lúc đó playback, thumbnail và preview đều public theo URL, chưa ai chấm.
+**Chờ verdict:** `VideoEventConsumer` ghi hold `PENDING` **trước** khi transcode, rồi `enforce` sau transcode — kể cả khi transcode lỗi giữa chừng, nên output dở dang cũng không nằm public. `VideoModerationConsumer` gỡ `PENDING` (`release`) trước khi phát verdict: `APPROVED` thì media ra public ngay trước khi video thành `PUBLISHED`; verdict khác thì hold `MODERATION` đã ghi trước đó giữ nó lại. Video `FAILED` không bao giờ được chấm nên giữ `PENDING` tới lúc purge. Chủ video và console xem video `PENDING_MODERATION` qua URL ký (`QuarantinedMediaUrls`).
+
+**Chưa che:** video `PRIVATE`/`FRIENDS` — media vẫn public theo URL; cần URL ký hoặc CDN signed cookie cho người xem hợp lệ.
 
 ## 6. Bố cục object trong bucket (`MediaKeys`)
 

@@ -24,12 +24,13 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
@@ -49,13 +50,21 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
 
     private final CreatorAnalyticsRepository repository;
 
+    /** The most answers kept; past it the least recently asked goes. */
+    static final int MEMO_MAX_ENTRIES = 10_000;
+
     /**
-     * ponytail: a per-instance memo, one entry per question asked. Nothing evicts — growth is bounded
-     * by creators × days × sorts, and an expired entry only goes when its question is asked again. A
-     * shared cache (Caffeine or Redis) is the upgrade when this runs on more than one instance or that
-     * growth shows in the heap.
+     * ponytail: a per-instance LRU memo, one entry per question asked. The key carries parameters
+     * the caller picks (days, sort, limit), so it is capped rather than left to grow with them. A
+     * shared cache (Redis) is the upgrade when this runs on more than one instance.
      */
-    private final ConcurrentHashMap<List<Object>, Memo> memo = new ConcurrentHashMap<>();
+    private final Map<List<Object>, Memo> memo = Collections.synchronizedMap(
+            new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<List<Object>, Memo> eldest) {
+                    return size() > MEMO_MAX_ENTRIES;
+                }
+            });
 
     private record Memo(Object value, long expiresAtNanos) {
     }

@@ -142,20 +142,32 @@ class StudioPostsTest {
     @Test
     void pinnedVideosLeadTheProfileUpToThree() throws Exception {
         save("fourth", OWNER, "bốn", null, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, "2026-10-06T00:00:00Z");
+        save("third", OWNER, "ba", null, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, "2026-10-07T00:00:00Z");
+        save("fifth", OWNER, "năm", null, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, "2026-10-08T00:00:00Z");
 
         patch("old", "pin", "{\"pinned\":true}").andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.pinnedAt").isNotEmpty());
-        patch("held", "pin", "{\"pinned\":true}").andExpect(status().isOk());
+        patch("fourth", "pin", "{\"pinned\":true}").andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/videos/users/" + OWNER).header("Authorization", "Bearer " + token()))
-                .andExpect(jsonPath("$.data.content[*].id", contains("held", "old", "fourth", "private")));
+                .andExpect(jsonPath("$.data.content[*].id",
+                        contains("fourth", "old", "fifth", "third", "private", "held")));
 
-        patch("private", "pin", "{\"pinned\":true}").andExpect(status().isOk());
-        patch("fourth", "pin", "{\"pinned\":true}").andExpect(status().isConflict())
+        patch("third", "pin", "{\"pinned\":true}").andExpect(status().isOk());
+        patch("fifth", "pin", "{\"pinned\":true}").andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("PIN_LIMIT_REACHED"));
 
         patch("old", "pin", "{\"pinned\":false}").andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.pinnedAt").doesNotExist());
-        patch("fourth", "pin", "{\"pinned\":true}").andExpect(status().isOk());
+        patch("fifth", "pin", "{\"pinned\":true}").andExpect(status().isOk());
+    }
+
+    /** The pin is for the profile: a video waiting for review, or a private one, shows there to nobody else. */
+    @Test
+    void onlyAPublishedVideoThatIsNotPrivateCanBePinned() throws Exception {
+        patch("held", "pin", "{\"pinned\":true}").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("VIDEO_NOT_PINNABLE"));
+        patch("private", "pin", "{\"pinned\":true}").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("VIDEO_NOT_PINNABLE"));
     }
 
     private ResultActions posts(Map<String, String> params) throws Exception {

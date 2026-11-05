@@ -26,6 +26,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 class CreatorAnalyticsServiceImplTest {
@@ -135,6 +136,27 @@ class CreatorAnalyticsServiceImplTest {
         assertThat(service.topVideos(7L, 7, CreatorVideoSort.NEW_VIEWERS, 10))
                 .extracting("videoId", "newViewers")
                 .containsExactly(tuple("b", 4L), tuple("a", 0L));
+    }
+
+    /**
+     * The memo key carries parameters the caller picks, so a signed-in user looping over them
+     * could grow it without end. It is capped: past the cap the oldest answer goes.
+     */
+    @Test
+    void theMemo_dropsTheOldestAnswerPastItsCap() {
+        when(repository.viewers(anyLong(), any(), any())).thenReturn(2L);
+
+        // One load reads two windows, so two calls per load.
+        service.viewers(1L, 7);
+        service.viewers(1L, 7);
+        verify(repository, times(2)).viewers(eq(1L), any(), any());
+
+        for (long creator = 2; creator <= CreatorAnalyticsServiceImpl.MEMO_MAX_ENTRIES + 1; creator++) {
+            service.viewers(creator, 7);
+        }
+        service.viewers(1L, 7);
+
+        verify(repository, times(4)).viewers(eq(1L), any(), any());
     }
 
     @Test

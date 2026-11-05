@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -186,6 +187,23 @@ public class UserProfileServiceImpl implements UserProfileService {
             return List.of();
         }
         return userProfileRepository.searchIds(escapeLike(term), PageRequest.of(0, limit));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<String, Long> idsByUsername(Collection<String> usernames) {
+        Set<String> handles = usernames.stream()
+                .filter(Objects::nonNull)
+                .map(handle -> handle.strip().toLowerCase(java.util.Locale.ROOT))
+                .filter(handle -> !handle.isEmpty())
+                .collect(Collectors.toSet());
+        if (handles.isEmpty()) {
+            return Map.of();
+        }
+        // Lowest id wins a handle two rows still share (see releaseUsername) — same as the single lookup.
+        return userProfileRepository.findLiveByLowerUsernames(handles).stream()
+                .collect(Collectors.toMap(p -> p.getUsername().toLowerCase(java.util.Locale.ROOT),
+                        UserProfile::getUserId, (first, later) -> first));
     }
 
     /** The query is text to find, not a pattern: {@code _} and {@code %} match themselves. */

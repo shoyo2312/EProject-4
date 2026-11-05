@@ -19,6 +19,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.nio.charset.StandardCharsets;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
@@ -77,6 +79,7 @@ class QuarantineRoutingTest {
 
         InOrder order = inOrder(quarantine, moderationProducer);
         order.verify(quarantine).hold("v2", Hold.MODERATION);
+        order.verify(quarantine).release("v2", Hold.PENDING);
         order.verify(moderationProducer).publish(rejected);
     }
 
@@ -112,14 +115,22 @@ class QuarantineRoutingTest {
                 && event.videoId().equals("v5")));
     }
 
+    /**
+     * The transcode held the media until a verdict; an approval releases it before the verdict
+     * goes out, so the video never turns PUBLISHED with nothing for the player to fetch.
+     */
     @Test
-    void approvedVerdict_leavesTheMediaAlone() throws Exception {
-        when(moderationService.moderate("v3", 4)).thenReturn(
-                VideoModerationCompletedEvent.of("v3", ModerationVerdict.APPROVED, "nsfw", 0.1, 0, 10, 5L, "m", "1", null));
+    void approvedVerdict_releasesThePendingHoldBeforeAnnouncingIt() throws Exception {
+        VideoModerationCompletedEvent approved =
+                VideoModerationCompletedEvent.of("v3", ModerationVerdict.APPROVED, "nsfw", 0.1, 0, 10, 5L, "m", "1", null);
+        when(moderationService.moderate("v3", 4)).thenReturn(approved);
 
         moderation().onMessage(json(VideoTranscodedEvent.success("v3", "t", null, "h", 4)));
 
-        verifyNoInteractions(quarantine);
+        InOrder order = inOrder(quarantine, moderationProducer);
+        order.verify(quarantine).release("v3", Hold.PENDING);
+        order.verify(moderationProducer).publish(approved);
+        verify(quarantine, never()).hold(any(), any());
     }
 
     private AdminModerationEventConsumer admin() {

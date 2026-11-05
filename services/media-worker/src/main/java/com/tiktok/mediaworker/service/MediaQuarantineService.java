@@ -48,6 +48,12 @@ public class MediaQuarantineService {
 
     /** Why a video's media is off the public path. */
     public enum Hold {
+        /**
+         * Transcoded, no verdict yet. Written before the transcode so its output never sits on the
+         * public path uncleared; lifted when moderation answers. A FAILED video is never
+         * moderated, so it stays held until the purge.
+         */
+        PENDING,
         /** An admin took the video down. Lifted by a restore. */
         TAKEN_DOWN,
         /** Automatic moderation did not approve it (REVIEW or REJECTED). Lifted by an admin's approval. */
@@ -98,6 +104,20 @@ public class MediaQuarantineService {
             return;
         }
         log.info("Released the media of video {}", videoId);
+    }
+
+    /** Lifts one hold; the media goes public only if nothing else still holds it. */
+    @SneakyThrows
+    public void release(String videoId, Hold hold) {
+        remove(MediaKeys.quarantineHold(videoId, hold.name()));
+        if (isQuarantined(videoId)) {
+            return;
+        }
+        moveOut(videoId);
+        // Same race as restore: a hold that landed mid-move moved what it found then.
+        if (isQuarantined(videoId)) {
+            moveIn(videoId);
+        }
     }
 
     /** For a transcode that has just written its output: put it under quarantine if anything holds it. */

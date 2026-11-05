@@ -427,6 +427,11 @@ Lọc (đều tuỳ chọn, gửi lại **đúng bộ lọc đó** cùng `cursor
 | `status` | `HELD` = chỉ comment chờ duyệt, `VISIBLE` = chỉ comment đang hiện |
 | `q` | nội dung có chứa chuỗi này, **không phân biệt hoa thường và dấu** (`hay qua` khớp `Hay quá`) |
 | `from`, `to` | ISO-8601 instant (vd. `2026-10-01T00:00:00Z`); `from` tính cả, `to` không tính |
+| `sort` | `NEWEST` (mặc định), `MOST_LIKED`, `MOST_REPLIED` — **cần `videoId`** |
+| `replied` | `true` = chỉ thread chủ video đã trả lời, `false` = chỉ thread chưa trả lời — **cần `videoId`**. Với một reply: chủ video đã trả lời đúng người đó trong thread |
+| `followers` | CSV của `UNDER_1K`, `FROM_1K_TO_10K`, `FROM_10K_TO_100K`, `OVER_100K` — chỉ comment của tài khoản có số follower trong một khoảng đó — **cần `videoId`**. Hỏi user-service `/stats/batch`; không hỏi được → `FOLLOWER_COUNT_UNAVAILABLE` (503) |
+
+Có `sort` khác `NEWEST`, `replied` hoặc `followers` thì service đọc **cả video** (tối đa 5.000 comment mới nhất), lọc và xếp trong bộ nhớ, rồi trang theo offset: `nextCursor` khi đó là offset, chỉ dùng được với đúng bộ lọc đó. Không có `videoId` mà gửi một trong ba tham số này → `INBOX_FILTER_NEEDS_VIDEO` (400). Với `followers`, số follower chỉ được hỏi tới đâu trang cần tới đó (mỗi lần 100 tác giả); tác giả không còn profile bị loại.
 
 Trang có thể ít hơn `size` (kể cả rỗng) mà `hasMore` vẫn `true` khi bộ lọc loại nhiều comment: cứ tải tiếp theo `nextCursor`.
 
@@ -452,6 +457,7 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `content` rỗng sau khi làm sạch / quá 150 ký tự (mục 3.4); thiếu `watchedMs`/`durationMs`, `watchedMs` âm, `durationMs` <= 0 (mục 3.9) |
 | `INVALID_COMMENT_CURSOR` | 400 | `cursor` của danh sách comment/reply không giải mã được (mục 3.5, 3.5b) |
+| `INBOX_FILTER_NEEDS_VIDEO` | 400 | `sort`/`replied`/`followers` của inbox Studio gửi mà thiếu `videoId` |
 | `INVALID_CURSOR` | 400 | `cursor` của danh sách video đã like/lưu/repost không giải mã được (mục 3.11, 3.15) |
 | `NOT_COMMENT_OWNER` | 403 | Xoá bình luận của người khác trên video không phải của mình (mục 3.6) |
 | `NOT_VIDEO_OWNER` | 403 | Xem hàng chờ duyệt / duyệt comment trên video không phải của mình — hoặc không xác nhận được chủ video (mục 3.4b–3.4c) |

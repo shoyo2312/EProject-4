@@ -52,6 +52,10 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Query("UPDATE RefreshToken t SET t.revokedAt = :revokedAt WHERE t.userId = :userId AND t.revokedAt IS NULL")
     void revokeAllByUserId(Long userId, Instant revokedAt);
 
+    @Modifying
+    @Query("UPDATE RefreshToken t SET t.revokedAt = :revokedAt WHERE t.familyId = :familyId AND t.revokedAt IS NULL")
+    void revokeFamily(@Param("familyId") Long familyId, @Param("revokedAt") Instant revokedAt);
+
     /**
      * Deletes up to {@code batchSize} rows whose expiry is already behind {@code cutoff},
      * returning how many went.

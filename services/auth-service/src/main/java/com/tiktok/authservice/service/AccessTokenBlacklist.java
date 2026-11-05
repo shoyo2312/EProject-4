@@ -49,6 +49,18 @@ public class AccessTokenBlacklist {
     }
 
     /**
+     * Kills every access token minted from one refresh-token family — the chain a replay was
+     * caught on — while the user's other sign-ins keep theirs. Same TTL reasoning as above: once
+     * the family's refresh tokens are revoked no new token can carry its id.
+     */
+    public void blacklistFamily(Long familyId, Duration ttl) {
+        if (ttl.isNegative() || ttl.isZero()) {
+            return;
+        }
+        write(RevocationKeys.forFamily(familyId), "1", ttl);
+    }
+
+    /**
      * Fails open, like the read side, and for a sharper reason: every caller has already done the
      * thing the revocation accompanies — the password is changed, the account is banned, the
      * replayed refresh chain is revoked in the database. Letting Redis throw here would propagate

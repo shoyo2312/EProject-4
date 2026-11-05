@@ -47,13 +47,25 @@ public class BlockClient {
     private static final ParameterizedTypeReference<ApiResponse<List<StateResponse>>> STATES_TYPE =
             new ParameterizedTypeReference<>() {};
 
-    /** Presentation only: an unavailable or malformed answer is unknown, never an invented block. */
+    /** user-service's limit on {@code otherIds} per call. */
+    private static final int MAX_IDS_PER_CALL = 100;
+
+    /**
+     * Presentation only: an unavailable or malformed answer is unknown, never an invented block.
+     * Asked a hundred ids at a time — user-service refuses more — so a batch that fails leaves only
+     * its own ids unknown.
+     */
     public Map<Long, BlockState> statesOf(Long viewerId, Collection<Long> otherIds) {
+        List<Long> ids = otherIds.stream().distinct().toList();
+        Map<Long, BlockState> result = new LinkedHashMap<>();
+        for (int from = 0; from < ids.size(); from += MAX_IDS_PER_CALL) {
+            result.putAll(statesOfBatch(viewerId, ids.subList(from, Math.min(from + MAX_IDS_PER_CALL, ids.size()))));
+        }
+        return Map.copyOf(result);
+    }
+
+    private Map<Long, BlockState> statesOfBatch(Long viewerId, List<Long> ids) {
         try {
-            if (otherIds.isEmpty()) {
-                return Map.of();
-            }
-            List<Long> ids = otherIds.stream().distinct().toList();
             var response = restClient.get()
                     .uri(uri -> uri.path("/api/v1/users/internal/blocks/states")
                             .queryParam("viewerId", viewerId)

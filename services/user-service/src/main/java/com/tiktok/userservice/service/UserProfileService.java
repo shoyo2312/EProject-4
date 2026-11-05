@@ -6,7 +6,9 @@ import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 public interface UserProfileService {
 
@@ -82,6 +84,13 @@ public interface UserProfileService {
      * search-service matching a video query against authors. Blank query is an empty list.
      */
     List<Long> searchIds(String query, int limit);
+
+    /**
+     * The live accounts behind a batch of handles, keyed by the lowercased handle — how
+     * notification-service finds who a comment's "@handle"s name. Unknown and closed handles are
+     * absent. No viewer rules: the caller applies blocks to whoever it notifies.
+     */
+    Map<String, Long> idsByUsername(Collection<String> usernames);
 
     /**
      * A changed display name is allowed once every 7 days ({@link DisplayNameCooldown}); the bio

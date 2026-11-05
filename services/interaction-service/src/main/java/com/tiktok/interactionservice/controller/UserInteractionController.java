@@ -18,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.Set;
 
 /**
  * A user's interaction history. Likes and saves are "me" only — they are private, and a
@@ -61,7 +62,9 @@ public class UserInteractionController {
      * TikTok Studio's comment inbox: what others said on any of the caller's videos, newest first,
      * the comments held for review among them with {@code status = HELD}. Approve or delete one
      * through the per-video endpoints, with the {@code videoId} each item carries. Every filter is
-     * optional; {@code from} is inclusive, {@code to} exclusive.
+     * optional; {@code from} is inclusive, {@code to} exclusive. {@code sort}, {@code replied} and
+     * {@code followers} need a {@code videoId}: the whole video is read and ranked in memory, and the
+     * cursor then belongs to exactly those filters.
      */
     @GetMapping("/me/comments")
     public ApiResponse<CommentPageResponse> listCommentsOnMyVideos(
@@ -71,10 +74,14 @@ public class UserInteractionController {
             @RequestParam(required = false) String q,
             @RequestParam(required = false) Instant from,
             @RequestParam(required = false) Instant to,
+            @RequestParam(required = false) CommentInboxFilter.Sort sort,
+            @RequestParam(required = false) Boolean replied,
+            @RequestParam(required = false) Set<CommentInboxFilter.FollowerRange> followers,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "20") int size) {
         return ApiResponse.success(commentService.listForOwner(currentUserId,
-                new CommentInboxFilter(videoId, status, q, from, to), cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
+                new CommentInboxFilter(videoId, status, q, from, to, sort, replied, followers),
+                cursor, Math.clamp(size, 1, MAX_PAGE_SIZE)));
     }
 
     /**

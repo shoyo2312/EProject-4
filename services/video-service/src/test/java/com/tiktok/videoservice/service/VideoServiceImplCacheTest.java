@@ -10,7 +10,9 @@ import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.PinLimitReachedException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
+import com.tiktok.videoservice.exception.VideoNotPinnableException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
@@ -363,6 +365,25 @@ class VideoServiceImplCacheTest {
         verify(quarantineClient).statObject(argThat(args -> "quarantine/thumbnails/A.jpg".equals(args.object())));
     }
 
+    /**
+     * media-worker holds a fresh transcode under quarantine until moderation answers, so the
+     * uploader watches it, and the console reviews it, through signed copies until then.
+     */
+    @Test
+    void pendingModeration_isSignedForTheOwnerAndTheConsole() throws Exception {
+        VideoResponse pending = new VideoResponse(
+                "P", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/P.jpg", null,
+                "http://localhost:9000/video-media/hls/P/source.mp4",
+                10, 1080, 1920, VideoStatus.PENDING_MODERATION, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        VideoResponse owners = quarantinedMediaUrls.forOwner(pending);
+        assertThat(owners.thumbnailUrl()).isEqualTo("signed");
+        assertThat(owners.hlsUrl()).as("the owner can still watch what they uploaded").isEqualTo("signed");
+        assertThat(quarantinedMediaUrls.forAdmin(pending).hlsUrl()).isEqualTo("signed");
+    }
+
     /** A Studio page is up to fifty quarantined rows, each a blocking stat: the answer is kept for a while. */
     @Test
     void forOwner_twiceForTheSameVideo_asksMinioOnce() throws Exception {
@@ -376,6 +397,49 @@ class VideoServiceImplCacheTest {
         assertThat(quarantinedMediaUrls.forOwner(rejected).thumbnailUrl()).isEqualTo("signed");
 
         verify(quarantineClient, times(1)).statObject(any());
+    }
+
+    /**
+     * A pin is for the profile, and only a published video that is not private shows there to
+     * anyone else; pinning anything else spent one of the three slots on nothing visible.
+     */
+    @Test
+    void updatePinned_refusesAVideoOthersCannotSee_butAlwaysUnpins() {
+        Video processing = Video.builder().id("A").userId(OWNER).status(VideoStatus.PROCESSING)
+                .visibility(VideoVisibility.PUBLIC).build();
+        Video privateOne = Video.builder().id("B").userId(OWNER).status(VideoStatus.PUBLISHED)
+                .visibility(VideoVisibility.PRIVATE).build();
+        Video pinnedPrivate = Video.builder().id("C").userId(OWNER).status(VideoStatus.PUBLISHED)
+                .visibility(VideoVisibility.PRIVATE).pinnedAt(Instant.now()).build();
+        when(videoRepository.findByIdAndDeletedAtIsNull("A")).thenReturn(Optional.of(processing));
+        when(videoRepository.findByIdAndDeletedAtIsNull("B")).thenReturn(Optional.of(privateOne));
+        when(videoRepository.findByIdAndDeletedAtIsNull("C")).thenReturn(Optional.of(pinnedPrivate));
+        when(videoMapper.toResponse(any(Video.class))).thenReturn(publicVideo("C"));
+
+        assertThatThrownBy(() -> videoService.updatePinned(OWNER, "A", true)).isInstanceOf(VideoNotPinnableException.class);
+        assertThatThrownBy(() -> videoService.updatePinned(OWNER, "B", true)).isInstanceOf(VideoNotPinnableException.class);
+
+        videoService.updatePinned(OWNER, "C", false);
+        assertThat(pinnedPrivate.getPinnedAt()).as("a pin left from before can always be taken off").isNull();
+    }
+
+    /**
+     * Two pins at once both passed the count and left four pinned. Whichever was pinned later
+     * sees three before it once both are written, and takes itself back off.
+     */
+    @Test
+    void updatePinned_racingAnotherPin_backsOutTheLaterOne() {
+        Video video = Video.builder().id("A").userId(OWNER).status(VideoStatus.PUBLISHED)
+                .visibility(VideoVisibility.PUBLIC).build();
+        when(videoRepository.findByIdAndDeletedAtIsNull("A")).thenReturn(Optional.of(video));
+        when(videoRepository.countByUserIdAndPinnedAtIsNotNullAndDeletedAtIsNull(OWNER)).thenReturn(2L);
+        when(videoRepository.countByUserIdAndPinnedAtBeforeAndDeletedAtIsNull(any(), any())).thenReturn(3L);
+
+        assertThatThrownBy(() -> videoService.updatePinned(OWNER, "A", true))
+                .isInstanceOf(PinLimitReachedException.class);
+
+        assertThat(video.getPinnedAt()).isNull();
+        verify(videoRepository, times(2)).updatePinned(video);
     }
 
     /**

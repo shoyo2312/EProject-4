@@ -152,7 +152,7 @@ Hai luật rút ra cho Flutter, sai là user bị logout hàng loạt:
 1. **Single-flight**: chỉ được có **đúng 1** request `/refresh` chạy tại một thời điểm. Nhiều request 401 song song phải cùng chờ chung 1 Future refresh (Dio interceptor + lock/`Completer`), không được mỗi request tự gọi `/refresh` bằng token cũ.
 2. **Ghi token mới trước khi retry**: lưu cặp token mới vào secure storage **rồi** mới phát lại các request đang chờ. Đừng retry với token cũ còn nằm trong biến/bộ nhớ.
 
-Không được retry `/refresh` sau khi đã nhận `401` — lần thử thứ hai nằm ngoài grace window sẽ kích hoạt replay detection và giết phiên trên mọi thiết bị của user.
+Không được retry `/refresh` sau khi đã nhận `401` — lần thử thứ hai nằm ngoài grace window sẽ kích hoạt replay detection và giết chain của lần đăng nhập đó (thiết bị này phải đăng nhập lại; thiết bị khác không bị ảnh hưởng).
 
 ### 3.4 `POST /logout`
 Header `Authorization: Bearer <accessToken>` (optional nhưng nên gửi để access token bị blacklist ngay lập tức thay vì chờ hết hạn). Trả `204 No Content` (không có body).
@@ -431,10 +431,10 @@ Thành công: mọi phiên của tài khoản bị huỷ (như ban), kể cả p
 
 1. `register` → `verify-email` (OTP 6 số gửi qua mail) → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext). Bỏ qua bước verify thì `login` trả `403 EMAIL_NOT_VERIFIED`. Luồng web thì khác: `register/start` → `register/verify` → `register/complete` (mục 3.13–3.15), bước cuối trả token luôn.
 2. Mọi request tới các service khác qua gateway: gắn header `Authorization: Bearer <accessToken>`.
-3. Access token sống **15 phút**. Khi API trả `401`, gọi `/refresh` bằng `refreshToken` **đúng một lần, và chỉ một request tại một thời điểm** (xem luật single-flight ở mục 3.3); nếu `/refresh` lỗi (`INVALID_REFRESH_TOKEN`) → xoá token, điều hướng về màn hình login. **Không retry `/refresh`** — lần thử thứ hai bị coi là replay và giết phiên trên mọi thiết bị.
+3. Access token sống **15 phút**. Khi API trả `401`, gọi `/refresh` bằng `refreshToken` **đúng một lần, và chỉ một request tại một thời điểm** (xem luật single-flight ở mục 3.3); nếu `/refresh` lỗi (`INVALID_REFRESH_TOKEN`) → xoá token, điều hướng về màn hình login. **Không retry `/refresh`** — lần thử thứ hai bị coi là replay và giết chain của lần đăng nhập đó.
 4. Refresh token sống **7 ngày** (`604800000ms`) nhưng **xoay mỗi lần dùng**: mỗi `/refresh` thành công trả về refresh token mới, phải ghi đè token cũ ngay. Nên chủ động refresh khi app resume nếu access token gần hết hạn, tránh chờ 401 (giảm giật UI).
 5. Logout: gọi `/logout` với access token hiện có + refresh token, rồi xoá token local. Việc gọi API logout quan trọng vì nó blacklist access token trên server (Redis) — nếu chỉ xoá local, token cũ (nếu bị lộ) vẫn dùng được tới khi tự hết hạn. Logout chỉ giết **phiên hiện tại**; các thiết bị khác vẫn đăng nhập bình thường.
-6. Có 2 trường hợp server giết **toàn bộ** phiên của user, app đang chạy sẽ đột ngột nhận `401` ở mọi request và `/refresh` cũng hỏng: reset password (mục 3.9) và replay detection (mục 3.3). Interceptor phải xử lý được tình huống này — xoá token, về màn hình login — chứ không loop retry.
+6. Có 2 trường hợp server giết phiên đang chạy, app sẽ đột ngột nhận `401` ở mọi request và `/refresh` cũng hỏng: reset password (mục 3.9, mọi thiết bị) và replay detection (mục 3.3, chỉ chain của lần đăng nhập bị trình lại). Interceptor phải xử lý được tình huống này — xoá token, về màn hình login — chứ không loop retry.
 
 Khuyến nghị dùng interceptor (Dio) để tự động gắn header và refresh-on-401, tránh lặp code ở từng repository. Interceptor bắt buộc phải có cơ chế khoá (single-flight) cho `/refresh`.
 
@@ -456,7 +456,7 @@ ACTIVE, LOCKED, BANNED, DEACTIVATED   // DEACTIVATED: chủ tự đóng, mục 3
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Body không đúng ràng buộc (`@NotBlank`, `@Email`, `@Size`...) |
 | `INVALID_CREDENTIALS` | 401 | Sai username/email hoặc password khi login |
-| `INVALID_REFRESH_TOKEN` | 401 | Refresh token sai/hết hạn/**đã bị xoay** ở lần `/refresh` trước (xem mục 3.3 — trình lại token đã xoay còn kích hoạt replay detection, giết mọi phiên) |
+| `INVALID_REFRESH_TOKEN` | 401 | Refresh token sai/hết hạn/**đã bị xoay** ở lần `/refresh` trước (xem mục 3.3 — trình lại token đã xoay còn kích hoạt replay detection, giết chain của lần đăng nhập đó) |
 | `EMAIL_NOT_VERIFIED` | 403 | Mật khẩu đúng nhưng email chưa xác thực → điều hướng sang màn hình nhập OTP, KHÔNG gộp với `INVALID_CREDENTIALS` |
 | `MFA_REQUIRED` | 401 | Tài khoản ADMIN, mật khẩu đúng, thiết bị chưa được ghi nhớ — OTP đã gửi qua email, tiếp tục ở `/login/otp` (mục 3.17) |
 | `SOCIAL_SIGN_IN_NOT_ALLOWED` | 403 | Đăng nhập Google/Facebook vào tài khoản ADMIN (mục 3.10) |
