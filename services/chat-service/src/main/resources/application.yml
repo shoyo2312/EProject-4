@@ -35,9 +35,10 @@ spring:
       # One thread per @Scheduled method: the two counter flushers, which can block on a
       # downstream read, the session sweep and AdminFanout's flush. On the default pool of one they
       # take turns, and a slow interaction-service stalls the profile stats, the video counters and
-      # the admin consoles' refresh along with it.
+      # the admin consoles' refresh along with it. The sticker-suggestion refresh is a fifth: it
+      # makes a GIPHY call per topic and must not hold up the others.
       pool:
-        size: 4
+        size: 5
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
