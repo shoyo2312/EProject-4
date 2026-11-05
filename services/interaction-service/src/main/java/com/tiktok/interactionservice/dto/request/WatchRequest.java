@@ -3,7 +3,6 @@ package com.tiktok.interactionservice.dto.request;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.PositiveOrZero;
-import jakarta.validation.constraints.Size;
 
 /**
  * How much of the video the player actually played, reported once the session ends — the client
@@ -24,7 +23,7 @@ public record WatchRequest(
         @NotNull @PositiveOrZero Long watchedMs,
         @NotNull @Positive Long durationMs,
         WatchSource source,
-        @Size(max = 100) String searchQuery
+        String searchQuery
 ) {
 
     public WatchRequest(Long watchedMs, Long durationMs) {

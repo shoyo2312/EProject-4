@@ -210,6 +210,13 @@ class ViewServiceImplWatchTest {
     }
 
     @Test
+    void anOverlongQueryIsDroppedNotRefused() {
+        viewService().recordWatch(7L, 1L, new WatchRequest(5_000L, 10_000L, WatchSource.SEARCH, "x".repeat(101)));
+
+        verify(eventPublisher).publishWatch(7L, 1L, 5_000L, 10_000L, false, "SEARCH", "");
+    }
+
+    @Test
     void aBlankQueryIsDropped() {
         viewService().recordWatch(7L, 1L, new WatchRequest(5_000L, 10_000L, WatchSource.SEARCH, "   "));
 

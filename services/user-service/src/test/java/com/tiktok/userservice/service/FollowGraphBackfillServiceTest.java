@@ -10,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -19,6 +20,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -52,6 +54,12 @@ class FollowGraphBackfillServiceTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    /** Well after every edge the tests make. */
+    private static final Instant LATER = Instant.now().plusSeconds(3600);
+
     @BeforeEach
     void setUp() {
         outboxEventRepository.deleteAll();
@@ -71,7 +79,7 @@ class FollowGraphBackfillServiceTest {
         gone.markDeleted();
         userFollowRepository.save(gone);
 
-        long published = backfill.publishAll();
+        long published = backfill.publishAll(LATER);
 
         assertThat(published).isEqualTo(2);
         List<OutboxEvent> rows = outboxEventRepository.findAll();
@@ -99,12 +107,27 @@ class FollowGraphBackfillServiceTest {
         edge(1L, 2L);
         edge(3L, 2L);
 
-        backfill.publishAll();
+        backfill.publishAll(LATER);
         List<String> firstRun = outboxEventRepository.findAll().stream().map(OutboxEvent::getPayload).sorted().toList();
         outboxEventRepository.deleteAll();
-        backfill.publishAll();
+        backfill.publishAll(LATER);
         List<String> secondRun = outboxEventRepository.findAll().stream().map(OutboxEvent::getPayload).sorted().toList();
 
         assertThat(secondRun).isEqualTo(firstRun);
+    }
+
+    /** An edge from after the consumer shipped already has its live row; replaying it would count it twice. */
+    @Test
+    void edgesFromAfterTheCutoffAreLeftAlone() {
+        UserFollow old = edge(1L, 2L);
+        UserFollow recent = edge(3L, 2L);
+        Instant cutoff = Instant.parse("2026-10-23T00:00:00Z");
+        jdbcTemplate.update("UPDATE user_follows SET created_at = ? WHERE id = ?",
+                java.sql.Timestamp.from(cutoff.minusSeconds(1)), old.getId());
+
+        assertThat(backfill.publishAll(cutoff)).isEqualTo(1);
+        assertThat(outboxEventRepository.findAll()).singleElement()
+                .satisfies(row -> assertThat(row.getPayload()).contains("backfill-follow-" + old.getId())
+                        .doesNotContain("backfill-follow-" + recent.getId()));
     }
 }

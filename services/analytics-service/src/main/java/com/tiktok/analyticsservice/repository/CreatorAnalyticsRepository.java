@@ -136,27 +136,29 @@ public class CreatorAnalyticsRepository {
     }
 
     /**
-     * Follows the video brought in, gross: a follow later undone still counts, the way TikTok's "new
-     * followers" on a video does. The unfollow carries no source, so it cannot be subtracted anyway.
+     * Follows of {@code ownerId} the video brought in, gross: a follow later undone still counts,
+     * the way TikTok's "new followers" on a video does. The unfollow carries no source, so it
+     * cannot be subtracted anyway. Scoped to the owner because the source is the client's word: a
+     * follow of someone else naming this video must not be credited to it.
      */
-    public long followsFromVideo(String videoId, Instant from, Instant to) {
+    public long followsFromVideo(long ownerId, String videoId, Instant from, Instant to) {
         return jdbcTemplate.queryForObject(
-                "SELECT countIf(followed = 1) FROM follow_events FINAL WHERE source_video_id = ? AND %s"
+                "SELECT countIf(followed = 1) FROM follow_events FINAL WHERE following_id = ? AND source_video_id = ? AND %s"
                         .formatted(IN_WINDOW),
-                Long.class, videoId, from.toEpochMilli(), to.toEpochMilli());
+                Long.class, ownerId, videoId, from.toEpochMilli(), to.toEpochMilli());
     }
 
     /** {@link #followsFromVideo} by day; {@code lost} is always 0. */
-    public List<DailyFollows> dailyFollowsFromVideo(String videoId, Instant from, Instant to) {
+    public List<DailyFollows> dailyFollowsFromVideo(long ownerId, String videoId, Instant from, Instant to) {
         return jdbcTemplate.query(
                 """
                 SELECT toString(toDate(occurred_at, '%s')) AS day, countIf(followed = 1) AS gained
                 FROM follow_events FINAL
-                WHERE source_video_id = ? AND %s
+                WHERE following_id = ? AND source_video_id = ? AND %s
                 GROUP BY day
                 """.formatted(ZONE, IN_WINDOW),
                 (rs, i) -> new DailyFollows(LocalDate.parse(rs.getString("day")), rs.getLong("gained"), 0),
-                videoId, from.toEpochMilli(), to.toEpochMilli());
+                ownerId, videoId, from.toEpochMilli(), to.toEpochMilli());
     }
 
     /** Where one video's views in the window came from, busiest surface first; surfaces with no views are left out. */
@@ -174,22 +176,24 @@ public class CreatorAnalyticsRepository {
     }
 
     /**
-     * What viewers searched to find the video, most viewed first. A query under {@code minViews}
-     * is left out: with one or two views it names the viewer more than the audience.
+     * What viewers searched to find the video, most viewed first. A query searched by fewer than
+     * {@code minViewers} distinct people is left out: one person's phrase, however often they
+     * replayed, names them more than the audience.
      */
-    public List<SearchQueryResponse> searchQueries(String videoId, Instant from, Instant to, int minViews, int limit) {
+    public List<SearchQueryResponse> searchQueries(String videoId, Instant from, Instant to, int minViewers,
+                                                   int limit) {
         return jdbcTemplate.query(
                 """
-                SELECT search_query, count() AS views
+                SELECT search_query, count() AS views, uniqExact(user_id) AS viewers
                 FROM watch_events FINAL
                 WHERE video_id = ? AND %s AND source = 'SEARCH' AND search_query != ''
                 GROUP BY search_query
-                HAVING views >= ?
+                HAVING viewers >= ?
                 ORDER BY views DESC, search_query
                 LIMIT ?
                 """.formatted(IN_WINDOW),
                 (rs, i) -> new SearchQueryResponse(rs.getString("search_query"), rs.getLong("views")),
-                videoId, from.toEpochMilli(), to.toEpochMilli(), minViews, limit);
+                videoId, from.toEpochMilli(), to.toEpochMilli(), minViewers, limit);
     }
 
     /** One row per video watched in the window. {@code user_id > 0} keeps anonymous playback out of viewers. */
@@ -342,7 +346,7 @@ public class CreatorAnalyticsRepository {
         Map<String, Long> groups = new HashMap<>();
         jdbcTemplate.query(
                 """
-                SELECT multiIf(isNull(years), 'UNKNOWN',
+                SELECT multiIf(isNull(years) OR years < 13, 'UNKNOWN',
                                years < 18, '13-17',
                                years < 25, '18-24',
                                years < 35, '25-34',

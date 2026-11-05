@@ -319,7 +319,7 @@ Request (`WatchRequest`):
   "watchedMs": 12500,    // bắt buộc, >= 0. Tổng thời gian ĐÃ PHÁT trong phiên, cộng dồn cả các lần lặp lại
   "durationMs": 15000,   // bắt buộc, > 0. Độ dài video theo player — chỉ là tham khảo, xem bên dưới
   "source": "SEARCH",    // tuỳ chọn — màn hình đang phát video, xem bên dưới
-  "searchQuery": "tiny house" // tuỳ chọn, ≤ 100 ký tự — từ khoá đã tìm; chỉ có nghĩa khi source = SEARCH
+  "searchQuery": "tiny house" // tuỳ chọn — từ khoá đã tìm; chỉ có nghĩa khi source = SEARCH; dài quá 100 ký tự thì bị bỏ (không 400)
 }
 ```
 

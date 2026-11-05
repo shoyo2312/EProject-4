@@ -38,6 +38,8 @@ public class ViewServiceImpl implements ViewService {
      * would teach the ranker that finishing is rare when it is not.
      */
     private static final double COMPLETION_RATIO = 0.9;
+    /** A search phrase longer than this is kept out of analytics rather than failing the watch. */
+    static final int MAX_QUERY_LENGTH = 100;
 
     /**
      * The longest video this platform will play. durationMs is the client's number too, so
@@ -123,11 +125,15 @@ public class ViewServiceImpl implements ViewService {
         boolean completed = watchedMs >= durationMs * COMPLETION_RATIO;
 
         // Where the view came from is the client's word; a report without one is OTHER. The
-        // query is only meaningful for a search, so it is dropped with any other source.
+        // query is only meaningful for a search, so it is dropped with any other source — and
+        // dropped, not refused, when too long: the watch itself is the ranker's label and must land.
         String source = request.source() == null ? "OTHER" : request.source().name();
         String query = request.source() == WatchSource.SEARCH && request.searchQuery() != null
                 ? request.searchQuery().strip().toLowerCase(Locale.ROOT)
                 : "";
+        if (query.length() > MAX_QUERY_LENGTH) {
+            query = "";
+        }
 
         rateLimiter.require("watch-rate", videoId, currentUserId, WatchRateLimitedException::new);
         eventPublisher.publishWatch(videoId, currentUserId, watchedMs, durationMs, completed, source, query);

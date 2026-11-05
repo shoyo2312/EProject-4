@@ -242,7 +242,9 @@ analytics-service bản có topic `user.follow-backfill-events`, và sau mỗi l
 `follow_events.native`:
 
 ```bash
-curl -X POST http://user-service:8082/api/v1/users/internal/follow-backfill \
+# before = lúc analytics-service bắt đầu đọc user.follow-events; follow từ đó đã có dòng riêng,
+# phát lại sẽ đếm đôi. Restore seed cũ hơn thì truyền mốc của bản seed đó.
+curl -X POST "http://user-service:8082/api/v1/users/internal/follow-backfill?before=2026-10-23T00:00:00Z" \
   -H "X-Internal-Token: $INTERNAL_API_TOKEN"
 # → {"success":true,"data":{"published":12345}}
 ```

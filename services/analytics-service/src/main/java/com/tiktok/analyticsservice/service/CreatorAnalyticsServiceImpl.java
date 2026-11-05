@@ -90,8 +90,8 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
      */
     private final long minAudience;
 
-    /** Views a search query needs before the video page lists it; under that it names the searcher. */
-    private final int searchQueryMinViews;
+    /** Distinct searchers a query needs before the video page lists it; under that it names them. */
+    private final int searchQueryMinViewers;
 
     /** The most search queries the video page lists, as TikTok does. */
     static final int SEARCH_QUERY_LIMIT = 10;
@@ -101,10 +101,10 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
 
     public CreatorAnalyticsServiceImpl(CreatorAnalyticsRepository repository,
                                        @Value("${analytics.creator.min-audience:100}") long minAudience,
-                                       @Value("${analytics.creator.search-query-min-views:3}") int searchQueryMinViews) {
+                                       @Value("${analytics.creator.search-query-min-viewers:3}") int searchQueryMinViewers) {
         this.repository = repository;
         this.minAudience = minAudience;
-        this.searchQueryMinViews = searchQueryMinViews;
+        this.searchQueryMinViewers = searchQueryMinViewers;
     }
 
     /**
@@ -207,24 +207,25 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                 engagement.comments(),
                 engagement.shares(),
                 engagement.saves(),
-                repository.followsFromVideo(videoId, Instant.EPOCH, window.to()),
+                repository.followsFromVideo(creatorId, videoId, Instant.EPOCH, window.to()),
                 retention(repository.retentionBuckets(videoId)),
                 daily(window.firstDay(), window.lastDay(),
                         repository.dailyViews(scope, window.from(), window.to()),
                         repository.dailyEngagement(scope, window.from(), window.to()),
-                        repository.dailyFollowsFromVideo(videoId, window.from(), window.to())),
-                videoTotals(videoId, current, window.from(), window.to()),
-                videoTotals(videoId, previous, window.previousFrom(), window.from()),
+                        repository.dailyFollowsFromVideo(creatorId, videoId, window.from(), window.to())),
+                videoTotals(creatorId, videoId, current, window.from(), window.to()),
+                videoTotals(creatorId, videoId, previous, window.previousFrom(), window.from()),
                 repository.trafficSources(videoId, window.from(), window.to()),
-                repository.searchQueries(videoId, window.from(), window.to(), searchQueryMinViews,
+                repository.searchQueries(videoId, window.from(), window.to(), searchQueryMinViewers,
                         SEARCH_QUERY_LIMIT),
                 videoViewers(creatorId, videoId, window, current.viewers(), previous.viewers()));
     }
 
-    private CreatorVideoTotalsResponse videoTotals(String videoId, WatchTotals watches, Instant from, Instant to) {
+    private CreatorVideoTotalsResponse videoTotals(long creatorId, String videoId, WatchTotals watches, Instant from,
+                                                   Instant to) {
         EngagementTotals engagement = engagementTotals(Scope.video(videoId), from, to);
         return new CreatorVideoTotalsResponse(watches.views(), engagement.likes(), engagement.comments(),
-                engagement.shares(), engagement.saves(), repository.followsFromVideo(videoId, from, to));
+                engagement.shares(), engagement.saves(), repository.followsFromVideo(creatorId, videoId, from, to));
     }
 
     private CreatorVideoViewersResponse videoViewers(long creatorId, String videoId, Window window,

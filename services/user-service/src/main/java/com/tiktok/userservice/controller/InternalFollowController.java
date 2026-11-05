@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -37,14 +38,17 @@ public class InternalFollowController {
     private final FollowService followService;
     private final FollowGraphBackfillService followGraphBackfillService;
 
-    /** An operator's one-off, run after analytics-service starts reading user.follow-backfill-events. */
-    @Operation(summary = "Internal: replay every live follow edge to analytics",
-            description = "Writes one UserFollowChangedEvent per live edge to the outbox for "
-                    + "user.follow-backfill-events, with a deterministic eventId so re-running is "
+    /**
+     * An operator's one-off, run after analytics-service starts reading user.follow-backfill-events.
+     * {@code before} is when that consumer shipped: edges from then on already have a live row.
+     */
+    @Operation(summary = "Internal: replay the live follow edges made before an instant to analytics",
+            description = "Writes one UserFollowChangedEvent per live edge created before `before` to the "
+                    + "outbox for user.follow-backfill-events, with a deterministic eventId so re-running is "
                     + "idempotent in ClickHouse. Answers how many were written.")
     @PostMapping("/api/v1/users/internal/follow-backfill")
-    public ApiResponse<FollowBackfillResponse> followBackfill() {
-        return ApiResponse.success(new FollowBackfillResponse(followGraphBackfillService.publishAll()));
+    public ApiResponse<FollowBackfillResponse> followBackfill(@RequestParam Instant before) {
+        return ApiResponse.success(new FollowBackfillResponse(followGraphBackfillService.publishAll(before)));
     }
 
     /**

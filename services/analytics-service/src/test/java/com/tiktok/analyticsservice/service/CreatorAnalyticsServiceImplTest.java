@@ -210,9 +210,9 @@ class CreatorAnalyticsServiceImplTest {
                 .thenReturn(List.of(new WatchTotals("v1", 10, 5, 0, 0)));
         when(repository.watchTotals(any(), eq(window.previousFrom()), eq(window.from())))
                 .thenReturn(List.of(new WatchTotals("v1", 4, 2, 0, 0)));
-        when(repository.followsFromVideo("v1", Instant.EPOCH, window.to())).thenReturn(9L);
-        when(repository.followsFromVideo("v1", window.from(), window.to())).thenReturn(3L);
-        when(repository.followsFromVideo("v1", window.previousFrom(), window.from())).thenReturn(1L);
+        when(repository.followsFromVideo(7L, "v1", Instant.EPOCH, window.to())).thenReturn(9L);
+        when(repository.followsFromVideo(7L, "v1", window.from(), window.to())).thenReturn(3L);
+        when(repository.followsFromVideo(7L, "v1", window.previousFrom(), window.from())).thenReturn(1L);
         when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
 
         CreatorVideoDetailResponse video = service.video(7L, "v1", 7);
@@ -224,7 +224,7 @@ class CreatorAnalyticsServiceImplTest {
         assertThat(video.previous().views()).isEqualTo(4);
         assertThat(video.previous().newFollowers()).isEqualTo(1);
         assertThat(video.daily()).hasSize(7);
-        verify(repository).dailyFollowsFromVideo("v1", window.from(), window.to());
+        verify(repository).dailyFollowsFromVideo(7L, "v1", window.from(), window.to());
     }
 
     @Test

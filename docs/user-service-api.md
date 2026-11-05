@@ -87,7 +87,7 @@ Request (mọi field đều optional, `UpdateProfileRequest`):
 }
 ```
 
-**`birthDate` chỉ đặt được một lần.** Gửi khi profile đã có ngày sinh → `409 BIRTH_DATE_ALREADY_SET` (cả request bị từ chối). Phải đủ **13 tuổi** tính đến hôm nay (múi giờ Asia/Ho_Chi_Minh), không ở tương lai, không trước 1900-01-01 → vi phạm trả `400 BIRTH_DATE_INVALID`. Không xoá được (`""` → `VALIDATION_ERROR`). Đặt xong, user-service phát `UserBirthDateSetEvent` (topic `user.profile-events`) cho analytics.
+**`birthDate` chỉ đặt được một lần.** Gửi khi profile đã có ngày sinh → `409 BIRTH_DATE_ALREADY_SET` (cả request bị từ chối). Phải đủ **13 tuổi** tính đến hôm nay (múi giờ Asia/Ho_Chi_Minh), không ở tương lai, không trước 1900-01-01 → vi phạm trả `400 BIRTH_DATE_INVALID`. Không xoá được. Đặt xong, user-service phát `UserBirthDateSetEvent` (topic `user.profile-events`) cho analytics.
 
 **Quy tắc partial update — quan trọng, dễ làm sai phía client:**
 - **Không gửi field** (field vắng mặt trong JSON, hoặc `null`) → giữ nguyên giá trị cũ trên server.
@@ -208,8 +208,8 @@ Danh sách user mình đang block. Phân trang giống mục 3.6. Trả `200 OK`
 Chỉ chat-service gọi (header `X-Internal-Token`, gateway `denyAll`). Tối đa 100 id. Một query cho cả danh sách. Mỗi phần tử: `{userId, blockedByViewer, blockedViewer, version}`. `version` là epoch-millis lớn nhất trong mọi dòng block của cặp (kể cả đã gỡ), tăng ở **mỗi** lần block/unblock — client dùng nó để bỏ qua trả lời cũ. chat-service **không** lộ `blockedViewer`: người xem chỉ biết "tôi đã chặn" (`blockedByViewer`) và "không thể nhắn" (`messagingBlocked`, một trong hai chiều).
 
 
-### 3.10b `POST /api/v1/users/internal/follow-backfill` (nội bộ, chạy tay một lần)
-Header `X-Internal-Token`, gateway `denyAll`. Phát lại **mọi follow edge còn sống** thành `UserFollowChangedEvent(followed=true)` qua outbox lên topic riêng `user.follow-backfill-events` — chỉ analytics-service đọc, nên không sinh thông báo "X đã follow bạn". `eventId = "backfill-follow-" + id edge`, `occurredAt` = lúc follow, nên chạy lại không nhân đôi trong ClickHouse (`ReplacingMergeTree`). Trả `data` → `{ "published": 12345 }`. Khi nào chạy: `operations.md` mục 9.
+### 3.10b `POST /api/v1/users/internal/follow-backfill?before=2026-10-23T00:00:00Z` (nội bộ, chạy tay một lần)
+Header `X-Internal-Token`, gateway `denyAll`. `before` (ISO instant, bắt buộc) là lúc analytics-service bắt đầu đọc `user.follow-events`: follow từ lúc đó đã có dòng riêng trong ClickHouse (eventId khác), phát lại sẽ đếm đôi trên mọi biểu đồ. Phát lại **mọi follow edge còn sống tạo trước `before`** thành `UserFollowChangedEvent(followed=true)` qua outbox lên topic riêng `user.follow-backfill-events` — chỉ analytics-service đọc, nên không sinh thông báo "X đã follow bạn". `eventId = "backfill-follow-" + id edge`, `occurredAt` = lúc follow, nên chạy lại không nhân đôi trong ClickHouse (`ReplacingMergeTree`). Trả `data` → `{ "published": 12345 }`. Khi nào chạy: `operations.md` mục 9.
 
 ### 3.11 `POST /{userId}/mute`
 Mute 1 user (ẩn nội dung của họ khỏi feed/thông báo — tuỳ service khác dùng thông tin này, user-service chỉ lưu trạng thái). Trả `201 Created`.

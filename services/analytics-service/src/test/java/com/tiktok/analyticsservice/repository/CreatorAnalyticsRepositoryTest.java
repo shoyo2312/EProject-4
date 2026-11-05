@@ -193,9 +193,11 @@ class CreatorAnalyticsRepositoryTest {
         repository.insertFollow("f2", 101L, CREATOR, true, EVENING, "mine");
         repository.insertFollow("f3", 100L, CREATOR, false, EVENING, "");
         repository.insertFollow("f4", 102L, CREATOR, true, EVENING, "");
+        // Someone else followed, naming this video: the source is the client's word, not a credit.
+        repository.insertFollow("f5", 103L, SOMEONE_ELSE, true, EVENING, "mine");
 
-        assertThat(repository.followsFromVideo("mine", FROM, TO)).isEqualTo(2);
-        assertThat(repository.dailyFollowsFromVideo("mine", FROM, TO))
+        assertThat(repository.followsFromVideo(CREATOR, "mine", FROM, TO)).isEqualTo(2);
+        assertThat(repository.dailyFollowsFromVideo(CREATOR, "mine", FROM, TO))
                 .containsExactly(new CreatorAnalyticsRepository.DailyFollows(LocalDate.of(2026, 10, 22), 2, 0));
     }
 
@@ -211,26 +213,30 @@ class CreatorAnalyticsRepositoryTest {
                 .containsExactly(new TrafficSourceResponse("FOR_YOU", 3), new TrafficSourceResponse("SEARCH", 1));
     }
 
+    /** Three distinct searchers, not three views: one person replaying their own search must not be listed. */
     @Test
-    void aSearchQueryNeedsThreeViews() {
+    void aSearchQueryNeedsThreeSearchers() {
         for (int i = 0; i < 3; i++) {
             watch("a" + i, "mine", 100L + i, 1_000, 10_000, EVENING, "SEARCH", "cat video");
         }
         watch("b0", "mine", 200L, 1_000, 10_000, EVENING, "SEARCH", "dog");
         watch("b1", "mine", 201L, 1_000, 10_000, EVENING, "SEARCH", "dog");
-        watch("blank", "mine", 300L, 1_000, 10_000, EVENING, "SEARCH", "");
+        for (int i = 0; i < 5; i++) {
+            watch("c" + i, "mine", 300L, 1_000, 10_000, EVENING, "SEARCH", "nguyen van a wedding");
+        }
+        watch("blank", "mine", 400L, 1_000, 10_000, EVENING, "SEARCH", "");
 
         assertThat(repository.searchQueries("mine", FROM, TO, 3, 10))
                 .containsExactly(new SearchQueryResponse("cat video", 3));
         assertThat(repository.searchQueries("mine", FROM, TO, 1, 10))
-                .extracting(SearchQueryResponse::query).containsExactly("cat video", "dog");
+                .extracting(SearchQueryResponse::query).containsExactly("nguyen van a wedding", "cat video", "dog");
     }
 
     @Test
     void queriesComeMostViewedFirstAndAtMostTen() {
         for (int q = 0; q < 12; q++) {
             for (int i = 0; i <= q; i++) {
-                watch("q" + q + "-" + i, "mine", 100L, 1_000, 10_000, EVENING, "SEARCH", "query " + q);
+                watch("q" + q + "-" + i, "mine", 100L + i, 1_000, 10_000, EVENING, "SEARCH", "query " + q);
             }
         }
 
