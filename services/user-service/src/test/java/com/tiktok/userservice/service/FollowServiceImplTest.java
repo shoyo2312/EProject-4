@@ -11,6 +11,7 @@ import com.tiktok.userservice.exception.NotFollowingException;
 import com.tiktok.userservice.exception.PrivateAccountException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
+import com.tiktok.userservice.entity.FollowRequest;
 import com.tiktok.userservice.entity.OutboxEvent;
 import com.tiktok.userservice.repository.FollowRequestRepository;
 import com.tiktok.userservice.repository.OutboxEventRepository;
@@ -499,5 +500,49 @@ class FollowServiceImplTest {
                 .isInstanceOf(PrivateAccountException.class);
         assertThatThrownBy(() -> followService.listFollowing(3L, 2L, PageRequest.of(0, 10)))
                 .isInstanceOf(PrivateAccountException.class);
+    }
+
+    @Test
+    @Transactional
+    void aFollowFromAVideoAnnouncesTheVideo() {
+        followService.follow(1L, 2L, 42L);
+
+        assertThat(outboxEventRepository.findAll())
+                .filteredOn(event -> "UserFollowChangedEvent".equals(event.getEventType()))
+                .singleElement()
+                .extracting(OutboxEvent::getPayload, as(org.assertj.core.api.InstanceOfAssertFactories.STRING))
+                .contains("\"followed\":true", "\"sourceVideoId\":42");
+    }
+
+    @Test
+    @Transactional
+    void aFollowRequestKeepsTheVideoUntilApproval() {
+        makePrivate(2L);
+        followService.follow(1L, 2L, 42L);
+
+        assertThat(followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(1L, 2L))
+                .get().extracting(FollowRequest::getSourceVideoId).isEqualTo(42L);
+
+        followService.approveFollowRequest(2L, 1L);
+
+        assertThat(outboxEventRepository.findAll())
+                .filteredOn(event -> "UserFollowChangedEvent".equals(event.getEventType()))
+                .singleElement()
+                .extracting(OutboxEvent::getPayload, as(org.assertj.core.api.InstanceOfAssertFactories.STRING))
+                .contains("\"requestApproved\":true", "\"sourceVideoId\":42");
+    }
+
+    @Test
+    @Transactional
+    void anUnfollowCarriesNoVideo() {
+        followService.follow(1L, 2L, 42L);
+        outboxEventRepository.deleteAll();
+
+        followService.unfollow(1L, 2L);
+
+        assertThat(outboxEventRepository.findAll())
+                .singleElement()
+                .extracting(OutboxEvent::getPayload, as(org.assertj.core.api.InstanceOfAssertFactories.STRING))
+                .contains("\"followed\":false", "\"sourceVideoId\":null");
     }
 }

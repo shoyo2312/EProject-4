@@ -336,7 +336,7 @@ class UserProfileControllerTest {
 
     @Test
     void follow_withValidToken_createsFollowAndReturns201() throws Exception {
-        when(followService.follow(1L, 2L)).thenReturn(new FollowResponse(1L, 2L, FollowResponse.Status.FOLLOWING));
+        when(followService.follow(1L, 2L, null)).thenReturn(new FollowResponse(1L, 2L, FollowResponse.Status.FOLLOWING));
 
         mockMvc.perform(post("/api/v1/users/2/follow")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
@@ -347,7 +347,7 @@ class UserProfileControllerTest {
 
     @Test
     void follow_self_returnsBadRequestFromDomainException() throws Exception {
-        when(followService.follow(1L, 1L)).thenThrow(new CannotFollowSelfException());
+        when(followService.follow(1L, 1L, null)).thenThrow(new CannotFollowSelfException());
 
         mockMvc.perform(post("/api/v1/users/1/follow")
                         .header("Authorization", "Bearer " + tokenFor(1L)))
@@ -357,7 +357,7 @@ class UserProfileControllerTest {
 
     @Test
     void follow_alreadyFollowing_returnsConflict() throws Exception {
-        when(followService.follow(1L, 2L)).thenThrow(new AlreadyFollowingException());
+        when(followService.follow(1L, 2L, null)).thenThrow(new AlreadyFollowingException());
 
         mockMvc.perform(post("/api/v1/users/2/follow")
                         .header("Authorization", "Bearer " + tokenFor(1L)))

@@ -55,6 +55,12 @@ public class FollowServiceImpl implements FollowService {
     @Override
     @Transactional
     public FollowResponse follow(Long followerId, Long followingId) {
+        return follow(followerId, followingId, null);
+    }
+
+    @Override
+    @Transactional
+    public FollowResponse follow(Long followerId, Long followingId, Long sourceVideoId) {
         pairLock.acquire(followerId, followingId);
         if (followerId.equals(followingId)) {
             throw new CannotFollowSelfException();
@@ -86,8 +92,8 @@ public class FollowServiceImpl implements FollowService {
         }
 
         return target.isPrivateAccount()
-                ? request(followerId, followingId)
-                : addEdge(followerId, followingId, false);
+                ? request(followerId, followingId, sourceVideoId)
+                : addEdge(followerId, followingId, false, sourceVideoId);
     }
 
     @Override
@@ -266,7 +272,7 @@ public class FollowServiceImpl implements FollowService {
      * before it existed. It stays answerable from the requests list; closing the gap needs a lock
      * on the profile row.
      */
-    private FollowResponse request(Long requesterId, Long targetId) {
+    private FollowResponse request(Long requesterId, Long targetId, Long sourceVideoId) {
         if (followRequestRepository.findByRequesterIdAndTargetIdAndDeletedAtIsNull(requesterId, targetId).isPresent()) {
             throw new AlreadyRequestedException();
         }
@@ -275,6 +281,7 @@ public class FollowServiceImpl implements FollowService {
             followRequestRepository.saveAndFlush(FollowRequest.builder()
                     .requesterId(requesterId)
                     .targetId(targetId)
+                    .sourceVideoId(sourceVideoId)
                     .build());
         } catch (DataIntegrityViolationException ex) {
             throw new AlreadyRequestedException();
@@ -285,7 +292,7 @@ public class FollowServiceImpl implements FollowService {
     }
 
     /** The edge, both counters and the announcement — one path for a follow and an approval. */
-    private FollowResponse addEdge(Long followerId, Long followingId, boolean requestApproved) {
+    private FollowResponse addEdge(Long followerId, Long followingId, boolean requestApproved, Long sourceVideoId) {
         // The check in follow() is not the guarantee — two concurrent requests both pass it and
         // only uq_user_follows_follower_following stops the second. saveAndFlush forces that
         // violation to surface here instead of at commit, so the loser is answered 409
@@ -302,7 +309,7 @@ public class FollowServiceImpl implements FollowService {
 
         userProfileRepository.incrementFollowingCount(followerId);
         userProfileRepository.incrementFollowerCount(followingId);
-        userEventPublisher.publishFollowChanged(followerId, followingId, true, requestApproved);
+        userEventPublisher.publishFollowChanged(followerId, followingId, true, requestApproved, sourceVideoId);
 
         return new FollowResponse(followerId, followingId, FollowResponse.Status.FOLLOWING);
     }
@@ -321,7 +328,7 @@ public class FollowServiceImpl implements FollowService {
             // The edge can already be there: a request left pending across a switch to public (see
             // request()), then a direct follow. Ending the request is all that is left to do.
             if (!hasEdge(request.getRequesterId(), request.getTargetId())) {
-                addEdge(request.getRequesterId(), request.getTargetId(), true);
+                addEdge(request.getRequesterId(), request.getTargetId(), true, request.getSourceVideoId());
             }
         }
     }

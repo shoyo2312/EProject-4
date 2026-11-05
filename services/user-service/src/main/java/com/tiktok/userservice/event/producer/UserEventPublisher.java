@@ -48,10 +48,16 @@ public class UserEventPublisher {
     /** @param requestApproved the edge is a follow request its owner approved — the requester is told */
     public void publishFollowChanged(Long followerId, Long followingId, boolean followed,
                                      boolean requestApproved) {
+        publishFollowChanged(followerId, followingId, followed, requestApproved, null);
+    }
+
+    /** @param sourceVideoId the video the follow came from, null when there is none (unfollows, profile follows) */
+    public void publishFollowChanged(Long followerId, Long followingId, boolean followed,
+                                     boolean requestApproved, Long sourceVideoId) {
         // Keyed by the followed user, so every change to one user's follower count keeps its order
         // on a single partition.
         save(FOLLOW_AGGREGATE, followingId,
-                UserFollowChangedEvent.of(followerId, followingId, followed, requestApproved));
+                UserFollowChangedEvent.of(followerId, followingId, followed, requestApproved, sourceVideoId));
     }
 
     public void publishFollowRequested(Long requesterId, Long targetId) {

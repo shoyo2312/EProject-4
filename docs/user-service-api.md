@@ -153,6 +153,8 @@ Dành cho màn hình đã có sẵn danh sách `userId` mà chưa có profile: f
 ### 3.4 `POST /{userId}/follow`
 Follow 1 user. Trả `201 Created`.
 
+Body **tuỳ chọn** (`FollowRequestBody`): `{ "sourceVideoId": 7312458901234567 }` — id video đang xem khi bấm follow (nút follow trên thẻ video ở feed / trang xem video), để TikTok Studio của chủ video đếm "New followers" cho video đó. Follow từ trang cá nhân thì **không gửi body**. Với tài khoản riêng tư, giá trị được giữ trên lời mời và gắn vào sự kiện follow khi chủ tài khoản duyệt.
+
 Response `data` → `FollowResponse`: `{ "followerId": ..., "followingId": ..., "status": "FOLLOWING" }`.
 
 `status` cho biết chuyện gì đã xảy ra — cả hai đều trả `201`:

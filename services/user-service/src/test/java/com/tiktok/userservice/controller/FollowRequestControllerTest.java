@@ -58,7 +58,7 @@ class FollowRequestControllerTest {
     /** 201 either way; the status is how the client tells Following from Requested. */
     @Test
     void follow_ofAPrivateAccount_is201Requested() throws Exception {
-        when(followService.follow(1L, 2L))
+        when(followService.follow(1L, 2L, null))
                 .thenReturn(new FollowResponse(1L, 2L, FollowResponse.Status.REQUESTED));
 
         mockMvc.perform(post("/api/v1/users/2/follow").header("Authorization", "Bearer " + tokenFor(1L)))
@@ -68,7 +68,7 @@ class FollowRequestControllerTest {
 
     @Test
     void follow_withARequestPending_is409AlreadyRequested() throws Exception {
-        when(followService.follow(1L, 2L)).thenThrow(new AlreadyRequestedException());
+        when(followService.follow(1L, 2L, null)).thenThrow(new AlreadyRequestedException());
 
         mockMvc.perform(post("/api/v1/users/2/follow").header("Authorization", "Bearer " + tokenFor(1L)))
                 .andExpect(status().isConflict())
