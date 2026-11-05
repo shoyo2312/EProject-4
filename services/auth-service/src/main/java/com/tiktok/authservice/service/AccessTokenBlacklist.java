@@ -61,6 +61,17 @@ public class AccessTokenBlacklist {
     }
 
     /**
+     * Kills every access token one session (one device) was issued, by its {@code sid} claim —
+     * a remote sign-out, or a sign-in that took the device's slot. TTL as above.
+     */
+    public void blacklistSession(Long sessionId, Duration ttl) {
+        if (ttl.isNegative() || ttl.isZero()) {
+            return;
+        }
+        write(RevocationKeys.forSession(sessionId), "1", ttl);
+    }
+
+    /**
      * Fails open, like the read side, and for a sharper reason: every caller has already done the
      * thing the revocation accompanies — the password is changed, the account is banned, the
      * replayed refresh chain is revoked in the database. Letting Redis throw here would propagate

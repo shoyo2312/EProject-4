@@ -27,10 +27,12 @@ public class SessionRevoker {
     private final RefreshTokenRepository refreshTokenRepository;
     private final AccessTokenBlacklist accessTokenBlacklist;
     private final JwtProperties jwtProperties;
+    private final SessionRegistry sessionRegistry;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void revokeAllSessions(Long userId) {
         refreshTokenRepository.revokeAllByUserId(userId, Instant.now());
+        sessionRegistry.endAll(userId);
         accessTokenBlacklist.blacklistAllForUser(userId,
                 Duration.ofMillis(jwtProperties.accessTokenExpiryMillis()));
     }

@@ -42,6 +42,9 @@ public class SecurityConfig {
                         .access(new InternalCallerAuthorization(internalApiToken))
                         // Studio's Posts table answers for the caller only, so it needs to know who.
                         .requestMatchers("/api/v1/videos/me").authenticated()
+                        // Also before it: every music search spends this service's catalogue quota,
+                        // so only signed-in users may.
+                        .requestMatchers("/api/v1/videos/music", "/api/v1/videos/music/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .anyRequest().authenticated()
                 )

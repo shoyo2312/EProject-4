@@ -2,16 +2,19 @@ package com.tiktok.videoservice.service;
 
 import com.tiktok.videoservice.client.FeedKeywords;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.VideoEditRequest;
 import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoEdit;
 import com.tiktok.videoservice.entity.VideoModeration;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoTextModeration;
@@ -59,6 +62,7 @@ import java.util.Set;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyCollection;
@@ -98,6 +102,10 @@ class VideoServiceImplTest {
     // Mocked so no test reaches a real user-service: null settings and no keywords, the fail-open answers.
     @MockitoBean
     private com.tiktok.videoservice.client.UserSettingsClient userSettingsClient;
+
+    // Mocked so no test reaches the real music catalogue.
+    @MockitoBean
+    private MusicService musicService;
 
     // Spied so a test can make owner_privacy answer differently from one read to the next.
     @MockitoSpyBean
@@ -159,6 +167,17 @@ class VideoServiceImplTest {
                 .isEqualTo(response.fileUrl());
     }
 
+    /** The overlay is one PNG; the video cap would let an image upload be gigabytes. */
+    @Test
+    void createUploadUrl_forAnOverlay_isAPngWithItsOwnSmallerCap() {
+        UploadUrlResponse response = videoService.createUploadUrl(42L, new UploadUrlRequest("image/png"));
+
+        assertThat(response.fileUrl()).startsWith("s3://video-media/raw/42/").endsWith(".png");
+        String policy = new String(java.util.Base64.getDecoder().decode(response.formFields().get("policy")),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(policy).contains("[\"content-length-range\",1," + VideoServiceImpl.MAX_OVERLAY_BYTES + "]");
+    }
+
     @Test
     void createUploadUrl_rejectsATypeTheTranscoderCannotRead() {
         assertThatThrownBy(() -> videoService.createUploadUrl(42L, new UploadUrlRequest("application/zip")))
@@ -172,6 +191,184 @@ class VideoServiceImplTest {
 
         assertThat(response.status()).isEqualTo(VideoStatus.PROCESSING);
         assertThat(response.userId()).isEqualTo(1L);
+        // No switch sent: comments on, as for every client before the switch existed.
+        assertThat(response.commentsDisabled()).isFalse();
+    }
+
+    /** The outbox poll builds the publication later, from the document, so the edits must be on it. */
+    @Test
+    void publish_withEdits_storesThemForThePublication() {
+        VideoEditRequest edit = new VideoEditRequest(List.of(
+                new VideoEditRequest.Segment(1.0, 5.5, 2.0),
+                new VideoEditRequest.Segment(7.0, 8.0, 0.5)));
+
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Edited", "desc",
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit));
+
+        VideoEdit stored = videoRepository.findById(response.id()).orElseThrow().getEdit();
+        assertThat(stored.getVersion()).isEqualTo(1);
+        assertThat(stored.getSegments()).extracting(VideoEdit.Segment::getStart, VideoEdit.Segment::getEnd, VideoEdit.Segment::getSpeed)
+                .containsExactly(tuple(1.0, 5.5, 2.0), tuple(7.0, 8.0, 0.5));
+    }
+
+    @Test
+    void publish_withAFilter_storesItWithFullIntensityWhenNoneWasSent() {
+        VideoEditRequest edit = new VideoEditRequest(null, new VideoEditRequest.Filter("mono", null));
+
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Grey", "desc",
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit));
+
+        VideoEdit stored = videoRepository.findById(response.id()).orElseThrow().getEdit();
+        assertThat(stored.getSegments()).isEmpty();
+        assertThat(stored.getFilter().getId()).isEqualTo("mono");
+        assertThat(stored.getFilter().getIntensity()).isEqualTo(1.0);
+    }
+
+    @Test
+    void publish_withOverlays_storesThemInOrderWithTheirTiming() {
+        VideoEditRequest edit = new VideoEditRequest(null, null, List.of(
+                new VideoEditRequest.Overlay("s3://video-media/raw/1/all.png"),
+                new VideoEditRequest.Overlay("s3://video-media/raw/1/later.png", 1.5, 4.0, List.of("Xin chào"))));
+
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Captioned", "desc",
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit));
+
+        VideoEdit stored = videoRepository.findById(response.id()).orElseThrow().getEdit();
+        assertThat(stored.getOverlays()).extracting(VideoEdit.Overlay::getImageUrl, VideoEdit.Overlay::getStart,
+                        VideoEdit.Overlay::getEnd)
+                .containsExactly(tuple("s3://video-media/raw/1/all.png", null, null),
+                        tuple("s3://video-media/raw/1/later.png", 1.5, 4.0));
+        assertThat(stored.getOverlays().get(1).getTexts()).containsExactly("Xin chào");
+        assertThat(stored.toEvent().overlays()).containsExactly(
+                new VideoPublishedEvent.Edit.Overlay("s3://video-media/raw/1/all.png", null, null),
+                new VideoPublishedEvent.Edit.Overlay("s3://video-media/raw/1/later.png", 1.5, 4.0));
+    }
+
+    /**
+     * The track is looked up again at publish: what is stored — and what media-worker downloads —
+     * is the catalogue's description of it, with the credit its licence asks for.
+     */
+    @Test
+    void publish_withMusic_storesTheCataloguesTrackAndItsCredit() {
+        when(musicService.requireTrack("42")).thenReturn(new com.tiktok.videoservice.client.MusicTrack("42", "Calm",
+                "Someone", 120, "https://stream/42", "https://prod-1.storage.jamendo.com/download/track/42/mp32/",
+                "https://img/42", "http://creativecommons.org/licenses/by/3.0/", "https://www.jamendo.com/track/42"));
+        VideoEditRequest edit = new VideoEditRequest(null, null, null,
+                new VideoEditRequest.Music("42", 12.5, 0.8, 0.0));
+
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("With a song", null,
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit));
+
+        assertThat(response.music().title()).isEqualTo("Calm");
+        assertThat(response.music().artist()).isEqualTo("Someone");
+        assertThat(response.music().licenseUrl()).contains("/by/");
+        VideoEdit stored = videoRepository.findById(response.id()).orElseThrow().getEdit();
+        assertThat(stored.toEvent().music()).isEqualTo(new VideoPublishedEvent.Edit.Music(
+                "https://prod-1.storage.jamendo.com/download/track/42/mp32/", 12.5, 0.8, 0.0));
+    }
+
+    @Test
+    void publish_withATrackTheCatalogueWillNotOffer_storesNothing() {
+        when(musicService.requireTrack("9")).thenThrow(new com.tiktok.videoservice.exception.MusicNotFoundException());
+        VideoEditRequest edit = new VideoEditRequest(null, null, null, new VideoEditRequest.Music("9", null, null, null));
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest("Gone", null,
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit)))
+                .isInstanceOf(com.tiktok.videoservice.exception.MusicNotFoundException.class);
+        assertThat(videoRepository.count()).isZero();
+    }
+
+    /** The picture reaches no text check, so the words the app says it drew are screened like a caption. */
+    @Test
+    void publish_overlayTextWithARefusedTerm_namesTheOverlay() {
+        VideoEditRequest edit = new VideoEditRequest(null, null, List.of(
+                new VideoEditRequest.Overlay("s3://video-media/raw/1/text.png", null, null, List.of("đồ con đĩ"))));
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest("Bình thường", null,
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit)))
+                .isInstanceOf(CaptionRejectedException.class)
+                .extracting("code").isEqualTo("VIDEO_OVERLAY_REJECTED");
+        assertThat(videoRepository.count()).isZero();
+    }
+
+    @Test
+    void publish_overlayTextThatIsFlagged_holdsTheVideoForReview() {
+        VideoEditRequest edit = new VideoEditRequest(null, null, List.of(
+                new VideoEditRequest.Overlay("s3://video-media/raw/1/text.png", null, null,
+                        List.of("gọi 0912345678"))));
+
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Săn sale", null,
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit));
+
+        VideoTextModeration recorded = videoRepository.findById(response.id()).orElseThrow().getTextModeration();
+        assertThat(recorded.getVerdict()).isEqualTo(ModerationVerdict.REVIEW);
+        assertThat(recorded.getFlags()).containsExactly("OVERLAY:PERSONAL_INFO:phone");
+    }
+
+    /** media-worker reads the overlay as it reads the upload, so someone else's file is refused alike. */
+    @Test
+    void publish_anOverlaySomeoneElseUploaded_isRejected() {
+        VideoEditRequest edit = new VideoEditRequest(null, null,
+                List.of(new VideoEditRequest.Overlay("s3://video-media/raw/2/text.png")));
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest("Theirs", null,
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit)))
+                .isInstanceOf(ForeignUploadException.class)
+                .hasMessageContaining("edit.overlays[].imageUrl");
+        assertThat(videoRepository.count()).isZero();
+    }
+
+    /** A video as the overlay would be decoded as a picture over the video — refused, not tried. */
+    @Test
+    void publish_anOverlayThatIsNotAPng_isRejected() {
+        VideoEditRequest edit = new VideoEditRequest(null, null,
+                List.of(new VideoEditRequest.Overlay("s3://video-media/raw/1/other.mp4")));
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest("Two videos", null,
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit)))
+                .isInstanceOf(UnsupportedUploadTypeException.class);
+    }
+
+    /** The overlay's upload type is not a way to publish a still image as a video. */
+    @Test
+    void publish_aPngAsTheVideo_isRejected() {
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest("A picture", null,
+                "s3://video-media/raw/1/text.png", VideoVisibility.PUBLIC, List.of())))
+                .isInstanceOf(UnsupportedUploadTypeException.class);
+        assertThat(videoRepository.count()).isZero();
+    }
+
+    @Test
+    void publish_anOverlayNothingWasUploadedTo_isRejected() throws Exception {
+        doThrow(new ErrorResponseException(
+                new ErrorResponse("NoSuchKey", "not found", "video-media", "k", "k", "r", "h"), null, null))
+                .when(minioClient).statObject(org.mockito.ArgumentMatchers.argThat(
+                        (io.minio.StatObjectArgs args) -> args != null && args.object().endsWith(".png")));
+        VideoEditRequest edit = new VideoEditRequest(null, null,
+                List.of(new VideoEditRequest.Overlay("s3://video-media/raw/1/never.png")));
+
+        assertThatThrownBy(() -> videoService.publish(1L, new CreateVideoRequest("No text", null,
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), null, edit)))
+                .isInstanceOf(UploadNotFoundException.class);
+        assertThat(videoRepository.count()).isZero();
+    }
+
+    @Test
+    void publish_withoutEdits_storesNone() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Plain", "desc",
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of()));
+
+        assertThat(videoRepository.findById(response.id()).orElseThrow().getEdit()).isNull();
+    }
+
+    @Test
+    void publish_withCommentsOff_isStoredOffFromTheStart() {
+        VideoResponse response = videoService.publish(1L, new CreateVideoRequest("Quiet video", "desc",
+                "s3://video-media/raw/1/first.mp4", VideoVisibility.PUBLIC, List.of(), true));
+
+        assertThat(response.commentsDisabled()).isTrue();
+        assertThat(response.commentCount()).isNull();
+        assertThat(videoRepository.findById(response.id()).orElseThrow().isCommentsDisabled()).isTrue();
     }
 
     /**

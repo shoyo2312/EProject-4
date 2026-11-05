@@ -164,7 +164,7 @@ class NewDeviceSignInTest {
             assertThat(row.getAggregateId()).isEqualTo(String.valueOf(user.getId()));
             assertThat(row.getEventType()).isEqualTo("NewDeviceSignInEvent");
             assertThat(row.getPayload())
-                    .contains("\"deviceLabel\":\"Chrome on macOS 27\"", "\"location\":\"London, United Kingdom\"")
+                    .contains("\"deviceLabel\":\"Chrome on macOS 27\"", "\"location\":\"London, England, United Kingdom\"")
                     .doesNotContain("routine");
         });
         assertThat(signIns()).extracting(AuthSecurityEvent::getDetail).containsExactly(null, "New device");
@@ -177,7 +177,7 @@ class NewDeviceSignInTest {
         tokenIssuer.issue(user, SecurityEventType.LOGIN_SUCCEEDED);
 
         arrive("device-cccccccccccc", Map.of());
-        tokenIssuer.reissue(user, null);
+        tokenIssuer.reissue(user, null, null);
         tokenIssuer.issue(user, SecurityEventType.LOGIN_SUCCEEDED);
 
         assertThat(alerts()).isEmpty();

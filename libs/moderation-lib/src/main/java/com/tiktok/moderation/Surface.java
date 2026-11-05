@@ -11,7 +11,11 @@ public enum Surface {
     VIDEO_TITLE,
     VIDEO_DESCRIPTION,
     VIDEO_TAGS,
-    STORY_CAPTION;
+    /** Words the uploader laid over the picture itself in the app's editor. */
+    VIDEO_OVERLAY,
+    STORY_CAPTION,
+    /** Words laid over a story's picture in the app's editor. */
+    STORY_OVERLAY;
 
     /** A video's own text, written by its owner — as opposed to something said about it. */
     public boolean isCaption() {

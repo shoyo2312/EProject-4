@@ -116,6 +116,11 @@ public class StoryMedia {
         return key;
     }
 
+    /** The {@code s3://} form media-worker reads a key from. */
+    public String canonicalUrl(String key) {
+        return "s3://%s/%s".formatted(properties.bucket(), key);
+    }
+
     public StoryMediaType typeOf(String key) {
         StoryMediaType type = TYPES.get(key.substring(key.lastIndexOf('.') + 1));
         if (type == null) {

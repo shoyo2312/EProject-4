@@ -38,8 +38,100 @@ public record VideoPublishedEvent(
         // into the moderation verdict, so every consumer of that verdict holds the video the same
         // way. Null from a producer older than this field, or with text moderation not enforced;
         // either way it changes nothing.
-        ModerationVerdict textVerdict
+        ModerationVerdict textVerdict,
+        // The edits made on the uploader's phone — trim and speed — which media-worker applies to
+        // the raw upload before transcoding it. The app only previews them, so without this the
+        // video everyone sees is the untouched recording. Null when nothing was edited, and on
+        // events from a producer older than this field; both mean the upload plays as recorded.
+        Edit edit
 ) implements DomainEvent {
+
+    /**
+     * The recipe that turns the raw upload into the video everyone sees.
+     *
+     * <p>Times are seconds on the raw upload's own clock, before any speed change, so a segment
+     * means the same thing whatever else the recipe does.
+     *
+     * @param version  format of this recipe, so a later shape can be told apart from this one
+     * @param segments the parts of the raw upload that make the video, played back to back in
+     *                 this order. Never null; empty means the whole upload at normal speed —
+     *                 a recipe that only changes the colour
+     * @param filter   the colour filter over the whole video, or null for none. Added after
+     *                 segments, so recipes written before it read as unfiltered
+     */
+    public record Edit(int version, List<Segment> segments, Filter filter, List<Overlay> overlays, Music music) {
+
+        public static final int CURRENT_VERSION = 1;
+
+        public Edit {
+            segments = segments == null ? List.of() : List.copyOf(segments);
+            overlays = overlays == null ? List.of() : List.copyOf(overlays);
+        }
+
+        /** Trim and speed only. */
+        public Edit(int version, List<Segment> segments) {
+            this(version, segments, null, null, null);
+        }
+
+        /** Without text or stickers. */
+        public Edit(int version, List<Segment> segments, Filter filter) {
+            this(version, segments, filter, null, null);
+        }
+
+        /** Without music. */
+        public Edit(int version, List<Segment> segments, Filter filter, List<Overlay> overlays) {
+            this(version, segments, filter, overlays, null);
+        }
+
+        /**
+         * A track from the music catalogue mixed under the video, from its first frame.
+         *
+         * @param audioUrl       where the worker downloads the track: an {@code https} address on
+         *                       the catalogue's own host, resolved by video-service from the
+         *                       track id the app sent — never a URL a client wrote
+         * @param start          seconds into the track the video's first frame plays against
+         * @param volume         0 to 1, the track's level in the mix
+         * @param originalVolume 0 to 1, the video's own sound in the mix; 0 replaces it
+         */
+        public record Music(String audioUrl, double start, double volume, double originalVolume) {
+        }
+
+        /**
+         * A layer of text and stickers, drawn by the app into a transparent PNG the shape of the
+         * video. Layers are stacked in list order, the first lowest; each one shows for its own
+         * stretch of the edited video.
+         *
+         * @param imageUrl {@code s3://bucket/raw/{userId}/{id}.png}, an upload of the video's own
+         *                 owner — video-service checked both before this was written
+         * @param start    seconds into the <em>edited</em> video — after the cuts and speed
+         *                 changes, as the viewer's clock runs — when the layer appears; null from
+         *                 the first frame
+         * @param end      when it goes again, after {@code start}; null until the last frame
+         */
+        public record Overlay(String imageUrl, Double start, Double end) {
+
+            /** Shown for the whole video. */
+            public Overlay(String imageUrl) {
+                this(imageUrl, null, null);
+            }
+        }
+
+        /**
+         * @param id        a {@link VideoFilter#id()}. A worker that does not know it — an id
+         *                  newer than its build — leaves the colour alone rather than fail
+         * @param intensity 0 to 1, how far from the original the colour goes
+         */
+        public record Filter(String id, double intensity) {
+        }
+
+        /**
+         * @param start seconds into the raw upload where this part begins
+         * @param end   seconds into the raw upload where this part ends, after {@code start}
+         * @param speed playback rate: 2 plays this part twice as fast, 0.5 at half speed
+         */
+        public record Segment(double start, double end, double speed) {
+        }
+    }
 
     /**
      * The eventId is derived from the videoId rather than drawn at random, because this event is
@@ -55,11 +147,18 @@ public record VideoPublishedEvent(
      */
     public static VideoPublishedEvent of(
             String videoId, Long userId, String title, String description, String rawFileUrl,
-            String visibility, List<String> tags, ModerationVerdict textVerdict) {
+            String visibility, List<String> tags, ModerationVerdict textVerdict, Edit edit) {
         String eventId = UUID.nameUUIDFromBytes(
                 ("VideoPublishedEvent:" + videoId).getBytes(StandardCharsets.UTF_8)).toString();
         return new VideoPublishedEvent(eventId, Instant.now(), videoId, userId, title, description,
-                rawFileUrl, visibility, tags == null ? List.of() : List.copyOf(tags), textVerdict);
+                rawFileUrl, visibility, tags == null ? List.of() : List.copyOf(tags), textVerdict, edit);
+    }
+
+    /** Without edits: the upload plays as recorded. */
+    public static VideoPublishedEvent of(
+            String videoId, Long userId, String title, String description, String rawFileUrl,
+            String visibility, List<String> tags, ModerationVerdict textVerdict) {
+        return of(videoId, userId, title, description, rawFileUrl, visibility, tags, textVerdict, null);
     }
 
     /** Without a text verdict, for callers with nothing to say about the caption. */

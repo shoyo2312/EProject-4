@@ -57,6 +57,12 @@ media:
     timeout-millis: ${MODERATION_TIMEOUT_MILLIS:30000}
     attempts: ${MODERATION_ATTEMPTS:3}
     retry-backoff-millis: ${MODERATION_RETRY_BACKOFF_MILLIS:3000}
+  music:
+    # Where an edit's music may be fetched from: the music catalogue's file hosts (Jamendo serves
+    # downloads from prod-N.storage.jamendo.com). Suffixes with a leading dot cover subdomains.
+    allowed-host-suffixes: ${MUSIC_ALLOWED_HOST_SUFFIXES:.jamendo.com}
+    # A ten-minute song at 320 kbps is about 24 MB.
+    max-bytes: ${MUSIC_MAX_BYTES:31457280}
   avatar:
     # The only hosts this worker will fetch an avatar from. Google serves pictures from lh3,
     # Facebook from platform-lookaside and the fbcdn host its redirects land on. Anything else an

@@ -79,6 +79,12 @@ public class Story {
     /** The caption's verdict, carried to media-worker on the created event. */
     private ModerationVerdict textVerdict;
 
+    /**
+     * The editor's recipe, which media-worker renders before screening. Null on a story posted as
+     * it was shot. Once rendered, {@link #mediaKey} and {@link #mediaType} are the result's.
+     */
+    private StoryEdit edit;
+
     private long viewCount;
 
     @CreatedDate
@@ -110,6 +116,12 @@ public class Story {
 
     public static Story pending(String id, Long userId, String mediaKey, String uploadKey, StoryMediaType mediaType,
                                 String caption, StoryVisibility visibility, ModerationVerdict textVerdict, Instant now) {
+        return pending(id, userId, mediaKey, uploadKey, mediaType, caption, visibility, textVerdict, null, now);
+    }
+
+    public static Story pending(String id, Long userId, String mediaKey, String uploadKey, StoryMediaType mediaType,
+                                String caption, StoryVisibility visibility, ModerationVerdict textVerdict,
+                                StoryEdit edit, Instant now) {
         return Story.builder()
                 .id(id)
                 .userId(userId)
@@ -120,6 +132,7 @@ public class Story {
                 .status(StoryStatus.PENDING_MODERATION)
                 .visibility(visibility)
                 .textVerdict(textVerdict)
+                .edit(edit)
                 .viewCount(0)
                 .createdAt(now)
                 .expiresAt(now.plus(PENDING_CEILING))

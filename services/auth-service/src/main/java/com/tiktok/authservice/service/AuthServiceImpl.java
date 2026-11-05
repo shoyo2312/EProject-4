@@ -96,6 +96,7 @@ public class AuthServiceImpl implements AuthService {
     private final OtpRateLimiter otpRateLimiter;
     private final SessionRevoker sessionRevoker;
     private final TokenIssuer tokenIssuer;
+    private final SessionRegistry sessionRegistry;
     private final TurnstileService turnstileService;
     private final OtpSendGate otpSendGate;
     private final AdminMfaService adminMfaService;
@@ -348,7 +349,7 @@ public class AuthServiceImpl implements AuthService {
                 .filter(u -> !u.isDeleted() && u.getStatus() == UserStatus.ACTIVE)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        return tokenIssuer.reissue(user, storedToken.getFamilyId());
+        return tokenIssuer.reissue(user, storedToken.getFamilyId(), storedToken.getSessionId());
     }
 
     /**
@@ -432,7 +433,10 @@ public class AuthServiceImpl implements AuthService {
 
         // Only when this call ended a session: an unknown or already revoked token ended none, and
         // logging a logout that ended no session would put sessions in the trail that never existed.
-        if (refreshTokenRepository.revoke(HashUtils.sha256(refreshToken), Instant.now()) == 1) {
+        String tokenHash = HashUtils.sha256(refreshToken);
+        if (refreshTokenRepository.revoke(tokenHash, Instant.now()) == 1) {
+            refreshTokenRepository.findByTokenHash(tokenHash)
+                    .ifPresent(token -> sessionRegistry.endedByLogout(token.getSessionId()));
             securityEventRecorder.record(owner, SecurityEventType.LOGOUT);
         }
     }

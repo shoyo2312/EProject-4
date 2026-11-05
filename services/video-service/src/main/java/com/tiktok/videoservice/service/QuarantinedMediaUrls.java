@@ -98,7 +98,7 @@ public class QuarantinedMediaUrls {
                 video.tags(), video.createdAt(), video.updatedAt(), video.publishedAt(), video.rawFileUrl(),
                 video.failureReason(), video.takedownReason(), video.deletedAt(),
                 video.purgeEventPublishedAt(), video.moderation(), video.accountCommentsOff(),
-                video.ownerPrivate(), video.textModeration(), video.pinnedAt());
+                video.ownerPrivate(), video.textModeration(), video.pinnedAt(), video.music());
     }
 
     private String signed(String url) {

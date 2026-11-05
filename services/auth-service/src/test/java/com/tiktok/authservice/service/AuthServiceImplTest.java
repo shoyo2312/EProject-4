@@ -1031,6 +1031,22 @@ class AuthServiceImplTest {
     }
 
     /**
+     * A sign-in from a phone. Two sign-ins without a User-Agent are both laptops, and an account
+     * holds one laptop session at a time — the second would sign the first out (SessionRegistry).
+     */
+    private TokenResponse loginOnPhone() {
+        org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.addHeader("User-Agent", "NowaApp/1.0 (Android; Mobile)");
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(request));
+        try {
+            return authService.login(new LoginRequest("johndoe", "password123"));
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    /**
      * Rotation without replay detection is worse than no rotation: whoever refreshes first keeps
      * a valid chain forever, and the loser just sees "please sign in again" — no alarm anywhere.
      * A rotated token coming back means two parties hold that chain, so the chain dies — every
@@ -1045,7 +1061,7 @@ class AuthServiceImplTest {
     void refresh_replayingARotatedToken_endsThatChainOnly() {
         registerVerified();
         TokenResponse stolen = authService.login(new LoginRequest("johndoe", "password123"));
-        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse otherDevice = loginOnPhone();
 
         // The thief gets there first and rotates the chain.
         TokenResponse thiefsChain = authService.refresh(new RefreshTokenRequest(stolen.refreshToken()));
@@ -1081,7 +1097,8 @@ class AuthServiceImplTest {
     void refresh_replayingARotatedTokenWithoutFamily_endsEverySessionForThatUser() {
         registerVerified();
         TokenResponse legacy = authService.login(new LoginRequest("johndoe", "password123"));
-        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+        // A phone: a second laptop would take the first one's session slot (SessionRegistry).
+        TokenResponse otherDevice = loginOnPhone();
         jdbcTemplate.update("UPDATE refresh_tokens SET family_id = NULL WHERE token_hash = ?",
                 HashUtils.sha256(legacy.refreshToken()));
 
@@ -1109,7 +1126,7 @@ class AuthServiceImplTest {
     void refresh_twoConcurrentRefreshesOfOneToken_issueExactlyOneChain() throws Exception {
         registerVerified();
         TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
-        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse otherDevice = loginOnPhone();
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         CyclicBarrier startTogether = new CyclicBarrier(2);
@@ -1246,7 +1263,7 @@ class AuthServiceImplTest {
     void refresh_retryingWithinTheGraceWindow_leavesOtherSessionsAlone() {
         registerVerified();
         TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
-        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse otherDevice = loginOnPhone();
 
         TokenResponse rotated = authService.refresh(new RefreshTokenRequest(session.refreshToken()));
 
@@ -1272,7 +1289,7 @@ class AuthServiceImplTest {
     @Test
     void refresh_twoDevicesRefreshingAtOnce_bothKeepTheirSessions() throws Exception {
         registerVerified();
-        String phone = authService.login(new LoginRequest("johndoe", "password123")).refreshToken();
+        String phone = loginOnPhone().refreshToken();
         String laptop = authService.login(new LoginRequest("johndoe", "password123")).refreshToken();
 
         for (int round = 0; round < 10; round++) {
@@ -1475,7 +1492,7 @@ class AuthServiceImplTest {
 
         assertThat(securityEventRepository.findAll())
                 .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getUserId, AuthSecurityEvent::getLocation)
-                .containsExactly(tuple(SecurityEventType.LOGIN_FAILED, registered.id(), "London, United Kingdom"));
+                .containsExactly(tuple(SecurityEventType.LOGIN_FAILED, registered.id(), "London, England, United Kingdom"));
     }
 
     /**

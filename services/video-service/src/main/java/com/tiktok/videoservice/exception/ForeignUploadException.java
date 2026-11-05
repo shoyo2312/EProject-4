@@ -13,6 +13,11 @@ import com.tiktok.common.exception.BadRequestException;
 public class ForeignUploadException extends BadRequestException {
 
     public ForeignUploadException() {
-        super("FOREIGN_UPLOAD", "rawFileUrl must point at a file you uploaded");
+        this("rawFileUrl");
+    }
+
+    /** @param field the request field holding the URL, named in the message */
+    public ForeignUploadException(String field) {
+        super("FOREIGN_UPLOAD", "%s must point at a file you uploaded".formatted(field));
     }
 }

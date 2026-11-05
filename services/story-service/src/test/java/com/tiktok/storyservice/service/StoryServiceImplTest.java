@@ -1,6 +1,11 @@
 package com.tiktok.storyservice.service;
 
 import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.storyservice.client.MusicCatalogClient;
+import com.tiktok.storyservice.client.MusicTrack;
+import com.tiktok.storyservice.dto.request.StoryEditRequest;
+import com.tiktok.storyservice.entity.StoryEdit;
+import com.tiktok.storyservice.exception.MusicNotFoundException;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
 import com.tiktok.storyservice.dto.response.StoryAnnouncementResponse;
 import com.tiktok.storyservice.dto.response.StoryCardResponse;
@@ -75,6 +80,9 @@ class StoryServiceImplTest {
     @Mock
     private StoryAudience storyAudience;
 
+    @Mock
+    private MusicCatalogClient musicCatalog;
+
     private final StoryMapper storyMapper = Mappers.getMapper(StoryMapper.class);
 
     private StoryServiceImpl storyService;
@@ -82,7 +90,7 @@ class StoryServiceImplTest {
     @BeforeEach
     void setUp() {
         storyService = new StoryServiceImpl(storyRepository, storyViewRepository, storyMapper, storyMedia,
-                captionModeration, storyAudience);
+                captionModeration, storyAudience, musicCatalog);
     }
 
     private static Story story(String id, Long userId, StoryStatus status, StoryVisibility visibility, Instant createdAt) {
@@ -114,7 +122,7 @@ class StoryServiceImplTest {
         when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
         when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
         when(storyMedia.exists(KEY)).thenReturn(true);
-        when(captionModeration.screen("hello")).thenReturn(ModerationVerdict.REVIEW);
+        when(captionModeration.screen("hello", List.of())).thenReturn(ModerationVerdict.REVIEW);
         when(storyMedia.copyForStory(eq(KEY), anyString())).thenReturn(COPY);
         when(storyRepository.insert(any(Story.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -175,10 +183,84 @@ class StoryServiceImplTest {
         when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
         when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
         when(storyMedia.exists(KEY)).thenReturn(true);
-        when(captionModeration.screen("bad")).thenThrow(new StoryCaptionRejectedException());
+        when(captionModeration.screen("bad", List.of())).thenThrow(new StoryCaptionRejectedException());
 
         assertThatThrownBy(() -> storyService.create(100L, new CreateStoryRequest(UPLOAD, "bad", StoryVisibility.PUBLIC)))
                 .isInstanceOf(StoryCaptionRejectedException.class);
+        verifyNoInteractions(storyRepository);
+        verify(storyMedia, never()).copyForStory(anyString(), anyString());
+    }
+
+    private static final String OVERLAY = "s3://bucket/stories/100/2.png";
+    private static final String OVERLAY_KEY = "stories/100/2.png";
+
+    private static StoryEditRequest songAndText() {
+        return new StoryEditRequest(null, new StoryEditRequest.Filter("mono", null),
+                List.of(new StoryEditRequest.Overlay(OVERLAY, null, null, List.of("hi there"))),
+                new StoryEditRequest.Music("42", 12.5, 0.8, null), 9.0);
+    }
+
+    /**
+     * The song is the catalogue's, not the client's: its credit and the file media-worker mixes both
+     * come from the lookup. The overlay is stored in the form media-worker reads, and its words are
+     * screened with the caption.
+     */
+    @Test
+    void createKeepsTheEditWithTheCataloguesSong() {
+        when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
+        when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
+        when(storyMedia.exists(KEY)).thenReturn(true);
+        when(storyMedia.keyOf(100L, OVERLAY)).thenReturn(OVERLAY_KEY);
+        when(storyMedia.exists(OVERLAY_KEY)).thenReturn(true);
+        when(storyMedia.canonicalUrl(OVERLAY_KEY)).thenReturn("s3://bucket/" + OVERLAY_KEY);
+        when(musicCatalog.requireTrack("42")).thenReturn(new MusicTrack("42", "Calm", "Someone",
+                "https://prod-1.storage.jamendo.com/download/42", "http://creativecommons.org/licenses/by/3.0/",
+                "https://www.jamendo.com/track/42"));
+        when(storyMedia.copyForStory(eq(KEY), anyString())).thenReturn(COPY);
+        when(storyRepository.insert(any(Story.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        StoryResponse response = storyService.create(100L,
+                new CreateStoryRequest(UPLOAD, "cap", StoryVisibility.PUBLIC, songAndText()));
+
+        verify(captionModeration).screen("cap", List.of("hi there"));
+        ArgumentCaptor<Story> captor = ArgumentCaptor.forClass(Story.class);
+        verify(storyRepository).insert(captor.capture());
+        StoryEdit edit = captor.getValue().getEdit();
+        assertThat(edit.getMusic().getAudioUrl()).isEqualTo("https://prod-1.storage.jamendo.com/download/42");
+        assertThat(edit.getMusic().getStart()).isEqualTo(12.5);
+        assertThat(edit.getMusic().getOriginalVolume()).isEqualTo(1.0);
+        assertThat(edit.getPhotoSeconds()).as("an image with a song plays this long").isEqualTo(9.0);
+        assertThat(edit.getOverlays()).singleElement()
+                .satisfies(overlay -> assertThat(overlay.getImageUrl()).isEqualTo("s3://bucket/" + OVERLAY_KEY));
+        assertThat(edit.getFilter().getId()).isEqualTo("mono");
+        assertThat(response.music().title()).isEqualTo("Calm");
+        assertThat(response.music().artist()).isEqualTo("Someone");
+    }
+
+    @Test
+    void anOverlayFromSomeoneElseIsRefused() {
+        when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
+        when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.IMAGE);
+        when(storyMedia.exists(KEY)).thenReturn(true);
+        when(storyMedia.keyOf(100L, OVERLAY)).thenThrow(new ForeignUploadException());
+
+        assertThatThrownBy(() -> storyService.create(100L,
+                new CreateStoryRequest(UPLOAD, null, StoryVisibility.PUBLIC, songAndText())))
+                .isInstanceOf(ForeignUploadException.class)
+                .hasMessageContaining("edit.overlays[].imageUrl");
+        verifyNoInteractions(storyRepository, musicCatalog);
+    }
+
+    @Test
+    void aSongTheCatalogueWillNotOfferSavesNothing() {
+        when(storyMedia.keyOf(100L, UPLOAD)).thenReturn(KEY);
+        when(storyMedia.typeOf(KEY)).thenReturn(StoryMediaType.VIDEO);
+        when(storyMedia.exists(KEY)).thenReturn(true);
+        when(musicCatalog.requireTrack("42")).thenThrow(new MusicNotFoundException());
+
+        assertThatThrownBy(() -> storyService.create(100L, new CreateStoryRequest(UPLOAD, null, StoryVisibility.PUBLIC,
+                new StoryEditRequest(null, null, null, new StoryEditRequest.Music("42", null, null, null), null))))
+                .isInstanceOf(MusicNotFoundException.class);
         verifyNoInteractions(storyRepository);
         verify(storyMedia, never()).copyForStory(anyString(), anyString());
     }

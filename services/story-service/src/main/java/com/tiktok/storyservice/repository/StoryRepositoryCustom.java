@@ -1,6 +1,7 @@
 package com.tiktok.storyservice.repository;
 
 import com.tiktok.storyservice.entity.Story;
+import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.entity.StoryModeration;
 import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.entity.StoryVisibility;
@@ -27,8 +28,18 @@ public interface StoryRepositoryCustom {
      * @param expiresAt null leaves the expiry as it is
      * @return whether this call made the transition
      */
+    default boolean decide(String storyId, StoryStatus to, Instant expiresAt, Integer durationSeconds,
+                           StoryModeration moderation) {
+        return decide(storyId, to, expiresAt, durationSeconds, moderation, null, null);
+    }
+
+    /**
+     * @param mediaKey  where media-worker stored the story rendered from its edits, served from now
+     *                  on; null leaves the media as posted
+     * @param mediaType the rendered media's type, set with {@code mediaKey}
+     */
     boolean decide(String storyId, StoryStatus to, Instant expiresAt, Integer durationSeconds,
-                   StoryModeration moderation);
+                   StoryModeration moderation, String mediaKey, StoryMediaType mediaType);
 
     void markEventPublished(String storyId, Instant at);
 

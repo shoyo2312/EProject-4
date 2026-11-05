@@ -1,6 +1,7 @@
 package com.tiktok.storyservice.repository;
 
 import com.tiktok.storyservice.entity.Story;
+import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.entity.StoryModeration;
 import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.entity.StoryVisibility;
@@ -30,11 +31,15 @@ public class StoryRepositoryImpl implements StoryRepositoryCustom {
 
     @Override
     public boolean decide(String storyId, StoryStatus to, Instant expiresAt, Integer durationSeconds,
-                          StoryModeration moderation) {
+                          StoryModeration moderation, String mediaKey, StoryMediaType mediaType) {
         Update update = new Update()
                 .set("status", to)
                 .set("durationSeconds", durationSeconds)
                 .set("moderation", moderation);
+        if (mediaKey != null && mediaType != null) {
+            // The rendered story replaces the upload's copy, which stays for the lifecycle rule.
+            update.set("mediaKey", mediaKey).set("mediaType", mediaType);
+        }
         if (expiresAt != null) {
             update.set("expiresAt", expiresAt);
         }

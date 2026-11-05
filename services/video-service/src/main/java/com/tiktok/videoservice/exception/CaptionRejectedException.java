@@ -17,7 +17,9 @@ import java.util.Locale;
 public class CaptionRejectedException extends DomainException {
 
     public enum Field {
-        TITLE, DESCRIPTION, TAGS
+        TITLE, DESCRIPTION, TAGS,
+        /** The words laid over the picture in the app's editor: VIDEO_OVERLAY_REJECTED. */
+        OVERLAY
     }
 
     public CaptionRejectedException(Field field) {

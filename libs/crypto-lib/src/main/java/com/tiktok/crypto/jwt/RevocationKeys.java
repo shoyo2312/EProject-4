@@ -32,6 +32,16 @@ public final class RevocationKeys {
     /** The access-token claim naming the refresh-token family it was minted from. */
     public static final String CLAIM_FAMILY = "fid";
 
+    /**
+     * One key per signed-out session (one device), holding a placeholder value. Kills every
+     * access token the session was ever issued, which the jti key cannot: the session that is
+     * signed out remotely is not the one making the request, so nobody holds its jti.
+     */
+    public static final String SESSION_PREFIX = "auth:blacklist:session:";
+
+    /** The session (device) an access token belongs to; absent on tokens minted before sessions. */
+    public static final String CLAIM_SESSION_ID = "sid";
+
     private static final String CLAIM_JTI = "jti";
 
     private RevocationKeys() {
@@ -49,6 +59,16 @@ public final class RevocationKeys {
         return FAMILY_PREFIX + familyId;
     }
 
+    public static String forSession(Object sessionId) {
+        return SESSION_PREFIX + sessionId;
+    }
+
+    /** The session id of this token, or {@code null} if it carries none. */
+    public static String sessionIdOf(Claims claims) {
+        Object sid = claims.get(CLAIM_SESSION_ID);
+        return sid == null ? null : sid.toString();
+    }
+
     /** The jti of this token, or {@code null} if it carries none. */
     public static String jtiOf(Claims claims) {
         return claims.get(CLAIM_JTI, String.class);
@@ -63,12 +83,12 @@ public final class RevocationKeys {
     }
 
     /**
-     * Every key that can revoke this token — the user's cutoff first, then the jti and the family
-     * when the token has them — for a read side to fetch in a single MGET. Asked one at a time,
-     * the check cost every authenticated request sequential Redis round trips.
+     * Every key that can revoke this token — the user's cutoff first, then the jti, the family
+     * and the session when the token has them — for a read side to fetch in a single MGET. Asked
+     * one at a time, the check cost every authenticated request sequential Redis round trips.
      */
     public static List<String> keysOf(Claims claims) {
-        List<String> keys = new ArrayList<>(3);
+        List<String> keys = new ArrayList<>(4);
         keys.add(forUser(claims.getSubject()));
         String jti = jtiOf(claims);
         if (jti != null) {
@@ -78,12 +98,18 @@ public final class RevocationKeys {
         if (family != null) {
             keys.add(forFamily(family));
         }
+        String sid = sessionIdOf(claims);
+        if (sid != null) {
+            keys.add(forSession(sid));
+        }
         return keys;
     }
 
     /**
-     * @param values what an MGET of {@link #keysOf} answered, in that order: the user's cutoff
-     *               is compared with the token's issue time, any other key present revokes it
+     * The first value is the user's cutoff and is compared with the token's issue time; every key
+     * after it is a plain marker, so any value at all means revoked.
+     *
+     * @param values what an MGET of {@link #keysOf} answered, in that order
      */
     public static boolean isRevoked(Claims claims, List<String> values) {
         if (values == null || values.isEmpty()) {

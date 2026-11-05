@@ -2,6 +2,7 @@ package com.tiktok.storyservice.event.producer;
 
 import com.tiktok.event.story.StoryActivatedEvent;
 import com.tiktok.event.story.StoryCreatedEvent;
+import com.tiktok.storyservice.entity.StoryEdit;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.storyservice.entity.Story;
 import com.tiktok.storyservice.repository.StoryRepository;
@@ -78,8 +79,10 @@ public class StoryEventPublisher {
     }
 
     private ProducerRecord<String, String> toRecord(Story story) {
+        StoryEdit edit = story.getEdit();
         StoryCreatedEvent event = StoryCreatedEvent.of(story.getId(), story.getUserId(), story.getMediaKey(),
-                story.getMediaType().name(), story.getTextVerdict());
+                story.getMediaType().name(), story.getTextVerdict(), edit == null ? null : edit.toEvent(),
+                edit == null ? null : edit.getPhotoSeconds());
         return new ProducerRecord<>(TOPIC, story.getId(), objectMapper.writeValueAsString(event));
     }
 

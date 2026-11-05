@@ -127,7 +127,7 @@ public class VideoEventConsumer {
 
         for (int attempt = 1; attempt <= transcodeAttempts; attempt++) {
             try {
-                TranscodeResult result = transcodeService.transcode(event.videoId(), event.rawFileUrl());
+                TranscodeResult result = transcodeService.transcode(event.videoId(), event.rawFileUrl(), event.edit());
                 // The moderation step reads this event, not the publication, so the caption's
                 // verdict rides along to be folded into the frames' (see CaptionVerdict).
                 return VideoTranscodedEvent.success(

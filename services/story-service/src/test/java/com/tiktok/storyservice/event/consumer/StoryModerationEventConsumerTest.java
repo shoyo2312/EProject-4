@@ -3,6 +3,7 @@ package com.tiktok.storyservice.event.consumer;
 import com.tiktok.event.story.StoryModerationCompletedEvent;
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.event.video.VideoModerationCompletedEvent;
+import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.entity.StoryModeration;
 import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.repository.StoryRepository;
@@ -37,13 +38,13 @@ class StoryModerationEventConsumerTest {
 
     @Test
     void approvedBecomesActiveFor24h() {
-        when(storyRepository.decide(anyString(), any(), any(), any(), any())).thenReturn(true);
+        when(storyRepository.decide(anyString(), any(), any(), any(), any(), any(), any())).thenReturn(true);
 
         consumer.onMessage(verdict("s1", ModerationVerdict.APPROVED, 42));
 
         ArgumentCaptor<Instant> expiresAt = ArgumentCaptor.forClass(Instant.class);
         ArgumentCaptor<StoryModeration> moderation = ArgumentCaptor.forClass(StoryModeration.class);
-        verify(storyRepository).decide(eq("s1"), eq(StoryStatus.ACTIVE), expiresAt.capture(), eq(42), moderation.capture());
+        verify(storyRepository).decide(eq("s1"), eq(StoryStatus.ACTIVE), expiresAt.capture(), eq(42), moderation.capture(), isNull(), isNull());
         assertThat(expiresAt.getValue()).isCloseTo(Instant.now().plus(24, ChronoUnit.HOURS), within(5, ChronoUnit.SECONDS));
         assertThat(moderation.getValue().getVerdict()).isEqualTo(ModerationVerdict.APPROVED);
         assertThat(moderation.getValue().getMaxScore()).isEqualTo(0.4);
@@ -52,35 +53,48 @@ class StoryModerationEventConsumerTest {
 
     @Test
     void reviewBecomesHeldKeepingExpiry() {
-        when(storyRepository.decide(anyString(), any(), any(), any(), any())).thenReturn(true);
+        when(storyRepository.decide(anyString(), any(), any(), any(), any(), any(), any())).thenReturn(true);
 
         consumer.onMessage(verdict("s1", ModerationVerdict.REVIEW, null));
 
-        verify(storyRepository).decide(eq("s1"), eq(StoryStatus.HELD), isNull(), isNull(), any());
+        verify(storyRepository).decide(eq("s1"), eq(StoryStatus.HELD), isNull(), isNull(), any(), isNull(), isNull());
     }
 
     @Test
     void rejectedBecomesRejectedKeepingExpiry() {
-        when(storyRepository.decide(anyString(), any(), any(), any(), any())).thenReturn(true);
+        when(storyRepository.decide(anyString(), any(), any(), any(), any(), any(), any())).thenReturn(true);
 
         consumer.onMessage(verdict("s1", ModerationVerdict.REJECTED, 70));
 
-        verify(storyRepository).decide(eq("s1"), eq(StoryStatus.REJECTED), isNull(), eq(70), any());
+        verify(storyRepository).decide(eq("s1"), eq(StoryStatus.REJECTED), isNull(), eq(70), any(), isNull(), isNull());
     }
 
     @Test
     void redeliveredVerdictChangesNothing() {
-        when(storyRepository.decide(anyString(), any(), any(), any(), any())).thenReturn(false);
+        when(storyRepository.decide(anyString(), any(), any(), any(), any(), any(), any())).thenReturn(false);
 
         assertThatCode(() -> consumer.onMessage(verdict("s1", ModerationVerdict.APPROVED, 5))).doesNotThrowAnyException();
 
-        verify(storyRepository).decide(eq("s1"), any(), any(), any(), any());
+        verify(storyRepository).decide(eq("s1"), any(), any(), any(), any(), any(), any());
         verifyNoMoreInteractions(storyRepository);
+    }
+
+    /** A story rendered from its edits is served from what media-worker rendered and screened. */
+    @Test
+    void renderedStorySwapsToTheRenderedMedia() {
+        when(storyRepository.decide(anyString(), any(), any(), any(), any(), any(), any())).thenReturn(true);
+
+        consumer.onMessage(objectMapper.writeValueAsString(StoryModerationCompletedEvent.from("s1",
+                VideoModerationCompletedEvent.of("s1", ModerationVerdict.APPROVED, "nsfw", 0.1, 0, 10, 30L, "m", "v1", null),
+                6, "stories/100/s1/rendered.mp4", "VIDEO")));
+
+        verify(storyRepository).decide(eq("s1"), eq(StoryStatus.ACTIVE), any(), eq(6), any(),
+                eq("stories/100/s1/rendered.mp4"), eq(StoryMediaType.VIDEO));
     }
 
     @Test
     void verdictForUnknownStoryIsNoOp() {
-        when(storyRepository.decide(eq("ghost"), any(), any(), any(), any())).thenReturn(false);
+        when(storyRepository.decide(eq("ghost"), any(), any(), any(), any(), any(), any())).thenReturn(false);
 
         assertThatCode(() -> consumer.onMessage(verdict("ghost", ModerationVerdict.REJECTED, null))).doesNotThrowAnyException();
 

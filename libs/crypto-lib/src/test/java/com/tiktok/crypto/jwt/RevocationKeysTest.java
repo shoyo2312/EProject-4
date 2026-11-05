@@ -16,6 +16,7 @@ class RevocationKeysTest {
     void keyNames_areTheContractTheReadSidesShare() {
         assertThat(RevocationKeys.forJti("abc")).isEqualTo("auth:blacklist:abc");
         assertThat(RevocationKeys.forUser(7L)).isEqualTo("auth:blacklist:user:7");
+        assertThat(RevocationKeys.forSession(9L)).isEqualTo("auth:blacklist:session:9");
     }
 
     @Test
@@ -56,6 +57,33 @@ class RevocationKeysTest {
         assertThat(RevocationKeys.isRevoked(claims, java.util.Arrays.asList(null, null, "1")))
                 .as("a revoked family kills its access tokens")
                 .isTrue();
+    }
+
+    /** A token minted after both features carries both, and either key alone revokes it. */
+    @Test
+    void keysOf_andIsRevoked_includeFamilyAndSessionTogether() {
+        Claims claims = provider.extractClaims(
+                provider.generateToken("7", Map.of("jti", "abc", "fid", "42", "sid", "9"), 60_000));
+
+        assertThat(RevocationKeys.keysOf(claims)).containsExactly(
+                "auth:blacklist:user:7", "auth:blacklist:abc", "auth:blacklist:family:42", "auth:blacklist:session:9");
+        assertThat(RevocationKeys.isRevoked(claims, java.util.Arrays.asList(null, null, null, null))).isFalse();
+        assertThat(RevocationKeys.isRevoked(claims, java.util.Arrays.asList(null, null, "1", null))).isTrue();
+        assertThat(RevocationKeys.isRevoked(claims, java.util.Arrays.asList(null, null, null, "1"))).isTrue();
+    }
+
+    @Test
+    void keysOf_andIsRevoked_includeTheSessionWhenTheTokenHasOne() {
+        Claims claims = provider.extractClaims(provider.generateToken("7", Map.of("jti", "abc", "sid", "9"), 60_000));
+        Claims sidOnly = provider.extractClaims(provider.generateToken("7", Map.of("sid", "9"), 60_000));
+
+        assertThat(RevocationKeys.keysOf(claims))
+                .containsExactly("auth:blacklist:user:7", "auth:blacklist:abc", "auth:blacklist:session:9");
+        assertThat(RevocationKeys.keysOf(sidOnly)).containsExactly("auth:blacklist:user:7", "auth:blacklist:session:9");
+
+        assertThat(RevocationKeys.isRevoked(claims, java.util.Arrays.asList(null, null, null))).isFalse();
+        assertThat(RevocationKeys.isRevoked(claims, java.util.Arrays.asList(null, null, "1"))).isTrue();
+        assertThat(RevocationKeys.isRevoked(sidOnly, java.util.Arrays.asList(null, "1"))).isTrue();
     }
 
     @Test

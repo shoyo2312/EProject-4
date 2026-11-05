@@ -16,7 +16,7 @@ service khác, gateway chặn hẳn.
 POST /upload-url → trình duyệt POST file thẳng lên MinIO (presigned, stories/{userId}/{id}.{ext})
 POST /           → caption được chấm (moderation-lib); file được copy sang stories/{userId}/{storyId}/media.{ext}
                    (bản được chấm và phát); story lưu ở PENDING_MODERATION
-                 → story.story-events → media-worker chấm ảnh/video
+                 → story.story-events → media-worker dựng lại theo edit (nếu có), rồi chấm bản đã dựng
                  → media.story-moderation-events → ACTIVE | HELD | REJECTED
                  → ACTIVE + PUBLIC/FRIENDS → story.activation-events (StoryActivatedEvent, key userId) → notification-service
 ```
@@ -68,12 +68,50 @@ Loại file và giới hạn: `image/jpeg`, `image/png`, `image/webp` ≤ 10 MB;
 ≤ 50 MB và ≤ 60 giây (dài hơn → `REJECTED`). Giới hạn dung lượng được ký vào policy upload, MinIO tự
 từ chối file lớn hơn.
 
+### Chỉnh sửa (`edit`)
+
+`POST /` nhận thêm `edit` (optional) — cùng công thức với `edit` của video (video doc §3.2): `segments`,
+`filter`, `overlays`, `music`, cộng `photoSeconds`. media-worker **dựng lại** story theo công thức này
+trước khi chấm, rồi chấm và phát **bản đã dựng** (`stories/{userId}/{storyId}/rendered.{mp4|jpg}`); bản
+copy gốc để lifecycle dọn.
+
+```json
+"edit": {
+  "segments": [ { "start": 0.0, "end": 12.5, "speed": 1.0 } ],
+  "filter": { "id": "mono", "intensity": 0.8 },
+  "overlays": [ { "imageUrl": "s3://video-media/stories/123/7314.png", "texts": ["Xin chào"] } ],
+  "music": { "trackId": "1214935", "start": 12.5, "volume": 0.8, "originalVolume": 0.2 },
+  "photoSeconds": 6
+}
+```
+
+- `segments`: chỉ có nghĩa với video (ảnh thì bỏ qua). ≤ 20 đoạn, `speed` 0.25–4.
+- `filter`: id của bộ lọc màu như video.
+- `overlays`: ≤ 10 lớp chữ/sticker, mỗi lớp là một PNG trong suốt cùng tỉ lệ khung hình, upload qua
+  `POST /upload-url` với `contentType: image/png`. Phải là upload của chính mình và có thật (`FOREIGN_UPLOAD`
+  / `UNSUPPORTED_UPLOAD_TYPE` / `UPLOAD_NOT_FOUND`). `texts` (≤ 20 × 150 ký tự) được chấm như caption,
+  đọc liền nhau: từ bị cấm → `422 STORY_OVERLAY_REJECTED`, từ đáng ngờ → story bị giữ. Trên ảnh không
+  nhạc, `start`/`end` bị bỏ qua (ảnh không có dòng thời gian).
+- `music`: `trackId` lấy từ `GET /api/v1/videos/music` (video doc §3.10). story-service **tra lại** bài hát
+  qua video-service (`GET /api/v1/videos/internal/music/{trackId}`, token nội bộ) — URL tải, tên bài, nghệ
+  sĩ, giấy phép đều lấy từ catalogue. Bài không dùng được → `400 MUSIC_NOT_FOUND`; không tra được →
+  `503 MUSIC_UNAVAILABLE`. `originalVolume` vô nghĩa với ảnh.
+- `photoSeconds`: 1–15, mặc định 6 — **ảnh có nhạc** được dựng thành video dài chừng đó (nhạc cần dòng
+  thời gian); `mediaType` của story đổi thành `VIDEO` sau khi duyệt. Ảnh không nhạc vẫn là ảnh (JPEG, đã vẽ
+  màu/chữ/sticker vào).
+
+App vẽ lại ảnh thẳng đứng (đã áp hướng xoay EXIF) thành PNG ≤ 1080 px ngang trước khi upload, để lớp chữ
+nằm đúng chỗ đã đặt — decoder của ffmpeg không đọc hướng xoay EXIF.
+
+Dựng không được (cắt hết, file hỏng, nhạc không tải được sau 2 lần thử) → story `REJECTED` với lý do
+"The story's edits could not be applied" — không bao giờ phát bản gốc thay cho bản đã chỉnh.
+
 ## 4. Endpoints
 
 | Method | Path | Token | Body / params | Trả về |
 |---|---|---|---|---|
 | POST | `/upload-url` | cần | `{contentType}` | `{uploadUrl, formFields, fileUrl, expiresInSeconds}` — giống `POST /videos/upload-url` |
-| POST | `/` | cần | `{mediaUrl: fileUrl, caption?: ≤300, visibility}` | `201` + `StoryResponse` (của chủ) |
+| POST | `/` | cần | `{mediaUrl: fileUrl, caption?: ≤300, visibility, edit?}` (`edit`: §3) | `201` + `StoryResponse` (của chủ) |
 | GET | `/feed` | cần | `followedUserIds` (≤ 500, như Following feed của video) | `StoryGroupResponse[]` |
 | GET | `/rings` | không | `userIds` (≤ 100) | `StoryRingResponse[]` — chỉ những id có vòng, theo thứ tự gửi lên |
 | GET | `/users/{userId}` | không | — | `StoryResponse[]`, cũ trước |
@@ -85,7 +123,8 @@ từ chối file lớn hơn.
 | DELETE | `/{storyId}/reaction` | cần | — | `204`, idempotent; view vẫn giữ |
 | DELETE | `/{storyId}` | chủ story | — | xoá mềm |
 
-`StoryResponse`: `id, userId, mediaUrl, mediaType (IMAGE|VIDEO), caption, visibility, status, durationSeconds, viewCount, viewedByMe, myReaction, reactionCounts, createdAt, expiresAt`.
+`StoryResponse`: `id, userId, mediaUrl, mediaType (IMAGE|VIDEO), caption, visibility, status, durationSeconds, viewCount, viewedByMe, myReaction, reactionCounts, createdAt, expiresAt, music`.
+`music`: `{trackId, title, artist, licenseUrl, shareUrl}` hoặc `null` — mọi giấy phép Creative Commons đòi ghi công, app hiện "♫ title · artist" khi xem story.
 `myReaction` là reaction của người gọi (null khi chưa thả, và luôn null với chủ story); `reactionCounts` (`{LOVE: 12, WOW: 3}`, chỉ loại có người thả) chỉ chủ story thấy, người khác nhận null như `viewCount`. Reaction nằm trên bản ghi view (`story_views`) nên hết hạn cùng story và không đi qua notification.
 
 `StoryGroupResponse`: `{userId, stories, hasUnseen}`. Nhóm của chính người gọi đứng đầu (mọi status,
@@ -107,6 +146,9 @@ vắng mặt trong kết quả; id trùng chỉ tính một lần.
 | `UPLOAD_NOT_FOUND` | 400 | chưa upload file lên `uploadUrl`, hoặc upload đã hết hạn |
 | `FOREIGN_UPLOAD` | 403 | `mediaUrl` không phải upload của mình, hoặc đã dùng cho story khác |
 | `STORY_CAPTION_REJECTED` | 422 | caption chứa từ bị cấm — không lưu gì, sửa caption rồi đăng lại cùng file |
+| `STORY_OVERLAY_REJECTED` | 422 | chữ vẽ trên story (`edit.overlays[].texts`) chứa từ bị cấm — không lưu gì |
+| `MUSIC_NOT_FOUND` | 400 | `edit.music.trackId` không còn trong catalogue hoặc không được ghép vào hình |
+| `MUSIC_UNAVAILABLE` | 503 | không tra được bài hát (video-service hoặc Jamendo không trả lời) |
 | `TOO_MANY_FOLLOWED_USERS` | 400 | `followedUserIds` quá 500 |
 | `TOO_MANY_RING_USERS` | 400 | `userIds` quá 100 |
 | `STORY_NOT_FOUND` | 404 | không tồn tại, đã xoá, đã hết hạn, hoặc người gọi không được xem |

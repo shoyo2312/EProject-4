@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
     status      text,
     mod_reason  text,
     mod_version text,
+    sticker_id  text,
+    edited_at   timestamp,
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
 
