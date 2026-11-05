@@ -60,6 +60,9 @@ chat:
     # BucketInitializer) is what makes stickers/* readable.
     public-base-url: ${MEDIA_PUBLIC_URL:${MINIO_ENDPOINT:http://localhost:9000}}
     bucket: ${MINIO_BUCKET:video-media}
+  giphy:
+    # Free beta key: 100 calls an hour, which GiphyClient's cache is there to respect. Blank turns the picker off.
+    api-key: ${GIPHY_API_KEY:}
 
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}

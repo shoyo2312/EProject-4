@@ -103,4 +103,20 @@ class StickerCatalogTest {
         assertThatThrownBy(() -> StickerCatalog.fromJson(json, BASE, BUCKET))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("--fill");
     }
+
+    @Test
+    void aGiphyStickerIsSendableByIdAndResolvesToTheCanonicalMediaUrl() {
+        assertThat(catalog.sendable("giphy:LKiPxU4tiTrJ5LWJst")).isTrue();
+        StickerView view = catalog.find("giphy:LKiPxU4tiTrJ5LWJst").orElseThrow();
+        assertThat(view.stickerId()).isEqualTo("giphy:LKiPxU4tiTrJ5LWJst");
+        assertThat(view.url()).isEqualTo("https://media.giphy.com/media/LKiPxU4tiTrJ5LWJst/giphy.webp");
+    }
+
+    @Test
+    void aGiphyIdThatCouldSteerTheUrlElsewhereIsRefused() {
+        for (String id : new String[] {"giphy:", "giphy:abc", "giphy:../../x", "giphy:a/b/c/d/e", "giphy:ab cd efg", "GIPHY:LKiPxU4tiTrJ5LWJst"}) {
+            assertThat(catalog.sendable(id)).as(id).isFalse();
+            assertThat(catalog.find(id)).as(id).isEmpty();
+        }
+    }
 }
