@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -114,6 +115,9 @@ class EventJsonCompatibilityTest {
         }
         if (type == Instant.class) {
             return AT.plusSeconds(n);
+        }
+        if (type == LocalDate.class) {
+            return LocalDate.of(2000, 1, 1).plusDays(n);
         }
         if (type == Long.class || type == long.class) {
             return 1000L + n;

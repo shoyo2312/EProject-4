@@ -21,7 +21,13 @@ public record UserFollowChangedEvent(
          * not the owner. Absent from every event produced before private accounts existed, which
          * deserialises to false.
          */
-        boolean requestApproved
+        boolean requestApproved,
+        /*
+         * The video the follower was watching when they followed, so analytics can credit it.
+         * Nullable: absent on unfollows, on profile-page follows and on every event written before
+         * the field existed.
+         */
+        Long sourceVideoId
 ) implements DomainEvent {
 
     public static UserFollowChangedEvent of(Long followerId, Long followingId, boolean followed) {
@@ -30,7 +36,12 @@ public record UserFollowChangedEvent(
 
     public static UserFollowChangedEvent of(Long followerId, Long followingId, boolean followed,
                                             boolean requestApproved) {
+        return of(followerId, followingId, followed, requestApproved, null);
+    }
+
+    public static UserFollowChangedEvent of(Long followerId, Long followingId, boolean followed,
+                                            boolean requestApproved, Long sourceVideoId) {
         return new UserFollowChangedEvent(UUID.randomUUID().toString(), Instant.now(),
-                followerId, followingId, followed, requestApproved);
+                followerId, followingId, followed, requestApproved, sourceVideoId);
     }
 }

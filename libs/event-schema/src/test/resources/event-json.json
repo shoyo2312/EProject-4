@@ -136,6 +136,12 @@
     "reason" : "reason-5",
     "bannedUntil" : "2026-10-08T09:30:21.123456789Z"
   },
+  "UserBirthDateSetEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "birthDate" : "2000-01-05"
+  },
   "UserBlockChangedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
@@ -149,7 +155,8 @@
     "followerId" : 1003,
     "followingId" : 1004,
     "followed" : false,
-    "requestApproved" : true
+    "requestApproved" : true,
+    "sourceVideoId" : 1007
   },
   "UserPrivacyChangedEvent" : {
     "eventId" : "eventId-1",
@@ -163,7 +170,8 @@
     "userId" : 1003,
     "username" : "username-4",
     "email" : "email-5",
-    "avatarUrl" : "avatarUrl-6"
+    "avatarUrl" : "avatarUrl-6",
+    "birthDate" : "2000-01-08"
   },
   "UserSessionsRevokedEvent" : {
     "eventId" : "eventId-1",
@@ -332,7 +340,9 @@
     "userId" : 1004,
     "watchedMs" : 1005,
     "durationMs" : 1006,
-    "completed" : false
+    "completed" : false,
+    "source" : "source-8",
+    "searchQuery" : "searchQuery-9"
   },
   "WeeklyScreenTimeSummaryEvent" : {
     "eventId" : "eventId-1",
