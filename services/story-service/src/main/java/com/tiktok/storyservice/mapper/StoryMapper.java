@@ -18,6 +18,7 @@ public interface StoryMapper {
     @Mapping(target = "viewedByMe", source = "viewedByMe")
     @Mapping(target = "myReaction", source = "myReaction")
     @Mapping(target = "reactionCounts", source = "reactionCounts")
+    @Mapping(target = "music", expression = "java(com.tiktok.storyservice.dto.response.StoryMusicCredit.of(story.getEdit()))")
     StoryResponse toResponse(Story story, String mediaUrl, boolean viewedByMe, StoryReaction myReaction,
                              Map<StoryReaction, Long> reactionCounts);
 

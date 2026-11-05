@@ -100,4 +100,22 @@ public interface Ffmpeg {
      * @return the frames actually written, in order, or an empty list if none could be decoded
      */
     List<Path> sampleFrames(Path source, Path targetDir, int count, int durationSeconds);
+
+    /**
+     * Turns a still picture into a silent clip {@code seconds} long, so a story photo can go
+     * through {@link #edit} like any video: its colour, text and song are then applied the one way.
+     * H.264 at the picture's own size, capped at 1080 wide and rounded to even sides.
+     *
+     * @param image a JPEG, PNG or WebP, read by the image demuxer and nothing else
+     * @return false if the picture could not be decoded
+     */
+    boolean stillVideo(Path image, Path target, double seconds);
+
+    /**
+     * Writes the first frame of {@code source} as a full-size JPEG — the still a story photo is
+     * served as once its colour, text and stickers are drawn in.
+     *
+     * @return false if no frame could be decoded
+     */
+    boolean firstFrame(Path source, Path target);
 }

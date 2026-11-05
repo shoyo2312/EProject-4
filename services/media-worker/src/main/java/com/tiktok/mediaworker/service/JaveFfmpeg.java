@@ -213,12 +213,77 @@ public class JaveFfmpeg implements Ffmpeg {
         }
     }
 
+    @Override
+    public boolean stillVideo(Path image, Path target, double seconds) {
+        // Decoded once on its own first: looped, a picture that will not decode is an error per
+        // frame for as long as the timeout allows, where this fails at once.
+        Path check = target.resolveSibling(target.getFileName() + ".check.png");
+        try {
+            if (!run("picture check", COPY_TIMEOUT_SECONDS, IMAGE_FORMATS, List.of(
+                    "-xerror",
+                    "-f", "image2",
+                    "-i", image.toString(),
+                    "-frames:v", "1",
+                    "-f", "image2",
+                    check.toString()))
+                    || !Files.isRegularFile(check) || Files.size(check) == 0) {
+                return false;
+            }
+        } catch (IOException e) {
+            return false;
+        } finally {
+            try {
+                Files.deleteIfExists(check);
+            } catch (IOException e) {
+                log.debug("Could not delete {}", check, e);
+            }
+        }
+        return run("still video", ENCODE_TIMEOUT_SECONDS, IMAGE_FORMATS, List.of(
+                "-f", "image2",
+                "-loop", "1",
+                "-framerate", "30",
+                "-t", format(seconds),
+                "-i", image.toString(),
+                // Even sides for yuv420p, and no wider than a phone screen needs.
+                "-vf", "scale=w='trunc(min(iw,1080)/2)*2':h=-2,format=yuv420p",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-tune", "stillimage",
+                "-crf", "20",
+                "-profile:v", "high",
+                "-pix_fmt", "yuv420p",
+                "-an",
+                "-movflags", "+faststart",
+                "-f", "mp4",
+                target.toString()));
+    }
+
+    @Override
+    public boolean firstFrame(Path source, Path target) {
+        return run("first frame", COPY_TIMEOUT_SECONDS, List.of(
+                "-i", source.toString(),
+                "-frames:v", "1",
+                "-q:v", "2",
+                "-f", "image2",
+                target.toString()));
+    }
+
     /** ffmpeg parses its own arguments, so the decimal separator must not follow the locale. */
     private static String format(double value) {
         return String.format(Locale.ROOT, "%.6f", value);
     }
 
+    /** The containers an upload may be — mp4/mov, webm — read straight from disk. */
+    private static final String VIDEO_FORMATS = "mov,matroska";
+
+    /** A story photo: the image demuxer, which reads one picture by its extension. */
+    private static final String IMAGE_FORMATS = "image2";
+
     private boolean run(String what, long timeoutSeconds, List<String> arguments) {
+        return run(what, timeoutSeconds, VIDEO_FORMATS, arguments);
+    }
+
+    private boolean run(String what, long timeoutSeconds, String formats, List<String> arguments) {
         List<String> command = new ArrayList<>(List.of(executable, "-nostdin", "-y", "-loglevel", "error",
                 // The input is a user's upload, and ffmpeg picks a demuxer from its content rather
                 // than its name: an HLS playlist saved as .mp4 has segments that can be any file
@@ -226,7 +291,7 @@ public class JaveFfmpeg implements Ffmpeg {
                 // apply to the one -i every command here has, and only to it — the containers an
                 // upload may be (mp4/mov, webm) read straight from disk.
                 "-protocol_whitelist", "file",
-                "-format_whitelist", "mov,matroska"));
+                "-format_whitelist", formats));
         command.addAll(arguments);
 
         Path diagnostics = null;

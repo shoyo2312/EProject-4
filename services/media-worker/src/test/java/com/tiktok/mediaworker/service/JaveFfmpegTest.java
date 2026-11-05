@@ -283,6 +283,56 @@ class JaveFfmpegTest {
         assertThat(new MultimediaObject(mixedVoiced.toFile()).getInfo().getDuration()).isBetween(1300L, 1800L);
     }
 
+    /**
+     * A story photo: made a still clip of the length asked for, then edited like any clip — here a
+     * red layer over the left half — and its first frame taken back out as the picture to serve.
+     * The odd-sized photo comes back with even sides, as yuv420p needs.
+     */
+    @Test
+    void stillVideo_thenEdit_thenFirstFrame_drawsTheLayerIntoThePhoto(@TempDir Path work) throws Exception {
+        Path photo = work.resolve("photo.png");
+        BufferedImage picture = new BufferedImage(301, 401, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < 401; y++) {
+            for (int x = 0; x < 301; x++) {
+                picture.setRGB(x, y, 0x2040C0);
+            }
+        }
+        ImageIO.write(picture, "png", photo.toFile());
+        Path overlay = work.resolve("overlay.png");
+        BufferedImage drawn = new BufferedImage(30, 40, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 40; y++) {
+            for (int x = 0; x < 15; x++) {
+                drawn.setRGB(x, y, 0xFFFF0000);
+            }
+        }
+        ImageIO.write(drawn, "png", overlay.toFile());
+
+        Path still = work.resolve("still.mp4");
+        assertThat(ffmpeg.stillVideo(photo, still, 3)).isTrue();
+        assertThat(new MultimediaObject(still.toFile()).getInfo().getDuration()).isBetween(2800L, 3300L);
+
+        Path edited = work.resolve("edited.mp4");
+        assertThat(ffmpeg.edit(still, edited, List.of(new VideoPublishedEvent.Edit.Segment(0, 3, 1)),
+                null, List.of(new Ffmpeg.Overlay(overlay, null, null)), null, false)).isTrue();
+
+        Path served = work.resolve("served.jpg");
+        assertThat(ffmpeg.firstFrame(edited, served)).isTrue();
+        BufferedImage frame = ImageIO.read(served.toFile());
+        assertThat(frame.getWidth() % 2).isZero();
+        assertThat(frame.getHeight() % 2).isZero();
+        assertThat(isRed(frame.getRGB(frame.getWidth() / 4, frame.getHeight() / 2))).as("under the layer").isTrue();
+        assertThat(isRed(frame.getRGB(frame.getWidth() * 3 / 4, frame.getHeight() / 2))).as("beside it").isFalse();
+    }
+
+    /** Only the image demuxer reads a story photo: a clip named like one is not decoded as a clip. */
+    @Test
+    void stillVideo_refusesSomethingThatIsNotAPicture(@TempDir Path work) throws Exception {
+        Path notAPicture = work.resolve("photo.jpg");
+        Files.write(notAPicture, "#EXTM3U\n#EXTINF:1,\nfile:///etc/passwd\n".getBytes());
+
+        assertThat(ffmpeg.stillVideo(notAPicture, work.resolve("still.mp4"), 2)).isFalse();
+    }
+
     /** A layer timed to the edited video's clock is absent before its start and there after it. */
     @Test
     void edit_showsATimedLayerOnlyFromItsStart(@TempDir Path work) throws Exception {

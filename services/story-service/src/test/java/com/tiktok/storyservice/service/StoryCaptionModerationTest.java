@@ -8,6 +8,7 @@ import com.tiktok.moderation.TextModerator;
 import com.tiktok.moderation.TextVerdict;
 import com.tiktok.moderation.classifier.TextClassifier;
 import com.tiktok.storyservice.exception.StoryCaptionRejectedException;
+import com.tiktok.storyservice.exception.StoryOverlayRejectedException;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -33,6 +34,32 @@ class StoryCaptionModerationTest {
         assertThat(moderation.screen(null)).isNull();
         assertThat(moderation.screen("  ")).isNull();
         verifyNoInteractions(moderator, classifier);
+    }
+
+    /** The words over the picture are read like the caption, and a refusal names them. */
+    @Test
+    void refusedOverlayTextRejectsWhileEnforcing() {
+        TextVerdict clean = TextVerdict.clean("v1");
+        when(moderator.enforcing()).thenReturn(true);
+        when(moderator.screen("hi", Surface.STORY_CAPTION)).thenReturn(clean);
+        when(classifier.refine(eq("hi"), eq(Surface.STORY_CAPTION), any())).thenReturn(clean);
+        when(moderator.screen("very bad", Surface.STORY_OVERLAY)).thenReturn(verdict(Flag.REJECT, Flag.Source.RULES));
+
+        assertThatThrownBy(() -> moderation.screen("hi", List.of("very", "bad")))
+                .isInstanceOf(StoryOverlayRejectedException.class);
+    }
+
+    @Test
+    void heldOverlayTextHoldsACleanCaption() {
+        TextVerdict clean = TextVerdict.clean("v1");
+        TextVerdict held = verdict(Flag.HOLD, Flag.Source.RULES);
+        when(moderator.enforcing()).thenReturn(true);
+        when(moderator.screen("hi", Surface.STORY_CAPTION)).thenReturn(clean);
+        when(classifier.refine(eq("hi"), eq(Surface.STORY_CAPTION), any())).thenReturn(clean);
+        when(moderator.screen("meh", Surface.STORY_OVERLAY)).thenReturn(held);
+        when(classifier.refine(eq("meh"), eq(Surface.STORY_OVERLAY), any())).thenReturn(held);
+
+        assertThat(moderation.screen("hi", List.of("meh"))).isEqualTo(ModerationVerdict.REVIEW);
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.tiktok.storyservice.event.consumer;
 
 import com.tiktok.event.story.StoryModerationCompletedEvent;
+import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.entity.StoryModeration;
 import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.repository.StoryRepository;
@@ -61,11 +62,25 @@ public class StoryModerationEventConsumer {
                 .build();
 
         boolean decided = storyRepository.decide(event.storyId(), status,
-                status == StoryStatus.ACTIVE ? now.plus(displayWindow) : null, event.durationSeconds(), moderation);
+                status == StoryStatus.ACTIVE ? now.plus(displayWindow) : null, event.durationSeconds(), moderation,
+                event.mediaKey(), mediaType(event.mediaType()));
         if (decided) {
             log.info("Story {} moderated as {}", event.storyId(), status);
         } else {
             log.debug("Verdict for story {} matched nothing — already decided, deleted or expired", event.storyId());
+        }
+    }
+
+    /** Null for a story screened as posted, or for a type this version does not know. */
+    private static StoryMediaType mediaType(String type) {
+        if (type == null) {
+            return null;
+        }
+        try {
+            return StoryMediaType.valueOf(type);
+        } catch (IllegalArgumentException e) {
+            log.warn("Rendered story media of unknown type {}, keeping the media as posted", type);
+            return null;
         }
     }
 }

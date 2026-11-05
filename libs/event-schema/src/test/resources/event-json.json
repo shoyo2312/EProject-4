@@ -111,7 +111,31 @@
     "userId" : 1004,
     "mediaKey" : "mediaKey-5",
     "mediaType" : "mediaType-6",
-    "textVerdict" : "REVIEW"
+    "textVerdict" : "REVIEW",
+    "edit" : {
+      "version" : 1,
+      "segments" : [ {
+        "start" : 1.25,
+        "end" : 2.25,
+        "speed" : 3.25
+      } ],
+      "filter" : {
+        "id" : "id-1",
+        "intensity" : 2.25
+      },
+      "overlays" : [ {
+        "imageUrl" : "imageUrl-1",
+        "start" : 2.25,
+        "end" : 3.25
+      } ],
+      "music" : {
+        "audioUrl" : "audioUrl-1",
+        "start" : 2.25,
+        "volume" : 3.25,
+        "originalVolume" : 4.25
+      }
+    },
+    "photoSeconds" : 9.25
   },
   "StoryModerationCompletedEvent" : {
     "eventId" : "eventId-1",
@@ -126,7 +150,9 @@
     "model" : "model-10",
     "modelVersion" : "modelVersion-11",
     "reason" : "reason-12",
-    "durationSeconds" : 13
+    "durationSeconds" : 13,
+    "mediaKey" : "mediaKey-14",
+    "mediaType" : "mediaType-15"
   },
   "UserBannedEvent" : {
     "eventId" : "eventId-1",
