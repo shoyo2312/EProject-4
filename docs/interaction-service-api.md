@@ -229,7 +229,13 @@ Cách dùng:
 
 > **Một trang có thể trả ít hơn `size` item, thậm chí `items: []`, mà `hasMore` vẫn `true`.** Comment bị xoá được lọc **sau** khi Cassandra đã cắt trang. Server tự đọc tiếp tối đa 5 trang khi gặp trang rỗng, nhưng một chuỗi dài comment đã xoá vẫn có thể ra trang rỗng. Đây là hành vi bình thường, **không** phải hết dữ liệu. Client phải lặp theo `hasMore`/`nextCursor`, tuyệt đối đừng dừng khi thấy trang rỗng — và đừng dùng `items.length < size` làm điều kiện dừng.
 
-`size` mặc định 20, bị kẹp vào khoảng **1–50**. Không nhận tham số `sort`. Cursor hỏng/không giải mã được → `INVALID_COMMENT_CURSOR` (400).
+`size` mặc định 20, bị kẹp vào khoảng **1–50**. Cursor hỏng/không giải mã được → `INVALID_COMMENT_CURSOR` (400).
+
+**`sort`** (tuỳ chọn): `newest` (mặc định, như trên) hoặc `top`. Giá trị khác được coi là `newest`.
+- `sort=top`: xếp theo **tương tác** = `likeCount + replyCount`, cao nhất trước; bằng điểm thì comment mới hơn trước. App mobile dùng `top`.
+- Chỉ **500 comment gốc mới nhất** được xếp hạng. Hết 500 cái đó, `nextCursor` chuyển sang cursor thường và các comment cũ hơn đi tiếp theo thứ tự mới nhất trước. Không comment nào bị mất.
+- Cursor trong phần xếp hạng có dạng `top.<offset>`. Vẫn coi là chuỗi mờ, truyền lại nguyên văn **kèm `sort=top`**.
+- Thứ hạng được tính lại ở mỗi trang. Một comment có thể được like giữa hai lần tải trang và nhảy qua ranh giới trang, nên client phải **bỏ các `commentId` đã có**.
 
 Video đã tắt comment (hoặc tài khoản chủ đặt `NO_ONE`) → trang rỗng, `hasMore: false`, không lỗi.
 

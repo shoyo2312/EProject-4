@@ -55,9 +55,13 @@ public class CommentController {
             @AuthenticationPrincipal Long currentUserId,
             @PathVariable Long videoId,
             @RequestParam(required = false) String cursor,
-            @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.success(commentService.listComments(
-                videoId, cursor, Math.clamp(size, 1, MAX_PAGE_SIZE), currentUserId));
+            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "newest") String sort) {
+        int pageSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
+        // Anything but "top" is the original order, so an older client keeps what it had.
+        return ApiResponse.success("top".equalsIgnoreCase(sort)
+                ? commentService.listTopComments(videoId, cursor, pageSize, currentUserId)
+                : commentService.listComments(videoId, cursor, pageSize, currentUserId));
     }
 
     /**

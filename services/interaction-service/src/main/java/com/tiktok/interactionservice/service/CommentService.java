@@ -38,6 +38,17 @@ public interface CommentService {
     }
 
     /**
+     * The same top-level comments ranked by interaction: likes plus replies, highest first, ties
+     * newest first. Only the newest few hundred are ranked; past them the listing carries on
+     * newest first with an ordinary cursor.
+     */
+    CommentPageResponse listTopComments(Long videoId, String cursor, int size, Long currentUserId);
+
+    default CommentPageResponse listTopComments(Long videoId, String cursor, int size) {
+        return listTopComments(videoId, cursor, size, null);
+    }
+
+    /**
      * One top-level comment's replies, oldest first — the order a thread reads in. Paged the same
      * way as {@link #listComments}: an unknown {@code parentId} is an empty page, not an error.
      */

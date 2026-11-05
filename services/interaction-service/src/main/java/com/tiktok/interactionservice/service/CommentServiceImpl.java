@@ -51,6 +51,8 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -70,6 +72,23 @@ public class CommentServiceImpl implements CommentService {
 
     /** How many replies one cascade delete takes off the index at a time. */
     private static final int CASCADE_PAGE_SIZE = 100;
+
+    /** How many of a video's newest top-level comments the "top" order ranks. */
+    static final int MAX_RANKED = 500;
+
+    /** Ids per {@code IN} when the ranked window is read. */
+    private static final int IN_CHUNK = 100;
+
+    /**
+     * Marks a cursor inside the ranked window: the prefix and an offset. Never confused with a
+     * Cassandra cursor, which is URL-safe base64 and has no dot in it.
+     */
+    private static final String TOP_CURSOR_PREFIX = "top.";
+
+    private static final Comparator<CommentResponse> MOST_INTERACTION =
+            Comparator.comparingInt((CommentResponse c) -> c.likeCount() + c.replyCount())
+                    .reversed()
+                    .thenComparing(CommentResponse::commentId, Comparator.reverseOrder());
 
     /** How many times a losing like-tally write re-reads and tries again — see moveLikes. */
     private static final int MAX_LIKE_CAS_RETRIES = 3;
@@ -401,6 +420,79 @@ public class CommentServiceImpl implements CommentService {
             return new CommentPageResponse(List.of(), null, false);
         }
         return page(videoId, CommentIndex.TOP_LEVEL, cursor, size, currentUserId);
+    }
+
+    /**
+     * Ranks the newest {@link #MAX_RANKED} top-level comments and hands them out by offset. After
+     * the window the cursor becomes the Cassandra one for the comments older than it, which
+     * {@link #page} reads newest first, so nothing on a busy video becomes unreachable.
+     *
+     * <p>ponytail: every page re-reads and re-ranks the window (a few {@code IN}s of 100). A like
+     * landing between two pages can move a comment across the page boundary, so the client drops
+     * ids it already has. A stored score would fix both; Cassandra cannot sort by one cheaply.
+     */
+    @Override
+    public CommentPageResponse listTopComments(Long videoId, String cursor, int size, Long currentUserId) {
+        videoOwnershipClient.requireVisible(videoId);
+        if (videoOwnershipClient.areCommentsDisabled(videoId)) {
+            return new CommentPageResponse(List.of(), null, false);
+        }
+        boolean pastWindow = cursor != null && !cursor.isBlank() && !cursor.startsWith(TOP_CURSOR_PREFIX);
+        if (pastWindow) {
+            return page(videoId, CommentIndex.TOP_LEVEL, cursor, size, currentUserId);
+        }
+        int offset = topOffset(cursor);
+
+        Slice<Long> window = commentIndexRepository
+                .findNewestFirst(videoId, CommentIndex.TOP_LEVEL, CassandraPageRequest.first(MAX_RANKED))
+                .map(row -> row.getKey().getCommentId());
+        List<CommentResponse> ranked = rank(videoId, window.getContent());
+
+        int end = Math.min(offset + size, ranked.size());
+        List<CommentResponse> items = offset >= end
+                ? List.of()
+                : withLikedByMe(ranked.subList(offset, end), currentUserId);
+        if (end < ranked.size()) {
+            return new CommentPageResponse(items, TOP_CURSOR_PREFIX + end, true);
+        }
+        if (!window.hasNext()) {
+            return new CommentPageResponse(items, null, false);
+        }
+        String olderThanWindow = CassandraCursors.encode((CassandraPageRequest) window.nextPageable());
+        return items.isEmpty()
+                ? page(videoId, CommentIndex.TOP_LEVEL, olderThanWindow, size, currentUserId)
+                : new CommentPageResponse(items, olderThanWindow, true);
+    }
+
+    private static int topOffset(String cursor) {
+        if (cursor == null || cursor.isBlank()) {
+            return 0;
+        }
+        try {
+            int offset = Integer.parseInt(cursor.substring(TOP_CURSOR_PREFIX.length()));
+            if (offset < 0) {
+                throw new InvalidCommentCursorException();
+            }
+            return offset;
+        } catch (NumberFormatException e) {
+            throw new InvalidCommentCursorException();
+        }
+    }
+
+    /** The window's live comments with their reply counts, most interaction first. */
+    private List<CommentResponse> rank(Long videoId, List<Long> ids) {
+        List<CommentResponse> all = new ArrayList<>();
+        for (int from = 0; from < ids.size(); from += IN_CHUNK) {
+            List<Long> chunk = ids.subList(from, Math.min(from + IN_CHUNK, ids.size()));
+            Map<Long, CommentByVideo> rows = withoutBannedAuthors(
+                    commentByVideoRepository.findAllByCommentIds(videoId, chunk).stream()
+                            .filter(CommentByVideo::isLive)
+                            .collect(Collectors.toMap(c -> c.getKey().getCommentId(), Function.identity())));
+            all.addAll(attachReplyCounts(videoId,
+                    rows.values().stream().map(commentMapper::toResponse).toList()));
+        }
+        all.sort(MOST_INTERACTION);
+        return all;
     }
 
     @Override
@@ -987,7 +1079,10 @@ public class CommentServiceImpl implements CommentService {
      * {@code likedByMe} false throughout.
      */
     private List<CommentResponse> toResponses(List<CommentByVideo> live, Long currentUserId) {
-        List<CommentResponse> mapped = live.stream().map(commentMapper::toResponse).toList();
+        return withLikedByMe(live.stream().map(commentMapper::toResponse).toList(), currentUserId);
+    }
+
+    private List<CommentResponse> withLikedByMe(List<CommentResponse> mapped, Long currentUserId) {
         if (currentUserId == null || mapped.isEmpty()) {
             return mapped;
         }
