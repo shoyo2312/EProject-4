@@ -22,8 +22,10 @@ public class TrainingDataRepository {
 
     private final JdbcTemplate jdbcTemplate;
 
+    /** {@code source} is one of the client's surfaces or OTHER; {@code searchQuery} is '' unless SEARCH. */
     public record WatchRow(String eventId, String videoId, Long userId,
-                           long watchedMs, long durationMs, boolean completed, Instant occurredAt) {
+                           long watchedMs, long durationMs, boolean completed, Instant occurredAt,
+                           String source, String searchQuery) {
     }
 
     /**
@@ -34,12 +36,14 @@ public class TrainingDataRepository {
         jdbcTemplate.batchUpdate(
                 """
                 INSERT INTO watch_events
-                    (event_id, video_id, user_id, watched_ms, duration_ms, completed, occurred_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (event_id, video_id, user_id, watched_ms, duration_ms, completed, occurred_at,
+                     source, search_query)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows.stream()
                         .map(row -> new Object[]{row.eventId(), row.videoId(), row.userId(), row.watchedMs(),
-                                row.durationMs(), row.completed() ? 1 : 0, row.occurredAt()})
+                                row.durationMs(), row.completed() ? 1 : 0, row.occurredAt(),
+                                row.source(), row.searchQuery()})
                         .toList());
     }
 

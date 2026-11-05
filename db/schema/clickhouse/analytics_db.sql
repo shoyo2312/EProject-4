@@ -49,3 +49,6 @@ ORDER BY (occurred_at, event_id)
 SETTINGS index_granularity = 8192
 ;
 
+
+ALTER TABLE analytics_db.watch_events ADD COLUMN IF NOT EXISTS source LowCardinality(String) DEFAULT 'OTHER';
+ALTER TABLE analytics_db.watch_events ADD COLUMN IF NOT EXISTS search_query String DEFAULT '';

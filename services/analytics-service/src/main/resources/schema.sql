@@ -61,3 +61,8 @@ CREATE TABLE IF NOT EXISTS follow_events (
     occurred_at  DateTime64(3)
 ) ENGINE = ReplacingMergeTree
 ORDER BY (following_id, event_id);
+
+-- Where a view came from, for Studio's traffic sources and search queries. Rows written before
+-- the columns existed, and reports from clients that send no source, read as OTHER / ''.
+ALTER TABLE watch_events ADD COLUMN IF NOT EXISTS source LowCardinality(String) DEFAULT 'OTHER';
+ALTER TABLE watch_events ADD COLUMN IF NOT EXISTS search_query String DEFAULT '';

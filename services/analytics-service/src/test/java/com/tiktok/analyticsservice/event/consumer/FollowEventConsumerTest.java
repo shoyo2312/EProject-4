@@ -40,7 +40,7 @@ class FollowEventConsumerTest {
      */
     @Test
     void anEventMissingAFollower_isSkippedNotCrashedOn() throws Exception {
-        UserFollowChangedEvent event = new UserFollowChangedEvent("e1", Instant.now(), null, 2L, true, false);
+        UserFollowChangedEvent event = new UserFollowChangedEvent("e1", Instant.now(), null, 2L, true, false, null);
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 

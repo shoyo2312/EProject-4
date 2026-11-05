@@ -73,7 +73,7 @@ class CreatorAnalyticsRepositoryTest {
 
     private void watch(String eventId, String videoId, long userId, long watchedMs, long durationMs, Instant at) {
         trainingDataRepository.insertWatches(List.of(new TrainingDataRepository.WatchRow(
-                eventId, videoId, userId, watchedMs, durationMs, watchedMs >= durationMs, at)));
+                eventId, videoId, userId, watchedMs, durationMs, watchedMs >= durationMs, at, "OTHER", "")));
     }
 
     @Test
