@@ -69,10 +69,15 @@ public class CreatorAnalyticsRepository {
     public record NewViewers(String videoId, long newViewers) {
     }
 
-    public void insertFollow(String eventId, long followerId, long followingId, boolean followed, Instant occurredAt) {
+    /** {@code sourceVideoId} is the video the follow came from, or '' when there is none. */
+    public void insertFollow(String eventId, long followerId, long followingId, boolean followed, Instant occurredAt,
+                             String sourceVideoId) {
         jdbcTemplate.update(
-                "INSERT INTO follow_events (event_id, follower_id, following_id, followed, occurred_at) VALUES (?, ?, ?, ?, ?)",
-                eventId, followerId, followingId, followed ? 1 : 0, occurredAt);
+                """
+                INSERT INTO follow_events (event_id, follower_id, following_id, followed, occurred_at, source_video_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                eventId, followerId, followingId, followed ? 1 : 0, occurredAt, sourceVideoId);
     }
 
     public boolean ownsVideo(long ownerId, String videoId) {

@@ -107,10 +107,10 @@ class CreatorAnalyticsRepositoryTest {
         engagementEventRepository.insert("l1", "LIKED", "mine", 100L, EVENING);
         engagementEventRepository.insert("l2", "LIKED", "mine", 101L, EVENING);
         engagementEventRepository.insert("u1", "UNLIKED", "mine", 100L, EVENING);
-        repository.insertFollow("f1", 100L, CREATOR, true, EVENING);
-        repository.insertFollow("f2", 100L, CREATOR, false, EVENING);
-        repository.insertFollow("f3", 101L, CREATOR, true, EVENING);
-        repository.insertFollow("f3", 101L, CREATOR, true, EVENING);
+        repository.insertFollow("f1", 100L, CREATOR, true, EVENING, "");
+        repository.insertFollow("f2", 100L, CREATOR, false, EVENING, "");
+        repository.insertFollow("f3", 101L, CREATOR, true, EVENING, "");
+        repository.insertFollow("f3", 101L, CREATOR, true, EVENING, "");
 
         assertThat(repository.dailyEngagement(Scope.ownedBy(CREATOR), FROM, TO))
                 .singleElement().satisfies(day -> assertThat(day.likes()).isEqualTo(1));

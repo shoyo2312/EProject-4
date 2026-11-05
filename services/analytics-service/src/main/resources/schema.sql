@@ -66,3 +66,7 @@ ORDER BY (following_id, event_id);
 -- the columns existed, and reports from clients that send no source, read as OTHER / ''.
 ALTER TABLE watch_events ADD COLUMN IF NOT EXISTS source LowCardinality(String) DEFAULT 'OTHER';
 ALTER TABLE watch_events ADD COLUMN IF NOT EXISTS search_query String DEFAULT '';
+
+-- The video a follow came from, for Studio's "New followers" per video. '' for unfollows,
+-- profile-page follows and rows written before the column existed.
+ALTER TABLE follow_events ADD COLUMN IF NOT EXISTS source_video_id String DEFAULT '';
