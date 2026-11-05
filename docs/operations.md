@@ -247,6 +247,12 @@ curl -X POST http://user-service:8082/api/v1/users/internal/follow-backfill \
 # → {"success":true,"data":{"published":12345}}
 ```
 
+**Thứ tự rollout** của tính năng phân tích video (2026-11-05): deploy backend trước (`analytics-service` tạo cột/bảng
+mới lúc boot, `user-service` chạy migration V25), rồi import seed ClickHouse nếu cần, rồi gọi backfill ở trên, rồi mới
+deploy web — trang `/studio/analytics/{videoId}` của web đọc `current`/`previous`/`audience` và trắng trang với
+analytics-service bản cũ. Tài khoản đã có (kể cả social) được hỏi ngày sinh một lần sau lần đăng nhập kế tiếp; tới khi
+họ trả lời, nhóm tuổi của họ là `UNKNOWN`.
+
 Chạy lại không sao: `eventId` suy từ id của edge nên `ReplacingMergeTree` gộp trùng. Outbox của user-service sẽ
 chứa thêm chừng ấy dòng mỗi lần chạy. Import seed ClickHouse: file `.native` cũ (thiếu cột `source`,
 `search_query`, `source_video_id`) vẫn insert được, các cột mới nhận giá trị mặc định (`OTHER`, `''`) — không
