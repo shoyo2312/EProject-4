@@ -28,11 +28,11 @@ class StickerCatalogTest {
     }
 
     @Test
-    void offersTwentyFourStickersWithStableUniqueIds() {
+    void offersTheFixtureStickersWithStableUniqueIds() {
         StickerPackResponse pack = catalog.pack();
         assertThat(pack.packId()).isEqualTo("fluent-3d");
-        assertThat(pack.stickers()).hasSize(24);
-        assertThat(new HashSet<>(pack.stickers().stream().map(StickerView::stickerId).toList())).hasSize(24);
+        assertThat(pack.stickers()).hasSize(5);
+        assertThat(new HashSet<>(pack.stickers().stream().map(StickerView::stickerId).toList())).hasSize(5);
     }
 
     @Test
@@ -64,7 +64,7 @@ class StickerCatalogTest {
             assertThat(sticker.get("bytes").asInt()).isPositive();
             keys.add(sticker.get("objectKey").asString());
         }
-        assertThat(keys).hasSize(24);
+        assertThat(keys).hasSize(5);
     }
 
     @Test

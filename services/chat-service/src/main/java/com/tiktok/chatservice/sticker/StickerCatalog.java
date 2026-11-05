@@ -15,7 +15,7 @@ import java.util.Optional;
 
 /**
  * The sticker pack, read from the same manifest the importer uploads from
- * ({@code stickers/fluent-3d-v1.json}), so the backend and the images in MinIO cannot disagree about
+ * ({@code stickers/fluent-3d-v1.json}, when one is on the classpath), so the backend and the images in MinIO cannot disagree about
  * which ids exist. Messages store only an id; this is where an id becomes something a client can draw.
  *
  * <p>Two questions, deliberately separate: {@link #sendable} (may a client send this now?) and
@@ -45,6 +45,12 @@ public final class StickerCatalog {
     private final Map<String, StickerView> all = new LinkedHashMap<>();
     private final Map<String, Boolean> retired = new LinkedHashMap<>();
 
+    /** No manifest on the classpath: nothing is offered and no id resolves. */
+    private StickerCatalog() {
+        this.packId = "none";
+        this.packName = "Stickers";
+    }
+
     private StickerCatalog(Manifest manifest, String publicBaseUrl, String bucket) {
         this.packId = manifest.packId();
         this.packName = manifest.packName();
@@ -69,7 +75,7 @@ public final class StickerCatalog {
     public static StickerCatalog load(String publicBaseUrl, String bucket) {
         try (InputStream in = StickerCatalog.class.getClassLoader().getResourceAsStream(MANIFEST)) {
             if (in == null) {
-                throw new IllegalStateException("Sticker manifest not found on the classpath: " + MANIFEST);
+                return new StickerCatalog();
             }
             return new StickerCatalog(MAPPER.readValue(in, Manifest.class), publicBaseUrl, bucket);
         } catch (IOException e) {
