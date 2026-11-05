@@ -18,6 +18,9 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
 
     Optional<Report> findByIdAndDeletedAtIsNull(Long id);
 
+    /** A submit own report, found by the client idempotency key. */
+    Optional<Report> findByReporterIdAndRequestIdAndDeletedAtIsNull(Long reporterId, String requestId);
+
     /**
      * The reporter's report against this target in the given status. Only ask for PENDING: the
      * one-per-reporter index covers pending reports alone, so a reporter can hold any number of

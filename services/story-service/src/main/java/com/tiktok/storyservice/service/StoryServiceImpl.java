@@ -4,6 +4,7 @@ import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
 import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
 import com.tiktok.storyservice.dto.response.StoryAnnouncementResponse;
+import com.tiktok.storyservice.dto.response.StoryCardResponse;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryRingResponse;
@@ -298,6 +299,20 @@ public class StoryServiceImpl implements StoryService {
                 .filter(found -> !storyAudience.isHidden(found.getUserId()))
                 .orElseThrow(() -> new StoryNotFoundException(storyId));
         return new StoryAnnouncementResponse(story.getUserId(), story.getVisibility());
+    }
+
+    @Override
+    public List<StoryCardResponse> viewable(Long viewerId, List<String> storyIds) {
+        List<Story> live = storyRepository.findAllById(storyIds.stream().distinct().limit(50).toList()).stream()
+                .filter(story -> story.getDeletedAt() == null && !story.isExpired())
+                .toList();
+        List<Story> others = live.stream().filter(story -> !isOwner(viewerId, story)).toList();
+        Set<String> allowed = visibleOf(viewerId, others).stream().map(Story::getId).collect(Collectors.toSet());
+        return live.stream()
+                .filter(story -> isOwner(viewerId, story) ? story.getStatus() == StoryStatus.ACTIVE : allowed.contains(story.getId()))
+                .map(story -> new StoryCardResponse(story.getId(), story.getUserId(), story.getMediaType(),
+                        storyMedia.signedGet(story.getMediaKey())))
+                .toList();
     }
 
     /** Not deleted, not expired, and either the requester's own or ACTIVE and in their audience. */

@@ -24,6 +24,12 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+  servlet:
+    multipart:
+      # A little over ImageInspector.MAX_BYTES (5 MB), so the service answers the size error itself.
+      max-file-size: 6MB
+      max-request-size: 7MB
+
   task:
     scheduling:
       # One thread per @Scheduled method: the two counter flushers, which can block on a
@@ -66,6 +72,7 @@ downstream:
   interaction-service-uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
   video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+  story-service-uri: ${STORY_SERVICE_URI:http://localhost:8086}
 
 realtime:
   flush-interval-millis: 500

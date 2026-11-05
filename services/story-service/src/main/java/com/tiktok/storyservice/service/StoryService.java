@@ -3,6 +3,7 @@ package com.tiktok.storyservice.service;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
 import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
 import com.tiktok.storyservice.dto.response.StoryAnnouncementResponse;
+import com.tiktok.storyservice.dto.response.StoryCardResponse;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryRingResponse;
@@ -48,4 +49,11 @@ public interface StoryService {
      * not found unless the story is live and its owner is not hidden.
      */
     StoryAnnouncementResponse announcement(String storyId);
+
+    /**
+     * The cards, among {@code storyIds}, that {@code viewerId} may see right now: live, not expired,
+     * owner not hidden, and either the viewer's own or ACTIVE inside the viewer's audience. The
+     * rest are absent; a caller must not tell "hidden" from "gone".
+     */
+    List<StoryCardResponse> viewable(Long viewerId, List<String> storyIds);
 }
