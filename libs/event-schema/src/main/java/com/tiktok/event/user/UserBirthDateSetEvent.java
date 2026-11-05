@@ -8,7 +8,8 @@ import java.util.UUID;
 
 /**
  * A profile's birth date was set after sign-up (social sign-ins and accounts older than the
- * column). It is set once, so one event per account; analytics keeps it for age groups.
+ * column), or withdrawn: erasing the account sends {@code birthDate = null}, so analytics drops
+ * the date it kept for age groups. Set once, so at most two events per account.
  */
 public record UserBirthDateSetEvent(
         String eventId,

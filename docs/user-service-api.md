@@ -87,7 +87,7 @@ Request (mọi field đều optional, `UpdateProfileRequest`):
 }
 ```
 
-**`birthDate` chỉ đặt được một lần.** Gửi khi profile đã có ngày sinh → `409 BIRTH_DATE_ALREADY_SET` (cả request bị từ chối). Phải đủ **13 tuổi** tính đến hôm nay (múi giờ Asia/Ho_Chi_Minh), không ở tương lai, không trước 1900-01-01 → vi phạm trả `400 BIRTH_DATE_INVALID`. Không xoá được. Đặt xong, user-service phát `UserBirthDateSetEvent` (topic `user.profile-events`) cho analytics.
+**`birthDate` chỉ đặt được một lần.** Gửi khi profile đã có ngày sinh → `409 BIRTH_DATE_ALREADY_SET` (cả request bị từ chối). Phải đủ **13 tuổi** tính đến hôm nay (múi giờ Asia/Ho_Chi_Minh), không ở tương lai, không trước 1900-01-01 → vi phạm trả `400 BIRTH_DATE_INVALID`. Không xoá được. Đặt xong, user-service phát `UserBirthDateSetEvent` (topic `user.profile-events`) cho analytics; khi tài khoản bị xoá (erase), phát lại event đó với `birthDate: null` để analytics bỏ ngày sinh đã giữ cho nhóm tuổi.
 
 **Quy tắc partial update — quan trọng, dễ làm sai phía client:**
 - **Không gửi field** (field vắng mặt trong JSON, hoặc `null`) → giữ nguyên giá trị cũ trên server.

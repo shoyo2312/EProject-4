@@ -34,10 +34,20 @@ class UserBirthDateSetEventConsumerTest {
         verify(viewerProfileRepository).upsert(7L, LocalDate.of(2001, 5, 9), Instant.parse("2026-11-05T10:00:00Z"));
     }
 
+    /** An erased account sends its date as null: the viewer is kept, the date is not. */
     @Test
-    void anEventMissingTheDateIsSkipped() {
+    void aNullDateClearsTheViewer() {
         consumer().onMessage("""
-                {"eventId":"e2","occurredAt":"2026-11-05T10:00:00Z","userId":7}
+                {"eventId":"e2","occurredAt":"2026-11-05T10:00:00Z","userId":7,"birthDate":null}
+                """);
+
+        verify(viewerProfileRepository).upsert(7L, null, Instant.parse("2026-11-05T10:00:00Z"));
+    }
+
+    @Test
+    void anEventMissingTheUserIsSkipped() {
+        consumer().onMessage("""
+                {"eventId":"e3","occurredAt":"2026-11-05T10:00:00Z","birthDate":"2001-05-09"}
                 """);
 
         verifyNoInteractions(viewerProfileRepository);

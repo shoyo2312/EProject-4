@@ -19,9 +19,10 @@ public class ViewerProfileRepository {
 
     private final JdbcTemplate jdbcTemplate;
 
+    /** A null date withdraws one already stored: the newer row wins the merge. */
     public void upsert(long userId, LocalDate birthDate, Instant updatedAt) {
         jdbcTemplate.update(
                 "INSERT INTO viewer_profiles (user_id, birth_date, updated_at) VALUES (?, ?, ?)",
-                userId, Date.valueOf(birthDate), updatedAt);
+                userId, birthDate == null ? null : Date.valueOf(birthDate), updatedAt);
     }
 }

@@ -9,7 +9,10 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
-/** A birth date set after sign-up (social sign-ins, older accounts). One per account, ever. */
+/**
+ * A birth date set after sign-up (social sign-ins, older accounts), or withdrawn: an erased account
+ * sends null, and the viewer row keeps the user but loses the date.
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -22,7 +25,7 @@ public class UserBirthDateSetEventConsumer {
     @SneakyThrows
     public void onMessage(String payload) {
         UserBirthDateSetEvent event = objectMapper.readValue(payload, UserBirthDateSetEvent.class);
-        if (event.userId() == null || event.birthDate() == null || event.occurredAt() == null) {
+        if (event.userId() == null || event.occurredAt() == null) {
             log.warn("Skipping birth date event {} with a missing field", event.eventId());
             return;
         }
