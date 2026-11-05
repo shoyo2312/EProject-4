@@ -1,0 +1,65 @@
+{
+  "packId": "fluent-3d",
+  "packName": "Fluent 3D",
+  "version": 1,
+  "source": {
+    "repository": "https://github.com/microsoft/fluentui-emoji",
+    "commit": "1ffb34c752ecf5d402f04cfb4b392c77f57c54bc",
+    "license": "MIT",
+    "licenseFile": "LICENSE-fluentui-emoji.txt",
+    "copyright": "Copyright (c) Microsoft Corporation"
+  },
+  "objectPrefix": "stickers/fluent-3d/v1/",
+  "stickers": [
+    {
+      "stickerId": "grinning-face",
+      "name": "Grinning face",
+      "sourcePath": "assets/Grinning face/3D/grinning_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/grinning-face.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 38711,
+      "sha256": "175d214df45fe18f6f106a9a094b695689d98abe6f343295fcbd690a7ee4f0ab"
+    },
+    {
+      "stickerId": "fire",
+      "name": "Fire",
+      "sourcePath": "assets/Fire/3D/fire_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/fire.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 26826,
+      "sha256": "d56355132d73df1741edcf37cb4e21ad54f1c46eeb76fa17224607abf4128c3f"
+    },
+    {
+      "stickerId": "party-popper",
+      "name": "Party popper",
+      "sourcePath": "assets/Party popper/3D/party_popper_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/party-popper.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 42512,
+      "sha256": "70a8e2f9daf1646be9e773751b7f3b6b281a2415cf29c3c3aeebd9c923cdc3e0"
+    },
+    {
+      "stickerId": "sparkles",
+      "name": "Sparkles",
+      "sourcePath": "assets/Sparkles/3D/sparkles_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/sparkles.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 21948,
+      "sha256": "e4490c9ff74a3fd73a8f99c760d65b6ed51b8a3e4ad28da137fec050b77e1058"
+    },
+    {
+      "stickerId": "hugging",
+      "name": "Hugging face",
+      "sourcePath": "assets/Hugging face/3D/hugging_face_3d.png",
+      "objectKey": "stickers/fluent-3d/v1/hugging.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 51316,
+      "sha256": "2f70a465496f45c146253fc933202a38f4f8e1af8b2a0e2555832456c03f1b2e"
+    }
+  ]
+}

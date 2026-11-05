@@ -23,6 +23,7 @@ public class StickerController {
 
     @GetMapping
     public ApiResponse<List<StickerPackResponse>> packs() {
-        return ApiResponse.success(List.of(stickerCatalog.pack()));
+        var pack = stickerCatalog.pack();
+        return ApiResponse.success(pack.stickers().isEmpty() ? List.of() : List.of(pack));
     }
 }
