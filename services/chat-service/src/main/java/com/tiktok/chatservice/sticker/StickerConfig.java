@@ -13,4 +13,10 @@ public class StickerConfig {
     public StickerCatalog stickerCatalog(StickerProperties properties) {
         return StickerCatalog.load(properties);
     }
+
+    /** Built once at startup, like the catalog: a malformed table stops the service rather than failing on a keystroke. */
+    @Bean
+    public SuggestionTopics suggestionTopics() {
+        return SuggestionTopics.load();
+    }
 }

@@ -1,0 +1,70 @@
+{
+  "topics": [
+    {
+      "id": "happy",
+      "query": "happy",
+      "keywords": ["vui", "vui vẻ", "hạnh phúc", "happy"],
+      "patterns": ["^(ha){2,}h?$", "^(hi){2,}$", "^(he){2,}$"]
+    },
+    {
+      "id": "sad",
+      "query": "sad",
+      "keywords": ["buồn", "khóc", "tủi thân", "sad"],
+      "patterns": ["^(hu){2,}$"]
+    },
+    {
+      "id": "love",
+      "query": "love",
+      "keywords": ["yêu", "thương", "iu", "nhớ em", "nhớ anh", "nhớ bạn", "nhớ quá", "love", "miss you"],
+      "patterns": []
+    },
+    {
+      "id": "thanks",
+      "query": "thank you",
+      "keywords": ["cảm ơn", "cám ơn", "thanks", "thank you"],
+      "patterns": []
+    },
+    {
+      "id": "hello",
+      "query": "hello",
+      "keywords": ["chào", "xin chào", "hello", "hi", "hey"],
+      "patterns": []
+    },
+    {
+      "id": "sleepy",
+      "query": "good night sleepy",
+      "keywords": ["ngủ ngon", "đi ngủ", "buồn ngủ", "ngủ đây", "ngủ thôi", "good night"],
+      "patterns": []
+    },
+    {
+      "id": "angry",
+      "query": "angry",
+      "keywords": ["giận", "tức", "bực", "bực mình"],
+      "patterns": []
+    },
+    {
+      "id": "surprised",
+      "query": "surprised",
+      "keywords": ["wow", "trời ơi", "ôi trời", "bất ngờ", "hết hồn"],
+      "patterns": ["^wo{2,}w$"]
+    },
+    {
+      "id": "sorry",
+      "query": "sorry",
+      "keywords": ["xin lỗi", "sorry"],
+      "patterns": []
+    },
+    {
+      "id": "congrats",
+      "query": "congratulations",
+      "keywords": ["chúc mừng", "sinh nhật", "happy birthday", "hpbd", "congrats"],
+      "patterns": []
+    },
+    {
+      "id": "tired",
+      "query": "tired",
+      "keywords": ["mệt", "mệt mỏi", "tired"],
+      "patterns": []
+    }
+  ]
+}
