@@ -1,5 +1,7 @@
 package com.tiktok.analyticsservice.repository;
 
+import com.tiktok.analyticsservice.dto.response.SearchQueryResponse;
+import com.tiktok.analyticsservice.dto.response.TrafficSourceResponse;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.Scope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -72,8 +74,13 @@ class CreatorAnalyticsRepositoryTest {
     }
 
     private void watch(String eventId, String videoId, long userId, long watchedMs, long durationMs, Instant at) {
+        watch(eventId, videoId, userId, watchedMs, durationMs, at, "OTHER", "");
+    }
+
+    private void watch(String eventId, String videoId, long userId, long watchedMs, long durationMs, Instant at,
+                       String source, String searchQuery) {
         trainingDataRepository.insertWatches(List.of(new TrainingDataRepository.WatchRow(
-                eventId, videoId, userId, watchedMs, durationMs, watchedMs >= durationMs, at, "OTHER", "")));
+                eventId, videoId, userId, watchedMs, durationMs, watchedMs >= durationMs, at, source, searchQuery)));
     }
 
     @Test
@@ -187,5 +194,47 @@ class CreatorAnalyticsRepositoryTest {
         assertThat(repository.followsFromVideo("mine", FROM, TO)).isEqualTo(2);
         assertThat(repository.dailyFollowsFromVideo("mine", FROM, TO))
                 .containsExactly(new CreatorAnalyticsRepository.DailyFollows(LocalDate.of(2026, 10, 22), 2, 0));
+    }
+
+    @Test
+    void trafficSourcesCountTheWindowsViewsBySource() {
+        watch("a", "mine", 100L, 1_000, 10_000, EVENING, "FOR_YOU", "");
+        watch("b", "mine", 101L, 1_000, 10_000, EVENING, "FOR_YOU", "");
+        watch("c", "mine", 0L, 1_000, 10_000, EVENING, "FOR_YOU", "");
+        watch("d", "mine", 102L, 1_000, 10_000, EVENING, "SEARCH", "cat");
+        watch("old", "mine", 103L, 1_000, 10_000, Instant.parse("2026-09-01T00:00:00Z"), "PROFILE", "");
+
+        assertThat(repository.trafficSources("mine", FROM, TO))
+                .containsExactly(new TrafficSourceResponse("FOR_YOU", 3), new TrafficSourceResponse("SEARCH", 1));
+    }
+
+    @Test
+    void aSearchQueryNeedsThreeViews() {
+        for (int i = 0; i < 3; i++) {
+            watch("a" + i, "mine", 100L + i, 1_000, 10_000, EVENING, "SEARCH", "cat video");
+        }
+        watch("b0", "mine", 200L, 1_000, 10_000, EVENING, "SEARCH", "dog");
+        watch("b1", "mine", 201L, 1_000, 10_000, EVENING, "SEARCH", "dog");
+        watch("blank", "mine", 300L, 1_000, 10_000, EVENING, "SEARCH", "");
+
+        assertThat(repository.searchQueries("mine", FROM, TO, 3, 10))
+                .containsExactly(new SearchQueryResponse("cat video", 3));
+        assertThat(repository.searchQueries("mine", FROM, TO, 1, 10))
+                .extracting(SearchQueryResponse::query).containsExactly("cat video", "dog");
+    }
+
+    @Test
+    void queriesComeMostViewedFirstAndAtMostTen() {
+        for (int q = 0; q < 12; q++) {
+            for (int i = 0; i <= q; i++) {
+                watch("q" + q + "-" + i, "mine", 100L, 1_000, 10_000, EVENING, "SEARCH", "query " + q);
+            }
+        }
+
+        List<SearchQueryResponse> queries = repository.searchQueries("mine", FROM, TO, 1, 10);
+
+        assertThat(queries).hasSize(10);
+        assertThat(queries.getFirst()).isEqualTo(new SearchQueryResponse("query 11", 12));
+        assertThat(queries).extracting(SearchQueryResponse::views).isSortedAccordingTo((x, y) -> Long.compare(y, x));
     }
 }

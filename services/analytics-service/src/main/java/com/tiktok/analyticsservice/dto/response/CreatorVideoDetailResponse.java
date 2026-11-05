@@ -7,6 +7,9 @@ import java.util.List;
  * {@code previous} the window of the same length just before it, and {@code daily} the window by day.
  *
  * @param newFollowers   follows that came from this video, gross, lifetime
+ * @param trafficSources where the window's views came from, busiest first, only surfaces with views
+ * @param searchQueries  what viewers searched to find it in the window, at most ten, only queries
+ *                       with enough views to name no one
  * @param avgWatchMs     time watched per view
  * @param completionRate share of views that reached the end, 0 to 1
  * @param retention      21 points, 0% to 100% of the video's length in steps of 5%: the share of
@@ -28,6 +31,8 @@ public record CreatorVideoDetailResponse(
         List<Double> retention,
         List<CreatorDailyStatsResponse> daily,
         CreatorVideoTotalsResponse current,
-        CreatorVideoTotalsResponse previous
+        CreatorVideoTotalsResponse previous,
+        List<TrafficSourceResponse> trafficSources,
+        List<SearchQueryResponse> searchQueries
 ) {
 }

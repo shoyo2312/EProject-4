@@ -45,6 +45,8 @@ analytics:
     # Viewers a creator needs before Studio breaks them down by hour and weekday — see
     # CreatorAnalyticsServiceImpl. Lower it only for a demo with a handful of test accounts.
     min-audience: ${CREATOR_MIN_AUDIENCE:100}
+    # Views a search query needs before a video's page lists it — one or two views names the searcher.
+    search-query-min-views: ${CREATOR_SEARCH_QUERY_MIN_VIEWS:3}
 
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}

@@ -89,10 +89,18 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
      */
     private final long minAudience;
 
+    /** Views a search query needs before the video page lists it; under that it names the searcher. */
+    private final int searchQueryMinViews;
+
+    /** The most search queries the video page lists, as TikTok does. */
+    static final int SEARCH_QUERY_LIMIT = 10;
+
     public CreatorAnalyticsServiceImpl(CreatorAnalyticsRepository repository,
-                                       @Value("${analytics.creator.min-audience:100}") long minAudience) {
+                                       @Value("${analytics.creator.min-audience:100}") long minAudience,
+                                       @Value("${analytics.creator.search-query-min-views:3}") int searchQueryMinViews) {
         this.repository = repository;
         this.minAudience = minAudience;
+        this.searchQueryMinViews = searchQueryMinViews;
     }
 
     /**
@@ -200,7 +208,10 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                         repository.dailyEngagement(scope, window.from(), window.to()),
                         repository.dailyFollowsFromVideo(videoId, window.from(), window.to())),
                 videoTotals(videoId, window.from(), window.to()),
-                videoTotals(videoId, window.previousFrom(), window.from()));
+                videoTotals(videoId, window.previousFrom(), window.from()),
+                repository.trafficSources(videoId, window.from(), window.to()),
+                repository.searchQueries(videoId, window.from(), window.to(), searchQueryMinViews,
+                        SEARCH_QUERY_LIMIT));
     }
 
     private CreatorVideoTotalsResponse videoTotals(String videoId, Instant from, Instant to) {

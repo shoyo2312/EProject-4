@@ -1,5 +1,7 @@
 package com.tiktok.analyticsservice.repository;
 
+import com.tiktok.analyticsservice.dto.response.SearchQueryResponse;
+import com.tiktok.analyticsservice.dto.response.TrafficSourceResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -153,6 +155,39 @@ public class CreatorAnalyticsRepository {
                 """.formatted(ZONE, IN_WINDOW),
                 (rs, i) -> new DailyFollows(LocalDate.parse(rs.getString("day")), rs.getLong("gained"), 0),
                 videoId, from.toEpochMilli(), to.toEpochMilli());
+    }
+
+    /** Where one video's views in the window came from, busiest surface first; surfaces with no views are left out. */
+    public List<TrafficSourceResponse> trafficSources(String videoId, Instant from, Instant to) {
+        return jdbcTemplate.query(
+                """
+                SELECT source, count() AS views
+                FROM watch_events FINAL
+                WHERE video_id = ? AND %s
+                GROUP BY source
+                ORDER BY views DESC, source
+                """.formatted(IN_WINDOW),
+                (rs, i) -> new TrafficSourceResponse(rs.getString("source"), rs.getLong("views")),
+                videoId, from.toEpochMilli(), to.toEpochMilli());
+    }
+
+    /**
+     * What viewers searched to find the video, most viewed first. A query under {@code minViews}
+     * is left out: with one or two views it names the viewer more than the audience.
+     */
+    public List<SearchQueryResponse> searchQueries(String videoId, Instant from, Instant to, int minViews, int limit) {
+        return jdbcTemplate.query(
+                """
+                SELECT search_query, count() AS views
+                FROM watch_events FINAL
+                WHERE video_id = ? AND %s AND source = 'SEARCH' AND search_query != ''
+                GROUP BY search_query
+                HAVING views >= ?
+                ORDER BY views DESC, search_query
+                LIMIT ?
+                """.formatted(IN_WINDOW),
+                (rs, i) -> new SearchQueryResponse(rs.getString("search_query"), rs.getLong("views")),
+                videoId, from.toEpochMilli(), to.toEpochMilli(), minViews, limit);
     }
 
     /** One row per video watched in the window. {@code user_id > 0} keeps anonymous playback out of viewers. */

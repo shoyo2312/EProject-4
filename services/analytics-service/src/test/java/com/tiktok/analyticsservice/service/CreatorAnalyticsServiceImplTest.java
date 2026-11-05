@@ -4,6 +4,8 @@ import com.tiktok.analyticsservice.dto.request.CreatorVideoSort;
 import com.tiktok.analyticsservice.dto.response.CreatorOverviewResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorVideoDetailResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorViewersResponse;
+import com.tiktok.analyticsservice.dto.response.SearchQueryResponse;
+import com.tiktok.analyticsservice.dto.response.TrafficSourceResponse;
 import com.tiktok.analyticsservice.exception.CreatorVideoNotFoundException;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.DailyEngagement;
@@ -33,7 +35,7 @@ import static org.mockito.Mockito.when;
 class CreatorAnalyticsServiceImplTest {
 
     private final CreatorAnalyticsRepository repository = mock(CreatorAnalyticsRepository.class);
-    private final CreatorAnalyticsServiceImpl service = new CreatorAnalyticsServiceImpl(repository, 3);
+    private final CreatorAnalyticsServiceImpl service = new CreatorAnalyticsServiceImpl(repository, 3, 3);
 
     /** Vietnam's midnight is 17:00 UTC the day before; a UTC midnight would cut the evening off. */
     @Test
@@ -240,5 +242,23 @@ class CreatorAnalyticsServiceImplTest {
         assertThat(service.overview(7L, 7).current().saves()).isEqualTo(4);
         assertThat(service.topVideos(7L, 7, CreatorVideoSort.VIEWS, 10)).singleElement()
                 .satisfies(stats -> assertThat(stats.saves()).isEqualTo(5));
+    }
+
+    /** Traffic and queries are the window's, the way TikTok shows them, not lifetime like the totals. */
+    @Test
+    void trafficAndQueriesAreTheWindows() {
+        var window = CreatorAnalyticsServiceImpl.Window.endingOn(LocalDate.now(CreatorAnalyticsServiceImpl.ZONE), 7);
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+        when(repository.trafficSources("v1", window.from(), window.to()))
+                .thenReturn(List.of(new TrafficSourceResponse("FOR_YOU", 3)));
+        when(repository.searchQueries("v1", window.from(), window.to(), 3, 10))
+                .thenReturn(List.of(new SearchQueryResponse("cat", 3)));
+
+        CreatorVideoDetailResponse video = service.video(7L, "v1", 7);
+
+        assertThat(video.trafficSources()).containsExactly(new TrafficSourceResponse("FOR_YOU", 3));
+        assertThat(video.searchQueries()).containsExactly(new SearchQueryResponse("cat", 3));
+        verify(repository, never()).trafficSources(any(), eq(Instant.EPOCH), any());
     }
 }

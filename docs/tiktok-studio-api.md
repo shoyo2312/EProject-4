@@ -65,9 +65,14 @@ Các số ở cấp cao nhất là **trọn đời**; `current` là cửa sổ `
   "retention": [1.0, 0.93, 0.88, "... 21 điểm ...", 0.42],
   "daily": [ { "day": "2026-10-17", "views": 10, "likes": 1, "comments": 0, "shares": 0, "saves": 1, "followersGained": 1, "followersLost": 0 } ],
   "current":  { "views": 40, "likes": 5, "comments": 1, "shares": 0, "saves": 2, "newFollowers": 1 },
-  "previous": { "views": 30, "likes": 4, "comments": 2, "shares": 1, "saves": 0, "newFollowers": 0 }
+  "previous": { "views": 30, "likes": 4, "comments": 2, "shares": 1, "saves": 0, "newFollowers": 0 },
+  "trafficSources": [ { "source": "FOR_YOU", "views": 28 }, { "source": "SEARCH", "views": 7 }, { "source": "OTHER", "views": 5 } ],
+  "searchQueries":  [ { "query": "mèo con", "views": 4 }, { "query": "cat video", "views": 3 } ]
 }
 ```
+
+- `trafficSources`: lượt xem **trong cửa sổ** theo nơi người xem bấm vào video, nhiều nhất trước. Giá trị là `WatchSource` của interaction-service: `FOR_YOU`, `FOLLOWING`, `FRIENDS`, `EXPLORE`, `PROFILE`, `SEARCH`, `MESSAGE`, `DIRECT`, `OTHER` (client cũ không gửi nguồn). Chỉ gồm nguồn có lượt xem > 0.
+- `searchQueries`: từ khoá người xem đã tìm để ra video này, trong cửa sổ, nhiều lượt nhất trước, tối đa 10. Từ khoá dưới `analytics.creator.search-query-min-views` lượt (env `CREATOR_SEARCH_QUERY_MIN_VIEWS`, mặc định 3) bị bỏ: một hai lượt xem thì từ khoá gần như nói ra *ai* đã tìm. Từ khoá đã hạ chữ thường và cắt khoảng trắng hai đầu lúc ghi.
 
 - `newFollowers`: số lượt follow **gộp** đến từ video này (follow rồi bỏ vẫn tính, như TikTok). Follow từ nơi khác (trang profile, tìm kiếm) không tính vào đây, chỉ vào `netFollowers` của §2.1. Với tài khoản riêng tư, follow được tính lúc chủ **duyệt** lời mời, mang theo video lúc gửi lời mời.
 
