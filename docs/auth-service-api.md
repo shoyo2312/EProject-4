@@ -427,6 +427,22 @@ Xác minh lại: **đúng một** trong `{ "password": "…" }`, `{ "otp": "1234
 
 Thành công: mọi phiên của tài khoản bị huỷ (như ban), kể cả phiên hiện tại — client xoá token local. Phát `AccountStateChangedEvent` (mục 9). Mở lại: mục 3.2. `AccountDeletionSweep` (mỗi giờ) chạy các lệnh xoá đến hạn, kể cả khi tài khoản đang bị ban: email, mật khẩu và liên kết provider bị gỡ, row được soft-delete, nên email/username/tài khoản Google-Facebook đăng ký lại được như tài khoản mới. Unban một tài khoản đã tự đóng đưa nó về `DEACTIVATED`, không phải `ACTIVE`.
 
+### 3.20 Đăng nhập web bằng mã QR — `/qr/**`
+Trình duyệt hiện mã QR, app (đã đăng nhập) quét rồi xác nhận, trình duyệt nhận phiên. Trạng thái nằm trong Redis (`auth:qr:{id}`, sống 2 phút), mỗi bước chuyển là một Lua script nên một mã chỉ một tài khoản quét được và token chỉ được trả **một lần**.
+
+| Endpoint | Ai gọi | Token | Body | Trả |
+|---|---|---|---|---|
+| `POST /qr` | Trình duyệt | Không | — | `201 { qrId, pollToken, qrContent, expiresAt }`. `429 TOO_MANY_QR_LOGIN_REQUESTS` quá 30 mã / 10 phút / IP |
+| `POST /qr/{qrId}/status` | Trình duyệt | Không | `{ "pollToken": "…" }` | `200 { status, username, tokens }` — `PENDING` → `SCANNED` (kèm `username`) → `APPROVED` (kèm `tokens`, **chỉ một lần**) hoặc `REJECTED`; `EXPIRED` khi hết hạn, đã dùng, không tồn tại **hoặc sai `pollToken`**. Gọi mỗi 2 giây |
+| `POST /qr/{qrId}/scan` | App | Có | — | `200 { deviceLabel, location, expiresAt }` cho màn xác nhận. `410 QR_LOGIN_EXPIRED`, `409 QR_LOGIN_ALREADY_SCANNED` (tài khoản khác quét trước), `403 QR_LOGIN_NOT_ALLOWED` (ADMIN / tài khoản không ACTIVE). Quét lại từ chính tài khoản đó vẫn `200` |
+| `POST /qr/{qrId}/approve` | App | Có | — | `200`. Chỉ sau `/scan` của **cùng tài khoản**, không thì `410 QR_LOGIN_EXPIRED` |
+| `POST /qr/{qrId}/reject` | App | Có | — | `200`. Như trên |
+
+- `qrContent` = `nowa://qr-login?id={qrId}`. Ảnh QR **chỉ** chứa nội dung này; `pollToken` ở lại trong trang — ai chụp được màn hình cũng không lấy được phiên.
+- Token được cấp ở lần gọi `/status` **của trình duyệt**, nên phiên mang User-Agent, IP, `X-Device-Id` của trình duyệt: là phiên `DESKTOP`, không đá phiên của app, và cảnh báo thiết bị mới (nếu có) ghi đúng trình duyệt. Lịch sử bảo mật ghi `LOGIN_SUCCEEDED` như các cách đăng nhập khác.
+- Màn xác nhận trên app **phải** hiện `deviceLabel` + `location` — đó là thứ chặn chiêu đưa mã QR của kẻ khác cho nạn nhân quét.
+- Tài khoản bị ban/đóng/xoá giữa lúc duyệt và lúc trình duyệt hỏi: `/status` trả `REJECTED`, không có token.
+
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
 1. `register` → `verify-email` (OTP 6 số gửi qua mail) → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext). Bỏ qua bước verify thì `login` trả `403 EMAIL_NOT_VERIFIED`. Luồng web thì khác: `register/start` → `register/verify` → `register/complete` (mục 3.13–3.15), bước cuối trả token luôn.
@@ -470,6 +486,10 @@ ACTIVE, LOCKED, BANNED, DEACTIVATED   // DEACTIVATED: chủ tự đóng, mục 3
 | `INVALID_SOCIAL_TOKEN` | 401 | Token Google/Facebook sai, hết hạn, hoặc **được cấp cho ứng dụng khác** (mục 3.10). Cố ý không nói rõ là lý do nào |
 | `EMAIL_ALREADY_LINKED` | 409 | Tài khoản đã có email đã verify nên không dùng `POST /email` được nữa (mục 3.12) |
 | `SOCIAL_LINK_VERIFICATION_REQUIRED` | 409 | Email sau tài khoản provider đã có chủ ở hệ thống ta và provider không khẳng định nó đã verify. Server đã gửi mã tới địa chỉ đó — **giữ lại token provider** rồi hoàn tất bằng mục 3.11. Không phải lỗi để hiển thị rồi thôi: bỏ token đi là bắt user đăng nhập provider lại từ đầu |
+| `QR_LOGIN_EXPIRED` | 410 | Mã QR hết hạn, đã dùng, không tồn tại, hoặc `/approve`·`/reject` không phải từ tài khoản đã quét (mục 3.20) → bảo user làm mới mã trên web |
+| `QR_LOGIN_ALREADY_SCANNED` | 409 | Tài khoản khác đã quét mã này trước (mục 3.20) |
+| `QR_LOGIN_NOT_ALLOWED` | 403 | Tài khoản ADMIN hoặc không ACTIVE quét mã QR (mục 3.20) |
+| `TOO_MANY_QR_LOGIN_REQUESTS` | 429 | Quá 30 mã QR / 10 phút từ một IP (mục 3.20) |
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
 | `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`, `reset-password/verify`, `register/verify`) |
 | `RESET_SESSION_EXPIRED` | 400 | `resetToken` của `reset-password/complete` hết hạn hoặc đã dùng — xin mã mới |

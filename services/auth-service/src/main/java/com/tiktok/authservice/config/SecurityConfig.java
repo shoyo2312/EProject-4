@@ -33,7 +33,10 @@ public class SecurityConfig {
                                 "/api/v1/auth/reset-password/verify", "/api/v1/auth/reset-password/complete",
                                 // Sign-in endpoints: requiring a session to start one is circular.
                                 "/api/v1/auth/oauth/google", "/api/v1/auth/oauth/facebook",
-                                "/api/v1/auth/oauth/google/link", "/api/v1/auth/oauth/facebook/link").permitAll()
+                                "/api/v1/auth/oauth/google/link", "/api/v1/auth/oauth/facebook/link",
+                                // QR sign-in, browser side only. Scanning and approving are the
+                                // phone's, and need its session like any other account action.
+                                "/api/v1/auth/qr", "/api/v1/auth/qr/*/status").permitAll()
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         // A container probe and a Prometheus scrape carry no JWT. The same set
                         // security-lib opens for the other services; the gateway routes /api/v1/**
