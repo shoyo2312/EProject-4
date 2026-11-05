@@ -35,7 +35,7 @@ class MeControllerTest {
         MeResponse meResponse = new MeResponse(
                 1L, "alice", "alice@example.com", "USER", "ACTIVE", Instant.parse("2024-01-01T00:00:00Z"),
                 "Alice A", "hello", "https://example.com/avatar.png", 10L, 5L, true, null, null, true,
-                true, List.of("GOOGLE"));
+                true, List.of("GOOGLE"), null);
         when(meService.getMe(anyString())).thenReturn(Mono.just(meResponse));
 
         WebTestClient client = WebTestClient.bindToController(new MeController(meService)).build();
@@ -63,7 +63,7 @@ class MeControllerTest {
     void getMe_whenProfileNotReady_returnsNullProfileFieldsButStillOk() {
         MeResponse meResponse = new MeResponse(
                 1L, "alice", "alice@example.com", "USER", "ACTIVE", Instant.parse("2024-01-01T00:00:00Z"),
-                null, null, null, null, null, false, null, null, false, false, List.of());
+                null, null, null, null, null, false, null, null, false, false, List.of(), null);
         when(meService.getMe(anyString())).thenReturn(Mono.just(meResponse));
 
         WebTestClient client = WebTestClient.bindToController(new MeController(meService)).build();
