@@ -335,7 +335,7 @@ class TranscodeServiceImplTest {
     }
 
     private void stubEdit(boolean succeeds) {
-        when(ffmpeg.edit(any(), any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
+        when(ffmpeg.edit(any(), any(), any(), any(), any(), anyBoolean())).thenAnswer(invocation -> {
             if (succeeds) {
                 Files.writeString(invocation.getArgument(1), "edited bytes");
             }
@@ -364,7 +364,7 @@ class TranscodeServiceImplTest {
 
         ArgumentCaptor<Path> edited = ArgumentCaptor.forClass(Path.class);
         verify(ffmpeg).edit(any(), edited.capture(),
-                eq(List.of(segment(2, 6, 1), segment(10, 14, 2))), isNull(), eq(true));
+                eq(List.of(segment(2, 6, 1), segment(10, 14, 2))), isNull(), eq(List.of()), eq(true));
         verify(ffmpeg).faststart(eq(edited.getValue()), any());
         verify(ffmpeg).stillFrame(eq(edited.getValue()), any(), anyInt());
         verify(ffmpeg).animatedPreview(eq(edited.getValue()), any(), anyInt());
@@ -383,7 +383,7 @@ class TranscodeServiceImplTest {
 
         service().transcode("vid123", RAW_URL, edit(segment(0, 5, 1)));
 
-        verify(ffmpeg).edit(any(), any(), any(), any(), eq(false));
+        verify(ffmpeg).edit(any(), any(), any(), any(), any(), eq(false));
     }
 
     /**
@@ -412,7 +412,7 @@ class TranscodeServiceImplTest {
         assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, edit(segment(50, 60, 1))))
                 .isInstanceOf(MediaRejectedException.class);
 
-        verify(ffmpeg, never()).edit(any(), any(), any(), any(), anyBoolean());
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     /** Opening the editor and touching nothing must not cost a full re-encode. */
@@ -427,7 +427,7 @@ class TranscodeServiceImplTest {
 
         service().transcode("vid123", RAW_URL, edit(segment(0, 42, 1)));
 
-        verify(ffmpeg, never()).edit(any(), any(), any(), any(), anyBoolean());
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), anyBoolean());
     }
 
     /** Slowing a clip down makes it longer, so the limit is checked again on what comes out. */
@@ -461,8 +461,68 @@ class TranscodeServiceImplTest {
                 new VideoPublishedEvent.Edit.Filter("mono", 1)));
 
         ArgumentCaptor<double[]> colour = ArgumentCaptor.forClass(double[].class);
-        verify(ffmpeg).edit(any(), any(), eq(List.of(segment(0, 43, 1))), colour.capture(), eq(true));
+        verify(ffmpeg).edit(any(), any(), eq(List.of(segment(0, 43, 1))), colour.capture(), eq(List.of()), eq(true));
         assertThat(colour.getValue()).containsExactly(VideoFilter.MONO.matrix(1));
+    }
+
+    private static VideoPublishedEvent.Edit overlayOnly() {
+        return new VideoPublishedEvent.Edit(1, List.of(), null,
+                List.of(new VideoPublishedEvent.Edit.Overlay("s3://video-media/raw/7/text.png", 1.0, 3.5)));
+    }
+
+    /** The overlay is fetched next to the upload, and leaves the source as a real PNG would. */
+    private void stubDownloadWithOverlay() throws Exception {
+        doAnswer(invocation -> {
+            DownloadObjectArgs args = invocation.getArgument(0);
+            Path file = Path.of(args.filename());
+            if (args.object().endsWith(".png")) {
+                ImageIO.write(new BufferedImage(72, 128, BufferedImage.TYPE_INT_ARGB), "png", file.toFile());
+            } else {
+                Files.writeString(file, "downloaded bytes");
+            }
+            return null;
+        }).when(minioClient).downloadObject(any(DownloadObjectArgs.class));
+    }
+
+    /** Text on its own still re-encodes, over the whole upload at normal speed. */
+    @Test
+    void transcode_withAnOverlay_laysTheDownloadedImageOverTheWholeVideo() throws Exception {
+        stubStat(1_000_000L);
+        stubDownloadWithOverlay();
+        stubProbe(42);
+        stubEdit(true);
+        stubFaststart(true);
+        stubStillFrame(true);
+        stubAnimatedPreview(true);
+
+        service().transcode("vid123", RAW_URL, overlayOnly());
+
+        ArgumentCaptor<DownloadObjectArgs> downloads = ArgumentCaptor.forClass(DownloadObjectArgs.class);
+        verify(minioClient, org.mockito.Mockito.times(2)).downloadObject(downloads.capture());
+        assertThat(downloads.getAllValues()).extracting(DownloadObjectArgs::object)
+                .containsExactly("raw/7/vid123.mp4", "raw/7/text.png");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Ffmpeg.Overlay>> overlays = ArgumentCaptor.forClass(List.class);
+        verify(ffmpeg).edit(any(), any(), eq(List.of(segment(0, 43, 1))), isNull(), overlays.capture(), eq(true));
+        assertThat(overlays.getValue()).singleElement().satisfies(overlay -> {
+            assertThat(overlay.file().getFileName().toString()).isEqualTo("overlay-0.png");
+            assertThat(overlay.start()).isEqualTo(1.0);
+            assertThat(overlay.end()).isEqualTo(3.5);
+        });
+    }
+
+    /** Whatever the client uploaded under an image type, ffmpeg only ever decodes a checked PNG. */
+    @Test
+    void transcode_anOverlayThatIsNotAPng_isRejectedBeforeFfmpegSeesIt() throws Exception {
+        stubStat(1_000_000L);
+        stubDownload();
+        stubProbe(42);
+
+        assertThatThrownBy(() -> service().transcode("vid123", RAW_URL, overlayOnly()))
+                .isInstanceOf(MediaRejectedException.class);
+
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), anyBoolean());
+        verify(minioClient, never()).uploadObject(any());
     }
 
     /** The app can be newer than this worker; a colour it cannot name is no reason to fail. */
@@ -478,7 +538,7 @@ class TranscodeServiceImplTest {
         TranscodeResult result = service().transcode("vid123", RAW_URL, new VideoPublishedEvent.Edit(1, List.of(),
                 new VideoPublishedEvent.Edit.Filter("from-the-future", 1)));
 
-        verify(ffmpeg, never()).edit(any(), any(), any(), any(), anyBoolean());
+        verify(ffmpeg, never()).edit(any(), any(), any(), any(), any(), anyBoolean());
         assertThat(result.durationSeconds()).isEqualTo(42);
     }
 }

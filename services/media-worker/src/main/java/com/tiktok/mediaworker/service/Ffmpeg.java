@@ -45,11 +45,19 @@ public interface Ffmpeg {
      *
      * @param segments  from {@link EditFilterGraph#usable}, never empty
      * @param colour    from {@link EditFilterGraph#colour}, or null to leave the colour alone
+     * @param overlays  the text and sticker layers, lowest first, each a PNG already passed through
+     *                  {@link OverlayImage#requireUsable}; empty for none
      * @param withAudio whether {@code source} has an audio stream
      * @return false if the source could not be decoded or encoded
      */
     boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments, double[] colour,
-                 boolean withAudio);
+                 List<Overlay> overlays, boolean withAudio);
+
+    /**
+     * A downloaded overlay layer and when it shows, in seconds on the edited video's clock.
+     */
+    record Overlay(Path file, Double start, Double end) {
+    }
 
     /**
      * Writes one decoded frame from {@code atSecond} into {@code target} as a JPEG, scaled to a

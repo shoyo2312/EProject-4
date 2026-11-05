@@ -108,6 +108,50 @@ class EditFilterGraphTest {
                 + "scale='min(iw,if(gt(iw,ih),1280,720))':-2[vout]");
     }
 
+    /**
+     * Last, at the capped size: stretched to exactly the picture, since the app drew it in the
+     * video's shape, and after the colour so a mono video keeps its coloured text — as the app
+     * shows it.
+     */
+    @Test
+    void build_laysTheOverlayOverThePictureAfterTheColourAndTheSizeCap() {
+        String graph = EditFilterGraph.build(List.of(new Segment(0, 2, 1)), VideoFilter.MONO.matrix(1),
+                List.of(new EditFilterGraph.Layer(new OverlayImage.Size(720, 1280))), false);
+
+        assertThat(graph).endsWith("scale='min(iw,if(gt(iw,ih),1280,720))':-2[vscaled];"
+                + "[1:v][vscaled]scale2ref="
+                + "w='if(eq(iw,720)*eq(ih,1280),main_w,iw)':h='if(eq(iw,720)*eq(ih,1280),main_h,ih)'"
+                + "[ov0][vb0];"
+                + "[vb0][ov0]overlay=x=0:y=0[vout]");
+        assertThat(graph.indexOf("colorchannelmixer")).isLessThan(graph.indexOf("[1:v]"));
+    }
+
+    /** Layers stack in order, each shown only over its own stretch of the edited video's clock. */
+    @Test
+    void build_stacksLayersInOrderEachOnItsOwnTimeline() {
+        OverlayImage.Size size = new OverlayImage.Size(72, 128);
+        String graph = EditFilterGraph.build(List.of(new Segment(0, 9, 1)), null, List.of(
+                new EditFilterGraph.Layer(size),
+                new EditFilterGraph.Layer(size, 1.5, 4.0),
+                new EditFilterGraph.Layer(size, 2.0, null),
+                new EditFilterGraph.Layer(size, null, 3.0)), false);
+
+        assertThat(graph)
+                .contains("[1:v][vscaled]scale2ref=")
+                .contains("[vb0][ov0]overlay=x=0:y=0[vo0];[2:v][vo0]scale2ref=")
+                .contains("[vb1][ov1]overlay=x=0:y=0:enable='between(t,1.500000,4.000000)'[vo1];")
+                .contains("[vb2][ov2]overlay=x=0:y=0:enable='gte(t,2.000000)'[vo2];")
+                .endsWith("[vb3][ov3]overlay=x=0:y=0:enable='lte(t,3.000000)'[vout]");
+    }
+
+    @Test
+    void changesAnything_anOverlayAloneIsAChange() {
+        Edit textOnly = new Edit(1, List.of(), null, List.of(new Edit.Overlay("s3://video-media/raw/1/t.png")));
+
+        assertThat(EditFilterGraph.changesAnything(textOnly, 10)).isTrue();
+        assertThat(EditFilterGraph.usable(textOnly, 10)).containsExactly(new Segment(0, 11, 1));
+    }
+
     @Test
     void colour_isTheCataloguedMatrixAtTheRequestedIntensity() {
         assertThat(EditFilterGraph.colour(new Edit(1, List.of(), new Edit.Filter("warm", 0.5))))

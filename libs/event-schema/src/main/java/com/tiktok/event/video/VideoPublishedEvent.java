@@ -59,17 +59,43 @@ public record VideoPublishedEvent(
      * @param filter   the colour filter over the whole video, or null for none. Added after
      *                 segments, so recipes written before it read as unfiltered
      */
-    public record Edit(int version, List<Segment> segments, Filter filter) {
+    public record Edit(int version, List<Segment> segments, Filter filter, List<Overlay> overlays) {
 
         public static final int CURRENT_VERSION = 1;
 
         public Edit {
             segments = segments == null ? List.of() : List.copyOf(segments);
+            overlays = overlays == null ? List.of() : List.copyOf(overlays);
         }
 
         /** Trim and speed only. */
         public Edit(int version, List<Segment> segments) {
-            this(version, segments, null);
+            this(version, segments, null, null);
+        }
+
+        /** Without text or stickers. */
+        public Edit(int version, List<Segment> segments, Filter filter) {
+            this(version, segments, filter, null);
+        }
+
+        /**
+         * A layer of text and stickers, drawn by the app into a transparent PNG the shape of the
+         * video. Layers are stacked in list order, the first lowest; each one shows for its own
+         * stretch of the edited video.
+         *
+         * @param imageUrl {@code s3://bucket/raw/{userId}/{id}.png}, an upload of the video's own
+         *                 owner — video-service checked both before this was written
+         * @param start    seconds into the <em>edited</em> video — after the cuts and speed
+         *                 changes, as the viewer's clock runs — when the layer appears; null from
+         *                 the first frame
+         * @param end      when it goes again, after {@code start}; null until the last frame
+         */
+        public record Overlay(String imageUrl, Double start, Double end) {
+
+            /** Shown for the whole video. */
+            public Overlay(String imageUrl) {
+                this(imageUrl, null, null);
+            }
         }
 
         /**

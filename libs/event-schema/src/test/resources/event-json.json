@@ -249,7 +249,12 @@
       "filter" : {
         "id" : "id-1",
         "intensity" : 2.25
-      }
+      },
+      "overlays" : [ {
+        "imageUrl" : "imageUrl-1",
+        "start" : 2.25,
+        "end" : 3.25
+      } ]
     }
   },
   "VideoPurgeRequestedEvent" : {

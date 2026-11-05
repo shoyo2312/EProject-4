@@ -90,12 +90,31 @@ public class JaveFfmpeg implements Ffmpeg {
 
     @Override
     public boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments,
-                        double[] colour, boolean withAudio) {
-        List<String> arguments = new ArrayList<>(List.of(
-                "-i", source.toString(),
+                        double[] colour, List<Overlay> overlays, boolean withAudio) {
+        List<EditFilterGraph.Layer> layers = new ArrayList<>();
+        for (Overlay overlay : overlays) {
+            try {
+                layers.add(new EditFilterGraph.Layer(OverlayImage.requireUsable(overlay.file()),
+                        overlay.start(), overlay.end()));
+            } catch (IOException | MediaRejectedException e) {
+                log.warn("Overlay {} is not usable: {}", overlay.file(), e.getMessage());
+                return false;
+            }
+        }
+        List<String> arguments = new ArrayList<>(List.of("-i", source.toString()));
+        for (Overlay overlay : overlays) {
+            // Input options apply to the next -i only, so run()'s whitelist does not cover these.
+            // The demuxer is named outright instead: a client file is never probed for what it
+            // might be, and OverlayImage has already read its header as a PNG.
+            arguments.addAll(List.of(
+                    "-protocol_whitelist", "file",
+                    "-f", "png_pipe",
+                    "-i", overlay.file().toString()));
+        }
+        arguments.addAll(List.of(
                 // Rotation is applied to the decoded input before the graph sees it, so the trim,
                 // the joins and the size cap all work on the picture as it will be shown.
-                "-filter_complex", EditFilterGraph.build(segments, colour, withAudio),
+                "-filter_complex", EditFilterGraph.build(segments, colour, layers, withAudio),
                 "-map", EditFilterGraph.VIDEO_OUT,
                 // The same encoder settings as normalize, so the result is already in the shape
                 // the rest of the pipeline wants and is only remuxed after this.

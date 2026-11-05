@@ -139,7 +139,7 @@ class JaveFfmpegTest {
 
         assertThat(ffmpeg.edit(source, target, List.of(
                 new VideoPublishedEvent.Edit.Segment(0.5, 1.5, 1),
-                new VideoPublishedEvent.Edit.Segment(0, 1, 2)), null, true)).isTrue();
+                new VideoPublishedEvent.Edit.Segment(0, 1, 2)), null, List.of(), true)).isTrue();
 
         assertThat(new MultimediaObject(target.toFile()).getInfo().getDuration()).isBetween(1300L, 1700L);
         ProbedVideo probed = probe.probe(target.toUri().toString());
@@ -154,7 +154,7 @@ class JaveFfmpegTest {
         Path target = work.resolve("edited.mp4");
 
         assertThat(ffmpeg.edit(rotated, target,
-                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, true)).isTrue();
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, List.of(), true)).isTrue();
 
         ProbedVideo probed = probe.probe(target.toUri().toString());
         assertThat(probed.width()).isEqualTo(720);
@@ -174,7 +174,7 @@ class JaveFfmpegTest {
         Path target = work.resolve("edited.mp4");
 
         assertThat(ffmpeg.edit(silent, target,
-                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 0.5)), null, false)).isTrue();
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 0.5)), null, List.of(), false)).isTrue();
 
         assertThat(probe.probe(target.toUri().toString()).audioCodec()).isNull();
     }
@@ -189,7 +189,7 @@ class JaveFfmpegTest {
         Path target = work.resolve("edited.mp4");
 
         assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)),
-                VideoFilter.MONO.matrix(1), true)).isTrue();
+                VideoFilter.MONO.matrix(1), List.of(), true)).isTrue();
 
         Path still = work.resolve("still.jpg");
         assertThat(ffmpeg.stillFrame(target, still, 0)).isTrue();
@@ -205,13 +205,100 @@ class JaveFfmpegTest {
         assertThat(worst).as("largest channel spread in a mono frame").isLessThan(16);
     }
 
+    /**
+     * The overlay is drawn at its own resolution and stretched over the whole picture: a red left
+     * half at a quarter of the video's size still covers the left half of every frame, and the
+     * transparent right half leaves the test pattern showing through.
+     */
+    @Test
+    void edit_laysTheOverlayOverTheWholePicture(@TempDir Path work) throws Exception {
+        Path source = synthesize(work.resolve("source.mp4"), "320x240");
+        Path overlay = work.resolve("overlay.png");
+        BufferedImage drawn = new BufferedImage(80, 60, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 60; y++) {
+            for (int x = 0; x < 40; x++) {
+                drawn.setRGB(x, y, 0xFFFF0000);
+            }
+        }
+        ImageIO.write(drawn, "png", overlay.toFile());
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0, 1.5, 1)),
+                null, List.of(new Ffmpeg.Overlay(overlay, null, null)), true)).isTrue();
+
+        assertThat(new MultimediaObject(target.toFile()).getInfo().getDuration()).isBetween(1300L, 1700L);
+        Path still = work.resolve("still.jpg");
+        assertThat(ffmpeg.stillFrame(target, still, 1)).isTrue();
+        BufferedImage frame = ImageIO.read(still.toFile());
+        int red = 0, other = 0;
+        for (int y = 10; y < frame.getHeight() - 10; y += 9) {
+            for (int x = 10; x < frame.getWidth() / 2 - 10; x += 9) {
+                red += isRed(frame.getRGB(x, y)) ? 1 : 0;
+            }
+            for (int x = frame.getWidth() / 2 + 10; x < frame.getWidth() - 10; x += 9) {
+                other += isRed(frame.getRGB(x, y)) ? 0 : 1;
+            }
+        }
+        int samples = ((frame.getHeight() - 20 + 8) / 9) * ((frame.getWidth() / 2 - 20 + 8) / 9);
+        assertThat(red).as("red samples on the covered half").isGreaterThan(samples * 9 / 10);
+        assertThat(other).as("pattern samples on the transparent half").isGreaterThan(samples / 2);
+    }
+
+    /** A layer timed to the edited video's clock is absent before its start and there after it. */
+    @Test
+    void edit_showsATimedLayerOnlyFromItsStart(@TempDir Path work) throws Exception {
+        Path source = synthesize(work.resolve("source.mp4"), "320x240");
+        Path overlay = work.resolve("overlay.png");
+        BufferedImage drawn = new BufferedImage(32, 24, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 24; y++) {
+            for (int x = 0; x < 32; x++) {
+                drawn.setRGB(x, y, 0xFFFF0000);
+            }
+        }
+        ImageIO.write(drawn, "png", overlay.toFile());
+        Path target = work.resolve("edited.mp4");
+
+        // The cut starts half a second into the upload, so "1 second" is the edited clock's.
+        assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0.5, 2, 1)),
+                null, List.of(new Ffmpeg.Overlay(overlay, 1.0, null)), true)).isTrue();
+
+        assertThat(redShare(stillAt(work, target, "0.4"))).as("before the start").isLessThan(0.3);
+        assertThat(redShare(stillAt(work, target, "1.3"))).as("after the start").isGreaterThan(0.9);
+    }
+
+    private static BufferedImage stillAt(Path work, Path video, String second) throws Exception {
+        Path still = work.resolve("at-" + second + ".png");
+        Process process = new ProcessBuilder(List.of(
+                new DefaultFFMPEGLocator().getExecutablePath(), "-nostdin", "-y", "-loglevel", "error",
+                "-ss", second, "-i", video.toString(), "-frames:v", "1", still.toString()))
+                .redirectErrorStream(true).inheritIO().start();
+        assertThat(process.waitFor()).isZero();
+        return ImageIO.read(still.toFile());
+    }
+
+    private static double redShare(BufferedImage frame) {
+        int red = 0, all = 0;
+        for (int y = 5; y < frame.getHeight(); y += 10) {
+            for (int x = 5; x < frame.getWidth(); x += 10) {
+                red += isRed(frame.getRGB(x, y)) ? 1 : 0;
+                all++;
+            }
+        }
+        return (double) red / all;
+    }
+
+    private static boolean isRed(int rgb) {
+        int r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+        return r > 200 && g < 60 && b < 60;
+    }
+
     @Test
     void edit_refusesInputItCannotDecode(@TempDir Path work) throws Exception {
         Path notMedia = work.resolve("notes.txt");
         Files.writeString(notMedia, "this is not a video");
 
         assertThat(ffmpeg.edit(notMedia, work.resolve("edited.mp4"),
-                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, true)).isFalse();
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, List.of(), true)).isFalse();
     }
 
     @Test

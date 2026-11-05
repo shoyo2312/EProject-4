@@ -29,6 +29,22 @@ public final class EditFilterGraph {
     public static final String VIDEO_OUT = "[vout]";
     public static final String AUDIO_OUT = "[aout]";
 
+    /**
+     * One layer of the editor's text and stickers: a PNG input after the upload, in order — the
+     * first layer is input 1.
+     *
+     * @param size  as {@link OverlayImage#requireUsable} read it from the header
+     * @param start seconds on the edited video's clock when it appears, null from the start
+     * @param end   when it goes, null at the end
+     */
+    public record Layer(OverlayImage.Size size, Double start, Double end) {
+
+        /** Shown throughout. */
+        public Layer(OverlayImage.Size size) {
+            this(size, null, null);
+        }
+    }
+
     /** atempo takes 0.5 to 2 in one step on older builds; anything further is chained. */
     private static final double ATEMPO_MIN = 0.5;
     private static final double ATEMPO_MAX = 2.0;
@@ -48,7 +64,7 @@ public final class EditFilterGraph {
      * opened it and touched nothing, and re-encoding for that is minutes of CPU for no difference.
      */
     public static boolean changesAnything(Edit edit, double durationSeconds) {
-        if (colour(edit).isPresent()) {
+        if (colour(edit).isPresent() || (edit != null && !edit.overlays().isEmpty())) {
             return true;
         }
         List<Segment> segments = usable(edit, durationSeconds);
@@ -106,17 +122,31 @@ public final class EditFilterGraph {
 
     /** Without a colour filter. */
     public static String build(List<Segment> segments, boolean withAudio) {
-        return build(segments, null, withAudio);
+        return build(segments, null, List.of(), withAudio);
+    }
+
+    /** Without overlays. */
+    public static String build(List<Segment> segments, double[] colour, boolean withAudio) {
+        return build(segments, colour, List.of(), withAudio);
     }
 
     /**
      * @param segments  from {@link #usable}, never empty
      * @param colour    from {@link #colour}, or null to leave the colour alone. Applied after the
      *                  join and before the size cap, in the same pass as everything else
+     * @param overlays  the editor's text and sticker layers, inputs 1, 2… in order, the first
+     *                  lowest. Laid over the picture last, after the size cap, each stretched to
+     *                  exactly the picture's size: the app drew them in the video's own shape, so
+     *                  this only changes their resolution — and drawing them after the cap keeps
+     *                  the text sharp rather than scaled twice. The colour filter is not applied
+     *                  to them, as the app's preview does not. Each shows only between its start
+     *                  and end, read on the clock of the edited video — after the concat, where
+     *                  {@code t} is what the viewer's player will show
      * @param withAudio whether the upload has an audio stream; a graph naming {@code [0:a]} on a
      *                  silent file is an error, not silence
      */
-    public static String build(List<Segment> segments, double[] colour, boolean withAudio) {
+    public static String build(List<Segment> segments, double[] colour, List<Layer> overlays,
+                               boolean withAudio) {
         if (segments.isEmpty()) {
             throw new IllegalArgumentException("An edit needs at least one segment");
         }
@@ -148,8 +178,48 @@ public final class EditFilterGraph {
         if (colour != null) {
             graph.append(colourChannelMixer(colour)).append(',');
         }
-        graph.append(SCALE).append(VIDEO_OUT);
+        graph.append(SCALE);
+        String below = "[vscaled]";
+        for (int i = 0; i < overlays.size(); i++) {
+            Layer layer = overlays.get(i);
+            // A single still: overlay keeps showing an input's last frame once it has ended, so
+            // the one frame is there for as long as enable lets it be.
+            graph.append(below).append(';')
+                    .append('[').append(i + 1).append(":v]").append(below)
+                    .append(scaleToReference(layer.size())).append("[ov").append(i).append("][vb").append(i).append("];")
+                    .append("[vb").append(i).append("][ov").append(i).append("]overlay=x=0:y=0")
+                    .append(enable(layer));
+            below = "[vo" + i + "]";
+        }
+        graph.append(VIDEO_OUT);
         return graph.toString();
+    }
+
+    /** ffmpeg's timeline option, on the overlay's clock; nothing for a layer shown throughout. */
+    private static String enable(Layer layer) {
+        if (layer.start() != null && layer.end() != null) {
+            return ":enable='between(t," + number(layer.start()) + "," + number(layer.end()) + ")'";
+        }
+        if (layer.start() != null) {
+            return ":enable='gte(t," + number(layer.start()) + ")'";
+        }
+        if (layer.end() != null) {
+            return ":enable='lte(t," + number(layer.end()) + ")'";
+        }
+        return "";
+    }
+
+    /**
+     * scale2ref sizing the overlay to the picture. Which variables name the picture depends on the
+     * build: the ffmpeg 4.4 bundled with JAVE has them backwards — {@code iw}/{@code ih} are the
+     * reference and {@code main_w}/{@code main_h} the image being scaled — where the documented
+     * and later behaviour is the reverse. Rather than bet on one, the expression asks which pair
+     * is the overlay, whose size the worker read from its header, and takes the other. When the
+     * two are the same size either answer is right.
+     */
+    private static String scaleToReference(OverlayImage.Size overlay) {
+        String isOverlay = "eq(iw,%d)*eq(ih,%d)".formatted(overlay.width(), overlay.height());
+        return "scale2ref=w='if(%s,main_w,iw)':h='if(%s,main_h,ih)'".formatted(isOverlay, isOverlay);
     }
 
     /**

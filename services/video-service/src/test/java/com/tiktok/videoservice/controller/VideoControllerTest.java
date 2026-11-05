@@ -189,6 +189,12 @@ class VideoControllerTest {
             "{\"segments\":[{\"start\":0,\"end\":5}]}",
             "{}",
             "{\"filter\":{\"id\":\"sepia\"}}",
+            "{\"overlays\":[]}",
+            "{\"overlays\":[{\"imageUrl\":\"\"}]}",
+            "{\"overlays\":[{\"imageUrl\":\"s3://video-media/raw/1/t.png\",\"start\":4,\"end\":2}]}",
+            "{\"overlays\":[{\"imageUrl\":\"s3://video-media/raw/1/t.png\",\"start\":-1}]}",
+            "{\"overlays\":[{\"imageUrl\":\"s3://video-media/raw/1/t.png\",\"texts\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}]}",
+            "{\"overlays\":[{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"}]}",
             "{\"filter\":{\"id\":\"warm\",\"intensity\":2}}",
             "{\"filter\":{\"id\":\"\"}}"
     })

@@ -50,7 +50,7 @@ Base path: `/api/v1/videos`.
 Request (`UploadUrlRequest`):
 ```json
 {
-  "contentType": "video/mp4"    // bắt buộc; chỉ nhận video/mp4, video/quicktime, video/webm
+  "contentType": "video/mp4"    // bắt buộc; video/mp4, video/quicktime, video/webm — hoặc image/png cho edit.overlays
                                 // tham số đi kèm được bỏ qua: "video/mp4; charset=utf-8" vẫn hợp lệ
 }
 ```
@@ -109,7 +109,11 @@ Request (`CreateVideoRequest`):
       { "start": 1.2, "end": 4.5, "speed": 1.0 },
       { "start": 6.0, "end": 12.5, "speed": 2.0 }
     ],
-    "filter": { "id": "warm", "intensity": 0.8 }
+    "filter": { "id": "warm", "intensity": 0.8 },
+    "overlays": [
+      { "imageUrl": "s3://video-media/raw/123456789012345/7313.png" },
+      { "imageUrl": "s3://video-media/raw/123456789012345/7314.png", "start": 1.5, "end": 4.0, "texts": ["Xin chào"] }
+    ]
   }
 }
 ```
@@ -117,7 +121,11 @@ Request (`CreateVideoRequest`):
 **Chỉnh sửa trong app (`edit`).** App chỉ **xem trước** việc cắt và đổi tốc độ; file upload vẫn là bản quay gốc. `edit` là công thức để media-worker dựng video cuối cùng bằng ffmpeg trước khi transcode, nên mọi thứ người xem thấy (playback, thumbnail, preview) và mọi thứ kiểm duyệt chấm đều là **bản đã chỉnh**.
 - `segments`: các đoạn lấy từ file gốc, phát nối tiếp nhau **theo thứ tự gửi**. 0–20 đoạn; bỏ trống = cả video ở tốc độ 1 (edit chỉ đổi màu).
 - `filter`: filter màu phủ cả video, optional. `id` là một trong `warm`, `cool`, `vivid`, `muted`, `mono`, `vintage` (danh mục ở `event-schema/VideoFilter`, ma trận màu 3x3 — app giữ một bản sao ở `video_filters.dart`, đổi bên này thì đổi bên kia). `intensity` 0–1, bỏ trống = 1. `id` lạ hoặc `intensity` ngoài 0–1 → `VALIDATION_ERROR` (400).
-- Phải có ít nhất một trong `segments` (không rỗng) hoặc `filter`; `edit: {}` → 400.
+- `overlays`: chữ + sticker, optional, tối đa 10 lớp. Mỗi lớp là một PNG trong suốt cùng tỉ lệ khung hình với video (720 hoặc 1280 px cạnh ngang) mà app vẽ sẵn: xin `POST /upload-url` với `contentType: "image/png"` (tối đa 5 MB, cùng prefix `raw/` nên cũng hết hạn sau 7 ngày) rồi gửi `fileUrl` làm `imageUrl`. Các lớp chồng **theo thứ tự gửi** (lớp đầu ở dưới cùng), mỗi lớp kéo phủ đúng khung hình, nằm trên filter màu (chữ không bị đổi màu, giống preview).
+  - `start`/`end`: giây trên đồng hồ của video **đã chỉnh** — sau khi cắt và đổi tốc độ, đúng thứ người xem thấy — khác với `segments` (giây trên file gốc). Bỏ `start` = từ đầu, bỏ `end` = tới hết. `0–36000`, `end > start`. App gom các item liền nhau có cùng khoảng thời gian vào một lớp.
+  - `texts`: chữ đã vẽ trong lớp, nguyên văn (tối đa 20, mỗi cái 150 ký tự). Ảnh thì không bộ kiểm duyệt chữ nào đọc được, nên đây là thứ được kiểm duyệt **như caption** (đọc liền nhau như tag, `Surface.VIDEO_OVERLAY`): từ bị cấm hẳn → `422 VIDEO_OVERLAY_REJECTED`, từ đáng ngờ → video vào hàng chờ admin (flag `OVERLAY:...`). Lưu lại trên document để admin xem; không đi theo event. Giới hạn: server tin app vẽ đúng chữ đã khai — client sửa đổi có thể vẽ chữ khác, chỉ kiểm duyệt khung hình (ảnh nhạy cảm) còn chặn được.
+  - Ràng buộc `imageUrl` giống `rawFileUrl`: upload của chính mình (`FOREIGN_UPLOAD`), là `.png` (`UNSUPPORTED_UPLOAD_TYPE`), đã upload xong (`UPLOAD_NOT_FOUND`). Ngược lại `rawFileUrl` trỏ vào một `.png` → `UNSUPPORTED_UPLOAD_TYPE`. PNG không đọc được hoặc header khai quá 4096 px một cạnh → video `FAILED`.
+- Phải có ít nhất một trong `segments`, `filter`, `overlays` (không rỗng); `edit: {}` → 400.
 - `start`/`end`: giây tính trên file **gốc**, trước khi đổi tốc độ. `0 ≤ start < end ≤ 36000`. Không cần khớp chính xác độ dài video: `end` quá cuối video thì dừng ở cuối video, đoạn bắt đầu sau khi video đã hết thì bị bỏ.
 - `speed`: `0.25`–`4` (editor dùng 0.3x/0.5x/1x/2x/3x). Tiếng đổi tốc độ nhưng giữ cao độ.
 - Không chỉnh gì thì **bỏ hẳn `edit`** (hoặc `null`). Một đoạn duy nhất phủ cả video ở tốc độ 1 cũng được coi là không chỉnh, server không encode lại.
@@ -127,7 +135,7 @@ Request (`CreateVideoRequest`):
 **Làm sạch trước khi kiểm tra độ dài.** Server chuẩn hoá NFC (tiếng Việt gõ kiểu tổ hợp được ghép lại), bỏ ký tự vô hình (zero-width, đảo chiều U+202E, ký tự "lấp chỗ" Hangul/Braille), gộp khoảng trắng, tối đa một dòng trống liên tiếp trong `description`, và đổi xuống dòng trong `title`/tag thành dấu cách. Mọi giới hạn ký tự tính theo **code point** sau khi làm sạch (emoji tính 1) — đếm phía client bằng `text.runes.length` (Dart) / `[...text].length` (JS). Tiêu đề chỉ toàn ký tự vô hình → `VALIDATION_ERROR` (400).
 
 **Kiểm duyệt chữ.** `title`, `description` và danh sách tag cuối cùng (kể cả hashtag lấy từ mô tả) được đọc bằng bộ luật chữ (blocklist tiếng Việt + tín hiệu spam) **trước khi lưu**:
-- Từ ngữ nặng nhất trong blocklist → `422` với mã theo trường: `VIDEO_TITLE_REJECTED`, `VIDEO_DESCRIPTION_REJECTED` hoặc `VIDEO_TAGS_REJECTED` (kiểm theo thứ tự đó, báo trường đầu tiên vi phạm). **Không lưu gì** — file đã upload vẫn còn, sửa chữ rồi gửi lại **đúng `rawFileUrl` cũ**, không cần upload lại. Server không nói từ nào; hiện thông báo dưới đúng ô nhập.
+- Từ ngữ nặng nhất trong blocklist → `422` với mã theo trường: `VIDEO_TITLE_REJECTED`, `VIDEO_DESCRIPTION_REJECTED`, `VIDEO_TAGS_REJECTED` hoặc `VIDEO_OVERLAY_REJECTED` (kiểm theo thứ tự đó, báo trường đầu tiên vi phạm). **Không lưu gì** — file đã upload vẫn còn, sửa chữ rồi gửi lại **đúng `rawFileUrl` cũ**, không cần upload lại. Server không nói từ nào; hiện thông báo dưới đúng ô nhập.
 - Thô tục/xúc phạm mức vừa, link (trừ link tới YouTube, Facebook, Instagram, TikTok, X, Threads), số điện thoại, email, cờ bạc → video **vẫn được tạo** (`201`) và chạy pipeline như thường, nhưng kiểm duyệt xong sẽ thành `PENDING_REVIEW` thay vì `PUBLISHED` — chờ admin, kể cả khi hình ảnh không có vấn đề gì.
 - Sau bộ luật, một model phân loại tiếng Việt (PhoBERT, chỉ bắt lời lẽ thù ghét) đọc cả ba trường. Model **chỉ có thể** đưa video vào `PENDING_REVIEW`, không bao giờ trả `422`. Model không chạy được thì bộ luật quyết một mình.
 - Chữ không bao giờ tự làm video thành `REJECTED`.
@@ -323,7 +331,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `title` rỗng sau khi làm sạch/quá 150 ký tự, `description` quá 2000, tag quá 50, `visibility` thiếu hoặc sai giá trị enum, `rawFileUrl` sai scheme/host/bucket (mục 3.2) |
-| `UNSUPPORTED_UPLOAD_TYPE` | 400 | `contentType` ở mục 3.1 không phải `video/mp4`, `video/quicktime` hoặc `video/webm` |
+| `UNSUPPORTED_UPLOAD_TYPE` | 400 | `contentType` ở mục 3.1 không phải `video/mp4`, `video/quicktime`, `video/webm` hoặc `image/png`; hoặc ở mục 3.2 `rawFileUrl` là `.png` / `edit.overlay.imageUrl` không phải `.png` |
 | `FOREIGN_UPLOAD` | 400 | `rawFileUrl` trỏ vào file của tài khoản khác, hoặc vào key không do mục 3.1 cấp. Chỉ publish được đúng `fileUrl` mà chính token này vừa nhận |
 | `UPLOAD_NOT_FOUND` | 400 | Chưa POST file lên `uploadUrl` (mục 3.1), hoặc file đã hết hạn sau 7 ngày. Upload lại rồi mới gọi `POST /` |
 | `RAW_FILE_ALREADY_PUBLISHED` | 400 | `rawFileUrl` này đã có video rồi. Thường là retry sau timeout — lần trước đã thành công |
@@ -333,6 +341,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `VIDEO_TITLE_REJECTED` | 422 | `title` chứa từ ngữ bị cấm hẳn; không lưu gì, sửa rồi gửi lại cùng `rawFileUrl` (mục 3.2) |
 | `VIDEO_DESCRIPTION_REJECTED` | 422 | Như trên, cho `description` |
 | `VIDEO_TAGS_REJECTED` | 422 | Như trên, cho tag (đọc liền nhau, nên một cụm bị cấm tách ra nhiều tag vẫn bị bắt) |
+| `VIDEO_OVERLAY_REJECTED` | 422 | Như trên, cho chữ vẽ trên video (`edit.overlays[].texts`, đọc liền nhau) |
 | `PRIVATE_ACCOUNT` | 403 | Lưới video (mục 3.5) của tài khoản riêng tư mà người gọi không follow |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |

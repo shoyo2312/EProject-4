@@ -27,6 +27,22 @@ public class VideoEdit {
     /** Null when the colour is left alone. */
     private Filter filter;
 
+    /** The text and sticker layers, lowest first. Empty or null without any. */
+    private List<Overlay> overlays;
+
+    @Getter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Overlay {
+        /** Canonical {@code s3://} form, checked to be the owner's own PNG upload. */
+        private String imageUrl;
+        private Double start;
+        private Double end;
+        /** The words in the layer as typed, kept for whoever reviews the video. */
+        private List<String> texts;
+    }
+
     @Getter
     @Builder
     @NoArgsConstructor
@@ -46,8 +62,19 @@ public class VideoEdit {
         private double speed;
     }
 
-    /** Null in, null out: no edits is the common case and stores nothing. */
+    /** Without an overlay. */
     public static VideoEdit from(VideoEditRequest request) {
+        return from(request, List.of());
+    }
+
+    /**
+     * Null in, null out: no edits is the common case and stores nothing.
+     *
+     * @param overlayUrls the request's overlays' URLs in canonical form and in order, once the
+     *                    caller has checked them. Taken separately so an unchecked URL is never
+     *                    stored
+     */
+    public static VideoEdit from(VideoEditRequest request, List<String> overlayUrls) {
         if (request == null) {
             return null;
         }
@@ -58,13 +85,33 @@ public class VideoEdit {
                         .toList())
                 .filter(request.filter() == null ? null
                         : new Filter(request.filter().id(), request.filter().intensityOrFull()))
+                .overlays(overlays(request.overlays(), overlayUrls))
                 .build();
+    }
+
+    private static List<Overlay> overlays(List<VideoEditRequest.Overlay> requested, List<String> urls) {
+        if (requested == null || requested.isEmpty()) {
+            return List.of();
+        }
+        if (urls.size() != requested.size()) {
+            throw new IllegalArgumentException("One checked URL per overlay: " + urls.size() + " for " + requested.size());
+        }
+        List<Overlay> overlays = new java.util.ArrayList<>();
+        for (int i = 0; i < requested.size(); i++) {
+            VideoEditRequest.Overlay overlay = requested.get(i);
+            overlays.add(new Overlay(urls.get(i), overlay.start(), overlay.end(),
+                    overlay.texts() == null ? List.of() : List.copyOf(overlay.texts())));
+        }
+        return overlays;
     }
 
     public VideoPublishedEvent.Edit toEvent() {
         return new VideoPublishedEvent.Edit(version, segments == null ? List.of() : segments.stream()
                 .map(s -> new VideoPublishedEvent.Edit.Segment(s.getStart(), s.getEnd(), s.getSpeed()))
                 .toList(),
-                filter == null ? null : new VideoPublishedEvent.Edit.Filter(filter.getId(), filter.getIntensity()));
+                filter == null ? null : new VideoPublishedEvent.Edit.Filter(filter.getId(), filter.getIntensity()),
+                overlays == null ? List.of() : overlays.stream()
+                        .map(o -> new VideoPublishedEvent.Edit.Overlay(o.getImageUrl(), o.getStart(), o.getEnd()))
+                        .toList());
     }
 }

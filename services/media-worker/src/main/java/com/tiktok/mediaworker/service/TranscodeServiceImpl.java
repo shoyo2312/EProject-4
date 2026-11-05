@@ -23,6 +23,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
@@ -123,7 +124,7 @@ public class TranscodeServiceImpl implements TranscodeService {
             requireWithinDuration(probed.durationSeconds());
 
             if (edit != null && EditFilterGraph.changesAnything(edit, probed.durationSeconds())) {
-                source = applyEdit(videoId, source, work.resolve("edited.mp4"), edit, probed);
+                source = applyEdit(videoId, source, work, edit, probed);
                 probed = videoProbe.probe(source.toUri().toString());
                 requireWithinDuration(probed.durationSeconds());
             }
@@ -184,8 +185,8 @@ public class TranscodeServiceImpl implements TranscodeService {
      * recorded, cuts included, and publishing it in place of the edit would show viewers exactly
      * the parts the uploader chose to remove.
      */
-    private Path applyEdit(String videoId, Path source, Path target, VideoPublishedEvent.Edit edit,
-                           ProbedVideo probed) {
+    private Path applyEdit(String videoId, Path source, Path work, VideoPublishedEvent.Edit edit,
+                           ProbedVideo probed) throws Exception {
         List<VideoPublishedEvent.Edit.Segment> segments = EditFilterGraph.usable(edit, probed.durationSeconds());
         if (segments.isEmpty()) {
             throw new MediaRejectedException("The edit keeps nothing of the video.");
@@ -195,13 +196,51 @@ public class TranscodeServiceImpl implements TranscodeService {
             log.warn("Video {} asks for filter {}, which this worker does not know; leaving the colour alone",
                     videoId, edit.filter().id());
         }
-        log.info("Editing video {} into {} segment(s){}", videoId, segments.size(),
-                colour == null ? "" : " with filter " + edit.filter().id());
-        if (!ffmpeg.edit(source, target, segments, colour, probed.audioCodec() != null)) {
+        if (edit.overlays().size() > MAX_OVERLAYS) {
+            throw new MediaRejectedException("The edit has %d text and sticker layers; the maximum is %d."
+                    .formatted(edit.overlays().size(), MAX_OVERLAYS));
+        }
+        List<Ffmpeg.Overlay> overlays = new ArrayList<>();
+        for (int i = 0; i < edit.overlays().size(); i++) {
+            VideoPublishedEvent.Edit.Overlay overlay = edit.overlays().get(i);
+            overlays.add(new Ffmpeg.Overlay(downloadOverlay(videoId, overlay, work.resolve("overlay-" + i + ".png")),
+                    overlay.start(), overlay.end()));
+        }
+        log.info("Editing video {} into {} segment(s){}{}", videoId, segments.size(),
+                colour == null ? "" : " with filter " + edit.filter().id(),
+                overlays.isEmpty() ? "" : " with " + overlays.size() + " text and sticker layer(s)");
+        Path target = work.resolve("edited.mp4");
+        if (!ffmpeg.edit(source, target, segments, colour, overlays, probed.audioCodec() != null)) {
             throw new IllegalStateException("Could not apply the edits to video " + videoId);
         }
         return target;
     }
+
+    /**
+     * Fetched and checked like the upload itself: video-service already confirmed it is the
+     * owner's own PNG, but the bytes are the client's, and this is the last place to look at them
+     * before a decoder does. A missing overlay is a failed edit, not a video without its text —
+     * the same rule as the cut, so what is published is what the uploader saw.
+     */
+    private Path downloadOverlay(String videoId, VideoPublishedEvent.Edit.Overlay overlay, Path file)
+            throws Exception {
+        String bucket = minioProperties.bucket();
+        String key = ObjectKeys.objectKey(overlay.imageUrl(), bucket).orElseThrow(() -> new MediaRejectedException(
+                "The text and sticker overlay of video %s is not in bucket %s".formatted(videoId, bucket)));
+        long sizeBytes = minioClient.statObject(StatObjectArgs.builder()
+                .bucket(bucket).object(key).build()).size();
+        if (sizeBytes > OverlayImage.MAX_BYTES) {
+            throw new MediaRejectedException("The text and sticker overlay is %s; the maximum is %s."
+                    .formatted(humanBytes(sizeBytes), humanBytes(OverlayImage.MAX_BYTES)));
+        }
+        minioClient.downloadObject(DownloadObjectArgs.builder()
+                .bucket(bucket).object(key).filename(file.toString()).build());
+        OverlayImage.requireUsable(file);
+        return file;
+    }
+
+    /** The same cap as video-service's: each layer is one more input decoded for every frame. */
+    static final int MAX_OVERLAYS = 10;
 
     private void requireWithinDuration(int durationSeconds) {
         if (durationSeconds > videoLimits.maxDurationSeconds()) {

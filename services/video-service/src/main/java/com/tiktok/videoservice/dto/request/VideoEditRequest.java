@@ -24,20 +24,72 @@ public record VideoEditRequest(
         // Optional: absent or empty is the whole upload at normal speed, for an edit that only
         // changes the colour.
         @Size(max = MAX_SEGMENTS) List<@Valid @NotNull Segment> segments,
-        @Valid Filter filter
+        @Valid Filter filter,
+        @Size(max = MAX_OVERLAYS) List<@Valid @NotNull Overlay> overlays
 ) {
 
     public static final int MAX_SEGMENTS = 20;
 
+    /**
+     * Each layer is a PNG media-worker downloads, decodes and composites over every frame, so this
+     * bounds that work. The app merges items that share their timing into one layer, so ten is
+     * already ten different moments.
+     */
+    public static final int MAX_OVERLAYS = 10;
+
     /** Trim and speed only. */
     public VideoEditRequest(List<Segment> segments) {
-        this(segments, null);
+        this(segments, null, null);
     }
 
-    /** An edit that is neither a cut nor a colour is a client bug, not a no-op to store. */
-    @AssertTrue(message = "an edit needs segments or a filter")
+    /** Without text or stickers. */
+    public VideoEditRequest(List<Segment> segments, Filter filter) {
+        this(segments, filter, null);
+    }
+
+    /** An edit that is neither a cut, a colour nor an overlay is a client bug, not a no-op to store. */
+    @AssertTrue(message = "an edit needs segments, a filter or overlays")
     public boolean isNotEmpty() {
-        return (segments != null && !segments.isEmpty()) || filter != null;
+        return (segments != null && !segments.isEmpty()) || filter != null
+                || (overlays != null && !overlays.isEmpty());
+    }
+
+    /** Every overlay's words, in layer order — what caption moderation reads. */
+    public List<String> overlayTexts() {
+        return overlays == null ? List.of() : overlays.stream()
+                .filter(overlay -> overlay.texts() != null)
+                .flatMap(overlay -> overlay.texts().stream())
+                .toList();
+    }
+
+    /**
+     * One layer of the app's text and stickers, drawn into a transparent PNG the shape of the video.
+     *
+     * @param imageUrl the {@code fileUrl} of an {@code image/png} upload from POST /upload-url.
+     *                 Whose upload it is, and that it exists, is checked at publish
+     * @param start    seconds into the edited video when the layer appears; absent from the start
+     * @param end      when it goes; absent until the end
+     * @param texts    the words drawn in the layer, as typed. Screened like the caption: the
+     *                 picture itself reaches no text check, so this is what one reads
+     */
+    public record Overlay(
+            @NotBlank @Size(max = 1024) String imageUrl,
+            @DecimalMin("0") @DecimalMax("36000") Double start,
+            @DecimalMin("0") @DecimalMax("36000") Double end,
+            @Size(max = MAX_OVERLAY_TEXTS) List<@NotNull @Size(max = 150) String> texts
+    ) {
+
+        public static final int MAX_OVERLAY_TEXTS = 20;
+
+        /** Shown throughout, no words. */
+        public Overlay(String imageUrl) {
+            this(imageUrl, null, null, null);
+        }
+
+        @AssertTrue(message = "end must be after start")
+        public boolean isOrdered() {
+            return start == null || end == null || end > start;
+        }
     }
 
     /**
