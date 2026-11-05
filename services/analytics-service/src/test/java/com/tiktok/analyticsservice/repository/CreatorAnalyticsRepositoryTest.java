@@ -62,11 +62,14 @@ class CreatorAnalyticsRepositoryTest {
     private TrainingDataRepository trainingDataRepository;
 
     @Autowired
+    private ViewerProfileRepository viewerProfileRepository;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void cleanUp() {
-        for (String table : List.of("watch_events", "engagement_events", "follow_events")) {
+        for (String table : List.of("watch_events", "engagement_events", "follow_events", "viewer_profiles")) {
             jdbcTemplate.execute("TRUNCATE TABLE " + table);
         }
         engagementEventRepository.insert("pub-mine", "PUBLISHED", "mine", CREATOR, FROM);
@@ -236,5 +239,64 @@ class CreatorAnalyticsRepositoryTest {
         assertThat(queries).hasSize(10);
         assertThat(queries.getFirst()).isEqualTo(new SearchQueryResponse("query 11", 12));
         assertThat(queries).extracting(SearchQueryResponse::views).isSortedAccordingTo((x, y) -> Long.compare(y, x));
+    }
+
+    @Test
+    void newViewersOfAVideoAreThoseWhoseFirstWatchWasIt() {
+        engagementEventRepository.insert("pub-other", "PUBLISHED", "other-mine", CREATOR, FROM);
+        Instant windowStart = Instant.parse("2026-10-20T00:00:00Z");
+        watch("x-first", "mine", 100L, 1_000, 10_000, EVENING);
+        watch("x-then", "other-mine", 100L, 1_000, 10_000, AFTER_MIDNIGHT);
+        watch("y-old", "other-mine", 101L, 1_000, 10_000, Instant.parse("2026-10-05T00:00:00Z"));
+        watch("y-now", "mine", 101L, 1_000, 10_000, EVENING);
+
+        assertThat(repository.newViewersOfVideo(CREATOR, "mine", windowStart, TO)).isEqualTo(1);
+        assertThat(repository.newViewersOfVideo(CREATOR, "other-mine", windowStart, TO)).isZero();
+    }
+
+    @Test
+    void followerViewersUseTheStateAtTheWindowsEnd() {
+        Instant before = Instant.parse("2026-10-10T00:00:00Z");
+        Instant after = Instant.parse("2026-11-02T00:00:00Z");
+        watch("w1", "mine", 100L, 1_000, 10_000, EVENING);
+        watch("w2", "mine", 101L, 1_000, 10_000, EVENING);
+        watch("w3", "mine", 102L, 1_000, 10_000, EVENING);
+        repository.insertFollow("f1", 100L, CREATOR, true, before, "");
+        repository.insertFollow("f2", 100L, CREATOR, false, EVENING, "");
+        repository.insertFollow("f3", 101L, CREATOR, true, before, "");
+        repository.insertFollow("f4", 101L, CREATOR, false, after, "");
+        repository.insertFollow("f5", 102L, SOMEONE_ELSE, true, before, "");
+
+        assertThat(repository.followerViewers(CREATOR, "mine", FROM, TO)).isEqualTo(1);
+    }
+
+    /** Full years at the first in-window watch, 22 Oct 2026: a birthday still to come this year is not counted. */
+    @Test
+    void ageGroupsBucketAtTheFirstInWindowWatch() {
+        long user = 100L;
+        for (LocalDate birth : List.of(
+                LocalDate.of(2008, 11, 1), LocalDate.of(2008, 10, 1),
+                LocalDate.of(1991, 11, 1), LocalDate.of(1991, 10, 1),
+                LocalDate.of(1971, 11, 1), LocalDate.of(1971, 10, 1))) {
+            viewerProfileRepository.upsert(user, birth, EVENING);
+            watch("w" + user, "mine", user, 1_000, 10_000, EVENING);
+            user++;
+        }
+
+        assertThat(repository.viewersByAge("mine", FROM, TO))
+                .containsOnly(
+                        java.util.Map.entry("13-17", 1L), java.util.Map.entry("18-24", 1L),
+                        java.util.Map.entry("25-34", 1L), java.util.Map.entry("35-44", 1L),
+                        java.util.Map.entry("45-54", 1L), java.util.Map.entry("55+", 1L));
+    }
+
+    @Test
+    void viewersWithoutABirthDateAreUnknown() {
+        watch("w1", "mine", 100L, 1_000, 10_000, EVENING);
+        watch("w2", "mine", 101L, 1_000, 10_000, EVENING);
+        watch("w2-again", "mine", 101L, 1_000, 10_000, AFTER_MIDNIGHT);
+        watch("anonymous", "mine", 0L, 1_000, 10_000, EVENING);
+
+        assertThat(repository.viewersByAge("mine", FROM, TO)).containsOnly(java.util.Map.entry("UNKNOWN", 2L));
     }
 }

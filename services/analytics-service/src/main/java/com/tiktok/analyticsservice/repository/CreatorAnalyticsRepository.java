@@ -8,7 +8,9 @@ import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * TikTok Studio's numbers: the same streams the admin console reads, narrowed to one creator.
@@ -291,6 +293,79 @@ public class CreatorAnalyticsRepository {
                 """.formatted(OWNED_BY),
                 (rs, i) -> new NewViewers(rs.getString("first_video"), rs.getLong("new_viewers")),
                 to.toEpochMilli(), ownerId, from.toEpochMilli());
+    }
+
+    /** {@link #newViewersByVideo} for one video: new viewers whose first watch of this creator was it. */
+    public long newViewersOfVideo(long ownerId, String videoId, Instant from, Instant to) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT count() FROM (
+                    SELECT user_id, argMin(video_id, occurred_at) AS first_video
+                    FROM watch_events FINAL
+                    WHERE occurred_at < fromUnixTimestamp64Milli(?) AND user_id > 0 AND %s
+                    GROUP BY user_id
+                    HAVING min(occurred_at) >= fromUnixTimestamp64Milli(?) AND first_video = ?
+                )
+                """.formatted(OWNED_BY),
+                Long.class, to.toEpochMilli(), ownerId, from.toEpochMilli(), videoId);
+    }
+
+    /**
+     * Distinct viewers of the video in the window who were following its owner at the window's
+     * end: their latest follow row toward the owner before {@code to} is a follow, not an unfollow.
+     */
+    public long followerViewers(long ownerId, String videoId, Instant from, Instant to) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT count() FROM (
+                    SELECT DISTINCT user_id FROM watch_events FINAL
+                    WHERE video_id = ? AND %s AND user_id > 0
+                ) AS v
+                INNER JOIN (
+                    SELECT follower_id, argMax(followed, occurred_at) AS latest
+                    FROM follow_events FINAL
+                    WHERE following_id = ? AND occurred_at < fromUnixTimestamp64Milli(?)
+                    GROUP BY follower_id
+                    HAVING latest = 1
+                ) AS f ON f.follower_id = v.user_id
+                """.formatted(IN_WINDOW),
+                Long.class, videoId, from.toEpochMilli(), to.toEpochMilli(), ownerId, to.toEpochMilli());
+    }
+
+    /**
+     * Distinct viewers of the video in the window by age group, the age being full years at their
+     * first watch in the window. Only groups with viewers come back; a viewer without a birth date
+     * is {@code UNKNOWN}. {@code age()} rather than {@code dateDiff('year')}: the latter counts
+     * year boundaries, which would make everyone a year older from New Year to their birthday.
+     */
+    public Map<String, Long> viewersByAge(String videoId, Instant from, Instant to) {
+        Map<String, Long> groups = new HashMap<>();
+        jdbcTemplate.query(
+                """
+                SELECT multiIf(isNull(years), 'UNKNOWN',
+                               years < 18, '13-17',
+                               years < 25, '18-24',
+                               years < 35, '25-34',
+                               years < 45, '35-44',
+                               years < 55, '45-54',
+                               '55+') AS age_group,
+                       count() AS viewers
+                FROM (
+                    SELECT w.user_id, age('year', p.birth_date, toDate(min(w.occurred_at), '%s')) AS years
+                    FROM (
+                        SELECT user_id, occurred_at FROM watch_events FINAL
+                        WHERE video_id = ? AND %s AND user_id > 0
+                    ) AS w
+                    LEFT JOIN (SELECT user_id, birth_date FROM viewer_profiles FINAL) AS p ON p.user_id = w.user_id
+                    GROUP BY w.user_id, p.birth_date
+                )
+                GROUP BY age_group
+                """.formatted(ZONE, IN_WINDOW),
+                rs -> {
+                    groups.put(rs.getString("age_group"), rs.getLong("viewers"));
+                },
+                videoId, from.toEpochMilli(), to.toEpochMilli());
+        return groups;
     }
 
     /** Distinct viewers by hour of the day, 0 to 23, in {@link #ZONE}. */

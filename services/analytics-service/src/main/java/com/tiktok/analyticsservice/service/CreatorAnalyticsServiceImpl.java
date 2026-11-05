@@ -7,6 +7,7 @@ import com.tiktok.analyticsservice.dto.response.CreatorTotalsResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorVideoDetailResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorVideoStatsResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorVideoTotalsResponse;
+import com.tiktok.analyticsservice.dto.response.CreatorVideoViewersResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorViewersResponse;
 import com.tiktok.analyticsservice.exception.CreatorVideoNotFoundException;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository;
@@ -94,6 +95,9 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
 
     /** The most search queries the video page lists, as TikTok does. */
     static final int SEARCH_QUERY_LIMIT = 10;
+
+    /** Every age group the video page reports, in order, so the client never meets a missing key. */
+    static final List<String> AGE_GROUPS = List.of("13-17", "18-24", "25-34", "35-44", "45-54", "55+", "UNKNOWN");
 
     public CreatorAnalyticsServiceImpl(CreatorAnalyticsRepository repository,
                                        @Value("${analytics.creator.min-audience:100}") long minAudience,
@@ -189,6 +193,8 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
 
         WatchTotals watches = watchTotals(scope, Instant.EPOCH, window.to());
         EngagementTotals engagement = engagementTotals(scope, Instant.EPOCH, window.to());
+        WatchTotals current = watchTotals(scope, window.from(), window.to());
+        WatchTotals previous = watchTotals(scope, window.previousFrom(), window.from());
 
         return new CreatorVideoDetailResponse(
                 videoId,
@@ -207,19 +213,34 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                         repository.dailyViews(scope, window.from(), window.to()),
                         repository.dailyEngagement(scope, window.from(), window.to()),
                         repository.dailyFollowsFromVideo(videoId, window.from(), window.to())),
-                videoTotals(videoId, window.from(), window.to()),
-                videoTotals(videoId, window.previousFrom(), window.from()),
+                videoTotals(videoId, current, window.from(), window.to()),
+                videoTotals(videoId, previous, window.previousFrom(), window.from()),
                 repository.trafficSources(videoId, window.from(), window.to()),
                 repository.searchQueries(videoId, window.from(), window.to(), searchQueryMinViews,
-                        SEARCH_QUERY_LIMIT));
+                        SEARCH_QUERY_LIMIT),
+                videoViewers(creatorId, videoId, window, current.viewers(), previous.viewers()));
     }
 
-    private CreatorVideoTotalsResponse videoTotals(String videoId, Instant from, Instant to) {
-        Scope scope = Scope.video(videoId);
-        WatchTotals watches = watchTotals(scope, from, to);
-        EngagementTotals engagement = engagementTotals(scope, from, to);
+    private CreatorVideoTotalsResponse videoTotals(String videoId, WatchTotals watches, Instant from, Instant to) {
+        EngagementTotals engagement = engagementTotals(Scope.video(videoId), from, to);
         return new CreatorVideoTotalsResponse(watches.views(), engagement.likes(), engagement.comments(),
                 engagement.shares(), engagement.saves(), repository.followsFromVideo(videoId, from, to));
+    }
+
+    private CreatorVideoViewersResponse videoViewers(long creatorId, String videoId, Window window,
+                                                     long total, long previousTotal) {
+        long fresh = repository.newViewersOfVideo(creatorId, videoId, window.from(), window.to());
+        long previousFresh = repository.newViewersOfVideo(creatorId, videoId, window.previousFrom(), window.from());
+        if (total < minAudience) {
+            return new CreatorVideoViewersResponse(total, fresh, previousTotal, previousFresh, false,
+                    null, null, null, null);
+        }
+        long followers = repository.followerViewers(creatorId, videoId, window.from(), window.to());
+        Map<String, Long> byAge = repository.viewersByAge(videoId, window.from(), window.to());
+        Map<String, Long> ageGroups = new LinkedHashMap<>();
+        AGE_GROUPS.forEach(group -> ageGroups.put(group, byAge.getOrDefault(group, 0L)));
+        return new CreatorVideoViewersResponse(total, fresh, previousTotal, previousFresh, true,
+                total - fresh, followers, total - followers, ageGroups);
     }
 
     private WatchTotals watchTotals(Scope scope, Instant from, Instant to) {

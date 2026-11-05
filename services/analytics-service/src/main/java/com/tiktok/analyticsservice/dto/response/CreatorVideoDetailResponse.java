@@ -10,6 +10,8 @@ import java.util.List;
  * @param trafficSources where the window's views came from, busiest first, only surfaces with views
  * @param searchQueries  what viewers searched to find it in the window, at most ten, only queries
  *                       with enough views to name no one
+ * @param audience       who watched in the window, with breakdowns once the audience is large enough
+ *                       ({@code viewers} above is the lifetime count)
  * @param avgWatchMs     time watched per view
  * @param completionRate share of views that reached the end, 0 to 1
  * @param retention      21 points, 0% to 100% of the video's length in steps of 5%: the share of
@@ -33,6 +35,7 @@ public record CreatorVideoDetailResponse(
         CreatorVideoTotalsResponse current,
         CreatorVideoTotalsResponse previous,
         List<TrafficSourceResponse> trafficSources,
-        List<SearchQueryResponse> searchQueries
+        List<SearchQueryResponse> searchQueries,
+        CreatorVideoViewersResponse audience
 ) {
 }

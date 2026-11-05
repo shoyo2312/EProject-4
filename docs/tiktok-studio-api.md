@@ -67,7 +67,13 @@ Các số ở cấp cao nhất là **trọn đời**; `current` là cửa sổ `
   "current":  { "views": 40, "likes": 5, "comments": 1, "shares": 0, "saves": 2, "newFollowers": 1 },
   "previous": { "views": 30, "likes": 4, "comments": 2, "shares": 1, "saves": 0, "newFollowers": 0 },
   "trafficSources": [ { "source": "FOR_YOU", "views": 28 }, { "source": "SEARCH", "views": 7 }, { "source": "OTHER", "views": 5 } ],
-  "searchQueries":  [ { "query": "mèo con", "views": 4 }, { "query": "cat video", "views": 3 } ]
+  "searchQueries":  [ { "query": "mèo con", "views": 4 }, { "query": "cat video", "views": 3 } ],
+  "audience": {
+    "total": 60, "newViewers": 25, "previousTotal": 40, "previousNewViewers": 10,
+    "breakdownAvailable": true,
+    "returning": 35, "followers": 22, "nonFollowers": 38,
+    "ageGroups": { "13-17": 3, "18-24": 30, "25-34": 15, "35-44": 4, "45-54": 1, "55+": 0, "UNKNOWN": 7 }
+  }
 }
 ```
 
@@ -77,6 +83,7 @@ Các số ở cấp cao nhất là **trọn đời**; `current` là cửa sổ `
 - `newFollowers`: số lượt follow **gộp** đến từ video này (follow rồi bỏ vẫn tính, như TikTok). Follow từ nơi khác (trang profile, tìm kiếm) không tính vào đây, chỉ vào `netFollowers` của §2.1. Với tài khoản riêng tư, follow được tính lúc chủ **duyệt** lời mời, mang theo video lúc gửi lời mời.
 
 - `retention`: 21 điểm, từ 0% đến 100% độ dài video, bước 5%. Điểm thứ `i` là tỉ lệ lượt xem còn đang xem ở `i×5%`. Video chưa ai xem thì toàn số 0.
+- `audience`: người xem **trong cửa sổ** (`viewers` ở cấp cao nhất là trọn đời). `newViewers` là người chưa từng xem creator và vào qua đúng video này (cùng định nghĩa với §2.2); `returning = total − newViewers`. `followers` là người xem đang follow creator **tại thời điểm cuối cửa sổ** (follow rồi bỏ trước đó thì không tính); `nonFollowers = total − followers`. `ageGroups` tính tuổi tròn năm tại lần xem đầu trong cửa sổ, theo ngày sinh người xem khai; luôn đủ 7 khoá theo thứ tự trên, `UNKNOWN` là người chưa khai ngày sinh. Bốn trường `returning`/`followers`/`nonFollowers`/`ageGroups` là `null` và `breakdownAvailable = false` khi `total` dưới ngưỡng `analytics.creator.min-audience` của §2.4 — cùng lý do: vài người xem thì "1 follower, 2 người 13-17" gần như gọi tên họ.
 - Video không phải của người gọi (hoặc không tồn tại) → 404 `VIDEO_NOT_FOUND`. Cố ý không trả 403, để không xác nhận id đó có tồn tại.
 
 ### 2.4 `GET /creator/viewers?days=7`
