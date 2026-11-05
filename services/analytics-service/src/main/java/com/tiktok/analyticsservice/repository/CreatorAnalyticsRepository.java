@@ -54,7 +54,7 @@ public class CreatorAnalyticsRepository {
     public record DailyViews(LocalDate day, long views) {
     }
 
-    public record DailyEngagement(LocalDate day, long likes, long comments, long shares) {
+    public record DailyEngagement(LocalDate day, long likes, long comments, long shares, long saves) {
     }
 
     public record DailyFollows(LocalDate day, long gained, long lost) {
@@ -63,7 +63,7 @@ public class CreatorAnalyticsRepository {
     public record WatchTotals(String videoId, long views, long viewers, long watchedMs, long completions) {
     }
 
-    public record EngagementTotals(String videoId, long likes, long comments, long shares) {
+    public record EngagementTotals(String videoId, long likes, long comments, long shares, long saves) {
     }
 
     public record NewViewers(String videoId, long newViewers) {
@@ -105,13 +105,14 @@ public class CreatorAnalyticsRepository {
                 SELECT toString(toDate(occurred_at, '%s')) AS day,
                        countIf(event_type = 'LIKED') - countIf(event_type = 'UNLIKED') AS likes,
                        countIf(event_type = 'COMMENTED') - countIf(event_type = 'UNCOMMENTED') AS comments,
-                       countIf(event_type = 'SHARED') AS shares
+                       countIf(event_type = 'SHARED') AS shares,
+                       countIf(event_type = 'SAVED') - countIf(event_type = 'UNSAVED') AS saves
                 FROM engagement_events FINAL
                 WHERE %s AND %s AND event_type != 'PUBLISHED'
                 GROUP BY day
                 """.formatted(ZONE, IN_WINDOW, scope.filter()),
                 (rs, i) -> new DailyEngagement(LocalDate.parse(rs.getString("day")),
-                        rs.getLong("likes"), rs.getLong("comments"), rs.getLong("shares")),
+                        rs.getLong("likes"), rs.getLong("comments"), rs.getLong("shares"), rs.getLong("saves")),
                 from.toEpochMilli(), to.toEpochMilli(), scope.param());
     }
 
@@ -128,6 +129,30 @@ public class CreatorAnalyticsRepository {
                 (rs, i) -> new DailyFollows(LocalDate.parse(rs.getString("day")),
                         rs.getLong("gained"), rs.getLong("lost")),
                 ownerId, from.toEpochMilli(), to.toEpochMilli());
+    }
+
+    /**
+     * Follows the video brought in, gross: a follow later undone still counts, the way TikTok's "new
+     * followers" on a video does. The unfollow carries no source, so it cannot be subtracted anyway.
+     */
+    public long followsFromVideo(String videoId, Instant from, Instant to) {
+        return jdbcTemplate.queryForObject(
+                "SELECT countIf(followed = 1) FROM follow_events FINAL WHERE source_video_id = ? AND %s"
+                        .formatted(IN_WINDOW),
+                Long.class, videoId, from.toEpochMilli(), to.toEpochMilli());
+    }
+
+    /** {@link #followsFromVideo} by day; {@code lost} is always 0. */
+    public List<DailyFollows> dailyFollowsFromVideo(String videoId, Instant from, Instant to) {
+        return jdbcTemplate.query(
+                """
+                SELECT toString(toDate(occurred_at, '%s')) AS day, countIf(followed = 1) AS gained
+                FROM follow_events FINAL
+                WHERE source_video_id = ? AND %s
+                GROUP BY day
+                """.formatted(ZONE, IN_WINDOW),
+                (rs, i) -> new DailyFollows(LocalDate.parse(rs.getString("day")), rs.getLong("gained"), 0),
+                videoId, from.toEpochMilli(), to.toEpochMilli());
     }
 
     /** One row per video watched in the window. {@code user_id > 0} keeps anonymous playback out of viewers. */
@@ -154,13 +179,14 @@ public class CreatorAnalyticsRepository {
                 SELECT video_id,
                        countIf(event_type = 'LIKED') - countIf(event_type = 'UNLIKED') AS likes,
                        countIf(event_type = 'COMMENTED') - countIf(event_type = 'UNCOMMENTED') AS comments,
-                       countIf(event_type = 'SHARED') AS shares
+                       countIf(event_type = 'SHARED') AS shares,
+                       countIf(event_type = 'SAVED') - countIf(event_type = 'UNSAVED') AS saves
                 FROM engagement_events FINAL
                 WHERE %s AND %s AND event_type != 'PUBLISHED'
                 GROUP BY video_id
                 """.formatted(IN_WINDOW, scope.filter()),
                 (rs, i) -> new EngagementTotals(rs.getString("video_id"),
-                        rs.getLong("likes"), rs.getLong("comments"), rs.getLong("shares")),
+                        rs.getLong("likes"), rs.getLong("comments"), rs.getLong("shares"), rs.getLong("saves")),
                 from.toEpochMilli(), to.toEpochMilli(), scope.param());
     }
 

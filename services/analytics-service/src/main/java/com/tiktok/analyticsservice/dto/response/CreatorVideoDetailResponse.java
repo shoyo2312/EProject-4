@@ -3,8 +3,10 @@ package com.tiktok.analyticsservice.dto.response;
 import java.util.List;
 
 /**
- * One video's analytics. Totals are lifetime; {@code daily} covers the window asked for.
+ * One video's analytics. The top-level totals are lifetime; {@code current} is the window asked for,
+ * {@code previous} the window of the same length just before it, and {@code daily} the window by day.
  *
+ * @param newFollowers   follows that came from this video, gross, lifetime
  * @param avgWatchMs     time watched per view
  * @param completionRate share of views that reached the end, 0 to 1
  * @param retention      21 points, 0% to 100% of the video's length in steps of 5%: the share of
@@ -21,7 +23,11 @@ public record CreatorVideoDetailResponse(
         long likes,
         long comments,
         long shares,
+        long saves,
+        long newFollowers,
         List<Double> retention,
-        List<CreatorDailyStatsResponse> daily
+        List<CreatorDailyStatsResponse> daily,
+        CreatorVideoTotalsResponse current,
+        CreatorVideoTotalsResponse previous
 ) {
 }

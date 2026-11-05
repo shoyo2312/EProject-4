@@ -6,6 +6,7 @@ import com.tiktok.analyticsservice.dto.response.CreatorOverviewResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorTotalsResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorVideoDetailResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorVideoStatsResponse;
+import com.tiktok.analyticsservice.dto.response.CreatorVideoTotalsResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorViewersResponse;
 import com.tiktok.analyticsservice.exception.CreatorVideoNotFoundException;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository;
@@ -43,7 +44,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
     static final ZoneId ZONE = ZoneId.of(CreatorAnalyticsRepository.ZONE);
 
     private static final WatchTotals NO_WATCHES = new WatchTotals(null, 0, 0, 0, 0);
-    private static final EngagementTotals NO_ENGAGEMENT = new EngagementTotals(null, 0, 0, 0);
+    private static final EngagementTotals NO_ENGAGEMENT = new EngagementTotals(null, 0, 0, 0, 0);
 
     /** How long one answer is reused — Studio asks these on every tab switch, and each is several FINAL scans. */
     private static final long TTL_NANOS = Duration.ofSeconds(60).toNanos();
@@ -178,10 +179,8 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
         Window window = window(days);
         Scope scope = Scope.video(videoId);
 
-        WatchTotals watches = repository.watchTotals(scope, Instant.EPOCH, window.to()).stream()
-                .findFirst().orElse(NO_WATCHES);
-        EngagementTotals engagement = repository.engagementTotals(scope, Instant.EPOCH, window.to()).stream()
-                .findFirst().orElse(NO_ENGAGEMENT);
+        WatchTotals watches = watchTotals(scope, Instant.EPOCH, window.to());
+        EngagementTotals engagement = engagementTotals(scope, Instant.EPOCH, window.to());
 
         return new CreatorVideoDetailResponse(
                 videoId,
@@ -193,11 +192,31 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                 engagement.likes(),
                 engagement.comments(),
                 engagement.shares(),
+                engagement.saves(),
+                repository.followsFromVideo(videoId, Instant.EPOCH, window.to()),
                 retention(repository.retentionBuckets(videoId)),
                 daily(window.firstDay(), window.lastDay(),
                         repository.dailyViews(scope, window.from(), window.to()),
                         repository.dailyEngagement(scope, window.from(), window.to()),
-                        List.of()));
+                        repository.dailyFollowsFromVideo(videoId, window.from(), window.to())),
+                videoTotals(videoId, window.from(), window.to()),
+                videoTotals(videoId, window.previousFrom(), window.from()));
+    }
+
+    private CreatorVideoTotalsResponse videoTotals(String videoId, Instant from, Instant to) {
+        Scope scope = Scope.video(videoId);
+        WatchTotals watches = watchTotals(scope, from, to);
+        EngagementTotals engagement = engagementTotals(scope, from, to);
+        return new CreatorVideoTotalsResponse(watches.views(), engagement.likes(), engagement.comments(),
+                engagement.shares(), engagement.saves(), repository.followsFromVideo(videoId, from, to));
+    }
+
+    private WatchTotals watchTotals(Scope scope, Instant from, Instant to) {
+        return repository.watchTotals(scope, from, to).stream().findFirst().orElse(NO_WATCHES);
+    }
+
+    private EngagementTotals engagementTotals(Scope scope, Instant from, Instant to) {
+        return repository.engagementTotals(scope, from, to).stream().findFirst().orElse(NO_ENGAGEMENT);
     }
 
     private CreatorViewersResponse loadViewers(long creatorId, int days) {
@@ -232,6 +251,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                             e == null ? 0 : e.likes(),
                             e == null ? 0 : e.comments(),
                             e == null ? 0 : e.shares(),
+                            e == null ? 0 : e.saves(),
                             f == null ? 0 : f.gained(),
                             f == null ? 0 : f.lost());
                 })
@@ -263,6 +283,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                 sum(days, CreatorDailyStatsResponse::likes),
                 sum(days, CreatorDailyStatsResponse::comments),
                 sum(days, CreatorDailyStatsResponse::shares),
+                sum(days, CreatorDailyStatsResponse::saves),
                 sum(days, day -> day.followersGained() - day.followersLost()));
     }
 
@@ -273,7 +294,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
     private static CreatorVideoStatsResponse stats(String videoId, WatchTotals watches, long newViewers,
                                                    EngagementTotals engagement) {
         return new CreatorVideoStatsResponse(videoId, watches.views(), watches.viewers(), newViewers,
-                engagement.likes(), engagement.comments(), engagement.shares());
+                engagement.likes(), engagement.comments(), engagement.shares(), engagement.saves());
     }
 
     private static ToLongFunction<CreatorVideoStatsResponse> metric(CreatorVideoSort sort) {

@@ -163,4 +163,29 @@ class CreatorAnalyticsRepositoryTest {
         assertThat(buckets[10]).isEqualTo(1);
         assertThat(buckets[20]).isEqualTo(1);
     }
+
+    @Test
+    void savesAreNetLikeLikes() {
+        engagementEventRepository.insert("s1", "SAVED", "mine", 100L, EVENING);
+        engagementEventRepository.insert("s2", "SAVED", "mine", 101L, EVENING);
+        engagementEventRepository.insert("u1", "UNSAVED", "mine", 100L, EVENING);
+
+        assertThat(repository.engagementTotals(Scope.video("mine"), FROM, TO))
+                .singleElement().satisfies(totals -> assertThat(totals.saves()).isEqualTo(1));
+        assertThat(repository.dailyEngagement(Scope.video("mine"), FROM, TO))
+                .singleElement().satisfies(day -> assertThat(day.saves()).isEqualTo(1));
+    }
+
+    /** A follow that came from the video counts even if it was later undone; one from elsewhere does not. */
+    @Test
+    void followsFromTheVideoAreCountedGross() {
+        repository.insertFollow("f1", 100L, CREATOR, true, EVENING, "mine");
+        repository.insertFollow("f2", 101L, CREATOR, true, EVENING, "mine");
+        repository.insertFollow("f3", 100L, CREATOR, false, EVENING, "");
+        repository.insertFollow("f4", 102L, CREATOR, true, EVENING, "");
+
+        assertThat(repository.followsFromVideo("mine", FROM, TO)).isEqualTo(2);
+        assertThat(repository.dailyFollowsFromVideo("mine", FROM, TO))
+                .containsExactly(new CreatorAnalyticsRepository.DailyFollows(LocalDate.of(2026, 10, 22), 2, 0));
+    }
 }

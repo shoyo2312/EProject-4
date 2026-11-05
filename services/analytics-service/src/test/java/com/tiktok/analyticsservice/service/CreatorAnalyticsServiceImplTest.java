@@ -2,6 +2,7 @@ package com.tiktok.analyticsservice.service;
 
 import com.tiktok.analyticsservice.dto.request.CreatorVideoSort;
 import com.tiktok.analyticsservice.dto.response.CreatorOverviewResponse;
+import com.tiktok.analyticsservice.dto.response.CreatorVideoDetailResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorViewersResponse;
 import com.tiktok.analyticsservice.exception.CreatorVideoNotFoundException;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository;
@@ -51,7 +52,7 @@ class CreatorAnalyticsServiceImplTest {
 
         var days = CreatorAnalyticsServiceImpl.daily(first, first.plusDays(2),
                 List.of(new DailyViews(first.plusDays(1), 5)),
-                List.of(new DailyEngagement(first, 1, 2, 3)),
+                List.of(new DailyEngagement(first, 1, 2, 3, 0)),
                 List.of(new DailyFollows(first.plusDays(2), 4, 1)));
 
         assertThat(days).hasSize(3);
@@ -116,8 +117,8 @@ class CreatorAnalyticsServiceImplTest {
                 new WatchTotals("a", 100, 50, 0, 0),
                 new WatchTotals("b", 10, 5, 0, 0)));
         when(repository.engagementTotals(any(), any(), any())).thenReturn(List.of(
-                new EngagementTotals("b", 30, 0, 0),
-                new EngagementTotals("c", 1, 0, 0)));
+                new EngagementTotals("b", 30, 0, 0, 0),
+                new EngagementTotals("c", 1, 0, 0, 0)));
 
         assertThat(service.topVideos(7L, 7, CreatorVideoSort.VIEWS, 10))
                 .extracting("videoId").containsExactly("a", "b", "c");
@@ -192,5 +193,52 @@ class CreatorAnalyticsServiceImplTest {
         service.overview(7L, 28);
 
         verify(repository, times(2)).dailyViews(any(), any(), any());
+    }
+
+    /** Lifetime totals at the top; {@code current} and {@code previous} are the window and the one before it. */
+    @Test
+    void theVideoPageTotalsBothWindows() {
+        var window = CreatorAnalyticsServiceImpl.Window.endingOn(LocalDate.now(CreatorAnalyticsServiceImpl.ZONE), 7);
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.watchTotals(any(), eq(Instant.EPOCH), eq(window.to())))
+                .thenReturn(List.of(new WatchTotals("v1", 100, 50, 0, 0)));
+        when(repository.watchTotals(any(), eq(window.from()), eq(window.to())))
+                .thenReturn(List.of(new WatchTotals("v1", 10, 5, 0, 0)));
+        when(repository.watchTotals(any(), eq(window.previousFrom()), eq(window.from())))
+                .thenReturn(List.of(new WatchTotals("v1", 4, 2, 0, 0)));
+        when(repository.followsFromVideo("v1", Instant.EPOCH, window.to())).thenReturn(9L);
+        when(repository.followsFromVideo("v1", window.from(), window.to())).thenReturn(3L);
+        when(repository.followsFromVideo("v1", window.previousFrom(), window.from())).thenReturn(1L);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+
+        CreatorVideoDetailResponse video = service.video(7L, "v1", 7);
+
+        assertThat(video.views()).isEqualTo(100);
+        assertThat(video.newFollowers()).isEqualTo(9);
+        assertThat(video.current().views()).isEqualTo(10);
+        assertThat(video.current().newFollowers()).isEqualTo(3);
+        assertThat(video.previous().views()).isEqualTo(4);
+        assertThat(video.previous().newFollowers()).isEqualTo(1);
+        assertThat(video.daily()).hasSize(7);
+        verify(repository).dailyFollowsFromVideo("v1", window.from(), window.to());
+    }
+
+    @Test
+    void savesRideEveryTotal() {
+        LocalDate today = LocalDate.now(CreatorAnalyticsServiceImpl.ZONE);
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+        when(repository.engagementTotals(any(), any(), any()))
+                .thenReturn(List.of(new EngagementTotals("v1", 1, 2, 3, 5)));
+        when(repository.dailyEngagement(any(), any(), any()))
+                .thenReturn(List.of(new DailyEngagement(today, 1, 2, 3, 4)));
+
+        CreatorVideoDetailResponse video = service.video(7L, "v1", 7);
+        assertThat(video.saves()).isEqualTo(5);
+        assertThat(video.current().saves()).isEqualTo(5);
+        assertThat(video.daily().getLast().saves()).isEqualTo(4);
+        assertThat(service.overview(7L, 7).current().saves()).isEqualTo(4);
+        assertThat(service.topVideos(7L, 7, CreatorVideoSort.VIEWS, 10)).singleElement()
+                .satisfies(stats -> assertThat(stats.saves()).isEqualTo(5));
     }
 }
