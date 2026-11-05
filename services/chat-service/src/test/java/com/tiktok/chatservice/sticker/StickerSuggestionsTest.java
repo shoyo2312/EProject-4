@@ -3,6 +3,10 @@ package com.tiktok.chatservice.sticker;
 import com.tiktok.chatservice.dto.response.StickerView;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 
 import java.time.Duration;
 import java.util.List;
@@ -144,5 +148,25 @@ class StickerSuggestionsTest {
         suggestions.refreshAll();
 
         assertThat(suggestions.suggestions("sad")).hasSize(5);
+    }
+    @Configuration
+    @Import(StickerSuggestions.class)
+    static class Wiring {
+        @Bean
+        SuggestionTopics suggestionTopics() {
+            return TOPICS;
+        }
+
+        @Bean
+        GiphyClient giphyClient() {
+            return mock(GiphyClient.class);
+        }
+    }
+
+    @Test
+    void springCanBuildItDespiteTheConstructorKeptForTests() {
+        try (var context = new AnnotationConfigApplicationContext(Wiring.class)) {
+            assertThat(context.getBean(StickerSuggestions.class).suggestions("nope")).isEmpty();
+        }
     }
 }
