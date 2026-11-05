@@ -261,7 +261,7 @@ class MessageActionsMongoTest {
     @Test
     void aStickerCanReplyToo() {
         MessageResponse original = send(B, "look");
-        MessageResponse reply = messageService.sendMessage("c1", A, SendMessageRequest.sticker("heart-eyes").replyingTo(original.id()));
+        MessageResponse reply = messageService.sendMessage("c1", A, SendMessageRequest.sticker("hugging").replyingTo(original.id()));
 
         assertThat(reply.replyToMessageId()).isEqualTo(original.id());
         assertThat(reply.sticker()).isNotNull();
