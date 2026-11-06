@@ -1,6 +1,8 @@
 package com.tiktok.adminservice.service;
 
 import com.tiktok.adminservice.client.AccountRoleClient;
+import com.tiktok.adminservice.client.CommentAuthorClient;
+import com.tiktok.adminservice.exception.OwnCommentReportException;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.ReportGroupResponse;
@@ -64,12 +66,15 @@ class AdminServiceImplTest {
     @Mock
     private AccountRoleClient accountRoleClient;
 
+    @Mock
+    private CommentAuthorClient commentAuthorClient;
+
     private AdminServiceImpl adminService;
 
     @BeforeEach
     void setUp() {
         adminService = new AdminServiceImpl(reportRepository, moderationActionRepository, adminMapper,
-                adminEventProducer, accountRoleClient);
+                adminEventProducer, accountRoleClient, commentAuthorClient);
     }
 
     /**
@@ -256,6 +261,30 @@ class AdminServiceImplTest {
         ReportResponse response = adminService.resolveReport(2L, 8L, new ResolveReportRequest(ModerationActionType.DISMISS_REPORT, "not a violation", null));
 
         assertThat(response.status()).isEqualTo(ReportStatus.DISMISSED);
+    }
+
+    @Test
+    void submitReport_ownComment_isRefusedAndStoresNothing() {
+        when(commentAuthorClient.authorOf(7L, 42L)).thenReturn(Optional.of(10L));
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.COMMENT, "7:42", "abuse");
+
+        assertThatThrownBy(() -> adminService.submitReport(10L, request))
+                .isInstanceOf(OwnCommentReportException.class);
+        verifyNoInteractions(reportRepository);
+        verifyNoInteractions(adminEventProducer);
+    }
+
+    @Test
+    void submitReport_someoneElsesComment_isNotBlockedByTheOwnCommentCheck() {
+        when(commentAuthorClient.authorOf(7L, 42L)).thenReturn(Optional.of(99L));
+        when(reportRepository.findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.COMMENT, "7:42", ReportStatus.PENDING)).thenReturn(Optional.of(new Report()));
+        SubmitReportRequest request = new SubmitReportRequest(ReportTargetType.COMMENT, "7:42", "abuse");
+
+        adminService.submitReport(10L, request);
+
+        verify(reportRepository).findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                10L, ReportTargetType.COMMENT, "7:42", ReportStatus.PENDING);
     }
 
     @Test

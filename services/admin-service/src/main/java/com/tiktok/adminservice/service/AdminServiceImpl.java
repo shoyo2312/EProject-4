@@ -1,6 +1,7 @@
 package com.tiktok.adminservice.service;
 
 import com.tiktok.adminservice.client.AccountRoleClient;
+import com.tiktok.adminservice.client.CommentAuthorClient;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.DailyAdminStatsResponse;
@@ -10,12 +11,14 @@ import com.tiktok.adminservice.dto.response.ReportResponse;
 import com.tiktok.adminservice.dto.response.StatsSummaryResponse;
 import com.tiktok.adminservice.entity.ModerationAction;
 import com.tiktok.adminservice.entity.ModerationActionType;
+import com.tiktok.adminservice.entity.CommentTarget;
 import com.tiktok.adminservice.entity.Report;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.event.producer.AdminEventProducer;
 import com.tiktok.adminservice.exception.InvalidModerationTargetException;
 import com.tiktok.adminservice.exception.InvalidSortException;
+import com.tiktok.adminservice.exception.OwnCommentReportException;
 import com.tiktok.adminservice.exception.ReportAlreadyResolvedException;
 import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
@@ -51,6 +54,7 @@ public class AdminServiceImpl implements AdminService {
     private final AdminMapper adminMapper;
     private final AdminEventProducer adminEventProducer;
     private final AccountRoleClient accountRoleClient;
+    private final CommentAuthorClient commentAuthorClient;
 
     @Override
     @Transactional
@@ -59,6 +63,15 @@ public class AdminServiceImpl implements AdminService {
         // cannot be closed, discovered days later by the admin who tries. Stored in its one
         // spelling, or "007" and "7" would be two targets — see ReportTargetType.
         String targetId = request.targetType().canonicalTargetId(request.targetId());
+
+        // Nobody reports their own comment. The client hides the option; this is the check that
+        // holds when the call is made directly.
+        if (request.targetType() == ReportTargetType.COMMENT) {
+            CommentTarget comment = CommentTarget.parse(targetId);
+            if (commentAuthorClient.authorOf(comment.videoId(), comment.commentId()).filter(reporterId::equals).isPresent()) {
+                throw new OwnCommentReportException();
+            }
+        }
 
         // The ordinary repeat — the same user reporting the same thing while their report is still
         // pending — answers with that report. A closed one does not count: the decision on it says

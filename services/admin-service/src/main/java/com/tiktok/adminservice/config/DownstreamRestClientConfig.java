@@ -50,4 +50,14 @@ public class DownstreamRestClientConfig {
                 .defaultHeader(InternalApiToken.HEADER, internalApiToken.value())
                 .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
     }
+
+    /** interaction-service's internal prefix: who wrote a reported comment. */
+    @Bean
+    public RestClient interactionServiceRestClient(
+            @Value("${downstream.interaction-service-uri:http://localhost:8085}") String interactionServiceUri,
+            @Value("${downstream.timeout-millis:2000}") long timeoutMillis) {
+        Duration timeout = Duration.ofMillis(timeoutMillis);
+        return RestClient.builder().baseUrl(interactionServiceUri)
+                .requestFactory(PooledRequestFactory.create(timeout, timeout)).build();
+    }
 }
