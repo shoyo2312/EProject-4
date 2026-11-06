@@ -37,7 +37,10 @@ public class VideoWatchEventConsumer {
                     event.watchedMs(),
                     event.durationMs(),
                     event.completed(),
-                    event.occurredAt());
+                    event.occurredAt(),
+                    // Older producers and the mobile app send neither: OTHER, no query.
+                    event.source() == null ? "OTHER" : event.source(),
+                    event.searchQuery() == null ? "" : event.searchQuery());
         }, trainingDataRepository::insertWatches);
     }
 }

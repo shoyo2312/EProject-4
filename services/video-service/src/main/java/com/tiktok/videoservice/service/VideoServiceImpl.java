@@ -13,6 +13,8 @@ import com.tiktok.videoservice.dto.request.CreateVideoRequest;
 import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.request.StudioPostFilter;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
+import com.tiktok.videoservice.dto.request.VideoEditRequest;
+import com.tiktok.videoservice.client.MusicTrack;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
@@ -22,6 +24,7 @@ import com.tiktok.videoservice.dto.response.ViewableVideoResponse;
 import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoEdit;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.videoservice.entity.VideoTextModeration;
@@ -37,6 +40,7 @@ import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.videoservice.exception.UploadNotFoundException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
+import com.tiktok.videoservice.exception.VideoNotPinnableException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.OwnerBanRepository;
 import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
@@ -115,10 +119,24 @@ public class VideoServiceImpl implements VideoService {
      * entry is a format the transcode pipeline has to be able to read, so widening it is a
      * media-worker decision, not a client one.
      */
+    private static final String OVERLAY_TYPE = "image/png";
+    private static final String OVERLAY_EXTENSION = "png";
+
     private static final Map<String, String> UPLOAD_EXTENSIONS = Map.of(
             "video/mp4", "mp4",
             "video/quicktime", "mov",
-            "video/webm", "webm");
+            "video/webm", "webm",
+            // The editor's text and stickers (edit.overlays), never a video of its own.
+            OVERLAY_TYPE, OVERLAY_EXTENSION);
+
+    /** The extensions a rawFileUrl may have: every upload type but the overlay. */
+    private static final Set<String> VIDEO_EXTENSIONS = Set.of("mp4", "mov", "webm");
+
+    /**
+     * An overlay is one frame-sized PNG, mostly transparent: a few hundred KB at most. The video
+     * cap would let a client park gigabytes under an image type.
+     */
+    static final long MAX_OVERLAY_BYTES = 5L * 1024 * 1024;
 
     private final VideoRepository videoRepository;
     private final VideoMapper videoMapper;
@@ -136,6 +154,7 @@ public class VideoServiceImpl implements VideoService {
     private final OwnerBanRepository ownerBanRepository;
     private final CaptionModeration captionModeration;
     private final FeedKeywordFilter feedKeywordFilter;
+    private final MusicService musicService;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -165,7 +184,8 @@ public class VideoServiceImpl implements VideoService {
                 ZonedDateTime.now().plusSeconds(expirySeconds));
         policy.addEqualsCondition("key", objectKey);
         policy.addEqualsCondition("Content-Type", contentType);
-        policy.addContentLengthRangeCondition(1L, uploadLimits.maxBytes());
+        policy.addContentLengthRangeCondition(1L,
+                OVERLAY_TYPE.equals(contentType) ? MAX_OVERLAY_BYTES : uploadLimits.maxBytes());
 
         Map<String, String> formFields;
         try {
@@ -187,12 +207,21 @@ public class VideoServiceImpl implements VideoService {
     @Override
     public VideoResponse publish(Long userId, CreateVideoRequest request) {
         String key = requireOwnUpload(userId, request.rawFileUrl());
+        if (!VIDEO_EXTENSIONS.contains(extension(key))) {
+            throw new UnsupportedUploadTypeException(extension(key), VIDEO_EXTENSIONS);
+        }
         requireUploaded(key);
         String rawFileUrl = storedUrl(key);
+        List<String> overlayUrls = checkedOverlays(userId, request.edit());
+        // Looked up again rather than trusted from the picker: the track's download URL, title
+        // and licence come from the catalogue, never from the client.
+        MusicTrack track = request.edit() == null || request.edit().music() == null ? null
+                : musicService.requireTrack(request.edit().music().trackId());
         List<String> tags = normalizeTags(request.tags(), request.description());
         // Before the insert: a caption refused here leaves nothing behind, so the same upload can
         // be published again once the text is fixed.
-        VideoTextModeration textModeration = captionModeration.screen(request.title(), request.description(), tags);
+        VideoTextModeration textModeration = captionModeration.screen(request.title(), request.description(), tags,
+                request.edit() == null ? List.of() : request.edit().overlayTexts());
 
         Video video = Video.builder()
                 .id(Video.newId())
@@ -203,6 +232,8 @@ public class VideoServiceImpl implements VideoService {
                 .visibility(request.visibility())
                 .ownerPrivate(isPrivateOwner(userId))
                 .tags(tags)
+                .commentsDisabled(request.startsWithCommentsDisabled())
+                .edit(VideoEdit.from(request.edit(), overlayUrls, track))
                 .textModeration(textModeration)
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)
@@ -233,6 +264,38 @@ public class VideoServiceImpl implements VideoService {
             ownerPrivate = isPrivateOwner(userId);
         }
         return withAccountComments(videoMapper.toResponse(video));
+    }
+
+    /**
+     * The overlay is read by media-worker exactly as the raw upload is, so it gets the same
+     * checks: the caller's own upload, of the type issued for overlays, and actually there.
+     *
+     * @return each overlay in canonical form, in order; empty for none
+     */
+    private List<String> checkedOverlays(Long userId, VideoEditRequest edit) {
+        if (edit == null || edit.overlays() == null) {
+            return List.of();
+        }
+        List<String> urls = new java.util.ArrayList<>();
+        for (VideoEditRequest.Overlay overlay : edit.overlays()) {
+            String key;
+            try {
+                key = requireOwnUpload(userId, overlay.imageUrl());
+            } catch (ForeignUploadException e) {
+                throw new ForeignUploadException("edit.overlays[].imageUrl");
+            }
+            if (!OVERLAY_EXTENSION.equals(extension(key))) {
+                throw new UnsupportedUploadTypeException(extension(key), Set.of(OVERLAY_EXTENSION));
+            }
+            requireUploaded(key);
+            urls.add(storedUrl(key));
+        }
+        return urls;
+    }
+
+    /** Of a key requireOwnUpload accepted, so there is always exactly one dot. */
+    private static String extension(String key) {
+        return key.substring(key.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -787,8 +850,10 @@ public class VideoServiceImpl implements VideoService {
         }
 
         if (pinned != (video.getPinnedAt() != null)) {
-            // ponytail: count then write, so two pins at the same instant can both pass and leave
-            // four pinned; a per-owner slot document would close it if that ever matters.
+            if (pinned && (video.getStatus() != VideoStatus.PUBLISHED
+                    || video.getVisibility() == VideoVisibility.PRIVATE)) {
+                throw new VideoNotPinnableException(videoId);
+            }
             if (pinned && videoRepository.countByUserIdAndPinnedAtIsNotNullAndDeletedAtIsNull(video.getUserId())
                     >= PIN_LIMIT) {
                 throw new PinLimitReachedException(PIN_LIMIT);
@@ -796,6 +861,17 @@ public class VideoServiceImpl implements VideoService {
             video.changePinned(pinned);
             videoRepository.updatePinned(video);
             videoCache.evict(videoId);
+            // Two pins at once both pass the count above. Once both are written, the later one
+            // sees the limit already filled ahead of it and takes itself back off.
+            // ponytail: two pins in the same millisecond both stay; a per-owner slot document
+            // closes that if it ever matters.
+            if (pinned && videoRepository.countByUserIdAndPinnedAtBeforeAndDeletedAtIsNull(
+                    video.getUserId(), video.getPinnedAt()) >= PIN_LIMIT) {
+                video.changePinned(false);
+                videoRepository.updatePinned(video);
+                videoCache.evict(videoId);
+                throw new PinLimitReachedException(PIN_LIMIT);
+            }
         }
 
         return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));

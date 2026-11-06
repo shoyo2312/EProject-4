@@ -22,7 +22,11 @@ public class FollowEventConsumer {
     private final CreatorAnalyticsRepository creatorAnalyticsRepository;
     private final ObjectMapper objectMapper;
 
-    @KafkaListener(topics = "user.follow-events", groupId = "analytics-service")
+    /**
+     * The backfill topic carries the same event, replayed once per live edge with a deterministic
+     * event_id, and is read here only — notification-service and chat-service must not see it.
+     */
+    @KafkaListener(topics = {"user.follow-events", "user.follow-backfill-events"}, groupId = "analytics-service")
     @SneakyThrows
     public void onMessage(String payload) {
         UserFollowChangedEvent event = objectMapper.readValue(payload, UserFollowChangedEvent.class);
@@ -34,6 +38,7 @@ public class FollowEventConsumer {
             return;
         }
         creatorAnalyticsRepository.insertFollow(event.eventId(), event.followerId(), event.followingId(),
-                event.followed(), event.occurredAt());
+                event.followed(), event.occurredAt(),
+                event.sourceVideoId() == null ? "" : String.valueOf(event.sourceVideoId()));
     }
 }

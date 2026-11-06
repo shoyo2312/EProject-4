@@ -9,8 +9,10 @@ import com.tiktok.authservice.entity.UserRole;
 import com.tiktok.authservice.event.producer.UserEventProducer;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.UserRepository;
+import com.tiktok.common.id.SnowflakeIdGenerator;
 import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.crypto.jwt.JwtProvider;
+import com.tiktok.crypto.jwt.RevocationKeys;
 import com.tiktok.event.user.NewDeviceSignInEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -53,6 +55,7 @@ public class TokenIssuer {
     private final RequestOrigins requestOrigins;
     private final KnownDevices knownDevices;
     private final UserEventProducer userEventProducer;
+    private final SessionRegistry sessionRegistry;
 
     /**
      * A sign-in. Mints the pair and appends {@code signIn} to the account's security log, so every
@@ -76,7 +79,12 @@ public class TokenIssuer {
     public TokenResponse issue(User user, SecurityEventType signIn) {
         RequestOrigin origin = requestOrigins.current();
         Minted minted = transactionTemplate.execute(status -> {
-            TokenResponse tokens = mint(user);
+            // First: the row lock it takes on the user serialises this account's sign-ins, so two
+            // devices of the same type signing in at once cannot both miss each other in open().
+            stampLastLogin(user);
+            Instant expiresAt = refreshExpiry();
+            Long sessionId = sessionRegistry.open(user, origin, expiresAt).getId();
+            TokenResponse tokens = mint(user, SnowflakeIdGenerator.nextId(), sessionId, expiresAt);
             return new Minted(tokens, alertIfNewDevice(user, origin));
         });
         securityEventRecorder.record(user.getId(), signIn, minted.newDevice() ? NEW_DEVICE_DETAIL : null, origin);
@@ -115,26 +123,55 @@ public class TokenIssuer {
      * be the account's "first device" and pass in silence.
      */
     @Transactional
-    public TokenResponse reissue(User user) {
-        TokenResponse tokens = mint(user);
+    public TokenResponse reissue(User user, Long familyId, Long sessionId) {
+        RequestOrigin origin = requestOrigins.current();
+        stampLastLogin(user);
+        Instant expiresAt = refreshExpiry();
+
+        // A token from before sessions existed gets one now — and with it the device limit.
+        Long session = sessionId;
+        if (session == null) {
+            session = sessionRegistry.open(user, origin, expiresAt).getId();
+        } else {
+            sessionRegistry.extend(sessionId, user.getId(), expiresAt);
+        }
+
+        // A row from before families existed starts one here, so its descendants are scoped.
+        long family = familyId != null ? familyId : SnowflakeIdGenerator.nextId();
+        TokenResponse tokens = mint(user, family, session, expiresAt);
         if (user.getRole() != UserRole.ADMIN) {
-            knownDevices.refreshed(user.getId(), requestOrigins.current().deviceId());
+            knownDevices.refreshed(user.getId(), origin.deviceId());
         }
         return tokens;
     }
 
-    private TokenResponse mint(User user) {
+    /**
+     * The one place every sign-in path ends, so the one place last_login_at is stamped. A bulk
+     * update rather than a change to the entity: saving it bumped the row's version, and two
+     * devices refreshing at once then failed one of them with 409 (see stampLastLogin).
+     */
+    private void stampLastLogin(User user) {
+        userRepository.stampLastLogin(user.getId(), Instant.now());
+    }
+
+    private Instant refreshExpiry() {
+        return Instant.now().plusMillis(jwtProperties.refreshTokenExpiryMillis());
+    }
+
+    /**
+     * @param familyId  the refresh-token chain this pair continues (replay ends the chain)
+     * @param sessionId the device it belongs to (remote sign-out ends the device)
+     */
+    private TokenResponse mint(User user, long familyId, Long sessionId, Instant refreshExpiresAt) {
         String subject = String.valueOf(user.getId());
 
-        // The one place every sign-in path ends, so the one place last_login_at is stamped. A bulk
-        // update rather than a change to the entity: saving it bumped the row's version, and two
-        // devices refreshing at once then failed one of them with 409 (see stampLastLogin).
-        userRepository.stampLastLogin(user.getId(), Instant.now());
-
+        // As strings: a Snowflake id is past the 2^53 a JSON number survives in every client.
         String accessToken = jwtProvider.generateToken(
                 subject,
                 Map.of(CLAIM_ROLE, user.getRole().name(),
                         CLAIM_JTI, UUID.randomUUID().toString(),
+                        RevocationKeys.CLAIM_FAMILY, String.valueOf(familyId),
+                        RevocationKeys.CLAIM_SESSION_ID, String.valueOf(sessionId),
                         JwtProvider.CLAIM_TOKEN_TYPE, JwtProvider.TOKEN_TYPE_ACCESS),
                 jwtProperties.accessTokenExpiryMillis());
 
@@ -146,8 +183,10 @@ public class TokenIssuer {
 
         RefreshToken tokenRecord = RefreshToken.builder()
                 .userId(user.getId())
+                .sessionId(sessionId)
                 .tokenHash(HashUtils.sha256(refreshToken))
-                .expiresAt(Instant.now().plusMillis(jwtProperties.refreshTokenExpiryMillis()))
+                .familyId(familyId)
+                .expiresAt(refreshExpiresAt)
                 .build();
         refreshTokenRepository.save(tokenRecord);
 

@@ -26,4 +26,8 @@ public class FollowRequest extends BaseEntity {
 
     @Column(name = "target_id", nullable = false)
     private Long targetId;
+
+    /** The video the requester was watching, carried onto the follow event when approved. Nullable. */
+    @Column(name = "source_video_id")
+    private Long sourceVideoId;
 }

@@ -6,7 +6,10 @@ import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 
 public interface UserProfileService {
 
@@ -84,6 +87,13 @@ public interface UserProfileService {
     List<Long> searchIds(String query, int limit);
 
     /**
+     * The live accounts behind a batch of handles, keyed by the lowercased handle — how
+     * notification-service finds who a comment's "@handle"s name. Unknown and closed handles are
+     * absent. No viewer rules: the caller applies blocks to whoever it notifies.
+     */
+    Map<String, Long> idsByUsername(Collection<String> usernames);
+
+    /**
      * A changed display name is allowed once every 7 days ({@link DisplayNameCooldown}); the bio
      * and avatar are not limited. The current name sent back is not a change, with or without
      * whitespace around it, and a new name is stored stripped.
@@ -115,6 +125,9 @@ public interface UserProfileService {
      * <p>Any other profile still showing the handle loses it, as in {@link #applyUsernameChange}.
      */
     void createFromRegisteredEvent(Long userId, String username, String avatarUrl);
+
+    /** The same, with the birth date a password sign-up collected; null for a social one. */
+    void createFromRegisteredEvent(Long userId, String username, String avatarUrl, LocalDate birthDate);
 
     /**
      * Follows a rename made in auth-service, which owns the handle and has already checked it.

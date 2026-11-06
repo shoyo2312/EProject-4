@@ -17,6 +17,10 @@ public interface UserFollowRepository extends JpaRepository<UserFollow, Long> {
 
     Optional<UserFollow> findByFollowerIdAndFollowingIdAndDeletedAtIsNull(Long followerId, Long followingId);
 
+    /** Keyset page of live edges for the analytics backfill: pass the last id seen to get the next page. */
+    List<UserFollow> findByIdGreaterThanAndCreatedAtBeforeAndDeletedAtIsNullOrderByIdAsc(Long id, Instant createdBefore,
+                                                                                      Pageable pageable);
+
     Page<UserFollow> findByFollowingIdAndDeletedAtIsNull(Long followingId, Pageable pageable);
 
     Page<UserFollow> findByFollowerIdAndDeletedAtIsNull(Long followerId, Pageable pageable);

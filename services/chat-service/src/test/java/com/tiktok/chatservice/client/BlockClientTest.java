@@ -75,6 +75,30 @@ class BlockClientTest {
         server.verify();
     }
 
+    /**
+     * user-service answers at most 100 ids a call and refuses more; the whole inbox's states used
+     * to go in one call, so past 100 conversations every block state was lost.
+     */
+    @Test
+    void statesOf_pastAHundredIds_asksInBatchesOfAHundred() {
+        List<Long> ids = java.util.stream.LongStream.rangeClosed(2, 151).boxed().toList();
+        for (List<Long> batch : List.of(ids.subList(0, 100), ids.subList(100, 150))) {
+            String query = batch.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
+            String data = batch.stream()
+                    .map(id -> "{\"userId\":" + id + ",\"blockedByViewer\":" + (id == 150L)
+                            + ",\"blockedViewer\":false,\"version\":1}")
+                    .collect(java.util.stream.Collectors.joining(","));
+            server.expect(requestTo("http://user-service/api/v1/users/internal/blocks/states?viewerId=1&otherIds=" + query))
+                    .andRespond(withSuccess("{\"success\":true,\"data\":[" + data + "]}", MediaType.APPLICATION_JSON));
+        }
+
+        var states = client.statesOf(1L, ids);
+
+        assertThat(states).hasSize(150);
+        assertThat(states.get(150L).blockedByViewer()).isTrue();
+        server.verify();
+    }
+
     @Test
     void statesOf_outageIsUnknown() {
         server.expect(requestTo(STATES_URL)).andRespond(withServerError());

@@ -81,7 +81,8 @@ class StickerMessageMongoTest {
         messageService = new MessageServiceImpl(conversationService, conversationRepository, messageRepository,
                 new MessageMapperImpl(), mock(SimpMessagingTemplate.class), mock(BlockClient.class), publisher, catalog, prefsRepository,
                 org.mockito.Mockito.mock(com.tiktok.chatservice.client.VideoClient.class),
-                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class));
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.StoryClient.class),
+                org.mockito.Mockito.mock(com.tiktok.chatservice.client.ShareStatsClient.class), mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
     }
 
     private Conversation ordinary() {
@@ -96,7 +97,7 @@ class StickerMessageMongoTest {
         messageRepository.save(Message.builder().id("100").conversationId("c1").senderId(B).content("from the old days")
                 .sentAt(Instant.parse("2026-10-01T08:00:00Z")).build());
         messageService.sendMessage("c1", A, new SendMessageRequest("hello 😀"));
-        messageService.sendMessage("c1", A, SendMessageRequest.sticker("heart-eyes"));
+        messageService.sendMessage("c1", A, SendMessageRequest.sticker("hugging"));
 
         MessagePageResponse page = messageService.listMessages("c1", A, null, 20);
 
@@ -104,7 +105,7 @@ class StickerMessageMongoTest {
         assertThat(newestFirst).hasSize(3);
         assertThat(newestFirst.get(0).type()).isEqualTo(MessageType.STICKER);
         assertThat(newestFirst.get(0).content()).isNull();
-        assertThat(newestFirst.get(0).sticker().stickerId()).isEqualTo("heart-eyes");
+        assertThat(newestFirst.get(0).sticker().stickerId()).isEqualTo("hugging");
         assertThat(newestFirst.get(1).type()).isEqualTo(MessageType.TEXT);
         assertThat(newestFirst.get(1).content()).isEqualTo("hello 😀");
         assertThat(newestFirst.get(2).type()).isEqualTo(MessageType.TEXT);

@@ -105,7 +105,7 @@ public class ConversationViews {
         }
         Message latest = newest.get(0);
         // A video's caption is not previewed: it would outlive a recall or a hide done on the video.
-        return view.withPreview(latest.isRecalled() || latest.getType() == MessageType.VIDEO ? null : latest.getContent(), latest.getType(),
+        return view.withPreview(latest.isRecalled() || latest.getType() == MessageType.VIDEO || latest.getType() == MessageType.IMAGE ? null : latest.getContent(), latest.getType(),
                 latest.getSenderId(), latest.isRecalled());
     }
 }

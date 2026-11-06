@@ -43,6 +43,21 @@ Normalize bắt các trường hợp thật: HEVC từ iPhone, AV1, VP8/VP9 từ
 
 Đường rẻ **không** gỡ rotation — file giữ nguyên display matrix và trình duyệt tự xoay đúng (`<video>` honor matrix từ lâu). Thumbnail cũng được ffmpeg autorotate.
 
+### 2.1b. Chỉnh sửa từ app (`VideoPublishedEvent.edit`)
+
+App chỉ xem trước việc cắt + đổi tốc độ; `edit` trên event là công thức. Khi có `edit` và nó thật sự đổi gì đó (`EditFilterGraph.changesAnything`), `TranscodeServiceImpl` chạy `Ffmpeg.edit` **trước** hai đường ở trên:
+
+- `EditFilterGraph` dựng một `-filter_complex`: mỗi đoạn `trim` + `setpts` (và `atrim` + `asetpts` + chuỗi `atempo` nếu file có tiếng), rồi `concat`, rồi cùng `scale` cap như normalize. Chỉ **số do class này tự format** đi vào graph, không bao giờ chuỗi từ client: filter graph là một ngôn ngữ, ghép chuỗi lạ vào là cho client chạy filter tuỳ ý lên file worker đọc được.
+- Encoder giống hệt normalize, nên file đã chỉnh **thay thế file gốc** cho mọi bước sau (faststart, still, preview, frame kiểm duyệt) và chỉ còn bị remux. Encode lại là bắt buộc: điểm cắt rơi giữa keyframe, đổi tốc độ viết lại mọi timestamp.
+- **Edit lỗi thì throw, không fallback về file gốc.** File gốc chứa đúng những đoạn chủ video đã cắt bỏ; publish nó thay cho bản chỉnh là cho người xem thấy thứ chủ video chọn không đăng. Công thức không giữ được giây nào → `MediaRejectedException` (FAILED, không retry).
+- Không cắt `end` theo độ dài probe: probe làm tròn tới giây (clip 10.4s đọc ra 10), cắt theo đó là mất mấy frame cuối. `trim` tự dừng ở cuối stream; chỉ đoạn **bắt đầu** sau độ dài bị bỏ, vì `concat` từ chối input rỗng.
+- **Filter màu** (`edit.filter`): `EditFilterGraph.colour` tra `VideoFilter` theo `id` rồi chèn `colorchannelmixer` (ma trận 3x3, pha với ma trận đơn vị theo `intensity`) sau `concat`, trước `scale` — cùng một lần encode. Đây chính là phép tính `ColorFilter.matrix` của app làm khi xem trước, nên màu khớp nhau. `id` mà worker không biết (app/video-service mới hơn worker) thì **bỏ qua filter, vẫn publish** — khác với cắt: thiếu màu không làm lộ thứ chủ video muốn giấu. Edit chỉ có filter (không `segments`) = cả video, tốc độ 1.
+- **Chữ + sticker** (`edit.overlays`): tối đa 10 lớp PNG trong suốt do app vẽ. Mỗi lớp tải về cạnh file gốc thành `overlay-{i}.png` (stat trước, > 5 MB → `MediaRejectedException`), rồi `OverlayImage` đọc **header** bằng tay — không phải PNG, hoặc khai > 4096 px một cạnh → `FAILED`, trước khi ffmpeg decode (PNG vài KB có thể khai canvas 50000x50000). Mỗi lớp là một input ffmpeg sau file gốc, mang `-f png_pipe` + `-protocol_whitelist file` vì whitelist của `run()` chỉ áp cho `-i` đầu. Trong graph: sau `scale`, mỗi lớp lần lượt qua `scale2ref` (kéo đúng bằng khung hình) rồi `overlay=0:0`, lớp đầu ở dưới; một frame là đủ vì overlay giữ frame cuối của input đã hết. Thời gian: `enable='between(t,start,end)'` (hoặc `gte`/`lte` khi chỉ có một đầu) — `t` sau `concat` chính là đồng hồ của video đã chỉnh, đúng đơn vị app gửi. **Bẫy:** ffmpeg 4.4 đóng gói trong JAVE có biến của `scale2ref` ngược (`iw`/`ih` là ảnh tham chiếu, `main_w`/`main_h` là ảnh đang scale), bản sau thì ngược lại — `EditFilterGraph.scaleToReference` dùng kích thước PNG đã đọc từ header để hỏi cặp nào là overlay rồi lấy cặp kia, nên đúng trên cả hai. Overlay thiếu/hỏng là edit hỏng (`FAILED`), không publish video thiếu chữ. Chữ trong lớp đã được video-service kiểm duyệt từ `texts` lúc publish; worker không đọc chữ.
+- **Nhạc** (`edit.music`): `MusicDownloader` tải `audioUrl` (do video-service lấy từ catalogue, không phải client) — chỉ `https`, host khớp `media.music.allowed-host-suffixes` (mặc định `.jamendo.com`), **không theo redirect**, tối đa `media.music.max-bytes` (30 MB), và file phải bắt đầu như MP3 (`ID3` hoặc frame sync): Jamendo gắn nhãn file là `text/html`, nên header là thứ duy nhất để kiểm. 404 → `FAILED` (bài đã mất), 5xx/429 → `IOException` cho retry. Input cuối của ffmpeg, `-f mp3` + `-protocol_whitelist file`. Graph: tiếng gốc sau `concat` thành `[acat]` → `volume=originalVolume`; nhạc `atrim=start` → `volume` → `amix=inputs=2:duration=first:normalize=0` (giữ đúng hai mức người đăng chọn). Video câm: chỉ có nhạc, cắt `duration` = độ dài đã chỉnh (`TranscodeServiceImpl.editedSeconds`, tính từ probe làm tròn nên có thể ngắn hơn chút — nhạc dừng trước hình, không chạy quá). Nhạc tải lỗi là edit hỏng, không publish video thiếu nhạc.
+- **Story** (`StoryCreatedEvent.edit`): `StoryRenderer` dựng story **trước khi chấm**, cùng công thức và cùng `Ffmpeg.edit` như video. Video: probe (≤ 180s đầu vào), cắt/tốc độ/màu/lớp chữ/nhạc. Ảnh: `Ffmpeg.stillVideo` biến ảnh thành clip H.264 tĩnh (demuxer `image2` duy nhất, giải mã thử một khung trước để file hỏng không lặp tới timeout, ≤ 1080 ngang, cạnh chẵn) rồi đi qua `edit`; ảnh **có nhạc** giữ nguyên clip `photoSeconds` giây (1–15) → `rendered.mp4`, ảnh **không nhạc** lấy khung đầu → `rendered.jpg` (lớp chữ hiện suốt, bỏ `start/end`). Bản dựng được chấm thay bản gốc, và `StoryModerationCompletedEvent` mang `mediaKey/mediaType` mới. Dựng lỗi: `MediaRejectedException` → REJECTED ngay; lỗi khác thử lại 1 lần rồi REJECTED ("The story's edits could not be applied") — không bao giờ chấm/phát bản gốc thay bản đã chỉnh.
+- Giới hạn thời lượng kiểm hai lần: trên file gốc (chặn chi phí của chính bước edit) và trên bản đã chỉnh (làm chậm làm video dài ra).
+- Timeout của edit là 600s như normalize. Edit **thay** normalize chứ không cộng thêm (bản đã chỉnh đã đúng dạng), nên phép tính poll interval ở §Retry vẫn đúng.
+
 ### 2.2. Animated preview cho hover
 
 WebP động 3 giây, 8 fps, cao 240px, không audio. Con số nằm ở đó vì đây là thứ feed kéo về **mỗi card**, không phải thứ xem toàn màn hình: đủ chuyển động để biết video nói gì, đủ nhỏ để không cần loading state. Clip 3 giây test ra khoảng 8 KB.
@@ -149,13 +164,16 @@ Bucket cho đọc ẩn danh `hls/`, `thumbnails/`, `previews/` (player đi theo 
 
 | Hold | Đặt khi | Gỡ khi |
 |---|---|---|
+| `PENDING` | trước khi transcode (xem "Chờ verdict" dưới) | có verdict, trước khi phát nó |
 | `MODERATION` | verdict không phải `APPROVED` (`REVIEW` lẫn `REJECTED`) — đặt **trước** khi phát verdict | admin duyệt (restore một video không bị takedown) |
 | `TAKEN_DOWN` | `VideoTakenDownEvent` | `VideoRestoredEvent` trên video đang có hold này |
 | `DELETED` | `VideoDeletedEvent` | không bao giờ — chờ purge |
 
 Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown của video đang chờ review thì media vẫn ở quarantine, như video-service trả nó về `PENDING_REVIEW`. Marker cũ `quarantine/markers/{id}` (trước khi có hold) vẫn được tính, và restore gỡ nó. Admin console xem media bị quarantine qua URL ký ngắn hạn (`video-service/QuarantinedMediaUrls`); chủ video cũng nhận URL ký cho video của chính mình đang `PENDING_REVIEW` (trước đây họ vẫn xem được vì media còn public).
 
-**Chưa che:** video `PRIVATE`/`FRIENDS` (media vẫn public theo URL — cần URL ký hoặc CDN signed cookie cho người xem hợp lệ), và khoảng giữa transcode xong và có verdict (`PENDING_MODERATION`, thường vài giây, gồm cả lượt chấm cover ở §2.6): trong lúc đó playback, thumbnail và preview đều public theo URL, chưa ai chấm.
+**Chờ verdict:** `VideoEventConsumer` ghi hold `PENDING` **trước** khi transcode, rồi `enforce` sau transcode — kể cả khi transcode lỗi giữa chừng, nên output dở dang cũng không nằm public. `VideoModerationConsumer` gỡ `PENDING` (`release`) trước khi phát verdict: `APPROVED` thì media ra public ngay trước khi video thành `PUBLISHED`; verdict khác thì hold `MODERATION` đã ghi trước đó giữ nó lại. Video `FAILED` không bao giờ được chấm nên giữ `PENDING` tới lúc purge. Chủ video và console xem video `PENDING_MODERATION` qua URL ký (`QuarantinedMediaUrls`).
+
+**Chưa che:** video `PRIVATE`/`FRIENDS` — media vẫn public theo URL; cần URL ký hoặc CDN signed cookie cho người xem hợp lệ.
 
 ## 6. Bố cục object trong bucket (`MediaKeys`)
 
@@ -168,7 +186,8 @@ Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown c
 | Hover preview | `previews/{videoId}.webp` | media-worker transcode | cleanup |
 | Avatar | `avatars/{userId}` | media-worker mirror **hoặc** user-service `POST /me/avatar` | (không xoá; upload ghi đè, mirror bỏ qua key đã có) |
 | Story upload | `stories/{userId}/{uploadId}.{ext}` | client (presigned POST từ story-service) | lifecycle 3 ngày |
-| Story media | `stories/{userId}/{storyId}/media.{ext}` | story-service copy từ upload lúc `POST /stories` — bản media-worker chấm và người xem nhận | lifecycle 3 ngày, tính từ lúc đăng |
+| Story media | `stories/{userId}/{storyId}/media.{ext}` | story-service copy từ upload lúc `POST /stories` — bản media-worker chấm và người xem nhận khi story không có `edit` | lifecycle 3 ngày, tính từ lúc đăng |
+| Story đã dựng | `stories/{userId}/{storyId}/rendered.{mp4\|jpg}` | media-worker (`StoryRenderer`) khi `StoryCreatedEvent.edit` có thay đổi — được chấm thay bản gốc; `StoryModerationCompletedEvent.mediaKey/mediaType` báo story-service phát bản này | lifecycle 3 ngày |
 | Bản quarantine | `quarantine/` + key gốc | quarantine (§3.1) | restore khi hết hold (dời về key gốc), hoặc cleanup |
 | Hold marker | `quarantine/holds/{videoId}/{HOLD}` | quarantine (§3.1) | restore, hoặc cleanup |
 

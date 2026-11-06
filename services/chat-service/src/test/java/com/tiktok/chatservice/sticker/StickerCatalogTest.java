@@ -28,11 +28,11 @@ class StickerCatalogTest {
     }
 
     @Test
-    void offersTwentyFourStickersWithStableUniqueIds() {
+    void offersTheFixtureStickersWithStableUniqueIds() {
         StickerPackResponse pack = catalog.pack();
         assertThat(pack.packId()).isEqualTo("fluent-3d");
-        assertThat(pack.stickers()).hasSize(24);
-        assertThat(new HashSet<>(pack.stickers().stream().map(StickerView::stickerId).toList())).hasSize(24);
+        assertThat(pack.stickers()).hasSize(5);
+        assertThat(new HashSet<>(pack.stickers().stream().map(StickerView::stickerId).toList())).hasSize(5);
     }
 
     @Test
@@ -64,7 +64,7 @@ class StickerCatalogTest {
             assertThat(sticker.get("bytes").asInt()).isPositive();
             keys.add(sticker.get("objectKey").asString());
         }
-        assertThat(keys).hasSize(24);
+        assertThat(keys).hasSize(5);
     }
 
     @Test
@@ -102,5 +102,21 @@ class StickerCatalogTest {
                  "stickers":[{"stickerId":"a","name":"A","sourcePath":"a","objectKey":"x/a.png"}]}""";
         assertThatThrownBy(() -> StickerCatalog.fromJson(json, BASE, BUCKET))
                 .isInstanceOf(IllegalStateException.class).hasMessageContaining("--fill");
+    }
+
+    @Test
+    void aGiphyStickerIsSendableByIdAndResolvesToTheCanonicalMediaUrl() {
+        assertThat(catalog.sendable("giphy:LKiPxU4tiTrJ5LWJst")).isTrue();
+        StickerView view = catalog.find("giphy:LKiPxU4tiTrJ5LWJst").orElseThrow();
+        assertThat(view.stickerId()).isEqualTo("giphy:LKiPxU4tiTrJ5LWJst");
+        assertThat(view.url()).isEqualTo("https://media.giphy.com/media/LKiPxU4tiTrJ5LWJst/giphy.webp");
+    }
+
+    @Test
+    void aGiphyIdThatCouldSteerTheUrlElsewhereIsRefused() {
+        for (String id : new String[] {"giphy:", "giphy:abc", "giphy:../../x", "giphy:a/b/c/d/e", "giphy:ab cd efg", "GIPHY:LKiPxU4tiTrJ5LWJst"}) {
+            assertThat(catalog.sendable(id)).as(id).isFalse();
+            assertThat(catalog.find(id)).as(id).isEmpty();
+        }
     }
 }

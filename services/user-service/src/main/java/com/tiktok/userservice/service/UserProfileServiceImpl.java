@@ -4,7 +4,11 @@ import com.tiktok.userservice.dto.request.UpdateProfileRequest;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.dto.response.UserStatsCountsResponse;
 import com.tiktok.userservice.entity.UserProfile;
+import com.tiktok.common.validation.BirthDateRule;
+import com.tiktok.userservice.event.producer.UserEventPublisher;
+import com.tiktok.userservice.exception.BirthDateAlreadySetException;
 import com.tiktok.userservice.exception.DisplayNameChangeTooSoonException;
+import com.tiktok.userservice.exception.InvalidBirthDateException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.mapper.UserProfileMapper;
@@ -19,6 +23,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -44,6 +51,10 @@ public class UserProfileServiceImpl implements UserProfileService {
     private final UserBlockRepository userBlockRepository;
     private final UserProfileMapper userProfileMapper;
     private final ProfileVisibilityGuard profileVisibilityGuard;
+    private final UserEventPublisher userEventPublisher;
+
+    /** The day the age gate is checked on is the platform's day, like every other date here. */
+    private static final ZoneId ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
 
     @Override
     @Transactional(readOnly = true)
@@ -188,6 +199,23 @@ public class UserProfileServiceImpl implements UserProfileService {
         return userProfileRepository.searchIds(escapeLike(term), PageRequest.of(0, limit));
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Map<String, Long> idsByUsername(Collection<String> usernames) {
+        Set<String> handles = usernames.stream()
+                .filter(Objects::nonNull)
+                .map(handle -> handle.strip().toLowerCase(java.util.Locale.ROOT))
+                .filter(handle -> !handle.isEmpty())
+                .collect(Collectors.toSet());
+        if (handles.isEmpty()) {
+            return Map.of();
+        }
+        // Lowest id wins a handle two rows still share (see releaseUsername) — same as the single lookup.
+        return userProfileRepository.findLiveByLowerUsernames(handles).stream()
+                .collect(Collectors.toMap(p -> p.getUsername().toLowerCase(java.util.Locale.ROOT),
+                        UserProfile::getUserId, (first, later) -> first));
+    }
+
     /** The query is text to find, not a pattern: {@code _} and {@code %} match themselves. */
     private static String escapeLike(String query) {
         return query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
@@ -215,6 +243,20 @@ public class UserProfileServiceImpl implements UserProfileService {
 
         profile.updateProfile(request.bio(), request.avatarUrl());
 
+        // Set once: the prompt after a social sign-in, or an account older than the column. A
+        // second value is refused rather than overwritten, and the event rides the same
+        // transaction as the row.
+        if (request.birthDate() != null) {
+            if (profile.getBirthDate() != null) {
+                throw new BirthDateAlreadySetException();
+            }
+            if (!BirthDateRule.isAllowed(request.birthDate(), LocalDate.now(ZONE))) {
+                throw new InvalidBirthDateException();
+            }
+            profile.setBirthDate(request.birthDate());
+            userEventPublisher.publishBirthDateSet(userId, request.birthDate());
+        }
+
         return userProfileMapper.toOwnResponse(profile);
     }
 
@@ -240,6 +282,12 @@ public class UserProfileServiceImpl implements UserProfileService {
     @Override
     @Transactional
     public void createFromRegisteredEvent(Long userId, String username, String avatarUrl) {
+        createFromRegisteredEvent(userId, username, avatarUrl, null);
+    }
+
+    @Override
+    @Transactional
+    public void createFromRegisteredEvent(Long userId, String username, String avatarUrl, LocalDate birthDate) {
         if (userProfileRepository.existsByUserIdAndDeletedAtIsNull(userId)) {
             return;
         }
@@ -251,6 +299,7 @@ public class UserProfileServiceImpl implements UserProfileService {
                 .username(username)
                 .displayName(username)
                 .avatarUrl(providerAvatar(avatarUrl))
+                .birthDate(birthDate)
                 .build();
 
         userProfileRepository.save(profile);

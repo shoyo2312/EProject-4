@@ -39,7 +39,7 @@ class TrainingSinkConsumerTest {
     @Test
     void watchEvent_isStoredWholeBecauseTheRatioIsTheLabel() throws Exception {
         VideoWatchEvent event = new VideoWatchEvent(
-                "evt-1", Instant.parse("2026-08-20T10:00:00Z"), 42L, 7L, 9_000L, 10_000L, true);
+                "evt-1", Instant.parse("2026-08-20T10:00:00Z"), 42L, 7L, 9_000L, 10_000L, true, null, null);
 
         new VideoWatchEventConsumer(trainingDataRepository, objectMapper).onMessages(List.of(
                 new ConsumerRecord<>("interaction.watch-events", 0, 0L, "42", objectMapper.writeValueAsString(event))));
@@ -47,7 +47,39 @@ class TrainingSinkConsumerTest {
         // Both durations, not only the completed flag: a model wants how much was watched, and
         // that cannot be recovered later from a boolean.
         verify(trainingDataRepository).insertWatches(List.of(new TrainingDataRepository.WatchRow(
-                "evt-1", "42", 7L, 9_000L, 10_000L, true, Instant.parse("2026-08-20T10:00:00Z"))));
+                "evt-1", "42", 7L, 9_000L, 10_000L, true, Instant.parse("2026-08-20T10:00:00Z"), "OTHER", "")));
+    }
+
+    @Test
+    void aWatchEventWritesItsSourceAndQuery() {
+        String payload = """
+                {"eventId":"evt-3","occurredAt":"2026-08-20T10:00:00Z","videoId":42,"userId":7,
+                 "watchedMs":9000,"durationMs":10000,"completed":true,
+                 "source":"SEARCH","searchQuery":"tiny house"}
+                """;
+
+        new VideoWatchEventConsumer(trainingDataRepository, objectMapper).onMessages(List.of(
+                new ConsumerRecord<>("interaction.watch-events", 0, 0L, "42", payload)));
+
+        verify(trainingDataRepository).insertWatches(List.of(new TrainingDataRepository.WatchRow(
+                "evt-3", "42", 7L, 9_000L, 10_000L, true, Instant.parse("2026-08-20T10:00:00Z"),
+                "SEARCH", "tiny house")));
+    }
+
+    /** An event from before the columns existed, or from the mobile app: no source, no query. */
+    @Test
+    void anOldWatchEventWithoutSourceIsOther() {
+        String payload = """
+                {"eventId":"evt-4","occurredAt":"2026-08-20T10:00:00Z","videoId":42,"userId":7,
+                 "watchedMs":9000,"durationMs":10000,"completed":true}
+                """;
+
+        new VideoWatchEventConsumer(trainingDataRepository, objectMapper).onMessages(List.of(
+                new ConsumerRecord<>("interaction.watch-events", 0, 0L, "42", payload)));
+
+        verify(trainingDataRepository).insertWatches(List.of(new TrainingDataRepository.WatchRow(
+                "evt-4", "42", 7L, 9_000L, 10_000L, true, Instant.parse("2026-08-20T10:00:00Z"),
+                "OTHER", "")));
     }
 
     @Test

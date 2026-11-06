@@ -74,10 +74,12 @@ public record VideoResponse(
         /** What the text rules made of the caption. Null on every public read path — admin console only. */
         TextModerationResponse textModeration,
         /** When the owner pinned it to the top of their profile; null when not pinned. */
-        Instant pinnedAt
+        Instant pinnedAt,
+        /** The music under the video and its credit; null without music. */
+        MusicCredit music
 ) {
 
-    /** Every field but the pin, which stays null — for responses built by hand without one. */
+    /** Without pin or music, for every place that built one before they existed. */
     public VideoResponse(String id, Long userId, String title, String description, String thumbnailUrl,
                          String previewUrl, String hlsUrl, Integer durationSeconds, Integer width, Integer height,
                          VideoStatus status, VideoVisibility visibility, long viewCount, long likeCount,
@@ -89,7 +91,7 @@ public record VideoResponse(
         this(id, userId, title, description, thumbnailUrl, previewUrl, hlsUrl, durationSeconds, width, height,
                 status, visibility, viewCount, likeCount, commentCount, commentsDisabled, tags, createdAt,
                 updatedAt, publishedAt, rawFileUrl, failureReason, takedownReason, deletedAt,
-                purgeEventPublishedAt, moderation, accountCommentsOff, ownerPrivate, textModeration, null);
+                purgeEventPublishedAt, moderation, accountCommentsOff, ownerPrivate, textModeration, null, null);
     }
 
     /** This response for a video whose owner accepts comments from no one. */
@@ -98,6 +100,6 @@ public record VideoResponse(
                 durationSeconds, width, height, status, visibility, viewCount, likeCount, null,
                 commentsDisabled, tags, createdAt, updatedAt, publishedAt, rawFileUrl, failureReason,
                 takedownReason, deletedAt, purgeEventPublishedAt, moderation, true, ownerPrivate, textModeration,
-                pinnedAt);
+                pinnedAt, music);
     }
 }

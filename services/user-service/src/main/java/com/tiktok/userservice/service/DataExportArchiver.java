@@ -81,6 +81,7 @@ public class DataExportArchiver {
         record.put("Name", text(profile.getDisplayName()));
         record.put("Bio", text(profile.getBio()));
         record.put("Profile photo", text(profile.getAvatarUrl()));
+        record.put("Birthday", profile.getBirthDate() == null ? "" : profile.getBirthDate().toString());
         record.put("Private account", yesNo(profile.isPrivateAccount()));
         record.put("Followers", String.valueOf(profile.getFollowerCount()));
         record.put("Following", String.valueOf(profile.getFollowingCount()));

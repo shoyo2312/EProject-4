@@ -78,6 +78,8 @@ public class AccountStateServiceImpl implements AccountStateService {
         // Hidden first, so a profile already gone stays hidden however the events were ordered.
         userProfileRepository.applyAccountState(userId, changedAt, changedAt);
         userProfileRepository.softDeleteByUserId(userId, now);
+        // analytics-service keeps the birth date for age groups; a null tells it to let go.
+        userEventPublisher.publishBirthDateSet(userId, null);
 
         log.info("Erased user {}: {} follow(s) and {} follower(s) ended", userId, following.size(), followers.size());
     }

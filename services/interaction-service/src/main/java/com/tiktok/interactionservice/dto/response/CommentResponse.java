@@ -31,20 +31,24 @@ public record CommentResponse(
          * held for the owner — the client says it is waiting for approval — and on the owner's queue
          * of held comments.
          */
-        CommentStatus status
+        CommentStatus status,
+        /** The sticker posted with the comment, or null. {@code content} is empty for a sticker alone. */
+        CommentSticker sticker,
+        /** When the author last edited the text; null for a comment never edited. */
+        Instant editedAt
 ) {
     public CommentResponse withLikedByMe(boolean value) {
         return new CommentResponse(commentId, videoId, userId, content, createdAt, parentId,
-                replyToUserId, likeCount, value, replyCount, status);
+                replyToUserId, likeCount, value, replyCount, status, sticker, editedAt);
     }
 
     public CommentResponse withReplyCount(int value) {
         return new CommentResponse(commentId, videoId, userId, content, createdAt, parentId,
-                replyToUserId, likeCount, likedByMe, value, status);
+                replyToUserId, likeCount, likedByMe, value, status, sticker, editedAt);
     }
 
     public CommentResponse withStatus(CommentStatus value) {
         return new CommentResponse(commentId, videoId, userId, content, createdAt, parentId,
-                replyToUserId, likeCount, likedByMe, replyCount, value);
+                replyToUserId, likeCount, likedByMe, replyCount, value, sticker, editedAt);
     }
 }

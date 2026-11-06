@@ -1,6 +1,7 @@
 package com.tiktok.mediaworker.service;
 
 import com.tiktok.common.storage.ObjectKeys;
+import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.mediaworker.config.MediaVideoProperties;
 import com.tiktok.mediaworker.config.MinioProperties;
 import io.minio.DownloadObjectArgs;
@@ -22,8 +23,10 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
@@ -67,6 +70,7 @@ public class TranscodeServiceImpl implements TranscodeService {
     private final MediaVideoProperties videoLimits;
     private final VideoProbe videoProbe;
     private final Ffmpeg ffmpeg;
+    private final MusicDownloader musicDownloader;
 
     @Override
     @SneakyThrows
@@ -94,7 +98,7 @@ public class TranscodeServiceImpl implements TranscodeService {
 
     @Override
     @SneakyThrows
-    public TranscodeResult transcode(String videoId, String rawFileUrl) {
+    public TranscodeResult transcode(String videoId, String rawFileUrl, VideoPublishedEvent.Edit edit) {
         String bucket = minioProperties.bucket();
         String sourceKey = ObjectKeys.objectKey(rawFileUrl, bucket).orElseThrow(() -> new IllegalArgumentException(
                 "Raw upload %s of video %s is not in bucket %s".formatted(rawFileUrl, videoId, bucket)));
@@ -115,11 +119,17 @@ public class TranscodeServiceImpl implements TranscodeService {
                     .bucket(bucket).object(sourceKey).filename(source.toString()).build());
 
             ProbedVideo probed = videoProbe.probe(source.toUri().toString());
-            int durationSeconds = probed.durationSeconds();
-            if (durationSeconds > videoLimits.maxDurationSeconds()) {
-                throw new MediaRejectedException("Video is %s; the maximum is %s."
-                        .formatted(humanDuration(durationSeconds), humanDuration(videoLimits.maxDurationSeconds())));
+            // Checked on the upload as well as on the edited result: this one bounds the work the
+            // edit itself costs, the one below bounds what viewers get, since a slowed-down clip
+            // comes out longer than it went in.
+            requireWithinDuration(probed.durationSeconds());
+
+            if (edit != null && EditFilterGraph.changesAnything(edit, probed.durationSeconds())) {
+                source = applyEdit(videoId, source, work, edit, probed);
+                probed = videoProbe.probe(source.toUri().toString());
+                requireWithinDuration(probed.durationSeconds());
             }
+            int durationSeconds = probed.durationSeconds();
 
             String playbackKey = MediaKeys.playback(videoId);
             Path playback = work.resolve("playback.mp4");
@@ -165,6 +175,107 @@ public class TranscodeServiceImpl implements TranscodeService {
                     display.width, display.height);
         } finally {
             deleteRecursively(work);
+        }
+    }
+
+    /**
+     * The edited file replaces the upload for everything after this — playback, artwork and the
+     * moderation that samples them — so what is checked is what is shown.
+     *
+     * <p>A failed edit is thrown, never fallen back from. The upload is everything the uploader
+     * recorded, cuts included, and publishing it in place of the edit would show viewers exactly
+     * the parts the uploader chose to remove.
+     */
+    private Path applyEdit(String videoId, Path source, Path work, VideoPublishedEvent.Edit edit,
+                           ProbedVideo probed) throws Exception {
+        List<VideoPublishedEvent.Edit.Segment> segments = EditFilterGraph.usable(edit, probed.durationSeconds());
+        if (segments.isEmpty()) {
+            throw new MediaRejectedException("The edit keeps nothing of the video.");
+        }
+        double[] colour = EditFilterGraph.colour(edit).orElse(null);
+        if (colour == null && edit.filter() != null) {
+            log.warn("Video {} asks for filter {}, which this worker does not know; leaving the colour alone",
+                    videoId, edit.filter().id());
+        }
+        if (edit.overlays().size() > MAX_OVERLAYS) {
+            throw new MediaRejectedException("The edit has %d text and sticker layers; the maximum is %d."
+                    .formatted(edit.overlays().size(), MAX_OVERLAYS));
+        }
+        List<Ffmpeg.Overlay> overlays = new ArrayList<>();
+        for (int i = 0; i < edit.overlays().size(); i++) {
+            VideoPublishedEvent.Edit.Overlay overlay = edit.overlays().get(i);
+            overlays.add(new Ffmpeg.Overlay(downloadOverlay(videoId, overlay, work.resolve("overlay-" + i + ".png")),
+                    overlay.start(), overlay.end()));
+        }
+        Ffmpeg.Music music = null;
+        if (edit.music() != null) {
+            VideoPublishedEvent.Edit.Music track = edit.music();
+            music = new Ffmpeg.Music(musicDownloader.download(track.audioUrl(), work.resolve("music.mp3")),
+                    Math.max(0, track.start()), clampVolume(track.volume()), clampVolume(track.originalVolume()),
+                    editedSeconds(segments, probed.durationSeconds()));
+        }
+        log.info("Editing video {} into {} segment(s){}{}{}", videoId, segments.size(),
+                colour == null ? "" : " with filter " + edit.filter().id(),
+                overlays.isEmpty() ? "" : " with " + overlays.size() + " text and sticker layer(s)",
+                music == null ? "" : " with music");
+        Path target = work.resolve("edited.mp4");
+        if (!ffmpeg.edit(source, target, segments, colour, overlays, music, probed.audioCodec() != null)) {
+            throw new IllegalStateException("Could not apply the edits to video " + videoId);
+        }
+        return target;
+    }
+
+    /**
+     * Fetched and checked like the upload itself: video-service already confirmed it is the
+     * owner's own PNG, but the bytes are the client's, and this is the last place to look at them
+     * before a decoder does. A missing overlay is a failed edit, not a video without its text —
+     * the same rule as the cut, so what is published is what the uploader saw.
+     */
+    private Path downloadOverlay(String videoId, VideoPublishedEvent.Edit.Overlay overlay, Path file)
+            throws Exception {
+        String bucket = minioProperties.bucket();
+        String key = ObjectKeys.objectKey(overlay.imageUrl(), bucket).orElseThrow(() -> new MediaRejectedException(
+                "The text and sticker overlay of video %s is not in bucket %s".formatted(videoId, bucket)));
+        long sizeBytes = minioClient.statObject(StatObjectArgs.builder()
+                .bucket(bucket).object(key).build()).size();
+        if (sizeBytes > OverlayImage.MAX_BYTES) {
+            throw new MediaRejectedException("The text and sticker overlay is %s; the maximum is %s."
+                    .formatted(humanBytes(sizeBytes), humanBytes(OverlayImage.MAX_BYTES)));
+        }
+        minioClient.downloadObject(DownloadObjectArgs.builder()
+                .bucket(bucket).object(key).filename(file.toString()).build());
+        OverlayImage.requireUsable(file);
+        return file;
+    }
+
+    /** video-service bounds these to 0..1; a stray value from elsewhere is held to that too. */
+    private static double clampVolume(double volume) {
+        return Math.min(1, Math.max(0, volume));
+    }
+
+    /**
+     * How long the edited video plays: each segment's stretch of the upload, at its speed. The
+     * probe rounds to the second, so this can come out a little short — the music then ends a
+     * moment before the picture rather than running past it.
+     */
+    static double editedSeconds(List<VideoPublishedEvent.Edit.Segment> segments, int durationSeconds) {
+        double seconds = 0;
+        for (VideoPublishedEvent.Edit.Segment segment : segments) {
+            double end = Math.min(segment.end(), durationSeconds);
+            if (end > segment.start()) {
+                seconds += (end - segment.start()) / segment.speed();
+            }
+        }
+        return seconds;
+    }
+
+    /** The same cap as video-service's: each layer is one more input decoded for every frame. */
+    static final int MAX_OVERLAYS = 10;
+
+    private void requireWithinDuration(int durationSeconds) {
+        if (durationSeconds > videoLimits.maxDurationSeconds()) {
+            throw new MediaRejectedException("Video is %s; the maximum is %s."
+                    .formatted(humanDuration(durationSeconds), humanDuration(videoLimits.maxDurationSeconds())));
         }
     }
 

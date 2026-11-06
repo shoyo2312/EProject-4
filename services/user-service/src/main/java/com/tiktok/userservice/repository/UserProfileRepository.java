@@ -53,6 +53,11 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
             + "where lower(p.username) = lower(:username) and p.userId <> :userId and p.deletedAt is null")
     void releaseUsername(@Param("username") String username, @Param("userId") Long userId);
 
+    /** {@code lower(...)} for V13's index, as {@link #findFirstByUsernameIgnoreCaseAndDeletedAtIsNull}. */
+    @Query("select p from UserProfile p where lower(p.username) in :usernames and p.deletedAt is null "
+            + "and p.deactivatedAt is null order by p.id")
+    List<UserProfile> findLiveByLowerUsernames(@Param("usernames") Collection<String> usernames);
+
     List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<Long> userIds);
 
     /** The profiles among {@code userIds} that other people may see: neither deleted nor closed. */

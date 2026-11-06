@@ -50,7 +50,7 @@ Base path: `/api/v1/videos`.
 Request (`UploadUrlRequest`):
 ```json
 {
-  "contentType": "video/mp4"    // bắt buộc; chỉ nhận video/mp4, video/quicktime, video/webm
+  "contentType": "video/mp4"    // bắt buộc; video/mp4, video/quicktime, video/webm — hoặc image/png cho edit.overlays
                                 // tham số đi kèm được bỏ qua: "video/mp4; charset=utf-8" vẫn hợp lệ
 }
 ```
@@ -102,14 +102,42 @@ Request (`CreateVideoRequest`):
   "description": "Mô tả",                             // optional, tối đa 2000 ký tự
   "rawFileUrl": "s3://video-media/raw/123456789012345/7312.mp4",  // bắt buộc, tối đa 500 ký tự, xem ràng buộc bên dưới
   "visibility": "PUBLIC",                             // bắt buộc: PUBLIC | PRIVATE
-  "tags": ["dance", "food"]                           // optional, tối đa 10 tag, mỗi tag tối đa 50 ký tự
+  "tags": ["dance", "food"],                          // optional, tối đa 10 tag, mỗi tag tối đa 50 ký tự
+  "commentsDisabled": false,                          // optional, mặc định false. true = đăng với comment tắt sẵn (cùng cờ mục 3.8)
+  "edit": {                                           // optional, xem "Chỉnh sửa trong app" bên dưới
+    "segments": [
+      { "start": 1.2, "end": 4.5, "speed": 1.0 },
+      { "start": 6.0, "end": 12.5, "speed": 2.0 }
+    ],
+    "filter": { "id": "warm", "intensity": 0.8 },
+    "overlays": [
+      { "imageUrl": "s3://video-media/raw/123456789012345/7313.png" },
+      { "imageUrl": "s3://video-media/raw/123456789012345/7314.png", "start": 1.5, "end": 4.0, "texts": ["Xin chào"] }
+    ],
+    "music": { "trackId": "1214935", "start": 12.5, "volume": 0.8, "originalVolume": 0.2 }
+  }
 }
 ```
+
+**Chỉnh sửa trong app (`edit`).** App chỉ **xem trước** việc cắt và đổi tốc độ; file upload vẫn là bản quay gốc. `edit` là công thức để media-worker dựng video cuối cùng bằng ffmpeg trước khi transcode, nên mọi thứ người xem thấy (playback, thumbnail, preview) và mọi thứ kiểm duyệt chấm đều là **bản đã chỉnh**.
+- `segments`: các đoạn lấy từ file gốc, phát nối tiếp nhau **theo thứ tự gửi**. 0–20 đoạn; bỏ trống = cả video ở tốc độ 1 (edit chỉ đổi màu).
+- `filter`: filter màu phủ cả video, optional. `id` là một trong `warm`, `cool`, `vivid`, `muted`, `mono`, `vintage` (danh mục ở `event-schema/VideoFilter`, ma trận màu 3x3 — app giữ một bản sao ở `video_filters.dart`, đổi bên này thì đổi bên kia). `intensity` 0–1, bỏ trống = 1. `id` lạ hoặc `intensity` ngoài 0–1 → `VALIDATION_ERROR` (400).
+- `overlays`: chữ + sticker, optional, tối đa 10 lớp. Mỗi lớp là một PNG trong suốt cùng tỉ lệ khung hình với video (720 hoặc 1280 px cạnh ngang) mà app vẽ sẵn: xin `POST /upload-url` với `contentType: "image/png"` (tối đa 5 MB, cùng prefix `raw/` nên cũng hết hạn sau 7 ngày) rồi gửi `fileUrl` làm `imageUrl`. Các lớp chồng **theo thứ tự gửi** (lớp đầu ở dưới cùng), mỗi lớp kéo phủ đúng khung hình, nằm trên filter màu (chữ không bị đổi màu, giống preview).
+  - `start`/`end`: giây trên đồng hồ của video **đã chỉnh** — sau khi cắt và đổi tốc độ, đúng thứ người xem thấy — khác với `segments` (giây trên file gốc). Bỏ `start` = từ đầu, bỏ `end` = tới hết. `0–36000`, `end > start`. App gom các item liền nhau có cùng khoảng thời gian vào một lớp.
+  - `texts`: chữ đã vẽ trong lớp, nguyên văn (tối đa 20, mỗi cái 150 ký tự). Ảnh thì không bộ kiểm duyệt chữ nào đọc được, nên đây là thứ được kiểm duyệt **như caption** (đọc liền nhau như tag, `Surface.VIDEO_OVERLAY`): từ bị cấm hẳn → `422 VIDEO_OVERLAY_REJECTED`, từ đáng ngờ → video vào hàng chờ admin (flag `OVERLAY:...`). Lưu lại trên document để admin xem; không đi theo event. Giới hạn: server tin app vẽ đúng chữ đã khai — client sửa đổi có thể vẽ chữ khác, chỉ kiểm duyệt khung hình (ảnh nhạy cảm) còn chặn được.
+  - Ràng buộc `imageUrl` giống `rawFileUrl`: upload của chính mình (`FOREIGN_UPLOAD`), là `.png` (`UNSUPPORTED_UPLOAD_TYPE`), đã upload xong (`UPLOAD_NOT_FOUND`). Ngược lại `rawFileUrl` trỏ vào một `.png` → `UNSUPPORTED_UPLOAD_TYPE`. PNG không đọc được hoặc header khai quá 4096 px một cạnh → video `FAILED`.
+- `music`: nhạc nền, optional. `trackId` là `id` lấy từ `GET /music` (mục 3.10), chỉ gồm chữ số. `start`: giây trong bài hát ứng với khung hình đầu của video (0–3600, bỏ trống = 0). `volume` (nhạc) và `originalVolume` (tiếng gốc của video) 0–1, bỏ trống = 1; `originalVolume: 0` là thay hẳn tiếng gốc. Server **tra lại** bài hát lúc publish — URL tải, tên bài, nghệ sĩ, giấy phép đều lấy từ catalogue, không lấy từ client — bài không còn hoặc không dùng được → `400 MUSIC_NOT_FOUND`; catalogue không trả lời → `503 MUSIC_UNAVAILABLE`, sửa request không giúp gì. Nhạc trộn trên đồng hồ của video **đã chỉnh** (sau cắt/đổi tốc độ), bài hát luôn ở tốc độ 1. Video có tiếng: dài bằng tiếng gốc; video câm: nhạc cắt đúng độ dài video. Video có nhạc trả về `music` (mục 3.10) để hiện credit.
+- Phải có ít nhất một trong `segments`, `filter`, `overlays` (không rỗng) hoặc `music`; `edit: {}` → 400.
+- `start`/`end`: giây tính trên file **gốc**, trước khi đổi tốc độ. `0 ≤ start < end ≤ 36000`. Không cần khớp chính xác độ dài video: `end` quá cuối video thì dừng ở cuối video, đoạn bắt đầu sau khi video đã hết thì bị bỏ.
+- `speed`: `0.25`–`4` (editor dùng 0.3x/0.5x/1x/2x/3x). Tiếng đổi tốc độ nhưng giữ cao độ.
+- Không chỉnh gì thì **bỏ hẳn `edit`** (hoặc `null`). Một đoạn duy nhất phủ cả video ở tốc độ 1 cũng được coi là không chỉnh, server không encode lại.
+- Sai giới hạn trên → `VALIDATION_ERROR` (400). Công thức không giữ lại được giây nào của video (mọi đoạn đều bắt đầu sau khi video hết) → video thành `FAILED`, giống file hỏng.
+- Giới hạn thời lượng áp cho **cả** file gốc lẫn bản đã chỉnh: làm chậm 0.5x khiến video dài gấp đôi.
 
 **Làm sạch trước khi kiểm tra độ dài.** Server chuẩn hoá NFC (tiếng Việt gõ kiểu tổ hợp được ghép lại), bỏ ký tự vô hình (zero-width, đảo chiều U+202E, ký tự "lấp chỗ" Hangul/Braille), gộp khoảng trắng, tối đa một dòng trống liên tiếp trong `description`, và đổi xuống dòng trong `title`/tag thành dấu cách. Mọi giới hạn ký tự tính theo **code point** sau khi làm sạch (emoji tính 1) — đếm phía client bằng `text.runes.length` (Dart) / `[...text].length` (JS). Tiêu đề chỉ toàn ký tự vô hình → `VALIDATION_ERROR` (400).
 
 **Kiểm duyệt chữ.** `title`, `description` và danh sách tag cuối cùng (kể cả hashtag lấy từ mô tả) được đọc bằng bộ luật chữ (blocklist tiếng Việt + tín hiệu spam) **trước khi lưu**:
-- Từ ngữ nặng nhất trong blocklist → `422` với mã theo trường: `VIDEO_TITLE_REJECTED`, `VIDEO_DESCRIPTION_REJECTED` hoặc `VIDEO_TAGS_REJECTED` (kiểm theo thứ tự đó, báo trường đầu tiên vi phạm). **Không lưu gì** — file đã upload vẫn còn, sửa chữ rồi gửi lại **đúng `rawFileUrl` cũ**, không cần upload lại. Server không nói từ nào; hiện thông báo dưới đúng ô nhập.
+- Từ ngữ nặng nhất trong blocklist → `422` với mã theo trường: `VIDEO_TITLE_REJECTED`, `VIDEO_DESCRIPTION_REJECTED`, `VIDEO_TAGS_REJECTED` hoặc `VIDEO_OVERLAY_REJECTED` (kiểm theo thứ tự đó, báo trường đầu tiên vi phạm). **Không lưu gì** — file đã upload vẫn còn, sửa chữ rồi gửi lại **đúng `rawFileUrl` cũ**, không cần upload lại. Server không nói từ nào; hiện thông báo dưới đúng ô nhập.
 - Thô tục/xúc phạm mức vừa, link (trừ link tới YouTube, Facebook, Instagram, TikTok, X, Threads), số điện thoại, email, cờ bạc → video **vẫn được tạo** (`201`) và chạy pipeline như thường, nhưng kiểm duyệt xong sẽ thành `PENDING_REVIEW` thay vì `PUBLISHED` — chờ admin, kể cả khi hình ảnh không có vấn đề gì.
 - Sau bộ luật, một model phân loại tiếng Việt (PhoBERT, chỉ bắt lời lẽ thù ghét) đọc cả ba trường. Model **chỉ có thể** đưa video vào `PENDING_REVIEW`, không bao giờ trả `422`. Model không chạy được thì bộ luật quyết một mình.
 - Chữ không bao giờ tự làm video thành `REJECTED`.
@@ -251,7 +279,7 @@ Không có lỗi `USER_NOT_FOUND` — `userId` không tồn tại chỉ trả v�
 | `views` / `likes` / `comments` | `UNDER_1K` (<1.000), `FROM_1K_TO_10K`, `FROM_10K_TO_100K`, `OVER_100K` (≥100.000), có thể nhiều giá trị | số đếm nằm trong **một trong** các khoảng; cận dưới tính, cận trên không tính |
 | `q` | chuỗi | có trong tiêu đề **hoặc** mô tả, không phân biệt hoa thường (có phân biệt dấu); tối đa 100 ký tự, quá → 400 |
 | `sort` | `NEWEST` (mặc định), `VIEWS`, `LIKES`, `COMMENTS` | cột để sắp xếp; trùng số thì xếp tiếp theo ngày tạo |
-| `order` | `DESC` (mặc định), `ASC` | chiều sắp xếp — `sort=NEWEST&order=ASC` là cũ nhất trước |
+| `order` | `DESC` (mặc định), `ASC` | chiều sắp xếp — `sort=NEWEST&order=ASC` là cũ nhất trước. Mới nhất trước (bỏ trống hay `NEWEST`, `DESC`) đưa video ghim lên đầu như trang cá nhân; cũ nhất trước và các cột khác thì không |
 
 Mọi tham số đều tuỳ chọn; các bộ lọc khác nhau áp dụng cùng lúc (AND). Ví dụ `?views=UNDER_1K,OVER_100K&visibility=PUBLIC`. Giá trị enum sai → 400.
 
@@ -290,12 +318,21 @@ Lỗi khác: `NOT_VIDEO_OWNER` (403), `VIDEO_NOT_FOUND` (404), `VALIDATION_ERROR
 ### 3.8c `PATCH /{videoId}/pin` — ghim lên đầu trang cá nhân
 **Bắt buộc token, chỉ chủ video.** Request `{ "pinned": true | false }`. Trả `200 OK`, `data` → `VideoResponse` với `pinnedAt` (thời điểm ghim, `null` khi không ghim). Ghim lại video đang ghim không đổi vị trí của nó.
 
-Tối đa **3** video ghim mỗi tài khoản — ghim cái thứ tư → `PIN_LIMIT_REACHED` (409). Danh sách `GET /users/{userId}` (mục 3.5) xếp video ghim lên đầu (ghim sau đứng trước), rồi mới tới mới nhất.
+Tối đa **3** video ghim mỗi tài khoản — ghim cái thứ tư → `PIN_LIMIT_REACHED` (409), kể cả khi hai lần ghim đến cùng lúc. Chỉ ghim được video `PUBLISHED` và không `PRIVATE` → khác đi là `VIDEO_NOT_PINNABLE` (409); bỏ ghim thì luôn được. Danh sách `GET /users/{userId}` (mục 3.5) xếp video ghim lên đầu (ghim sau đứng trước), rồi mới tới mới nhất.
 
 Lỗi khác: như 3.7.
 
 ### 3.9 `GET /users/stats/batch?ids=1,2,3` — số liệu profile của nhiều người
 Không cần token. Trả `data` → `UserVideoStatsResponse[]` (`userId, videoCount, totalLikes, totalViews`), cùng con số công khai như `GET /users/{userId}/stats`. Tối đa 50 id (`max-page-size`), id trùng bị gộp.
+
+### 3.10 `GET /music?q=&page=0&size=20` — nhạc cho editor
+**Bắt buộc token** (khác các GET khác của service này: mỗi lần gọi tiêu quota của client id chung). Danh sách bài hát từ catalogue Jamendo (nhạc Creative Commons), đã lọc chỉ còn bài **được phép ghép vào video**: cho tải về, và giấy phép không có NoDerivatives (`-nd`) — đặt nhạc vào hình là một bản phái sinh.
+
+- `q`: từ khoá (≤ 100 ký tự), bỏ trống = bài phổ biến nhất. `page` 0–20, `size` 1–50.
+- Response `data`: mảng `{ id, title, artist, durationSeconds, audioUrl, imageUrl, licenseUrl, shareUrl }`. `audioUrl` là stream để **nghe thử ngay** — có token ngắn hạn, đừng lưu lại. `licenseUrl`/`shareUrl` để hiện credit.
+- Server gọi Jamendo bằng `JAMENDO_CLIENT_ID` (chỉ client id, không cần secret) và cache mỗi trang 10 phút trong bộ nhớ; trang rỗng không cache (Jamendo đôi khi trả rỗng nhất thời, server tự hỏi lại 3 lần). Thiếu client id → `503 MUSIC_UNAVAILABLE`.
+
+`VideoResponse.music` (mọi đường đọc): `{ trackId, title, artist, licenseUrl, shareUrl }` hoặc `null`. Mọi giấy phép CC đều đòi ghi công (BY): app hiện "♫ title · artist" ở chỗ sound pill của feed. Lưu ý giấy phép `-nc` (NonCommercial): dùng được cho dự án phi thương mại; bán quảng cáo trên video có nhạc `-nc` cần license thương mại riêng của Jamendo.
 
 ## 4. Enums
 
@@ -335,7 +372,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `title` rỗng sau khi làm sạch/quá 150 ký tự, `description` quá 2000, tag quá 50, `visibility` thiếu hoặc sai giá trị enum, `rawFileUrl` sai scheme/host/bucket (mục 3.2) |
-| `UNSUPPORTED_UPLOAD_TYPE` | 400 | `contentType` ở mục 3.1 không phải `video/mp4`, `video/quicktime` hoặc `video/webm` |
+| `UNSUPPORTED_UPLOAD_TYPE` | 400 | `contentType` ở mục 3.1 không phải `video/mp4`, `video/quicktime`, `video/webm` hoặc `image/png`; hoặc ở mục 3.2 `rawFileUrl` là `.png` / `edit.overlay.imageUrl` không phải `.png` |
 | `FOREIGN_UPLOAD` | 400 | `rawFileUrl` trỏ vào file của tài khoản khác, hoặc vào key không do mục 3.1 cấp. Chỉ publish được đúng `fileUrl` mà chính token này vừa nhận |
 | `UPLOAD_NOT_FOUND` | 400 | Chưa POST file lên `uploadUrl` (mục 3.1), hoặc file đã hết hạn sau 7 ngày. Upload lại rồi mới gọi `POST /` |
 | `RAW_FILE_ALREADY_PUBLISHED` | 400 | `rawFileUrl` này đã có video rồi. Thường là retry sau timeout — lần trước đã thành công |
@@ -345,6 +382,9 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `VIDEO_TITLE_REJECTED` | 422 | `title` chứa từ ngữ bị cấm hẳn; không lưu gì, sửa rồi gửi lại cùng `rawFileUrl` (mục 3.2) |
 | `VIDEO_DESCRIPTION_REJECTED` | 422 | Như trên, cho `description` |
 | `VIDEO_TAGS_REJECTED` | 422 | Như trên, cho tag (đọc liền nhau, nên một cụm bị cấm tách ra nhiều tag vẫn bị bắt) |
+| `VIDEO_OVERLAY_REJECTED` | 422 | Như trên, cho chữ vẽ trên video (`edit.overlays[].texts`, đọc liền nhau) |
+| `MUSIC_NOT_FOUND` | 400 | `edit.music.trackId` không còn trong catalogue hoặc không được phép ghép vào video (mục 3.2) |
+| `MUSIC_UNAVAILABLE` | 503 | Không đọc được catalogue nhạc (mục 3.10, và lúc publish có `edit.music`): chưa cấu hình `JAMENDO_CLIENT_ID`, Jamendo không trả lời hoặc từ chối |
 | `PRIVATE_ACCOUNT` | 403 | Lưới video (mục 3.5) của tài khoản riêng tư mà người gọi không follow |
 | `VIDEO_NOT_FOUND` | 404 | Không tồn tại, đã xoá, hoặc không có quyền xem (server gộp 4 case, xem mục 3.4) |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |

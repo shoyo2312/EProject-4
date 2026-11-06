@@ -6,6 +6,7 @@ import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.kafka.outbox.OutboxDispatcher;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoEdit;
 import com.tiktok.videoservice.entity.VideoStatus;
 import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
@@ -347,6 +348,55 @@ class VideoEventPublisherTest {
 
         assertThat(video.getPurgeEventPublishedAt()).isNull();
         verify(videoRepository, never()).updatePurgeEventPublished(any(Video.class));
+    }
+
+    /** media-worker applies the edits from the event; a video with none must not grow any. */
+    @Test
+    void publishPending_carriesTheEditorsTrimAndSpeedOnThePublication() {
+        Video edited = Video.builder()
+                .id(Video.newId()).userId(1L).title("Edited").rawFileUrl("s3://video-media/raw/2.mp4")
+                .visibility(VideoVisibility.PUBLIC).tags(List.of()).status(VideoStatus.PROCESSING)
+                .edit(VideoEdit.builder().version(1).segments(List.of(
+                        new VideoEdit.Segment(0.5, 4.0, 1.0),
+                        new VideoEdit.Segment(6.0, 9.0, 2.0))).build())
+                .build();
+        Video plain = pendingVideo();
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(edited, plain));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPending();
+
+        ArgumentCaptor<ProducerRecord<String, String>> captor = ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaOperations, times(2)).send(captor.capture());
+        VideoPublishedEvent first = objectMapper.readValue(captor.getAllValues().get(0).value(), VideoPublishedEvent.class);
+        VideoPublishedEvent second = objectMapper.readValue(captor.getAllValues().get(1).value(), VideoPublishedEvent.class);
+
+        assertThat(first.edit()).isEqualTo(new VideoPublishedEvent.Edit(1, List.of(
+                new VideoPublishedEvent.Edit.Segment(0.5, 4.0, 1.0),
+                new VideoPublishedEvent.Edit.Segment(6.0, 9.0, 2.0))));
+        assertThat(second.edit()).isNull();
+    }
+
+    @Test
+    void publishPending_carriesTheColourFilterOnThePublication() {
+        Video filtered = Video.builder()
+                .id(Video.newId()).userId(1L).title("Warm").rawFileUrl("s3://video-media/raw/3.mp4")
+                .visibility(VideoVisibility.PUBLIC).tags(List.of()).status(VideoStatus.PROCESSING)
+                .edit(VideoEdit.builder().version(1).segments(List.of())
+                        .filter(new VideoEdit.Filter("warm", 0.7)).build())
+                .build();
+        when(videoRepository.findTop100ByEventPublishedAtIsNullAndEventFailedAtIsNullAndDeletedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(filtered));
+        when(kafkaOperations.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher.publishPending();
+
+        VideoPublishedEvent event = objectMapper.readValue(captureRecord().value(), VideoPublishedEvent.class);
+        assertThat(event.edit()).isEqualTo(new VideoPublishedEvent.Edit(1, List.of(),
+                new VideoPublishedEvent.Edit.Filter("warm", 0.7)));
     }
 
     private ProducerRecord<String, String> captureRecord() {

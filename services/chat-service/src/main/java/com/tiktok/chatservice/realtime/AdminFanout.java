@@ -29,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AdminFanout {
 
     static final String DESTINATION = "/topic/admin";
+    static final String ENGAGEMENT_PREFIX = "interaction.";
 
     private final SimpMessagingTemplate messaging;
 
@@ -40,10 +41,17 @@ public class AdminFanout {
             "admin.moderation-events",
             "media.video-moderation-events",
             "video.video-events",
-            "auth.user-events"})
+            "auth.user-events",
+            // Engagement on the analytics and dashboard pages. Watches stay out: one per view
+            // per viewer, and the console filters these to the pages that show engagement.
+            "interaction.like-events",
+            "interaction.comment-events",
+            "interaction.share-events"})
     public void onEvent(ConsumerRecord<String, String> record) {
         Header eventType = record.headers().lastHeader("eventType");
-        pending.add(eventType == null
+        // Engagement goes out as its topic, whatever the header says: the console keys its page
+        // filter on the "interaction." prefix, and a comment created or deleted is one re-read.
+        pending.add(eventType == null || record.topic().startsWith(ENGAGEMENT_PREFIX)
                 ? record.topic()
                 : new String(eventType.value(), StandardCharsets.UTF_8));
     }

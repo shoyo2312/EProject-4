@@ -232,3 +232,30 @@ khi thiếu một trong bốn biến bắt buộc.
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | có | thiếu thì form đăng ký / quên mật khẩu không bao giờ submit được |
 | `MEDIA_CDN_HOST` | không | host CDN https nếu có, khớp `media.allowed-hosts` của video-service |
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID`, `NEXT_PUBLIC_FACEBOOK_APP_ID` | không | rỗng thì ẩn nút social sign-in |
+
+## 9. Analytics: backfill đồ thị follow
+
+ClickHouse `follow_events` chỉ có follow phát sinh từ khi analytics-service bắt đầu đọc `user.follow-events`
+(2026-10-23) và **không nằm trong bộ seed** `~/seed-export/clickhouse/`. Thiếu nó, mục "Followers / Non-followers"
+trong trang phân tích video của Studio coi mọi follower cũ là người lạ. Chạy **một lần** sau khi deploy
+analytics-service bản có topic `user.follow-backfill-events`, và sau mỗi lần restore seed ClickHouse cũ hơn
+`follow_events.native`:
+
+```bash
+# before = lúc analytics-service bắt đầu đọc user.follow-events; follow từ đó đã có dòng riêng,
+# phát lại sẽ đếm đôi. Restore seed cũ hơn thì truyền mốc của bản seed đó.
+curl -X POST "http://user-service:8082/api/v1/users/internal/follow-backfill?before=2026-10-23T00:00:00Z" \
+  -H "X-Internal-Token: $INTERNAL_API_TOKEN"
+# → {"success":true,"data":{"published":12345}}
+```
+
+**Thứ tự rollout** của tính năng phân tích video (2026-11-05): deploy backend trước (`analytics-service` tạo cột/bảng
+mới lúc boot, `user-service` chạy migration V25), rồi import seed ClickHouse nếu cần, rồi gọi backfill ở trên, rồi mới
+deploy web — trang `/studio/analytics/{videoId}` của web đọc `current`/`previous`/`audience` và trắng trang với
+analytics-service bản cũ. Tài khoản đã có (kể cả social) được hỏi ngày sinh một lần sau lần đăng nhập kế tiếp; tới khi
+họ trả lời, nhóm tuổi của họ là `UNKNOWN`.
+
+Chạy lại không sao: `eventId` suy từ id của edge nên `ReplacingMergeTree` gộp trùng. Outbox của user-service sẽ
+chứa thêm chừng ấy dòng mỗi lần chạy. Import seed ClickHouse: file `.native` cũ (thiếu cột `source`,
+`search_query`, `source_video_id`) vẫn insert được, các cột mới nhận giá trị mặc định (`OTHER`, `''`) — không
+cần cờ gì thêm.

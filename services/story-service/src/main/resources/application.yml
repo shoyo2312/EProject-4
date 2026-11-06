@@ -51,6 +51,9 @@ downstream:
   # one internal call per 100 owners. It carries INTERNAL_API_TOKEN.
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
   timeout-millis: ${USER_SERVICE_TIMEOUT_MILLIS:1000}
+  # video-service: a story's song is checked against its music catalogue. Also INTERNAL_API_TOKEN.
+  video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+  video-service-timeout-millis: ${VIDEO_SERVICE_TIMEOUT_MILLIS:15000}
 
 minio:
   # The same bucket video-service and media-worker use. endpoint is what presigned reads are

@@ -16,6 +16,12 @@ public interface FollowService {
     /** A follow, or a follow request when the account is private — the status says which. */
     FollowResponse follow(Long followerId, Long followingId);
 
+    /**
+     * The same, crediting {@code sourceVideoId} — the video the follower was watching — on the
+     * follow event (through the request, for a private account). Null for a profile-page follow.
+     */
+    FollowResponse follow(Long followerId, Long followingId, Long sourceVideoId);
+
     /** Removes the edge, or withdraws the pending request when there is no edge. */
     void unfollow(Long followerId, Long followingId);
 

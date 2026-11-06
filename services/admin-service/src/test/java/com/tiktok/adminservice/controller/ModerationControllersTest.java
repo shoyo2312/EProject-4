@@ -5,6 +5,7 @@ import com.tiktok.common.config.InternalApiAutoConfiguration;
 import com.tiktok.adminservice.entity.ModerationActionType;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.service.AdminService;
+import com.tiktok.adminservice.service.DirectMessageReportService;
 import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import org.junit.jupiter.api.Test;
@@ -48,6 +49,9 @@ class ModerationControllersTest {
 
     @MockitoBean
     private AdminService adminService;
+
+    @MockitoBean
+    private DirectMessageReportService directMessageReportService;
 
     private final JwtProvider jwtProvider = new JwtProvider(JWT_SECRET);
 
@@ -101,6 +105,22 @@ class ModerationControllersTest {
                 .andExpect(status().isForbidden());
 
         verifyNoInteractions(adminService);
+    }
+
+    @Test
+    void anyAccountMayFileADirectMessageReportButOnlyAnAdminReadsItsEvidence() throws Exception {
+        mockMvc.perform(post("/api/v1/admin/reports/direct-message")
+                        .header("Authorization", bearer(7L, "USER"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"conversationId\":\"c1\",\"reason\":\"Other\",\"messageIds\":[\"m1\"],\"requestId\":\"r1\"}"))
+                .andExpect(status().isCreated());
+        verify(directMessageReportService).submit(eq(7L), any());
+
+        mockMvc.perform(get("/api/v1/admin/reports/9/evidence").header("Authorization", bearer(7L, "USER")))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/admin/reports/9/evidence").header("Authorization", bearer(1L, "ADMIN")))
+                .andExpect(status().isOk());
+        verify(directMessageReportService).evidence(9L);
     }
 
     @Test

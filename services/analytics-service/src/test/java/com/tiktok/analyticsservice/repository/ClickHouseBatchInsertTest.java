@@ -98,7 +98,7 @@ class ClickHouseBatchInsertTest {
     void aPollOfWatchSessionsIsOnePart() {
         trainingDataRepository.insertWatches(IntStream.range(0, 200)
                 .mapToObj(i -> new TrainingDataRepository.WatchRow(
-                        "evt-" + i, "v" + i, 7L, 9_000L, 10_000L, i % 2 == 0, T0.plusMillis(i)))
+                        "evt-" + i, "v" + i, 7L, 9_000L, 10_000L, i % 2 == 0, T0.plusMillis(i), "OTHER", ""))
                 .toList());
 
         assertThat(rows("watch_events")).isEqualTo(200);
@@ -113,7 +113,7 @@ class ClickHouseBatchInsertTest {
     void everyInsertKeepsTheInstantItWasGiven() {
         Instant at = T0.plusMillis(123);
         trainingDataRepository.insertWatches(List.of(
-                new TrainingDataRepository.WatchRow("w", "v1", 7L, 9_000L, 10_000L, true, at)));
+                new TrainingDataRepository.WatchRow("w", "v1", 7L, 9_000L, 10_000L, true, at, "OTHER", "")));
         trainingDataRepository.insertTags("v1", List.of("dance"), at);
         engagementEventRepository.insert("e", "LIKED", "v1", 7L, at);
         userSignupEventRepository.insert("s", 7L, "alice", at);
@@ -150,7 +150,7 @@ class ClickHouseBatchInsertTest {
 
     private void watchAt(String eventId, String videoId, Instant at) {
         trainingDataRepository.insertWatches(List.of(
-                new TrainingDataRepository.WatchRow(eventId, videoId, 7L, 9_000L, 10_000L, false, at)));
+                new TrainingDataRepository.WatchRow(eventId, videoId, 7L, 9_000L, 10_000L, false, at, "OTHER", "")));
     }
 
     @Test

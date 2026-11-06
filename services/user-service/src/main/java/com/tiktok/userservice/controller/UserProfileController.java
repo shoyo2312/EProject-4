@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/users")
@@ -90,6 +91,16 @@ public class UserProfileController {
     @GetMapping("/internal/search-ids")
     public ApiResponse<List<Long>> searchIds(@RequestParam(required = false) String q) {
         return ApiResponse.success(userProfileService.searchIds(q, 50));
+    }
+
+    /**
+     * Service-to-service: notification-service resolves the "@handle"s in a comment with this.
+     * Internal only (gateway denies the prefix); the caller caps how many handles it sends.
+     */
+    @Operation(summary = "Internal: user ids behind a batch of handles, keyed by lowercased handle")
+    @GetMapping("/internal/ids-by-username")
+    public ApiResponse<Map<String, Long>> idsByUsername(@RequestParam List<String> usernames) {
+        return ApiResponse.success(userProfileService.idsByUsername(usernames));
     }
 
     /**

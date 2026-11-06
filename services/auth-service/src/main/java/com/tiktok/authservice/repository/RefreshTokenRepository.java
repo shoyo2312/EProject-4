@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Optional;
 
 public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long> {
@@ -48,9 +49,18 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Query("UPDATE RefreshToken t SET t.revokedAt = :now WHERE t.tokenHash = :tokenHash AND t.revokedAt IS NULL")
     int revoke(@Param("tokenHash") String tokenHash, @Param("now") Instant now);
 
+    /** Ends the token chains of these sessions — a remote sign-out, or the device limit. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE RefreshToken t SET t.revokedAt = :now WHERE t.sessionId IN :sessionIds AND t.revokedAt IS NULL")
+    int revokeAllBySessionIds(@Param("sessionIds") Collection<Long> sessionIds, @Param("now") Instant now);
+
     @Modifying
     @Query("UPDATE RefreshToken t SET t.revokedAt = :revokedAt WHERE t.userId = :userId AND t.revokedAt IS NULL")
     void revokeAllByUserId(Long userId, Instant revokedAt);
+
+    @Modifying
+    @Query("UPDATE RefreshToken t SET t.revokedAt = :revokedAt WHERE t.familyId = :familyId AND t.revokedAt IS NULL")
+    void revokeFamily(@Param("familyId") Long familyId, @Param("revokedAt") Instant revokedAt);
 
     /**
      * Deletes up to {@code batchSize} rows whose expiry is already behind {@code cutoff},

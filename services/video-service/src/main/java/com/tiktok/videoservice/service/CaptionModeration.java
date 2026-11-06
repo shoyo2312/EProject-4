@@ -42,28 +42,49 @@ public class CaptionModeration {
     private final TextModerator textModerator;
     private final TextClassifier textClassifier;
 
-    /**
-     * @throws CaptionRejectedException for the first field, in the order title, description, tags,
-     *                                  that holds a refused term — only while enforcing
-     */
+    /** Without words over the picture. */
     public VideoTextModeration screen(String title, String description, List<String> tags) {
+        return screen(title, description, tags, List.of());
+    }
+
+    /**
+     * @param overlayTexts the words the uploader laid over the picture in the editor. Read as one
+     *                     text, like the tags, so a word split across two stickers is still read
+     *                     whole; screened only when there are any, so a video without them asks
+     *                     the classifier exactly what it did before
+     * @throws CaptionRejectedException for the first field, in the order title, description, tags,
+     *                                  overlay, that holds a refused term — only while enforcing
+     */
+    public VideoTextModeration screen(String title, String description, List<String> tags,
+                                      List<String> overlayTexts) {
         String tagText = String.join(" ", tags);
+        String overlayText = overlayTexts == null ? "" : String.join(" ", overlayTexts).strip();
         TextVerdict titleVerdict = textModerator.screen(title, Surface.VIDEO_TITLE);
         TextVerdict descriptionVerdict = textModerator.screen(description, Surface.VIDEO_DESCRIPTION);
         TextVerdict tagsVerdict = textModerator.screen(tagText, Surface.VIDEO_TAGS);
+        TextVerdict overlayVerdict = overlayText.isEmpty() ? null
+                : textModerator.screen(overlayText, Surface.VIDEO_OVERLAY);
 
         boolean rulesEnforcing = textModerator.enforcing();
         if (rulesEnforcing) {
             refuseIfRejected(titleVerdict, Field.TITLE);
             refuseIfRejected(descriptionVerdict, Field.DESCRIPTION);
             refuseIfRejected(tagsVerdict, Field.TAGS);
+            if (overlayVerdict != null) {
+                refuseIfRejected(overlayVerdict, Field.OVERLAY);
+            }
         }
 
-        List<TextVerdict> verdicts = textClassifier.refine(List.of(
+        List<TextClassifier.Input> inputs = new ArrayList<>(List.of(
                 new TextClassifier.Input(title, Surface.VIDEO_TITLE, titleVerdict),
                 new TextClassifier.Input(description, Surface.VIDEO_DESCRIPTION, descriptionVerdict),
                 new TextClassifier.Input(tagText, Surface.VIDEO_TAGS, tagsVerdict)));
-        List<Field> fields = List.of(Field.TITLE, Field.DESCRIPTION, Field.TAGS);
+        List<Field> fields = new ArrayList<>(List.of(Field.TITLE, Field.DESCRIPTION, Field.TAGS));
+        if (overlayVerdict != null) {
+            inputs.add(new TextClassifier.Input(overlayText, Surface.VIDEO_OVERLAY, overlayVerdict));
+            fields.add(Field.OVERLAY);
+        }
+        List<TextVerdict> verdicts = textClassifier.refine(inputs);
 
         List<String> flags = new ArrayList<>();
         Decision worst = Decision.ALLOW;

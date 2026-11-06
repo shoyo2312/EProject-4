@@ -152,7 +152,7 @@ Hai luật rút ra cho Flutter, sai là user bị logout hàng loạt:
 1. **Single-flight**: chỉ được có **đúng 1** request `/refresh` chạy tại một thời điểm. Nhiều request 401 song song phải cùng chờ chung 1 Future refresh (Dio interceptor + lock/`Completer`), không được mỗi request tự gọi `/refresh` bằng token cũ.
 2. **Ghi token mới trước khi retry**: lưu cặp token mới vào secure storage **rồi** mới phát lại các request đang chờ. Đừng retry với token cũ còn nằm trong biến/bộ nhớ.
 
-Không được retry `/refresh` sau khi đã nhận `401` — lần thử thứ hai nằm ngoài grace window sẽ kích hoạt replay detection và giết phiên trên mọi thiết bị của user.
+Không được retry `/refresh` sau khi đã nhận `401` — lần thử thứ hai nằm ngoài grace window sẽ kích hoạt replay detection và giết chain của lần đăng nhập đó (thiết bị này phải đăng nhập lại; thiết bị khác không bị ảnh hưởng).
 
 ### 3.4 `POST /logout`
 Header `Authorization: Bearer <accessToken>` (optional nhưng nên gửi để access token bị blacklist ngay lập tức thay vì chờ hết hạn). Trả `204 No Content` (không có body).
@@ -362,15 +362,18 @@ Request:
 {
   "signupToken": "...",       // từ mục 3.14
   "username": "minh_hung",    // cùng quy tắc với mục 3.1
-  "password": "P@ssw0rd!"     // 8-100 ký tự
+  "password": "P@ssw0rd!",    // 8-100 ký tự
+  "birthDate": "2001-05-09"   // bắt buộc, ISO yyyy-MM-dd — phải đủ 13 tuổi tính đến hôm nay (Asia/Ho_Chi_Minh), không ở tương lai, không trước 1900
 }
 ```
 
 Không có `email` trong request: địa chỉ là cái mà vé đã chứng minh, nên không đổi được sang một địa chỉ chưa verify.
 
+`birthDate` được kiểm tra **trước khi tiêu vé**: sai thì trả `400 BIRTH_DATE_INVALID` và vé vẫn dùng được, client sửa ngày rồi gửi lại. auth-service không lưu ngày sinh — nó đi theo `UserRegisteredEvent` sang user-service (`user-service-api.md` mục 3.1, chỉ chủ tài khoản thấy). Tài khoản Google/Facebook không có bước này: client hỏi ngày sinh một lần sau đăng nhập khi `GET /me` trả `birthDate: null`.
+
 Response `data` → `TokenResponse` (giống mục 3.2). Tài khoản được tạo **đã verify email** và đăng nhập luôn — lưu cặp token như sau `/login`, không cần gọi `/login` nữa.
 
-Lỗi: `VALIDATION_ERROR` (400), `USERNAME_ALREADY_EXISTS` (409 — vé **vẫn dùng được**, cho user chọn username khác), `SIGNUP_SESSION_EXPIRED` (400 — vé sai, hết hạn, hoặc đã dùng: quay lại mục 3.13), `EMAIL_ALREADY_EXISTS` (409 — địa chỉ bị tài khoản khác lấy mất trong lúc đăng ký: cũng quay lại mục 3.13).
+Lỗi: `VALIDATION_ERROR` (400), `BIRTH_DATE_INVALID` (400 — vé vẫn dùng được), `USERNAME_ALREADY_EXISTS` (409 — vé **vẫn dùng được**, cho user chọn username khác), `SIGNUP_SESSION_EXPIRED` (400 — vé sai, hết hạn, hoặc đã dùng: quay lại mục 3.13), `EMAIL_ALREADY_EXISTS` (409 — địa chỉ bị tài khoản khác lấy mất trong lúc đăng ký: cũng quay lại mục 3.13).
 
 ### 3.16 `PUT /me/username`
 **Cần Bearer token.** Trả `200 OK`. Đổi username (TikTok ID) — **tối đa 1 lần mỗi 30 ngày**.
@@ -427,14 +430,30 @@ Xác minh lại: **đúng một** trong `{ "password": "…" }`, `{ "otp": "1234
 
 Thành công: mọi phiên của tài khoản bị huỷ (như ban), kể cả phiên hiện tại — client xoá token local. Phát `AccountStateChangedEvent` (mục 9). Mở lại: mục 3.2. `AccountDeletionSweep` (mỗi giờ) chạy các lệnh xoá đến hạn, kể cả khi tài khoản đang bị ban: email, mật khẩu và liên kết provider bị gỡ, row được soft-delete, nên email/username/tài khoản Google-Facebook đăng ký lại được như tài khoản mới. Unban một tài khoản đã tự đóng đưa nó về `DEACTIVATED`, không phải `ACTIVE`.
 
+### 3.20 Đăng nhập web bằng mã QR — `/qr/**`
+Trình duyệt hiện mã QR, app (đã đăng nhập) quét rồi xác nhận, trình duyệt nhận phiên. Trạng thái nằm trong Redis (`auth:qr:{id}`, sống 2 phút), mỗi bước chuyển là một Lua script nên một mã chỉ một tài khoản quét được và token chỉ được trả **một lần**.
+
+| Endpoint | Ai gọi | Token | Body | Trả |
+|---|---|---|---|---|
+| `POST /qr` | Trình duyệt | Không | — | `201 { qrId, pollToken, qrContent, expiresAt }`. `429 TOO_MANY_QR_LOGIN_REQUESTS` quá 30 mã / 10 phút / IP |
+| `POST /qr/{qrId}/status` | Trình duyệt | Không | `{ "pollToken": "…" }` | `200 { status, username, tokens }` — `PENDING` → `SCANNED` (kèm `username`) → `APPROVED` (kèm `tokens`, **chỉ một lần**) hoặc `REJECTED`; `EXPIRED` khi hết hạn, đã dùng, không tồn tại **hoặc sai `pollToken`**. Gọi mỗi 2 giây |
+| `POST /qr/{qrId}/scan` | App | Có | — | `200 { deviceLabel, location, expiresAt }` cho màn xác nhận. `410 QR_LOGIN_EXPIRED`, `409 QR_LOGIN_ALREADY_SCANNED` (tài khoản khác quét trước), `403 QR_LOGIN_NOT_ALLOWED` (ADMIN / tài khoản không ACTIVE). Quét lại từ chính tài khoản đó vẫn `200` |
+| `POST /qr/{qrId}/approve` | App | Có | — | `200`. Chỉ sau `/scan` của **cùng tài khoản**, không thì `410 QR_LOGIN_EXPIRED` |
+| `POST /qr/{qrId}/reject` | App | Có | — | `200`. Như trên |
+
+- `qrContent` = `nowa://qr-login?id={qrId}`. Ảnh QR **chỉ** chứa nội dung này; `pollToken` ở lại trong trang — ai chụp được màn hình cũng không lấy được phiên.
+- Token được cấp ở lần gọi `/status` **của trình duyệt**, nên phiên mang User-Agent, IP, `X-Device-Id` của trình duyệt: là phiên `DESKTOP`, không đá phiên của app, và cảnh báo thiết bị mới (nếu có) ghi đúng trình duyệt. Lịch sử bảo mật ghi `LOGIN_SUCCEEDED` như các cách đăng nhập khác.
+- Màn xác nhận trên app **phải** hiện `deviceLabel` + `location` — đó là thứ chặn chiêu đưa mã QR của kẻ khác cho nạn nhân quét.
+- Tài khoản bị ban/đóng/xoá giữa lúc duyệt và lúc trình duyệt hỏi: `/status` trả `REJECTED`, không có token.
+
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
 1. `register` → `verify-email` (OTP 6 số gửi qua mail) → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext). Bỏ qua bước verify thì `login` trả `403 EMAIL_NOT_VERIFIED`. Luồng web thì khác: `register/start` → `register/verify` → `register/complete` (mục 3.13–3.15), bước cuối trả token luôn.
 2. Mọi request tới các service khác qua gateway: gắn header `Authorization: Bearer <accessToken>`.
-3. Access token sống **15 phút**. Khi API trả `401`, gọi `/refresh` bằng `refreshToken` **đúng một lần, và chỉ một request tại một thời điểm** (xem luật single-flight ở mục 3.3); nếu `/refresh` lỗi (`INVALID_REFRESH_TOKEN`) → xoá token, điều hướng về màn hình login. **Không retry `/refresh`** — lần thử thứ hai bị coi là replay và giết phiên trên mọi thiết bị.
+3. Access token sống **15 phút**. Khi API trả `401`, gọi `/refresh` bằng `refreshToken` **đúng một lần, và chỉ một request tại một thời điểm** (xem luật single-flight ở mục 3.3); nếu `/refresh` lỗi (`INVALID_REFRESH_TOKEN`) → xoá token, điều hướng về màn hình login. **Không retry `/refresh`** — lần thử thứ hai bị coi là replay và giết chain của lần đăng nhập đó.
 4. Refresh token sống **7 ngày** (`604800000ms`) nhưng **xoay mỗi lần dùng**: mỗi `/refresh` thành công trả về refresh token mới, phải ghi đè token cũ ngay. Nên chủ động refresh khi app resume nếu access token gần hết hạn, tránh chờ 401 (giảm giật UI).
 5. Logout: gọi `/logout` với access token hiện có + refresh token, rồi xoá token local. Việc gọi API logout quan trọng vì nó blacklist access token trên server (Redis) — nếu chỉ xoá local, token cũ (nếu bị lộ) vẫn dùng được tới khi tự hết hạn. Logout chỉ giết **phiên hiện tại**; các thiết bị khác vẫn đăng nhập bình thường.
-6. Có 2 trường hợp server giết **toàn bộ** phiên của user, app đang chạy sẽ đột ngột nhận `401` ở mọi request và `/refresh` cũng hỏng: reset password (mục 3.9) và replay detection (mục 3.3). Interceptor phải xử lý được tình huống này — xoá token, về màn hình login — chứ không loop retry.
+6. Có 2 trường hợp server giết phiên đang chạy, app sẽ đột ngột nhận `401` ở mọi request và `/refresh` cũng hỏng: reset password (mục 3.9, mọi thiết bị) và replay detection (mục 3.3, chỉ chain của lần đăng nhập bị trình lại). Interceptor phải xử lý được tình huống này — xoá token, về màn hình login — chứ không loop retry.
 
 Khuyến nghị dùng interceptor (Dio) để tự động gắn header và refresh-on-401, tránh lặp code ở từng repository. Interceptor bắt buộc phải có cơ chế khoá (single-flight) cho `/refresh`.
 
@@ -456,7 +475,7 @@ ACTIVE, LOCKED, BANNED, DEACTIVATED   // DEACTIVATED: chủ tự đóng, mục 3
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | Body không đúng ràng buộc (`@NotBlank`, `@Email`, `@Size`...) |
 | `INVALID_CREDENTIALS` | 401 | Sai username/email hoặc password khi login |
-| `INVALID_REFRESH_TOKEN` | 401 | Refresh token sai/hết hạn/**đã bị xoay** ở lần `/refresh` trước (xem mục 3.3 — trình lại token đã xoay còn kích hoạt replay detection, giết mọi phiên) |
+| `INVALID_REFRESH_TOKEN` | 401 | Refresh token sai/hết hạn/**đã bị xoay** ở lần `/refresh` trước (xem mục 3.3 — trình lại token đã xoay còn kích hoạt replay detection, giết chain của lần đăng nhập đó) |
 | `EMAIL_NOT_VERIFIED` | 403 | Mật khẩu đúng nhưng email chưa xác thực → điều hướng sang màn hình nhập OTP, KHÔNG gộp với `INVALID_CREDENTIALS` |
 | `MFA_REQUIRED` | 401 | Tài khoản ADMIN, mật khẩu đúng, thiết bị chưa được ghi nhớ — OTP đã gửi qua email, tiếp tục ở `/login/otp` (mục 3.17) |
 | `SOCIAL_SIGN_IN_NOT_ALLOWED` | 403 | Đăng nhập Google/Facebook vào tài khoản ADMIN (mục 3.10) |
@@ -470,6 +489,10 @@ ACTIVE, LOCKED, BANNED, DEACTIVATED   // DEACTIVATED: chủ tự đóng, mục 3
 | `INVALID_SOCIAL_TOKEN` | 401 | Token Google/Facebook sai, hết hạn, hoặc **được cấp cho ứng dụng khác** (mục 3.10). Cố ý không nói rõ là lý do nào |
 | `EMAIL_ALREADY_LINKED` | 409 | Tài khoản đã có email đã verify nên không dùng `POST /email` được nữa (mục 3.12) |
 | `SOCIAL_LINK_VERIFICATION_REQUIRED` | 409 | Email sau tài khoản provider đã có chủ ở hệ thống ta và provider không khẳng định nó đã verify. Server đã gửi mã tới địa chỉ đó — **giữ lại token provider** rồi hoàn tất bằng mục 3.11. Không phải lỗi để hiển thị rồi thôi: bỏ token đi là bắt user đăng nhập provider lại từ đầu |
+| `QR_LOGIN_EXPIRED` | 410 | Mã QR hết hạn, đã dùng, không tồn tại, hoặc `/approve`·`/reject` không phải từ tài khoản đã quét (mục 3.20) → bảo user làm mới mã trên web |
+| `QR_LOGIN_ALREADY_SCANNED` | 409 | Tài khoản khác đã quét mã này trước (mục 3.20) |
+| `QR_LOGIN_NOT_ALLOWED` | 403 | Tài khoản ADMIN hoặc không ACTIVE quét mã QR (mục 3.20) |
+| `TOO_MANY_QR_LOGIN_REQUESTS` | 429 | Quá 30 mã QR / 10 phút từ một IP (mục 3.20) |
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
 | `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`, `reset-password/verify`, `register/verify`) |
 | `RESET_SESSION_EXPIRED` | 400 | `resetToken` của `reset-password/complete` hết hạn hoặc đã dùng — xin mã mới |

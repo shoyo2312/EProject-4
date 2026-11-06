@@ -72,6 +72,9 @@ class UserSettingsControllerTest {
     @MockitoBean
     private FollowService followService;
 
+    @MockitoBean
+    private com.tiktok.userservice.service.FollowGraphBackfillService followGraphBackfillService;
+
     private JwtProvider jwtProvider;
 
     @BeforeEach

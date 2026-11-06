@@ -2,13 +2,16 @@ package com.tiktok.adminservice.controller;
 
 import com.tiktok.adminservice.dto.request.ResolveQueueRequest;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
+import com.tiktok.adminservice.dto.request.SubmitDirectMessageReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
+import com.tiktok.adminservice.dto.response.ReportEvidenceResponse;
 import com.tiktok.adminservice.dto.response.ModerationActionResponse;
 import com.tiktok.adminservice.dto.response.ReportGroupResponse;
 import com.tiktok.adminservice.dto.response.ReportResponse;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.service.AdminService;
+import com.tiktok.adminservice.service.DirectMessageReportService;
 import com.tiktok.common.response.ApiResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +29,7 @@ import java.time.Instant;
 public class ReportController {
 
     private final AdminService adminService;
+    private final DirectMessageReportService directMessageReportService;
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -33,6 +37,23 @@ public class ReportController {
             @AuthenticationPrincipal Long currentUserId,
             @Valid @RequestBody SubmitReportRequest request) {
         return ApiResponse.success(adminService.submitReport(currentUserId, request));
+    }
+
+    /**
+     * A report filed from a conversation. Its own path, open to any signed-in user like the one above
+     * and nothing wider: reading what was reported stays ROLE_ADMIN.
+     */
+    @PostMapping("/direct-message")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ApiResponse<ReportResponse> submitDirectMessage(
+            @AuthenticationPrincipal Long currentUserId,
+            @Valid @RequestBody SubmitDirectMessageReportRequest request) {
+        return ApiResponse.success(directMessageReportService.submit(currentUserId, request));
+    }
+
+    @GetMapping("/{reportId}/evidence")
+    public ApiResponse<ReportEvidenceResponse> evidence(@PathVariable Long reportId) {
+        return ApiResponse.success(directMessageReportService.evidence(reportId));
     }
 
     @GetMapping

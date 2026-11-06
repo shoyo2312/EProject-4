@@ -61,9 +61,12 @@ Response `data` → `UserProfileResponse`:
   "followerCount": 10,
   "followingCount": 5,
   "privateAccount": false,
-  "displayNameChangeableAt": null
+  "displayNameChangeableAt": null,
+  "birthDate": "2001-05-09"
 }
 ```
+
+`birthDate`: ngày sinh (ISO `yyyy-MM-dd`) hoặc `null` khi chưa có. **Chỉ chủ tài khoản thấy**, trên profile của chính mình (cùng các chỗ như `displayNameChangeableAt` bên dưới); `null` trên profile người khác. Tài khoản đăng ký bằng email đã có sẵn từ lúc đăng ký; tài khoản Google/Facebook và tài khoản cũ thì `null` cho tới khi gửi qua `PATCH /me` (mục 3.2) — client hỏi một lần ngay sau đăng nhập khi thấy `null`.
 
 `displayNameChangeableAt`: khi nào được đổi `displayName` lần tới (mục 3.2). **Chỉ chủ tài khoản thấy**, trên profile của chính mình (`GET /me`, `PATCH /me`, `POST /me/avatar`, và `GET /{userId}` / `GET /by-username/{username}` khi người gọi là chủ); `null` ở mọi chỗ khác, và `null` với chủ khi đổi được ngay.
 
@@ -79,9 +82,12 @@ Request (mọi field đều optional, `UpdateProfileRequest`):
 {
   "displayName": "Tên mới",   // optional, 1-100 ký tự, không được toàn khoảng trắng
   "bio": "Bio mới",            // optional, tối đa 500 ký tự
-  "avatarUrl": "https://cdn.tiktok-clone.local/avatars/123.jpg"  // optional, tối đa 500 ký tự
+  "avatarUrl": "https://cdn.tiktok-clone.local/avatars/123.jpg",  // optional, tối đa 500 ký tự
+  "birthDate": "2001-05-09"    // optional, ISO yyyy-MM-dd — chỉ nhận khi profile chưa có ngày sinh, xem bên dưới
 }
 ```
+
+**`birthDate` chỉ đặt được một lần.** Gửi khi profile đã có ngày sinh → `409 BIRTH_DATE_ALREADY_SET` (cả request bị từ chối). Phải đủ **13 tuổi** tính đến hôm nay (múi giờ Asia/Ho_Chi_Minh), không ở tương lai, không trước 1900-01-01 → vi phạm trả `400 BIRTH_DATE_INVALID`. Không xoá được. Đặt xong, user-service phát `UserBirthDateSetEvent` (topic `user.profile-events`) cho analytics; khi tài khoản bị xoá (erase), phát lại event đó với `birthDate: null` để analytics bỏ ngày sinh đã giữ cho nhóm tuổi.
 
 **Quy tắc partial update — quan trọng, dễ làm sai phía client:**
 - **Không gửi field** (field vắng mặt trong JSON, hoặc `null`) → giữ nguyên giá trị cũ trên server.
@@ -107,7 +113,7 @@ Bước 3 **chỉ** ghi đè khi `avatarUrl` đang trống hoặc vẫn đúng U
 
 Client hiển thị đúng URL server trả về, không suy đoán host. Next.js phải khai báo host trong `images.remotePatterns` (`lh3.googleusercontent.com`, `platform-lookaside.fbsbx.com`, và origin MinIO) mới render được qua `next/image`. Ảnh render bằng `<img>` thường thì phải có `referrerPolicy="no-referrer"`: Google trả lỗi (503) thay vì ảnh khi request mang `Referer` là trang của client.
 
-Lỗi: `VALIDATION_ERROR` (400), `DISPLAY_NAME_CHANGE_TOO_SOON` (429).
+Lỗi: `VALIDATION_ERROR` (400), `BIRTH_DATE_INVALID` (400), `BIRTH_DATE_ALREADY_SET` (409), `DISPLAY_NAME_CHANGE_TOO_SOON` (429).
 
 ### 3.2b `POST /me/avatar`
 
@@ -146,6 +152,8 @@ Dành cho màn hình đã có sẵn danh sách `userId` mà chưa có profile: f
 
 ### 3.4 `POST /{userId}/follow`
 Follow 1 user. Trả `201 Created`.
+
+Body **tuỳ chọn** (`FollowRequestBody`): `{ "sourceVideoId": 7312458901234567 }` — id video đang xem khi bấm follow (nút follow trên thẻ video ở feed / trang xem video), để TikTok Studio của chủ video đếm "New followers" cho video đó. Follow từ trang cá nhân thì **không gửi body**. Với tài khoản riêng tư, giá trị được giữ trên lời mời và gắn vào sự kiện follow khi chủ tài khoản duyệt.
 
 Response `data` → `FollowResponse`: `{ "followerId": ..., "followingId": ..., "status": "FOLLOWING" }`.
 
@@ -199,6 +207,9 @@ Danh sách user mình đang block. Phân trang giống mục 3.6. Trả `200 OK`
 ### 3.10a `GET /api/v1/users/internal/blocks/states?viewerId=&otherIds=1,2,3` (nội bộ)
 Chỉ chat-service gọi (header `X-Internal-Token`, gateway `denyAll`). Tối đa 100 id. Một query cho cả danh sách. Mỗi phần tử: `{userId, blockedByViewer, blockedViewer, version}`. `version` là epoch-millis lớn nhất trong mọi dòng block của cặp (kể cả đã gỡ), tăng ở **mỗi** lần block/unblock — client dùng nó để bỏ qua trả lời cũ. chat-service **không** lộ `blockedViewer`: người xem chỉ biết "tôi đã chặn" (`blockedByViewer`) và "không thể nhắn" (`messagingBlocked`, một trong hai chiều).
 
+
+### 3.10b `POST /api/v1/users/internal/follow-backfill?before=2026-10-23T00:00:00Z` (nội bộ, chạy tay một lần)
+Header `X-Internal-Token`, gateway `denyAll`. `before` (ISO instant, bắt buộc) là lúc analytics-service bắt đầu đọc `user.follow-events`: follow từ lúc đó đã có dòng riêng trong ClickHouse (eventId khác), phát lại sẽ đếm đôi trên mọi biểu đồ. Phát lại **mọi follow edge còn sống tạo trước `before`** thành `UserFollowChangedEvent(followed=true)` qua outbox lên topic riêng `user.follow-backfill-events` — chỉ analytics-service đọc, nên không sinh thông báo "X đã follow bạn". `eventId = "backfill-follow-" + id edge`, `occurredAt` = lúc follow, nên chạy lại không nhân đôi trong ClickHouse (`ReplacingMergeTree`). Trả `data` → `{ "published": 12345 }`. Khi nào chạy: `operations.md` mục 9.
 
 ### 3.11 `POST /{userId}/mute`
 Mute 1 user (ẩn nội dung của họ khỏi feed/thông báo — tuỳ service khác dùng thông tin này, user-service chỉ lưu trạng thái). Trả `201 Created`.
@@ -364,7 +375,7 @@ Phần tử: `{ id, format, categories, status, requestedAt, readyAt, expiresAt,
 
 | Category | Nội dung | Nguồn |
 |---|---|---|
-| `PROFILE_AND_SETTINGS` | Profile, cài đặt | user-service |
+| `PROFILE_AND_SETTINGS` | Profile (gồm ngày sinh), cài đặt | user-service |
 | `POSTS` | Mọi video chưa xoá, mọi status/visibility | video-service `GET /api/v1/videos/internal/users/{id}/videos` |
 | `LIKES_AND_FAVORITES` | Like, video đã lưu (kèm thời điểm) | interaction-service `GET /api/v1/interactions/internal/users/{id}/likes\|saves` |
 | `DIRECT_MESSAGES` | Mọi hội thoại và tin nhắn | chat-service `GET /api/v1/conversations/internal/users/{id}`, `.../internal/{conversationId}/messages` |

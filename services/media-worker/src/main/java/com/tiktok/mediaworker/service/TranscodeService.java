@@ -1,8 +1,14 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoPublishedEvent;
+
 public interface TranscodeService {
 
-    TranscodeResult transcode(String videoId, String rawFileUrl);
+    /**
+     * @param edit trim and speed from the app's editor, applied before anything else; null plays
+     *             the upload as recorded
+     */
+    TranscodeResult transcode(String videoId, String rawFileUrl, VideoPublishedEvent.Edit edit);
 
     /**
      * Whether this video's result has already been reported. VideoPublishedEvent is redelivered

@@ -39,7 +39,9 @@ import com.tiktok.authservice.exception.InvalidCredentialsException;
 import com.tiktok.authservice.exception.InvalidOtpException;
 import com.tiktok.authservice.exception.InvalidRefreshTokenException;
 import com.tiktok.authservice.exception.InvalidResetTokenException;
+import com.tiktok.authservice.exception.InvalidBirthDateException;
 import com.tiktok.authservice.exception.InvalidSignupTokenException;
+import com.tiktok.common.validation.BirthDateRule;
 import com.tiktok.authservice.exception.MfaRequiredException;
 import com.tiktok.authservice.exception.UserNotFoundException;
 import com.tiktok.authservice.exception.UsernameAlreadyExistsException;
@@ -61,13 +63,19 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
+
+    /** What a sign-in with no password to check is verified against, at the cost real hashes have. */
+    private static final String NO_ACCOUNT_HASH = HashUtils.bcryptHash(UUID.randomUUID().toString());
 
     private static final String CLAIM_JTI = "jti";
     private static final String PURPOSE_EMAIL_VERIFICATION = "email-verification";
@@ -88,6 +96,7 @@ public class AuthServiceImpl implements AuthService {
     private final OtpRateLimiter otpRateLimiter;
     private final SessionRevoker sessionRevoker;
     private final TokenIssuer tokenIssuer;
+    private final SessionRegistry sessionRegistry;
     private final TurnstileService turnstileService;
     private final OtpSendGate otpSendGate;
     private final AdminMfaService adminMfaService;
@@ -109,7 +118,7 @@ public class AuthServiceImpl implements AuthService {
         // casing the user chose, and only its uniqueness check is case-insensitive.
         String email = request.email().toLowerCase(Locale.ROOT);
 
-        User saved = createPasswordAccount(request.username(), email, request.password(), false);
+        User saved = createPasswordAccount(request.username(), email, request.password(), false, null);
 
         otpService.issue(saved, VerificationTokenType.EMAIL_VERIFICATION, otpProperties.emailVerificationExpiryMillis(),
                 otp -> new EmailVerificationRequestedEvent(saved.getEmail(), otp));
@@ -174,12 +183,19 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public TokenResponse completeSignup(CompleteSignupRequest request) {
+        // Before anything is spent: a date that fails the gate costs the user a corrected form,
+        // not a new verification round.
+        if (!BirthDateRule.isAllowed(request.birthDate(), LocalDate.now(ZoneId.of("Asia/Ho_Chi_Minh")))) {
+            throw new InvalidBirthDateException();
+        }
+
         String email = signupChallenge.emailFor(request.signupToken())
                 .orElseThrow(InvalidSignupTokenException::new);
 
         // Verified from the start: the address was proven before the row existed — that is what
         // the ticket is.
-        User saved = createPasswordAccount(request.username(), email, request.password(), true);
+        User saved = createPasswordAccount(request.username(), email, request.password(), true,
+                request.birthDate());
 
         if (!signupChallenge.spendTicket(request.signupToken())) {
             throw new InvalidSignupTokenException();
@@ -218,14 +234,20 @@ public class AuthServiceImpl implements AuthService {
         // bcrypt verification per attempt — the work an attacker would otherwise get for free.
         // A closed account checks its password like an open one: what happened to it is told only
         // to someone who proved they may open it, further down.
+        // bcrypt runs for every attempt, against a stand-in hash when there is no password to check:
+        // the answer is the same for an unknown name and a wrong password, and skipping the ~100ms
+        // verification made the clock say which names are real.
+        String passwordHash = user == null ? null : user.getPasswordHash();
+        boolean matches = HashUtils.bcryptMatches(request.password(),
+                passwordHash != null ? passwordHash : NO_ACCOUNT_HASH);
         boolean valid = user != null
                 && (user.getStatus() == UserStatus.ACTIVE || user.getStatus() == UserStatus.DEACTIVATED)
                 // An account created by a social login has no password to match. Stated rather
                 // than left to bcrypt — which does answer false for a null hash, after logging a
                 // warning about it on every attempt — because "there is no password" is a fact
                 // about the account, not an encoder edge case.
-                && user.getPasswordHash() != null
-                && HashUtils.bcryptMatches(request.password(), user.getPasswordHash());
+                && passwordHash != null
+                && matches;
 
         if (!valid) {
             // Null for an identifier matching no account, which the recorder drops: an attempt
@@ -327,12 +349,12 @@ public class AuthServiceImpl implements AuthService {
                 .filter(u -> !u.isDeleted() && u.getStatus() == UserStatus.ACTIVE)
                 .orElseThrow(InvalidRefreshTokenException::new);
 
-        return tokenIssuer.reissue(user);
+        return tokenIssuer.reissue(user, storedToken.getFamilyId(), storedToken.getSessionId());
     }
 
     /**
-     * Rejects a token whose successor was already handed out, ending every session for the user
-     * if the timing says theft rather than a retry.
+     * Rejects a token whose successor was already handed out, ending its chain if the timing says
+     * theft rather than a retry.
      *
      * <p>Two parties holding one chain is indistinguishable from one party asking twice: a mobile
      * client that double-submits, or retries after a response is lost in flight, presents exactly
@@ -340,15 +362,26 @@ public class AuthServiceImpl implements AuthService {
      * still in flight; the victim's own client only refreshes when its access token runs out,
      * fifteen minutes later, and an attacker walking a stolen chain is later still. So inside the
      * grace window the loser is simply rejected — it will retry the refresh and get a fresh chain
-     * — and outside it, every session for the user dies and both sides re-authenticate.
+     * — and outside it the chain dies and both sides re-authenticate.
+     *
+     * <p>Only the chain — the family of tokens descended from that one sign-in — because the
+     * user's other sign-ins never shared it: ending every session let one stale tab or one lost
+     * response sign the user out of every device. A row from before families existed carries
+     * none, so it still ends every session.
      *
      * <p>Returned rather than thrown so the call sites read as {@code throw rejectAsReplay(...)},
      * which keeps the compiler aware that control does not continue past them.
      */
     private RuntimeException rejectAsReplay(RefreshToken token, Instant now) {
         if (token.wasRotatedBefore(now.minusMillis(jwtProperties.rotationGraceMillis()))) {
-            log.warn("Refresh token replay detected for user {} — revoking all sessions", token.getUserId());
-            sessionRevoker.revokeAllSessions(token.getUserId());
+            if (token.getFamilyId() != null) {
+                log.warn("Refresh token replay detected for user {} — revoking family {}",
+                        token.getUserId(), token.getFamilyId());
+                sessionRevoker.revokeFamily(token.getFamilyId());
+            } else {
+                log.warn("Refresh token replay detected for user {} — revoking all sessions", token.getUserId());
+                sessionRevoker.revokeAllSessions(token.getUserId());
+            }
             securityEventRecorder.record(token.getUserId(), SecurityEventType.SESSIONS_REVOKED,
                     "refresh token replay detected");
         }
@@ -400,7 +433,10 @@ public class AuthServiceImpl implements AuthService {
 
         // Only when this call ended a session: an unknown or already revoked token ended none, and
         // logging a logout that ended no session would put sessions in the trail that never existed.
-        if (refreshTokenRepository.revoke(HashUtils.sha256(refreshToken), Instant.now()) == 1) {
+        String tokenHash = HashUtils.sha256(refreshToken);
+        if (refreshTokenRepository.revoke(tokenHash, Instant.now()) == 1) {
+            refreshTokenRepository.findByTokenHash(tokenHash)
+                    .ifPresent(token -> sessionRegistry.endedByLogout(token.getSessionId()));
             securityEventRecorder.record(owner, SecurityEventType.LOGOUT);
         }
     }
@@ -648,9 +684,12 @@ public class AuthServiceImpl implements AuthService {
      * is the line behind them for a request that raced past.
      *
      * @param emailVerified true when the address was proven before the account existed
+     * @param birthDate     what the sign-up form collected; null on the legacy one-step register,
+     *                      which the mobile app still uses. Not stored here — user-service owns it
+     *                      and reads it off the registration event.
      */
     private User createPasswordAccount(String username, String email, String password,
-                                       boolean emailVerified) {
+                                       boolean emailVerified, LocalDate birthDate) {
         if (userRepository.existsByUsernameIgnoreCaseAndDeletedAtIsNull(username)) {
             throw new UsernameAlreadyExistsException(username);
         }
@@ -671,7 +710,7 @@ public class AuthServiceImpl implements AuthService {
 
         User saved = saveUnique(user, username, email);
         userEventProducer.publishUserRegistered(
-                UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail()));
+                UserRegisteredEvent.of(saved.getId(), saved.getUsername(), saved.getEmail(), null, birthDate));
         return saved;
     }
 

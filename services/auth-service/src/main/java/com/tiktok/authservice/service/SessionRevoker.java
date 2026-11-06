@@ -27,11 +27,24 @@ public class SessionRevoker {
     private final RefreshTokenRepository refreshTokenRepository;
     private final AccessTokenBlacklist accessTokenBlacklist;
     private final JwtProperties jwtProperties;
+    private final SessionRegistry sessionRegistry;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void revokeAllSessions(Long userId) {
         refreshTokenRepository.revokeAllByUserId(userId, Instant.now());
+        sessionRegistry.endAll(userId);
         accessTokenBlacklist.blacklistAllForUser(userId,
+                Duration.ofMillis(jwtProperties.accessTokenExpiryMillis()));
+    }
+
+    /**
+     * Ends one chain: the refresh tokens descended from one sign-in, and the access tokens minted
+     * from them. Same transaction reasoning as {@link #revokeAllSessions}.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void revokeFamily(Long familyId) {
+        refreshTokenRepository.revokeFamily(familyId, Instant.now());
+        accessTokenBlacklist.blacklistFamily(familyId,
                 Duration.ofMillis(jwtProperties.accessTokenExpiryMillis()));
     }
 }

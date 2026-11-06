@@ -4,6 +4,7 @@ import com.tiktok.common.validation.ValidMediaUrl;
 import com.tiktok.moderation.text.MaxCodePoints;
 import com.tiktok.moderation.text.TextSanitizer;
 import com.tiktok.videoservice.entity.VideoVisibility;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -27,12 +28,35 @@ public record CreateVideoRequest(
         // Optional. Capped because the list is indexed and rides on every VideoPublishedEvent, and
         // an uncapped tag list is the cheapest way for one uploader to bloat both. Normalised
         // server-side, so "#Dance" and "dance " are the same tag by the time anything reads them.
-        @Size(max = 10) List<@NotBlank @MaxCodePoints(50) String> tags
+        @Size(max = 10) List<@NotBlank @MaxCodePoints(50) String> tags,
+        // Optional: the "Allow comments" switch on the upload screen, off from the first second.
+        // Null (an older client) means comments on, as before. The same flag PATCH
+        // /{videoId}/comments-setting flips later.
+        Boolean commentsDisabled,
+        // Optional: trim and speed from the app's editor, which media-worker applies before the
+        // transcode. Null (no edits, or an older client) publishes the upload as recorded.
+        @Valid VideoEditRequest edit
 ) {
+
+    /** Without the comment switch: comments on. */
+    public CreateVideoRequest(String title, String description, String rawFileUrl,
+                              VideoVisibility visibility, List<String> tags) {
+        this(title, description, rawFileUrl, visibility, tags, null);
+    }
+
+    /** Without edits: the upload is published as recorded. */
+    public CreateVideoRequest(String title, String description, String rawFileUrl,
+                              VideoVisibility visibility, List<String> tags, Boolean commentsDisabled) {
+        this(title, description, rawFileUrl, visibility, tags, commentsDisabled, null);
+    }
 
     public CreateVideoRequest {
         title = TextSanitizer.sanitizeLine(title);
         description = TextSanitizer.sanitize(description);
         tags = tags == null ? null : tags.stream().map(TextSanitizer::sanitizeLine).toList();
+    }
+
+    public boolean startsWithCommentsDisabled() {
+        return Boolean.TRUE.equals(commentsDisabled);
     }
 }

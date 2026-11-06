@@ -1,6 +1,7 @@
 package com.tiktok.apigateway.dto;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
@@ -14,7 +15,8 @@ import java.util.Optional;
  * display name (user-service, once every 7) may next change; null means now. hasPassword is
  * false for a social account that has never set one. emailVerified and providers tell the client
  * which proof to ask for before the account is closed: the password, a code to the address, or a
- * sign-in with a linked provider.
+ * sign-in with a linked provider. birthDate is null until the owner has given one — the client
+ * asks once after sign-in when profileReady is true and it is still null.
  */
 public record MeResponse(
         Long id,
@@ -33,7 +35,8 @@ public record MeResponse(
         Instant displayNameChangeableAt,
         boolean hasPassword,
         boolean emailVerified,
-        List<String> providers
+        List<String> providers,
+        LocalDate birthDate
 ) {
 
     public static MeResponse from(AuthMeResponse account, Optional<ProfileMeResponse> profile) {
@@ -45,12 +48,12 @@ public record MeResponse(
                         p.displayName(), p.bio(), p.avatarUrl(),
                         p.followerCount(), p.followingCount(), true,
                         account.usernameChangeableAt(), p.displayNameChangeableAt(),
-                        account.hasPassword(), account.emailVerified(), providers))
+                        account.hasPassword(), account.emailVerified(), providers, p.birthDate()))
                 .orElseGet(() -> new MeResponse(
                         account.id(), account.username(), account.email(), account.role(),
                         account.status(), account.createdAt(),
                         null, null, null, null, null, false,
                         account.usernameChangeableAt(), null, account.hasPassword(),
-                        account.emailVerified(), providers));
+                        account.emailVerified(), providers, null));
     }
 }

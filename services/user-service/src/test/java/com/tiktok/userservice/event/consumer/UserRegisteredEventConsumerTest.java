@@ -48,7 +48,7 @@ class UserRegisteredEventConsumerTest {
         consumer.onMessage(payload);
 
         verify(userProfileService, times(1))
-                .createFromRegisteredEvent(event.userId(), event.username(), event.avatarUrl());
+                .createFromRegisteredEvent(event.userId(), event.username(), event.avatarUrl(), event.birthDate());
     }
 
     @Test

@@ -121,6 +121,33 @@
     </dependencies>
 
     <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- Comments may carry a chat sticker. chat-service owns the pack; its manifest is copied in
+                 at build time rather than duplicated, so the two services cannot disagree about which
+                 sticker ids exist. No manifest there (none ships today) means no stickers here either.
+                 See CommentStickers. -->
+            <resource>
+                <directory>${project.basedir}/../chat-service/src/main/resources</directory>
+                <includes>
+                    <include>stickers/fluent-3d-v1.json</include>
+                </includes>
+            </resource>
+        </resources>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+            </testResource>
+            <!-- The same small fixture pack chat-service tests against. -->
+            <testResource>
+                <directory>${project.basedir}/../chat-service/src/test/resources</directory>
+                <includes>
+                    <include>stickers/fluent-3d-v1.json</include>
+                </includes>
+            </testResource>
+        </testResources>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

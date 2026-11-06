@@ -75,7 +75,7 @@ class ModerationTermControllerTest {
     @Test
     void anAdminAddsATerm_sanitizedBeforeItIsStored() throws Exception {
         when(moderationTermService.add(eq(7L), any())).thenReturn(new ModerationTermResponse(1L, "cút đi",
-                Category.INSULT, AdminTerm.Action.HOLD, null, 7L, Instant.now()));
+                Category.INSULT, AdminTerm.Action.HOLD, null, 7L, Instant.now(), null, null));
 
         mockMvc.perform(post("/api/v1/admin/moderation/terms")
                         .header("Authorization", bearer(7L, "ADMIN"))
@@ -116,10 +116,21 @@ class ModerationTermControllerTest {
     void aUserWhoIsNotAnAdmin_cannotTouchTheList() throws Exception {
         mockMvc.perform(get("/api/v1/admin/moderation/terms").header("Authorization", bearer(8L, "USER")))
                 .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/admin/moderation/terms/removed").header("Authorization", bearer(8L, "USER")))
+                .andExpect(status().isForbidden());
         mockMvc.perform(delete("/api/v1/admin/moderation/terms/1").header("Authorization", bearer(8L, "USER")))
                 .andExpect(status().isForbidden());
 
         verifyNoInteractions(moderationTermService);
+    }
+
+    @Test
+    void anAdminReadsTheRemovedTerms() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/moderation/terms/removed").param("q", "dạy").param("action", "REJECT")
+                        .header("Authorization", bearer(7L, "ADMIN")))
+                .andExpect(status().isOk());
+
+        verify(moderationTermService).listRemoved(eq("dạy"), eq(AdminTerm.Action.REJECT), any());
     }
 
     @Test

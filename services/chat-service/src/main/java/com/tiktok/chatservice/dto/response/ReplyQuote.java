@@ -17,11 +17,17 @@ public record ReplyQuote(
         MessageType type,
         String content,
         StickerView sticker,
-        @JsonInclude(JsonInclude.Include.NON_NULL) VideoCard video
+        @JsonInclude(JsonInclude.Include.NON_NULL) VideoCard video,
+        @JsonInclude(JsonInclude.Include.NON_NULL) ImageView image
 ) {
 
     public ReplyQuote(String messageId, State state, Long senderId, MessageType type, String content, StickerView sticker) {
-        this(messageId, state, senderId, type, content, sticker, null);
+        this(messageId, state, senderId, type, content, sticker, null, null);
+    }
+
+    public ReplyQuote(String messageId, State state, Long senderId, MessageType type, String content,
+                      StickerView sticker, VideoCard video) {
+        this(messageId, state, senderId, type, content, sticker, video, null);
     }
 
     public enum State {

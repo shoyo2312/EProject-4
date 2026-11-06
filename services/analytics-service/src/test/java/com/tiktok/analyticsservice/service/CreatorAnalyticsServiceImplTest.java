@@ -2,7 +2,11 @@ package com.tiktok.analyticsservice.service;
 
 import com.tiktok.analyticsservice.dto.request.CreatorVideoSort;
 import com.tiktok.analyticsservice.dto.response.CreatorOverviewResponse;
+import com.tiktok.analyticsservice.dto.response.CreatorVideoDetailResponse;
+import com.tiktok.analyticsservice.dto.response.CreatorVideoViewersResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorViewersResponse;
+import com.tiktok.analyticsservice.dto.response.SearchQueryResponse;
+import com.tiktok.analyticsservice.dto.response.TrafficSourceResponse;
 import com.tiktok.analyticsservice.exception.CreatorVideoNotFoundException;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.DailyEngagement;
@@ -16,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -26,12 +31,13 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 class CreatorAnalyticsServiceImplTest {
 
     private final CreatorAnalyticsRepository repository = mock(CreatorAnalyticsRepository.class);
-    private final CreatorAnalyticsServiceImpl service = new CreatorAnalyticsServiceImpl(repository, 3);
+    private final CreatorAnalyticsServiceImpl service = new CreatorAnalyticsServiceImpl(repository, 3, 3);
 
     /** Vietnam's midnight is 17:00 UTC the day before; a UTC midnight would cut the evening off. */
     @Test
@@ -50,7 +56,7 @@ class CreatorAnalyticsServiceImplTest {
 
         var days = CreatorAnalyticsServiceImpl.daily(first, first.plusDays(2),
                 List.of(new DailyViews(first.plusDays(1), 5)),
-                List.of(new DailyEngagement(first, 1, 2, 3)),
+                List.of(new DailyEngagement(first, 1, 2, 3, 0)),
                 List.of(new DailyFollows(first.plusDays(2), 4, 1)));
 
         assertThat(days).hasSize(3);
@@ -115,8 +121,8 @@ class CreatorAnalyticsServiceImplTest {
                 new WatchTotals("a", 100, 50, 0, 0),
                 new WatchTotals("b", 10, 5, 0, 0)));
         when(repository.engagementTotals(any(), any(), any())).thenReturn(List.of(
-                new EngagementTotals("b", 30, 0, 0),
-                new EngagementTotals("c", 1, 0, 0)));
+                new EngagementTotals("b", 30, 0, 0, 0),
+                new EngagementTotals("c", 1, 0, 0, 0)));
 
         assertThat(service.topVideos(7L, 7, CreatorVideoSort.VIEWS, 10))
                 .extracting("videoId").containsExactly("a", "b", "c");
@@ -135,6 +141,27 @@ class CreatorAnalyticsServiceImplTest {
         assertThat(service.topVideos(7L, 7, CreatorVideoSort.NEW_VIEWERS, 10))
                 .extracting("videoId", "newViewers")
                 .containsExactly(tuple("b", 4L), tuple("a", 0L));
+    }
+
+    /**
+     * The memo key carries parameters the caller picks, so a signed-in user looping over them
+     * could grow it without end. It is capped: past the cap the oldest answer goes.
+     */
+    @Test
+    void theMemo_dropsTheOldestAnswerPastItsCap() {
+        when(repository.viewers(anyLong(), any(), any())).thenReturn(2L);
+
+        // One load reads two windows, so two calls per load.
+        service.viewers(1L, 7);
+        service.viewers(1L, 7);
+        verify(repository, times(2)).viewers(eq(1L), any(), any());
+
+        for (long creator = 2; creator <= CreatorAnalyticsServiceImpl.MEMO_MAX_ENTRIES + 1; creator++) {
+            service.viewers(creator, 7);
+        }
+        service.viewers(1L, 7);
+
+        verify(repository, times(4)).viewers(eq(1L), any(), any());
     }
 
     @Test
@@ -170,5 +197,133 @@ class CreatorAnalyticsServiceImplTest {
         service.overview(7L, 28);
 
         verify(repository, times(2)).dailyViews(any(), any(), any());
+    }
+
+    /** Lifetime totals at the top; {@code current} and {@code previous} are the window and the one before it. */
+    @Test
+    void theVideoPageTotalsBothWindows() {
+        var window = CreatorAnalyticsServiceImpl.Window.endingOn(LocalDate.now(CreatorAnalyticsServiceImpl.ZONE), 7);
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.watchTotals(any(), eq(Instant.EPOCH), eq(window.to())))
+                .thenReturn(List.of(new WatchTotals("v1", 100, 50, 0, 0)));
+        when(repository.watchTotals(any(), eq(window.from()), eq(window.to())))
+                .thenReturn(List.of(new WatchTotals("v1", 10, 5, 0, 0)));
+        when(repository.watchTotals(any(), eq(window.previousFrom()), eq(window.from())))
+                .thenReturn(List.of(new WatchTotals("v1", 4, 2, 0, 0)));
+        when(repository.followsFromVideo(7L, "v1", Instant.EPOCH, window.to())).thenReturn(9L);
+        when(repository.followsFromVideo(7L, "v1", window.from(), window.to())).thenReturn(3L);
+        when(repository.followsFromVideo(7L, "v1", window.previousFrom(), window.from())).thenReturn(1L);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+
+        CreatorVideoDetailResponse video = service.video(7L, "v1", 7);
+
+        assertThat(video.views()).isEqualTo(100);
+        assertThat(video.newFollowers()).isEqualTo(9);
+        assertThat(video.current().views()).isEqualTo(10);
+        assertThat(video.current().newFollowers()).isEqualTo(3);
+        assertThat(video.previous().views()).isEqualTo(4);
+        assertThat(video.previous().newFollowers()).isEqualTo(1);
+        assertThat(video.daily()).hasSize(7);
+        verify(repository).dailyFollowsFromVideo(7L, "v1", window.from(), window.to());
+    }
+
+    @Test
+    void savesRideEveryTotal() {
+        LocalDate today = LocalDate.now(CreatorAnalyticsServiceImpl.ZONE);
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+        when(repository.engagementTotals(any(), any(), any()))
+                .thenReturn(List.of(new EngagementTotals("v1", 1, 2, 3, 5)));
+        when(repository.dailyEngagement(any(), any(), any()))
+                .thenReturn(List.of(new DailyEngagement(today, 1, 2, 3, 4)));
+
+        CreatorVideoDetailResponse video = service.video(7L, "v1", 7);
+        assertThat(video.saves()).isEqualTo(5);
+        assertThat(video.current().saves()).isEqualTo(5);
+        assertThat(video.daily().getLast().saves()).isEqualTo(4);
+        assertThat(service.overview(7L, 7).current().saves()).isEqualTo(4);
+        assertThat(service.topVideos(7L, 7, CreatorVideoSort.VIEWS, 10)).singleElement()
+                .satisfies(stats -> assertThat(stats.saves()).isEqualTo(5));
+    }
+
+    /** Traffic and queries are the window's, the way TikTok shows them, not lifetime like the totals. */
+    @Test
+    void trafficAndQueriesAreTheWindows() {
+        var window = CreatorAnalyticsServiceImpl.Window.endingOn(LocalDate.now(CreatorAnalyticsServiceImpl.ZONE), 7);
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+        when(repository.trafficSources("v1", window.from(), window.to()))
+                .thenReturn(List.of(new TrafficSourceResponse("FOR_YOU", 3)));
+        when(repository.searchQueries("v1", window.from(), window.to(), 3, 10))
+                .thenReturn(List.of(new SearchQueryResponse("cat", 3)));
+
+        CreatorVideoDetailResponse video = service.video(7L, "v1", 7);
+
+        assertThat(video.trafficSources()).containsExactly(new TrafficSourceResponse("FOR_YOU", 3));
+        assertThat(video.searchQueries()).containsExactly(new SearchQueryResponse("cat", 3));
+        verify(repository, never()).trafficSources(any(), eq(Instant.EPOCH), any());
+    }
+
+    @Test
+    void breakdownsAreWithheldUnderTheThreshold() {
+        var window = CreatorAnalyticsServiceImpl.Window.endingOn(LocalDate.now(CreatorAnalyticsServiceImpl.ZONE), 7);
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+        when(repository.watchTotals(any(), eq(window.from()), eq(window.to())))
+                .thenReturn(List.of(new WatchTotals("v1", 10, 2, 0, 0)));
+        when(repository.watchTotals(any(), eq(window.previousFrom()), eq(window.from())))
+                .thenReturn(List.of(new WatchTotals("v1", 4, 1, 0, 0)));
+        when(repository.newViewersOfVideo(7L, "v1", window.from(), window.to())).thenReturn(1L);
+        when(repository.newViewersOfVideo(7L, "v1", window.previousFrom(), window.from())).thenReturn(1L);
+
+        CreatorVideoViewersResponse viewers = service.video(7L, "v1", 7).audience();
+
+        assertThat(viewers.total()).isEqualTo(2);
+        assertThat(viewers.newViewers()).isEqualTo(1);
+        assertThat(viewers.previousTotal()).isEqualTo(1);
+        assertThat(viewers.breakdownAvailable()).isFalse();
+        assertThat(viewers.returning()).isNull();
+        assertThat(viewers.followers()).isNull();
+        assertThat(viewers.ageGroups()).isNull();
+        verify(repository, never()).followerViewers(anyLong(), any(), any(), any());
+        verify(repository, never()).viewersByAge(any(), any(), any());
+    }
+
+    @Test
+    void returningIsTotalMinusNew() {
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+        when(repository.watchTotals(any(), any(), any())).thenReturn(List.of(new WatchTotals("v1", 10, 5, 0, 0)));
+        when(repository.newViewersOfVideo(anyLong(), any(), any(), any())).thenReturn(2L);
+        when(repository.followerViewers(anyLong(), any(), any(), any())).thenReturn(1L);
+        when(repository.viewersByAge(any(), any(), any())).thenReturn(Map.of("18-24", 4L, "UNKNOWN", 1L));
+
+        CreatorVideoViewersResponse viewers = service.video(7L, "v1", 7).audience();
+
+        assertThat(viewers.breakdownAvailable()).isTrue();
+        assertThat(viewers.returning()).isEqualTo(3);
+        assertThat(viewers.followers()).isEqualTo(1);
+        assertThat(viewers.nonFollowers()).isEqualTo(4);
+        assertThat(viewers.ageGroups().keySet())
+                .containsExactly("13-17", "18-24", "25-34", "35-44", "45-54", "55+", "UNKNOWN");
+        assertThat(viewers.ageGroups()).containsEntry("18-24", 4L).containsEntry("55+", 0L);
+    }
+
+    /** Two teenagers among 150 viewers is close to naming them: a group that small counts as UNKNOWN. */
+    @Test
+    void anAgeGroupTooSmallToStandAloneIsCountedAsUnknown() {
+        CreatorAnalyticsServiceImpl atDefaults = new CreatorAnalyticsServiceImpl(repository, 100, 3);
+        when(repository.ownsVideo(7L, "v1")).thenReturn(true);
+        when(repository.retentionBuckets("v1")).thenReturn(new long[21]);
+        when(repository.watchTotals(any(), any(), any())).thenReturn(List.of(new WatchTotals("v1", 300, 150, 0, 0)));
+        when(repository.viewersByAge(any(), any(), any()))
+                .thenReturn(Map.of("13-17", 2L, "18-24", 140L, "UNKNOWN", 8L));
+
+        CreatorVideoViewersResponse viewers = atDefaults.video(7L, "v1", 7).audience();
+
+        assertThat(viewers.ageGroups())
+                .containsEntry("13-17", 0L)
+                .containsEntry("18-24", 140L)
+                .containsEntry("UNKNOWN", 10L);
     }
 }

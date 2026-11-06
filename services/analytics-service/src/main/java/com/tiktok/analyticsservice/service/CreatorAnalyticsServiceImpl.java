@@ -6,6 +6,8 @@ import com.tiktok.analyticsservice.dto.response.CreatorOverviewResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorTotalsResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorVideoDetailResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorVideoStatsResponse;
+import com.tiktok.analyticsservice.dto.response.CreatorVideoTotalsResponse;
+import com.tiktok.analyticsservice.dto.response.CreatorVideoViewersResponse;
 import com.tiktok.analyticsservice.dto.response.CreatorViewersResponse;
 import com.tiktok.analyticsservice.exception.CreatorVideoNotFoundException;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository;
@@ -24,12 +26,13 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.function.ToLongFunction;
@@ -42,20 +45,28 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
     static final ZoneId ZONE = ZoneId.of(CreatorAnalyticsRepository.ZONE);
 
     private static final WatchTotals NO_WATCHES = new WatchTotals(null, 0, 0, 0, 0);
-    private static final EngagementTotals NO_ENGAGEMENT = new EngagementTotals(null, 0, 0, 0);
+    private static final EngagementTotals NO_ENGAGEMENT = new EngagementTotals(null, 0, 0, 0, 0);
 
     /** How long one answer is reused — Studio asks these on every tab switch, and each is several FINAL scans. */
     private static final long TTL_NANOS = Duration.ofSeconds(60).toNanos();
 
     private final CreatorAnalyticsRepository repository;
 
+    /** The most answers kept; past it the least recently asked goes. */
+    static final int MEMO_MAX_ENTRIES = 10_000;
+
     /**
-     * ponytail: a per-instance memo, one entry per question asked. Nothing evicts — growth is bounded
-     * by creators × days × sorts, and an expired entry only goes when its question is asked again. A
-     * shared cache (Caffeine or Redis) is the upgrade when this runs on more than one instance or that
-     * growth shows in the heap.
+     * ponytail: a per-instance LRU memo, one entry per question asked. The key carries parameters
+     * the caller picks (days, sort, limit), so it is capped rather than left to grow with them. A
+     * shared cache (Redis) is the upgrade when this runs on more than one instance.
      */
-    private final ConcurrentHashMap<List<Object>, Memo> memo = new ConcurrentHashMap<>();
+    private final Map<List<Object>, Memo> memo = Collections.synchronizedMap(
+            new LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<List<Object>, Memo> eldest) {
+                    return size() > MEMO_MAX_ENTRIES;
+                }
+            });
 
     private record Memo(Object value, long expiresAtNanos) {
     }
@@ -79,10 +90,32 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
      */
     private final long minAudience;
 
+    /**
+     * Fewest viewers an age group needs to be shown on its own; a smaller one is counted under
+     * UNKNOWN, so a handful of teenagers among a video's viewers does not point at them. A tenth of
+     * the audience floor, so a demo that lowers that floor lowers this too.
+     * ponytail: suppression, not noise — two overlapping windows can still move one viewer across
+     * the line; add noise to the counts if that matters.
+     */
+    private final long minAgeGroup;
+
+    /** Distinct searchers a query needs before the video page lists it; under that it names them. */
+    private final int searchQueryMinViewers;
+
+    /** The most search queries the video page lists, as TikTok does. */
+    static final int SEARCH_QUERY_LIMIT = 10;
+
+    /** Every age group the video page reports, in order, so the client never meets a missing key. */
+    static final List<String> AGE_GROUPS = List.of("13-17", "18-24", "25-34", "35-44", "45-54", "55+", "UNKNOWN");
+    private static final String UNKNOWN_AGE = "UNKNOWN";
+
     public CreatorAnalyticsServiceImpl(CreatorAnalyticsRepository repository,
-                                       @Value("${analytics.creator.min-audience:100}") long minAudience) {
+                                       @Value("${analytics.creator.min-audience:100}") long minAudience,
+                                       @Value("${analytics.creator.search-query-min-viewers:3}") int searchQueryMinViewers) {
         this.repository = repository;
         this.minAudience = minAudience;
+        this.minAgeGroup = Math.max(1, minAudience / 10);
+        this.searchQueryMinViewers = searchQueryMinViewers;
     }
 
     /**
@@ -169,10 +202,10 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
         Window window = window(days);
         Scope scope = Scope.video(videoId);
 
-        WatchTotals watches = repository.watchTotals(scope, Instant.EPOCH, window.to()).stream()
-                .findFirst().orElse(NO_WATCHES);
-        EngagementTotals engagement = repository.engagementTotals(scope, Instant.EPOCH, window.to()).stream()
-                .findFirst().orElse(NO_ENGAGEMENT);
+        WatchTotals watches = watchTotals(scope, Instant.EPOCH, window.to());
+        EngagementTotals engagement = engagementTotals(scope, Instant.EPOCH, window.to());
+        WatchTotals current = watchTotals(scope, window.from(), window.to());
+        WatchTotals previous = watchTotals(scope, window.previousFrom(), window.from());
 
         return new CreatorVideoDetailResponse(
                 videoId,
@@ -184,11 +217,57 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                 engagement.likes(),
                 engagement.comments(),
                 engagement.shares(),
+                engagement.saves(),
+                repository.followsFromVideo(creatorId, videoId, Instant.EPOCH, window.to()),
                 retention(repository.retentionBuckets(videoId)),
                 daily(window.firstDay(), window.lastDay(),
                         repository.dailyViews(scope, window.from(), window.to()),
                         repository.dailyEngagement(scope, window.from(), window.to()),
-                        List.of()));
+                        repository.dailyFollowsFromVideo(creatorId, videoId, window.from(), window.to())),
+                videoTotals(creatorId, videoId, current, window.from(), window.to()),
+                videoTotals(creatorId, videoId, previous, window.previousFrom(), window.from()),
+                repository.trafficSources(videoId, window.from(), window.to()),
+                repository.searchQueries(videoId, window.from(), window.to(), searchQueryMinViewers,
+                        SEARCH_QUERY_LIMIT),
+                videoViewers(creatorId, videoId, window, current.viewers(), previous.viewers()));
+    }
+
+    private CreatorVideoTotalsResponse videoTotals(long creatorId, String videoId, WatchTotals watches, Instant from,
+                                                   Instant to) {
+        EngagementTotals engagement = engagementTotals(Scope.video(videoId), from, to);
+        return new CreatorVideoTotalsResponse(watches.views(), engagement.likes(), engagement.comments(),
+                engagement.shares(), engagement.saves(), repository.followsFromVideo(creatorId, videoId, from, to));
+    }
+
+    private CreatorVideoViewersResponse videoViewers(long creatorId, String videoId, Window window,
+                                                     long total, long previousTotal) {
+        long fresh = repository.newViewersOfVideo(creatorId, videoId, window.from(), window.to());
+        long previousFresh = repository.newViewersOfVideo(creatorId, videoId, window.previousFrom(), window.from());
+        if (total < minAudience) {
+            return new CreatorVideoViewersResponse(total, fresh, previousTotal, previousFresh, false,
+                    null, null, null, null);
+        }
+        long followers = repository.followerViewers(creatorId, videoId, window.from(), window.to());
+        Map<String, Long> byAge = repository.viewersByAge(videoId, window.from(), window.to());
+        Map<String, Long> ageGroups = new LinkedHashMap<>();
+        long withheld = 0;
+        for (String group : AGE_GROUPS) {
+            long count = byAge.getOrDefault(group, 0L);
+            boolean tooSmall = count < minAgeGroup && !UNKNOWN_AGE.equals(group);
+            withheld += tooSmall ? count : 0;
+            ageGroups.put(group, tooSmall ? 0L : count);
+        }
+        ageGroups.merge(UNKNOWN_AGE, withheld, Long::sum);
+        return new CreatorVideoViewersResponse(total, fresh, previousTotal, previousFresh, true,
+                total - fresh, followers, total - followers, ageGroups);
+    }
+
+    private WatchTotals watchTotals(Scope scope, Instant from, Instant to) {
+        return repository.watchTotals(scope, from, to).stream().findFirst().orElse(NO_WATCHES);
+    }
+
+    private EngagementTotals engagementTotals(Scope scope, Instant from, Instant to) {
+        return repository.engagementTotals(scope, from, to).stream().findFirst().orElse(NO_ENGAGEMENT);
     }
 
     private CreatorViewersResponse loadViewers(long creatorId, int days) {
@@ -223,6 +302,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                             e == null ? 0 : e.likes(),
                             e == null ? 0 : e.comments(),
                             e == null ? 0 : e.shares(),
+                            e == null ? 0 : e.saves(),
                             f == null ? 0 : f.gained(),
                             f == null ? 0 : f.lost());
                 })
@@ -254,6 +334,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
                 sum(days, CreatorDailyStatsResponse::likes),
                 sum(days, CreatorDailyStatsResponse::comments),
                 sum(days, CreatorDailyStatsResponse::shares),
+                sum(days, CreatorDailyStatsResponse::saves),
                 sum(days, day -> day.followersGained() - day.followersLost()));
     }
 
@@ -264,7 +345,7 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
     private static CreatorVideoStatsResponse stats(String videoId, WatchTotals watches, long newViewers,
                                                    EngagementTotals engagement) {
         return new CreatorVideoStatsResponse(videoId, watches.views(), watches.viewers(), newViewers,
-                engagement.likes(), engagement.comments(), engagement.shares());
+                engagement.likes(), engagement.comments(), engagement.shares(), engagement.saves());
     }
 
     private static ToLongFunction<CreatorVideoStatsResponse> metric(CreatorVideoSort sort) {

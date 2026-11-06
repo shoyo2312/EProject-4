@@ -1,9 +1,14 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoFilter;
+import com.tiktok.event.video.VideoPublishedEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import ws.schild.jave.MultimediaObject;
 import ws.schild.jave.process.ffmpeg.DefaultFFMPEGLocator;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -121,6 +126,268 @@ class JaveFfmpegTest {
             return i;
         }
         return Integer.MAX_VALUE;
+    }
+
+    /**
+     * One second played straight, then one second at double speed: a second and a half of video,
+     * with the sound kept and in the shape the rest of the pipeline only has to remux.
+     */
+    @Test
+    void edit_trimsRetimesAndJoinsTheSegments(@TempDir Path work) throws Exception {
+        Path source = synthesize(work.resolve("source.mp4"), "320x240");
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(source, target, List.of(
+                new VideoPublishedEvent.Edit.Segment(0.5, 1.5, 1),
+                new VideoPublishedEvent.Edit.Segment(0, 1, 2)), null, List.of(), null, true)).isTrue();
+
+        assertThat(new MultimediaObject(target.toFile()).getInfo().getDuration()).isBetween(1300L, 1700L);
+        ProbedVideo probed = probe.probe(target.toUri().toString());
+        assertThat(probed.audioCodec()).isEqualTo("aac");
+        assertThat(probed.needsNormalizing()).isFalse();
+    }
+
+    /** The cut works on the picture as it is shown, so a phone held upright stays portrait. */
+    @Test
+    void edit_bakesRotationInAndCapsTheSizeLikeNormalize(@TempDir Path work) throws Exception {
+        Path rotated = rotate90(synthesize(work.resolve("rotated.mp4"), "1920x1080"));
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(rotated, target,
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, List.of(), null, true)).isTrue();
+
+        ProbedVideo probed = probe.probe(target.toUri().toString());
+        assertThat(probed.width()).isEqualTo(720);
+        assertThat(probed.height()).isEqualTo(1280);
+    }
+
+    /** Naming an audio stream the file does not have would fail the whole edit. */
+    @Test
+    void edit_silentClip_comesOutSilent(@TempDir Path work) throws Exception {
+        Path silent = work.resolve("silent.mp4");
+        Process process = new ProcessBuilder(List.of(
+                new DefaultFFMPEGLocator().getExecutablePath(), "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc=size=320x240:rate=15:duration=2",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", silent.toString()))
+                .redirectErrorStream(true).inheritIO().start();
+        assertThat(process.waitFor()).isZero();
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(silent, target,
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 0.5)), null, List.of(), null, false)).isTrue();
+
+        assertThat(probe.probe(target.toUri().toString()).audioCodec()).isNull();
+    }
+
+    /**
+     * The colour lands in the published pixels: mono over a test pattern full of colour leaves
+     * every pixel with red, green and blue equal, give or take what JPEG does to them.
+     */
+    @Test
+    void edit_appliesTheColourFilterToThePicture(@TempDir Path work) throws Exception {
+        Path source = synthesize(work.resolve("source.mp4"), "320x240");
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)),
+                VideoFilter.MONO.matrix(1), List.of(), null, true)).isTrue();
+
+        Path still = work.resolve("still.jpg");
+        assertThat(ffmpeg.stillFrame(target, still, 0)).isTrue();
+        BufferedImage frame = ImageIO.read(still.toFile());
+        int worst = 0;
+        for (int y = 0; y < frame.getHeight(); y += 7) {
+            for (int x = 0; x < frame.getWidth(); x += 7) {
+                int rgb = frame.getRGB(x, y);
+                int r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+                worst = Math.max(worst, Math.max(Math.abs(r - g), Math.max(Math.abs(g - b), Math.abs(r - b))));
+            }
+        }
+        assertThat(worst).as("largest channel spread in a mono frame").isLessThan(16);
+    }
+
+    /**
+     * The overlay is drawn at its own resolution and stretched over the whole picture: a red left
+     * half at a quarter of the video's size still covers the left half of every frame, and the
+     * transparent right half leaves the test pattern showing through.
+     */
+    @Test
+    void edit_laysTheOverlayOverTheWholePicture(@TempDir Path work) throws Exception {
+        Path source = synthesize(work.resolve("source.mp4"), "320x240");
+        Path overlay = work.resolve("overlay.png");
+        BufferedImage drawn = new BufferedImage(80, 60, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 60; y++) {
+            for (int x = 0; x < 40; x++) {
+                drawn.setRGB(x, y, 0xFFFF0000);
+            }
+        }
+        ImageIO.write(drawn, "png", overlay.toFile());
+        Path target = work.resolve("edited.mp4");
+
+        assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0, 1.5, 1)),
+                null, List.of(new Ffmpeg.Overlay(overlay, null, null)), null, true)).isTrue();
+
+        assertThat(new MultimediaObject(target.toFile()).getInfo().getDuration()).isBetween(1300L, 1700L);
+        Path still = work.resolve("still.jpg");
+        assertThat(ffmpeg.stillFrame(target, still, 1)).isTrue();
+        BufferedImage frame = ImageIO.read(still.toFile());
+        int red = 0, other = 0;
+        for (int y = 10; y < frame.getHeight() - 10; y += 9) {
+            for (int x = 10; x < frame.getWidth() / 2 - 10; x += 9) {
+                red += isRed(frame.getRGB(x, y)) ? 1 : 0;
+            }
+            for (int x = frame.getWidth() / 2 + 10; x < frame.getWidth() - 10; x += 9) {
+                other += isRed(frame.getRGB(x, y)) ? 0 : 1;
+            }
+        }
+        int samples = ((frame.getHeight() - 20 + 8) / 9) * ((frame.getWidth() / 2 - 20 + 8) / 9);
+        assertThat(red).as("red samples on the covered half").isGreaterThan(samples * 9 / 10);
+        assertThat(other).as("pattern samples on the transparent half").isGreaterThan(samples / 2);
+    }
+
+    /**
+     * The real mix: a silent clip gets the track as its only sound, cut at the clip's length; a
+     * clip with sound keeps its length and gains the track under it.
+     */
+    @Test
+    void edit_mixesMusicUnderTheVideo(@TempDir Path work) throws Exception {
+        Path music = work.resolve("music.mp3");
+        Process tone = new ProcessBuilder(List.of(
+                new DefaultFFMPEGLocator().getExecutablePath(), "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "sine=frequency=880:duration=10", "-c:a", "libmp3lame", music.toString()))
+                .redirectErrorStream(true).inheritIO().start();
+        assertThat(tone.waitFor()).isZero();
+        MusicDownloader.requireMp3(music);
+
+        Path silent = work.resolve("silent.mp4");
+        Process process = new ProcessBuilder(List.of(
+                new DefaultFFMPEGLocator().getExecutablePath(), "-nostdin", "-y", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc=size=320x240:rate=15:duration=2",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", silent.toString()))
+                .redirectErrorStream(true).inheritIO().start();
+        assertThat(process.waitFor()).isZero();
+        Path mixedSilent = work.resolve("mixed-silent.mp4");
+
+        assertThat(ffmpeg.edit(silent, mixedSilent, List.of(new VideoPublishedEvent.Edit.Segment(0, 2, 1)),
+                null, List.of(), new Ffmpeg.Music(music, 3, 0.8, 1, 2), false)).isTrue();
+
+        assertThat(probe.probe(mixedSilent.toUri().toString()).audioCodec()).isEqualTo("aac");
+        assertThat(new MultimediaObject(mixedSilent.toFile()).getInfo().getDuration()).isBetween(1800L, 2300L);
+
+        Path voiced = synthesize(work.resolve("voiced.mp4"), "320x240");
+        Path mixedVoiced = work.resolve("mixed-voiced.mp4");
+
+        assertThat(ffmpeg.edit(voiced, mixedVoiced, List.of(new VideoPublishedEvent.Edit.Segment(0, 1.5, 1)),
+                null, List.of(), new Ffmpeg.Music(music, 0, 1, 0, 1.5), true)).isTrue();
+
+        assertThat(probe.probe(mixedVoiced.toUri().toString()).audioCodec()).isEqualTo("aac");
+        assertThat(new MultimediaObject(mixedVoiced.toFile()).getInfo().getDuration()).isBetween(1300L, 1800L);
+    }
+
+    /**
+     * A story photo: made a still clip of the length asked for, then edited like any clip — here a
+     * red layer over the left half — and its first frame taken back out as the picture to serve.
+     * The odd-sized photo comes back with even sides, as yuv420p needs.
+     */
+    @Test
+    void stillVideo_thenEdit_thenFirstFrame_drawsTheLayerIntoThePhoto(@TempDir Path work) throws Exception {
+        Path photo = work.resolve("photo.png");
+        BufferedImage picture = new BufferedImage(301, 401, BufferedImage.TYPE_INT_RGB);
+        for (int y = 0; y < 401; y++) {
+            for (int x = 0; x < 301; x++) {
+                picture.setRGB(x, y, 0x2040C0);
+            }
+        }
+        ImageIO.write(picture, "png", photo.toFile());
+        Path overlay = work.resolve("overlay.png");
+        BufferedImage drawn = new BufferedImage(30, 40, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 40; y++) {
+            for (int x = 0; x < 15; x++) {
+                drawn.setRGB(x, y, 0xFFFF0000);
+            }
+        }
+        ImageIO.write(drawn, "png", overlay.toFile());
+
+        Path still = work.resolve("still.mp4");
+        assertThat(ffmpeg.stillVideo(photo, still, 3)).isTrue();
+        assertThat(new MultimediaObject(still.toFile()).getInfo().getDuration()).isBetween(2800L, 3300L);
+
+        Path edited = work.resolve("edited.mp4");
+        assertThat(ffmpeg.edit(still, edited, List.of(new VideoPublishedEvent.Edit.Segment(0, 3, 1)),
+                null, List.of(new Ffmpeg.Overlay(overlay, null, null)), null, false)).isTrue();
+
+        Path served = work.resolve("served.jpg");
+        assertThat(ffmpeg.firstFrame(edited, served)).isTrue();
+        BufferedImage frame = ImageIO.read(served.toFile());
+        assertThat(frame.getWidth() % 2).isZero();
+        assertThat(frame.getHeight() % 2).isZero();
+        assertThat(isRed(frame.getRGB(frame.getWidth() / 4, frame.getHeight() / 2))).as("under the layer").isTrue();
+        assertThat(isRed(frame.getRGB(frame.getWidth() * 3 / 4, frame.getHeight() / 2))).as("beside it").isFalse();
+    }
+
+    /** Only the image demuxer reads a story photo: a clip named like one is not decoded as a clip. */
+    @Test
+    void stillVideo_refusesSomethingThatIsNotAPicture(@TempDir Path work) throws Exception {
+        Path notAPicture = work.resolve("photo.jpg");
+        Files.write(notAPicture, "#EXTM3U\n#EXTINF:1,\nfile:///etc/passwd\n".getBytes());
+
+        assertThat(ffmpeg.stillVideo(notAPicture, work.resolve("still.mp4"), 2)).isFalse();
+    }
+
+    /** A layer timed to the edited video's clock is absent before its start and there after it. */
+    @Test
+    void edit_showsATimedLayerOnlyFromItsStart(@TempDir Path work) throws Exception {
+        Path source = synthesize(work.resolve("source.mp4"), "320x240");
+        Path overlay = work.resolve("overlay.png");
+        BufferedImage drawn = new BufferedImage(32, 24, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < 24; y++) {
+            for (int x = 0; x < 32; x++) {
+                drawn.setRGB(x, y, 0xFFFF0000);
+            }
+        }
+        ImageIO.write(drawn, "png", overlay.toFile());
+        Path target = work.resolve("edited.mp4");
+
+        // The cut starts half a second into the upload, so "1 second" is the edited clock's.
+        assertThat(ffmpeg.edit(source, target, List.of(new VideoPublishedEvent.Edit.Segment(0.5, 2, 1)),
+                null, List.of(new Ffmpeg.Overlay(overlay, 1.0, null)), null, true)).isTrue();
+
+        assertThat(redShare(stillAt(work, target, "0.4"))).as("before the start").isLessThan(0.3);
+        assertThat(redShare(stillAt(work, target, "1.3"))).as("after the start").isGreaterThan(0.9);
+    }
+
+    private static BufferedImage stillAt(Path work, Path video, String second) throws Exception {
+        Path still = work.resolve("at-" + second + ".png");
+        Process process = new ProcessBuilder(List.of(
+                new DefaultFFMPEGLocator().getExecutablePath(), "-nostdin", "-y", "-loglevel", "error",
+                "-ss", second, "-i", video.toString(), "-frames:v", "1", still.toString()))
+                .redirectErrorStream(true).inheritIO().start();
+        assertThat(process.waitFor()).isZero();
+        return ImageIO.read(still.toFile());
+    }
+
+    private static double redShare(BufferedImage frame) {
+        int red = 0, all = 0;
+        for (int y = 5; y < frame.getHeight(); y += 10) {
+            for (int x = 5; x < frame.getWidth(); x += 10) {
+                red += isRed(frame.getRGB(x, y)) ? 1 : 0;
+                all++;
+            }
+        }
+        return (double) red / all;
+    }
+
+    private static boolean isRed(int rgb) {
+        int r = (rgb >> 16) & 0xFF, g = (rgb >> 8) & 0xFF, b = rgb & 0xFF;
+        return r > 200 && g < 60 && b < 60;
+    }
+
+    @Test
+    void edit_refusesInputItCannotDecode(@TempDir Path work) throws Exception {
+        Path notMedia = work.resolve("notes.txt");
+        Files.writeString(notMedia, "this is not a video");
+
+        assertThat(ffmpeg.edit(notMedia, work.resolve("edited.mp4"),
+                List.of(new VideoPublishedEvent.Edit.Segment(0, 1, 1)), null, List.of(), null, true)).isFalse();
     }
 
     @Test

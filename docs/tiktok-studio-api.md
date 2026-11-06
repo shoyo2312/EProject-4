@@ -30,17 +30,17 @@ của người khác. Base URL qua gateway: `http://<host>:8080`. Envelope `ApiR
 
 ```json
 {
-  "current":  { "views": 120, "likes": 30, "comments": 4, "shares": 2, "netFollowers": 5 },
-  "previous": { "views": 80,  "likes": 25, "comments": 6, "shares": 0, "netFollowers": 1 },
+  "current":  { "views": 120, "likes": 30, "comments": 4, "shares": 2, "saves": 6, "netFollowers": 5 },
+  "previous": { "views": 80,  "likes": 25, "comments": 6, "shares": 0, "saves": 2, "netFollowers": 1 },
   "daily": [
-    { "day": "2026-10-17", "views": 10, "likes": 3, "comments": 0, "shares": 0, "followersGained": 1, "followersLost": 0 }
+    { "day": "2026-10-17", "views": 10, "likes": 3, "comments": 0, "shares": 0, "saves": 1, "followersGained": 1, "followersLost": 0 }
   ]
 }
 ```
 
 - `previous` là cửa sổ cùng độ dài ngay trước đó. Phần trăm thay đổi do client tính; `previous = 0` thì hiện `--` như TikTok.
 - `daily` có **đủ mọi ngày** trong cửa sổ, ngày không có gì là số 0.
-- `likes`, `comments` là số **ròng**: bỏ thích và comment bị xoá trong cửa sổ được trừ đi, nên có thể âm.
+- `likes`, `comments`, `saves` là số **ròng**: bỏ thích, comment bị xoá và bỏ lưu trong cửa sổ được trừ đi, nên có thể âm.
 - `views` là số phiên xem (watch session), có thể lệch nhẹ so với `viewCount` trên video.
 
 ### 2.2 `GET /creator/videos/top?days=7&sort=VIEWS&limit=10`
@@ -50,24 +50,40 @@ của người khác. Base URL qua gateway: `http://<host>:8080`. Envelope `ApiR
 `newViewers`: người **chưa từng xem** creator, tính cho video đầu tiên họ xem của creator trong cửa sổ — nên cộng mọi video bằng đúng `newViewers` của §2.4. `sort=NEW_VIEWERS` là tab "Nhiều người xem mới nhất" của TikTok.
 
 ```json
-[ { "videoId": "7312458901234567", "views": 100, "viewers": 50, "newViewers": 8, "likes": 12, "comments": 3, "shares": 1 } ]
+[ { "videoId": "7312458901234567", "views": 100, "viewers": 50, "newViewers": 8, "likes": 12, "comments": 3, "shares": 1, "saves": 4 } ]
 ```
 
 ### 2.3 `GET /creator/videos/{videoId}?days=7`
 
-Tổng là **trọn đời**; `daily` là theo cửa sổ (`followersGained`/`followersLost` luôn 0 ở đây).
+Các số ở cấp cao nhất là **trọn đời**; `current` là cửa sổ `days`, `previous` là cửa sổ cùng độ dài ngay trước đó; `daily` là theo cửa sổ. Ở đây `followersGained` là follow đến từ video này (người xem bấm follow trên video), `followersLost` luôn 0.
 
 ```json
 {
   "videoId": "7312458901234567",
   "views": 100, "viewers": 60, "totalWatchMs": 540000, "avgWatchMs": 5400, "completionRate": 0.42,
-  "likes": 12, "comments": 3, "shares": 1,
+  "likes": 12, "comments": 3, "shares": 1, "saves": 4, "newFollowers": 2,
   "retention": [1.0, 0.93, 0.88, "... 21 điểm ...", 0.42],
-  "daily": [ { "day": "2026-10-17", "views": 10, "likes": 1, "comments": 0, "shares": 0, "followersGained": 0, "followersLost": 0 } ]
+  "daily": [ { "day": "2026-10-17", "views": 10, "likes": 1, "comments": 0, "shares": 0, "saves": 1, "followersGained": 1, "followersLost": 0 } ],
+  "current":  { "views": 40, "likes": 5, "comments": 1, "shares": 0, "saves": 2, "newFollowers": 1 },
+  "previous": { "views": 30, "likes": 4, "comments": 2, "shares": 1, "saves": 0, "newFollowers": 0 },
+  "trafficSources": [ { "source": "FOR_YOU", "views": 28 }, { "source": "SEARCH", "views": 7 }, { "source": "OTHER", "views": 5 } ],
+  "searchQueries":  [ { "query": "mèo con", "views": 4 }, { "query": "cat video", "views": 3 } ],
+  "audience": {
+    "total": 60, "newViewers": 25, "previousTotal": 40, "previousNewViewers": 10,
+    "breakdownAvailable": true,
+    "returning": 35, "followers": 22, "nonFollowers": 38,
+    "ageGroups": { "13-17": 3, "18-24": 30, "25-34": 15, "35-44": 4, "45-54": 1, "55+": 0, "UNKNOWN": 7 }
+  }
 }
 ```
 
+- `trafficSources`: lượt xem **trong cửa sổ** theo nơi người xem bấm vào video, nhiều nhất trước. Giá trị là `WatchSource` của interaction-service: `FOR_YOU`, `FOLLOWING`, `FRIENDS`, `EXPLORE`, `PROFILE`, `SEARCH`, `MESSAGE`, `DIRECT`, `OTHER` (client cũ không gửi nguồn). Chỉ gồm nguồn có lượt xem > 0.
+- `searchQueries`: từ khoá người xem đã tìm để ra video này, trong cửa sổ, nhiều lượt nhất trước, tối đa 10. Từ khoá có dưới `analytics.creator.search-query-min-viewers` **người** tìm khác nhau (env `CREATOR_SEARCH_QUERY_MIN_VIEWERS`, mặc định 3) bị bỏ — đếm người, không đếm lượt: một người xem lại năm lần vẫn là từ khoá của một người, gần như nói ra *ai* đã tìm. Từ khoá đã hạ chữ thường và cắt khoảng trắng hai đầu lúc ghi; dài quá 100 ký tự thì không được ghi.
+
+- `newFollowers`: số lượt follow **creator** **gộp** đến từ video này (follow rồi bỏ vẫn tính, như TikTok); follow người khác mà client gắn id video này không tính. Follow từ nơi khác (trang profile, tìm kiếm) không tính vào đây, chỉ vào `netFollowers` của §2.1. Với tài khoản riêng tư, follow được tính lúc chủ **duyệt** lời mời, mang theo video lúc gửi lời mời.
+
 - `retention`: 21 điểm, từ 0% đến 100% độ dài video, bước 5%. Điểm thứ `i` là tỉ lệ lượt xem còn đang xem ở `i×5%`. Video chưa ai xem thì toàn số 0.
+- `audience`: người xem **trong cửa sổ** (`viewers` ở cấp cao nhất là trọn đời). `newViewers` là người chưa từng xem creator và vào qua đúng video này (cùng định nghĩa với §2.2); `returning = total − newViewers`. `followers` là người xem đang follow creator **tại thời điểm cuối cửa sổ** (follow rồi bỏ trước đó thì không tính); `nonFollowers = total − followers`. `ageGroups` tính tuổi tròn năm tại lần xem đầu trong cửa sổ, theo ngày sinh người xem khai; luôn đủ 7 khoá theo thứ tự trên, `UNKNOWN` là người chưa khai ngày sinh, cộng các nhóm có ít hơn `min-audience / 10` người (tối thiểu 1; mặc định 10) — nhóm nhỏ như vậy bị gộp vào `UNKNOWN` và trả 0, để vài người 13-17 giữa 150 người xem không lộ ra. Bốn trường `returning`/`followers`/`nonFollowers`/`ageGroups` là `null` và `breakdownAvailable = false` khi `total` dưới ngưỡng `analytics.creator.min-audience` của §2.4 — cùng lý do: vài người xem thì "1 follower, 2 người 13-17" gần như gọi tên họ.
 - Video không phải của người gọi (hoặc không tồn tại) → 404 `VIDEO_NOT_FOUND`. Cố ý không trả 403, để không xác nhận id đó có tồn tại.
 
 ### 2.4 `GET /creator/viewers?days=7`

@@ -31,7 +31,7 @@ class FollowEventConsumerTest {
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
-        verify(creatorAnalyticsRepository).insertFollow(event.eventId(), 1L, 2L, true, event.occurredAt());
+        verify(creatorAnalyticsRepository).insertFollow(event.eventId(), 1L, 2L, true, event.occurredAt(), "");
     }
 
     /**
@@ -40,10 +40,33 @@ class FollowEventConsumerTest {
      */
     @Test
     void anEventMissingAFollower_isSkippedNotCrashedOn() throws Exception {
-        UserFollowChangedEvent event = new UserFollowChangedEvent("e1", Instant.now(), null, 2L, true, false);
+        UserFollowChangedEvent event = new UserFollowChangedEvent("e1", Instant.now(), null, 2L, true, false, null);
 
         consumer().onMessage(objectMapper.writeValueAsString(event));
 
         verifyNoInteractions(creatorAnalyticsRepository);
+    }
+
+    @Test
+    void aFollowFromAVideoKeepsTheVideo() {
+        String payload = """
+                {"eventId":"e2","occurredAt":"2026-08-20T10:00:00Z","followerId":1,"followingId":2,
+                 "followed":true,"requestApproved":false,"sourceVideoId":42}
+                """;
+
+        consumer().onMessage(payload);
+
+        verify(creatorAnalyticsRepository).insertFollow("e2", 1L, 2L, true, Instant.parse("2026-08-20T10:00:00Z"), "42");
+    }
+
+    @Test
+    void aFollowWithoutASourceStoresEmpty() {
+        String payload = """
+                {"eventId":"e3","occurredAt":"2026-08-20T10:00:00Z","followerId":1,"followingId":2,"followed":true,"requestApproved":false}
+                """;
+
+        consumer().onMessage(payload);
+
+        verify(creatorAnalyticsRepository).insertFollow("e3", 1L, 2L, true, Instant.parse("2026-08-20T10:00:00Z"), "");
     }
 }

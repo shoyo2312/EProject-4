@@ -1,5 +1,7 @@
 package com.tiktok.analyticsservice.repository;
 
+import com.tiktok.analyticsservice.dto.response.SearchQueryResponse;
+import com.tiktok.analyticsservice.dto.response.TrafficSourceResponse;
 import com.tiktok.analyticsservice.repository.CreatorAnalyticsRepository.Scope;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -60,11 +62,14 @@ class CreatorAnalyticsRepositoryTest {
     private TrainingDataRepository trainingDataRepository;
 
     @Autowired
+    private ViewerProfileRepository viewerProfileRepository;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void cleanUp() {
-        for (String table : List.of("watch_events", "engagement_events", "follow_events")) {
+        for (String table : List.of("watch_events", "engagement_events", "follow_events", "viewer_profiles")) {
             jdbcTemplate.execute("TRUNCATE TABLE " + table);
         }
         engagementEventRepository.insert("pub-mine", "PUBLISHED", "mine", CREATOR, FROM);
@@ -72,8 +77,13 @@ class CreatorAnalyticsRepositoryTest {
     }
 
     private void watch(String eventId, String videoId, long userId, long watchedMs, long durationMs, Instant at) {
+        watch(eventId, videoId, userId, watchedMs, durationMs, at, "OTHER", "");
+    }
+
+    private void watch(String eventId, String videoId, long userId, long watchedMs, long durationMs, Instant at,
+                       String source, String searchQuery) {
         trainingDataRepository.insertWatches(List.of(new TrainingDataRepository.WatchRow(
-                eventId, videoId, userId, watchedMs, durationMs, watchedMs >= durationMs, at)));
+                eventId, videoId, userId, watchedMs, durationMs, watchedMs >= durationMs, at, source, searchQuery)));
     }
 
     @Test
@@ -107,10 +117,10 @@ class CreatorAnalyticsRepositoryTest {
         engagementEventRepository.insert("l1", "LIKED", "mine", 100L, EVENING);
         engagementEventRepository.insert("l2", "LIKED", "mine", 101L, EVENING);
         engagementEventRepository.insert("u1", "UNLIKED", "mine", 100L, EVENING);
-        repository.insertFollow("f1", 100L, CREATOR, true, EVENING);
-        repository.insertFollow("f2", 100L, CREATOR, false, EVENING);
-        repository.insertFollow("f3", 101L, CREATOR, true, EVENING);
-        repository.insertFollow("f3", 101L, CREATOR, true, EVENING);
+        repository.insertFollow("f1", 100L, CREATOR, true, EVENING, "");
+        repository.insertFollow("f2", 100L, CREATOR, false, EVENING, "");
+        repository.insertFollow("f3", 101L, CREATOR, true, EVENING, "");
+        repository.insertFollow("f3", 101L, CREATOR, true, EVENING, "");
 
         assertThat(repository.dailyEngagement(Scope.ownedBy(CREATOR), FROM, TO))
                 .singleElement().satisfies(day -> assertThat(day.likes()).isEqualTo(1));
@@ -162,5 +172,137 @@ class CreatorAnalyticsRepositoryTest {
 
         assertThat(buckets[10]).isEqualTo(1);
         assertThat(buckets[20]).isEqualTo(1);
+    }
+
+    @Test
+    void savesAreNetLikeLikes() {
+        engagementEventRepository.insert("s1", "SAVED", "mine", 100L, EVENING);
+        engagementEventRepository.insert("s2", "SAVED", "mine", 101L, EVENING);
+        engagementEventRepository.insert("u1", "UNSAVED", "mine", 100L, EVENING);
+
+        assertThat(repository.engagementTotals(Scope.video("mine"), FROM, TO))
+                .singleElement().satisfies(totals -> assertThat(totals.saves()).isEqualTo(1));
+        assertThat(repository.dailyEngagement(Scope.video("mine"), FROM, TO))
+                .singleElement().satisfies(day -> assertThat(day.saves()).isEqualTo(1));
+    }
+
+    /** A follow that came from the video counts even if it was later undone; one from elsewhere does not. */
+    @Test
+    void followsFromTheVideoAreCountedGross() {
+        repository.insertFollow("f1", 100L, CREATOR, true, EVENING, "mine");
+        repository.insertFollow("f2", 101L, CREATOR, true, EVENING, "mine");
+        repository.insertFollow("f3", 100L, CREATOR, false, EVENING, "");
+        repository.insertFollow("f4", 102L, CREATOR, true, EVENING, "");
+        // Someone else followed, naming this video: the source is the client's word, not a credit.
+        repository.insertFollow("f5", 103L, SOMEONE_ELSE, true, EVENING, "mine");
+
+        assertThat(repository.followsFromVideo(CREATOR, "mine", FROM, TO)).isEqualTo(2);
+        assertThat(repository.dailyFollowsFromVideo(CREATOR, "mine", FROM, TO))
+                .containsExactly(new CreatorAnalyticsRepository.DailyFollows(LocalDate.of(2026, 10, 22), 2, 0));
+    }
+
+    @Test
+    void trafficSourcesCountTheWindowsViewsBySource() {
+        watch("a", "mine", 100L, 1_000, 10_000, EVENING, "FOR_YOU", "");
+        watch("b", "mine", 101L, 1_000, 10_000, EVENING, "FOR_YOU", "");
+        watch("c", "mine", 0L, 1_000, 10_000, EVENING, "FOR_YOU", "");
+        watch("d", "mine", 102L, 1_000, 10_000, EVENING, "SEARCH", "cat");
+        watch("old", "mine", 103L, 1_000, 10_000, Instant.parse("2026-09-01T00:00:00Z"), "PROFILE", "");
+
+        assertThat(repository.trafficSources("mine", FROM, TO))
+                .containsExactly(new TrafficSourceResponse("FOR_YOU", 3), new TrafficSourceResponse("SEARCH", 1));
+    }
+
+    /** Three distinct searchers, not three views: one person replaying their own search must not be listed. */
+    @Test
+    void aSearchQueryNeedsThreeSearchers() {
+        for (int i = 0; i < 3; i++) {
+            watch("a" + i, "mine", 100L + i, 1_000, 10_000, EVENING, "SEARCH", "cat video");
+        }
+        watch("b0", "mine", 200L, 1_000, 10_000, EVENING, "SEARCH", "dog");
+        watch("b1", "mine", 201L, 1_000, 10_000, EVENING, "SEARCH", "dog");
+        for (int i = 0; i < 5; i++) {
+            watch("c" + i, "mine", 300L, 1_000, 10_000, EVENING, "SEARCH", "nguyen van a wedding");
+        }
+        watch("blank", "mine", 400L, 1_000, 10_000, EVENING, "SEARCH", "");
+
+        assertThat(repository.searchQueries("mine", FROM, TO, 3, 10))
+                .containsExactly(new SearchQueryResponse("cat video", 3));
+        assertThat(repository.searchQueries("mine", FROM, TO, 1, 10))
+                .extracting(SearchQueryResponse::query).containsExactly("nguyen van a wedding", "cat video", "dog");
+    }
+
+    @Test
+    void queriesComeMostViewedFirstAndAtMostTen() {
+        for (int q = 0; q < 12; q++) {
+            for (int i = 0; i <= q; i++) {
+                watch("q" + q + "-" + i, "mine", 100L + i, 1_000, 10_000, EVENING, "SEARCH", "query " + q);
+            }
+        }
+
+        List<SearchQueryResponse> queries = repository.searchQueries("mine", FROM, TO, 1, 10);
+
+        assertThat(queries).hasSize(10);
+        assertThat(queries.getFirst()).isEqualTo(new SearchQueryResponse("query 11", 12));
+        assertThat(queries).extracting(SearchQueryResponse::views).isSortedAccordingTo((x, y) -> Long.compare(y, x));
+    }
+
+    @Test
+    void newViewersOfAVideoAreThoseWhoseFirstWatchWasIt() {
+        engagementEventRepository.insert("pub-other", "PUBLISHED", "other-mine", CREATOR, FROM);
+        Instant windowStart = Instant.parse("2026-10-20T00:00:00Z");
+        watch("x-first", "mine", 100L, 1_000, 10_000, EVENING);
+        watch("x-then", "other-mine", 100L, 1_000, 10_000, AFTER_MIDNIGHT);
+        watch("y-old", "other-mine", 101L, 1_000, 10_000, Instant.parse("2026-10-05T00:00:00Z"));
+        watch("y-now", "mine", 101L, 1_000, 10_000, EVENING);
+
+        assertThat(repository.newViewersOfVideo(CREATOR, "mine", windowStart, TO)).isEqualTo(1);
+        assertThat(repository.newViewersOfVideo(CREATOR, "other-mine", windowStart, TO)).isZero();
+    }
+
+    @Test
+    void followerViewersUseTheStateAtTheWindowsEnd() {
+        Instant before = Instant.parse("2026-10-10T00:00:00Z");
+        Instant after = Instant.parse("2026-11-02T00:00:00Z");
+        watch("w1", "mine", 100L, 1_000, 10_000, EVENING);
+        watch("w2", "mine", 101L, 1_000, 10_000, EVENING);
+        watch("w3", "mine", 102L, 1_000, 10_000, EVENING);
+        repository.insertFollow("f1", 100L, CREATOR, true, before, "");
+        repository.insertFollow("f2", 100L, CREATOR, false, EVENING, "");
+        repository.insertFollow("f3", 101L, CREATOR, true, before, "");
+        repository.insertFollow("f4", 101L, CREATOR, false, after, "");
+        repository.insertFollow("f5", 102L, SOMEONE_ELSE, true, before, "");
+
+        assertThat(repository.followerViewers(CREATOR, "mine", FROM, TO)).isEqualTo(1);
+    }
+
+    /** Full years at the first in-window watch, 22 Oct 2026: a birthday still to come this year is not counted. */
+    @Test
+    void ageGroupsBucketAtTheFirstInWindowWatch() {
+        long user = 100L;
+        for (LocalDate birth : List.of(
+                LocalDate.of(2008, 11, 1), LocalDate.of(2008, 10, 1),
+                LocalDate.of(1991, 11, 1), LocalDate.of(1991, 10, 1),
+                LocalDate.of(1971, 11, 1), LocalDate.of(1971, 10, 1))) {
+            viewerProfileRepository.upsert(user, birth, EVENING);
+            watch("w" + user, "mine", user, 1_000, 10_000, EVENING);
+            user++;
+        }
+
+        assertThat(repository.viewersByAge("mine", FROM, TO))
+                .containsOnly(
+                        java.util.Map.entry("13-17", 1L), java.util.Map.entry("18-24", 1L),
+                        java.util.Map.entry("25-34", 1L), java.util.Map.entry("35-44", 1L),
+                        java.util.Map.entry("45-54", 1L), java.util.Map.entry("55+", 1L));
+    }
+
+    @Test
+    void viewersWithoutABirthDateAreUnknown() {
+        watch("w1", "mine", 100L, 1_000, 10_000, EVENING);
+        watch("w2", "mine", 101L, 1_000, 10_000, EVENING);
+        watch("w2-again", "mine", 101L, 1_000, 10_000, AFTER_MIDNIGHT);
+        watch("anonymous", "mine", 0L, 1_000, 10_000, EVENING);
+
+        assertThat(repository.viewersByAge("mine", FROM, TO)).containsOnly(java.util.Map.entry("UNKNOWN", 2L));
     }
 }

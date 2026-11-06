@@ -69,7 +69,8 @@ class ReceiptsMongoTest {
                 mock(SimpMessagingTemplate.class), mock(BlockClient.class), publisher,
                 com.tiktok.chatservice.sticker.StickerCatalog.load("http://localhost:9000", "video-media"), prefs,
                 mock(com.tiktok.chatservice.client.VideoClient.class),
-                mock(com.tiktok.chatservice.client.ShareStatsClient.class));
+                mock(com.tiktok.chatservice.client.StoryClient.class),
+                mock(com.tiktok.chatservice.client.ShareStatsClient.class), mock(com.tiktok.chatservice.repository.ChatImageRepository.class), mock(com.tiktok.chatservice.service.ChatImageService.class));
         when(conversationService.requireParticipant(any(), any())).thenAnswer(call ->
                 conversations.findByIdAndDeletedAtIsNull(call.getArgument(1)).orElseThrow());
         when(conversationService.promoteIfMutual(any())).thenAnswer(call -> call.getArgument(0));

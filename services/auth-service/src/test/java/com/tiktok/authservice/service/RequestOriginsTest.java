@@ -47,7 +47,7 @@ class RequestOriginsTest {
         arrive(Map.of("X-Client-Ip", "81.2.69.160", InternalApiToken.HEADER, token.value()));
         assertThat(origins.current())
                 .extracting(RequestOrigin::address, RequestOrigin::location)
-                .containsExactly("81.2.69.160", "London, United Kingdom");
+                .containsExactly("81.2.69.160", "London, England, United Kingdom");
 
         arrive(Map.of("X-Client-Ip", "81.2.69.160"));
         assertThat(origins.current())

@@ -1,12 +1,16 @@
 package com.tiktok.analyticsservice.repository;
 
+import com.tiktok.analyticsservice.dto.response.SearchQueryResponse;
+import com.tiktok.analyticsservice.dto.response.TrafficSourceResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * TikTok Studio's numbers: the same streams the admin console reads, narrowed to one creator.
@@ -54,7 +58,7 @@ public class CreatorAnalyticsRepository {
     public record DailyViews(LocalDate day, long views) {
     }
 
-    public record DailyEngagement(LocalDate day, long likes, long comments, long shares) {
+    public record DailyEngagement(LocalDate day, long likes, long comments, long shares, long saves) {
     }
 
     public record DailyFollows(LocalDate day, long gained, long lost) {
@@ -63,16 +67,21 @@ public class CreatorAnalyticsRepository {
     public record WatchTotals(String videoId, long views, long viewers, long watchedMs, long completions) {
     }
 
-    public record EngagementTotals(String videoId, long likes, long comments, long shares) {
+    public record EngagementTotals(String videoId, long likes, long comments, long shares, long saves) {
     }
 
     public record NewViewers(String videoId, long newViewers) {
     }
 
-    public void insertFollow(String eventId, long followerId, long followingId, boolean followed, Instant occurredAt) {
+    /** {@code sourceVideoId} is the video the follow came from, or '' when there is none. */
+    public void insertFollow(String eventId, long followerId, long followingId, boolean followed, Instant occurredAt,
+                             String sourceVideoId) {
         jdbcTemplate.update(
-                "INSERT INTO follow_events (event_id, follower_id, following_id, followed, occurred_at) VALUES (?, ?, ?, ?, ?)",
-                eventId, followerId, followingId, followed ? 1 : 0, occurredAt);
+                """
+                INSERT INTO follow_events (event_id, follower_id, following_id, followed, occurred_at, source_video_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                eventId, followerId, followingId, followed ? 1 : 0, occurredAt, sourceVideoId);
     }
 
     public boolean ownsVideo(long ownerId, String videoId) {
@@ -100,13 +109,14 @@ public class CreatorAnalyticsRepository {
                 SELECT toString(toDate(occurred_at, '%s')) AS day,
                        countIf(event_type = 'LIKED') - countIf(event_type = 'UNLIKED') AS likes,
                        countIf(event_type = 'COMMENTED') - countIf(event_type = 'UNCOMMENTED') AS comments,
-                       countIf(event_type = 'SHARED') AS shares
+                       countIf(event_type = 'SHARED') AS shares,
+                       countIf(event_type = 'SAVED') - countIf(event_type = 'UNSAVED') AS saves
                 FROM engagement_events FINAL
                 WHERE %s AND %s AND event_type != 'PUBLISHED'
                 GROUP BY day
                 """.formatted(ZONE, IN_WINDOW, scope.filter()),
                 (rs, i) -> new DailyEngagement(LocalDate.parse(rs.getString("day")),
-                        rs.getLong("likes"), rs.getLong("comments"), rs.getLong("shares")),
+                        rs.getLong("likes"), rs.getLong("comments"), rs.getLong("shares"), rs.getLong("saves")),
                 from.toEpochMilli(), to.toEpochMilli(), scope.param());
     }
 
@@ -123,6 +133,67 @@ public class CreatorAnalyticsRepository {
                 (rs, i) -> new DailyFollows(LocalDate.parse(rs.getString("day")),
                         rs.getLong("gained"), rs.getLong("lost")),
                 ownerId, from.toEpochMilli(), to.toEpochMilli());
+    }
+
+    /**
+     * Follows of {@code ownerId} the video brought in, gross: a follow later undone still counts,
+     * the way TikTok's "new followers" on a video does. The unfollow carries no source, so it
+     * cannot be subtracted anyway. Scoped to the owner because the source is the client's word: a
+     * follow of someone else naming this video must not be credited to it.
+     */
+    public long followsFromVideo(long ownerId, String videoId, Instant from, Instant to) {
+        return jdbcTemplate.queryForObject(
+                "SELECT countIf(followed = 1) FROM follow_events FINAL WHERE following_id = ? AND source_video_id = ? AND %s"
+                        .formatted(IN_WINDOW),
+                Long.class, ownerId, videoId, from.toEpochMilli(), to.toEpochMilli());
+    }
+
+    /** {@link #followsFromVideo} by day; {@code lost} is always 0. */
+    public List<DailyFollows> dailyFollowsFromVideo(long ownerId, String videoId, Instant from, Instant to) {
+        return jdbcTemplate.query(
+                """
+                SELECT toString(toDate(occurred_at, '%s')) AS day, countIf(followed = 1) AS gained
+                FROM follow_events FINAL
+                WHERE following_id = ? AND source_video_id = ? AND %s
+                GROUP BY day
+                """.formatted(ZONE, IN_WINDOW),
+                (rs, i) -> new DailyFollows(LocalDate.parse(rs.getString("day")), rs.getLong("gained"), 0),
+                ownerId, videoId, from.toEpochMilli(), to.toEpochMilli());
+    }
+
+    /** Where one video's views in the window came from, busiest surface first; surfaces with no views are left out. */
+    public List<TrafficSourceResponse> trafficSources(String videoId, Instant from, Instant to) {
+        return jdbcTemplate.query(
+                """
+                SELECT source, count() AS views
+                FROM watch_events FINAL
+                WHERE video_id = ? AND %s
+                GROUP BY source
+                ORDER BY views DESC, source
+                """.formatted(IN_WINDOW),
+                (rs, i) -> new TrafficSourceResponse(rs.getString("source"), rs.getLong("views")),
+                videoId, from.toEpochMilli(), to.toEpochMilli());
+    }
+
+    /**
+     * What viewers searched to find the video, most viewed first. A query searched by fewer than
+     * {@code minViewers} distinct people is left out: one person's phrase, however often they
+     * replayed, names them more than the audience.
+     */
+    public List<SearchQueryResponse> searchQueries(String videoId, Instant from, Instant to, int minViewers,
+                                                   int limit) {
+        return jdbcTemplate.query(
+                """
+                SELECT search_query, count() AS views, uniqExact(user_id) AS viewers
+                FROM watch_events FINAL
+                WHERE video_id = ? AND %s AND source = 'SEARCH' AND search_query != ''
+                GROUP BY search_query
+                HAVING viewers >= ?
+                ORDER BY views DESC, search_query
+                LIMIT ?
+                """.formatted(IN_WINDOW),
+                (rs, i) -> new SearchQueryResponse(rs.getString("search_query"), rs.getLong("views")),
+                videoId, from.toEpochMilli(), to.toEpochMilli(), minViewers, limit);
     }
 
     /** One row per video watched in the window. {@code user_id > 0} keeps anonymous playback out of viewers. */
@@ -149,13 +220,14 @@ public class CreatorAnalyticsRepository {
                 SELECT video_id,
                        countIf(event_type = 'LIKED') - countIf(event_type = 'UNLIKED') AS likes,
                        countIf(event_type = 'COMMENTED') - countIf(event_type = 'UNCOMMENTED') AS comments,
-                       countIf(event_type = 'SHARED') AS shares
+                       countIf(event_type = 'SHARED') AS shares,
+                       countIf(event_type = 'SAVED') - countIf(event_type = 'UNSAVED') AS saves
                 FROM engagement_events FINAL
                 WHERE %s AND %s AND event_type != 'PUBLISHED'
                 GROUP BY video_id
                 """.formatted(IN_WINDOW, scope.filter()),
                 (rs, i) -> new EngagementTotals(rs.getString("video_id"),
-                        rs.getLong("likes"), rs.getLong("comments"), rs.getLong("shares")),
+                        rs.getLong("likes"), rs.getLong("comments"), rs.getLong("shares"), rs.getLong("saves")),
                 from.toEpochMilli(), to.toEpochMilli(), scope.param());
     }
 
@@ -225,6 +297,79 @@ public class CreatorAnalyticsRepository {
                 """.formatted(OWNED_BY),
                 (rs, i) -> new NewViewers(rs.getString("first_video"), rs.getLong("new_viewers")),
                 to.toEpochMilli(), ownerId, from.toEpochMilli());
+    }
+
+    /** {@link #newViewersByVideo} for one video: new viewers whose first watch of this creator was it. */
+    public long newViewersOfVideo(long ownerId, String videoId, Instant from, Instant to) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT count() FROM (
+                    SELECT user_id, argMin(video_id, occurred_at) AS first_video
+                    FROM watch_events FINAL
+                    WHERE occurred_at < fromUnixTimestamp64Milli(?) AND user_id > 0 AND %s
+                    GROUP BY user_id
+                    HAVING min(occurred_at) >= fromUnixTimestamp64Milli(?) AND first_video = ?
+                )
+                """.formatted(OWNED_BY),
+                Long.class, to.toEpochMilli(), ownerId, from.toEpochMilli(), videoId);
+    }
+
+    /**
+     * Distinct viewers of the video in the window who were following its owner at the window's
+     * end: their latest follow row toward the owner before {@code to} is a follow, not an unfollow.
+     */
+    public long followerViewers(long ownerId, String videoId, Instant from, Instant to) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT count() FROM (
+                    SELECT DISTINCT user_id FROM watch_events FINAL
+                    WHERE video_id = ? AND %s AND user_id > 0
+                ) AS v
+                INNER JOIN (
+                    SELECT follower_id, argMax(followed, occurred_at) AS latest
+                    FROM follow_events FINAL
+                    WHERE following_id = ? AND occurred_at < fromUnixTimestamp64Milli(?)
+                    GROUP BY follower_id
+                    HAVING latest = 1
+                ) AS f ON f.follower_id = v.user_id
+                """.formatted(IN_WINDOW),
+                Long.class, videoId, from.toEpochMilli(), to.toEpochMilli(), ownerId, to.toEpochMilli());
+    }
+
+    /**
+     * Distinct viewers of the video in the window by age group, the age being full years at their
+     * first watch in the window. Only groups with viewers come back; a viewer without a birth date
+     * is {@code UNKNOWN}. {@code age()} rather than {@code dateDiff('year')}: the latter counts
+     * year boundaries, which would make everyone a year older from New Year to their birthday.
+     */
+    public Map<String, Long> viewersByAge(String videoId, Instant from, Instant to) {
+        Map<String, Long> groups = new HashMap<>();
+        jdbcTemplate.query(
+                """
+                SELECT multiIf(isNull(years) OR years < 13, 'UNKNOWN',
+                               years < 18, '13-17',
+                               years < 25, '18-24',
+                               years < 35, '25-34',
+                               years < 45, '35-44',
+                               years < 55, '45-54',
+                               '55+') AS age_group,
+                       count() AS viewers
+                FROM (
+                    SELECT w.user_id, age('year', p.birth_date, toDate(min(w.occurred_at), '%s')) AS years
+                    FROM (
+                        SELECT user_id, occurred_at FROM watch_events FINAL
+                        WHERE video_id = ? AND %s AND user_id > 0
+                    ) AS w
+                    LEFT JOIN (SELECT user_id, birth_date FROM viewer_profiles FINAL) AS p ON p.user_id = w.user_id
+                    GROUP BY w.user_id, p.birth_date
+                )
+                GROUP BY age_group
+                """.formatted(ZONE, IN_WINDOW),
+                rs -> {
+                    groups.put(rs.getString("age_group"), rs.getLong("viewers"));
+                },
+                videoId, from.toEpochMilli(), to.toEpochMilli());
+        return groups;
     }
 
     /** Distinct viewers by hour of the day, 0 to 23, in {@link #ZONE}. */

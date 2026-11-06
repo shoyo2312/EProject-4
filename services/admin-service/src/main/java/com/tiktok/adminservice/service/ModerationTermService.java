@@ -19,6 +19,9 @@ public interface ModerationTermService {
     /** Live terms, newest first, optionally one action and/or containing {@code q}. */
     Page<ModerationTermResponse> list(String q, AdminTerm.Action action, Pageable pageable);
 
+    /** Removed terms, most recently removed first, with who took each out — the list's history. */
+    Page<ModerationTermResponse> listRemoved(String q, AdminTerm.Action action, Pageable pageable);
+
     ModerationTermSummaryResponse summary();
 
     ModerationTermResponse add(Long adminId, AddModerationTermRequest request);

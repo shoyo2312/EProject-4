@@ -36,7 +36,7 @@ public class SecurityConfig {
             "/api/v1/auth/reset-password", "/api/v1/auth/reset-password/verify",
             "/api/v1/auth/reset-password/complete", "/api/v1/auth/oauth/google",
             "/api/v1/auth/oauth/facebook", "/api/v1/auth/oauth/google/link",
-            "/api/v1/auth/oauth/facebook/link");
+            "/api/v1/auth/oauth/facebook/link", "/api/v1/auth/qr", "/api/v1/auth/qr/*/status");
 
     private final JwtServerAuthenticationConverter jwtServerAuthenticationConverter;
     private final JwtReactiveAuthenticationManager jwtReactiveAuthenticationManager;

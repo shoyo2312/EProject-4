@@ -1,15 +1,20 @@
 package com.tiktok.storyservice.service;
 
 import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.storyservice.client.MusicCatalogClient;
+import com.tiktok.storyservice.client.MusicTrack;
 import com.tiktok.storyservice.dto.request.CreateStoryRequest;
+import com.tiktok.storyservice.dto.request.StoryEditRequest;
 import com.tiktok.storyservice.dto.request.StoryUploadUrlRequest;
 import com.tiktok.storyservice.dto.response.StoryAnnouncementResponse;
+import com.tiktok.storyservice.dto.response.StoryCardResponse;
 import com.tiktok.storyservice.dto.response.StoryGroupResponse;
 import com.tiktok.storyservice.dto.response.StoryResponse;
 import com.tiktok.storyservice.dto.response.StoryRingResponse;
 import com.tiktok.storyservice.dto.response.StoryUploadUrlResponse;
 import com.tiktok.storyservice.dto.response.StoryViewerResponse;
 import com.tiktok.storyservice.entity.Story;
+import com.tiktok.storyservice.entity.StoryEdit;
 import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.entity.StoryStatus;
 import com.tiktok.storyservice.entity.StoryView;
@@ -21,6 +26,7 @@ import com.tiktok.storyservice.exception.OwnStoryReactionException;
 import com.tiktok.storyservice.exception.StoryNotFoundException;
 import com.tiktok.storyservice.exception.TooManyFollowedUsersException;
 import com.tiktok.storyservice.exception.TooManyRingUsersException;
+import com.tiktok.storyservice.exception.UnsupportedUploadTypeException;
 import com.tiktok.storyservice.exception.UploadNotFoundException;
 import com.tiktok.storyservice.mapper.StoryMapper;
 import com.tiktok.storyservice.repository.StoryRepository;
@@ -67,6 +73,7 @@ public class StoryServiceImpl implements StoryService {
     private final StoryMedia storyMedia;
     private final StoryCaptionModeration captionModeration;
     private final StoryAudience storyAudience;
+    private final MusicCatalogClient musicCatalog;
 
     // ponytail: no per-account limit on how many upload URLs or stories one account may ask for;
     // the signed byte limit bounds each upload. video-service's UploadRateLimiter, removed but in
@@ -83,15 +90,23 @@ public class StoryServiceImpl implements StoryService {
         if (!storyMedia.exists(key)) {
             throw new UploadNotFoundException();
         }
+        StoryEditRequest editRequest = request.edit();
+        List<String> overlayUrls = checkedOverlays(userId, editRequest);
         // Before the insert: a refused caption leaves nothing behind, so the upload can be posted again.
-        ModerationVerdict textVerdict = captionModeration.screen(request.caption());
+        ModerationVerdict textVerdict = captionModeration.screen(request.caption(),
+                editRequest == null ? List.of() : editRequest.overlayTexts());
+        // Looked up here, not trusted from the client: the title and artist credited and the file
+        // media-worker downloads both come from the catalogue.
+        MusicTrack track = editRequest == null || editRequest.music() == null ? null
+                : musicCatalog.requireTrack(editRequest.music().trackId());
 
         // Screened and served from the story's own copy: the upload form still works, so the upload
         // key can be overwritten after moderation looked at it.
         String storyId = Story.newId();
         String mediaKey = storyMedia.copyForStory(key, storyId);
         Story story = Story.pending(storyId, userId, mediaKey, key, mediaType, request.caption(),
-                request.visibility(), textVerdict, Instant.now());
+                request.visibility(), textVerdict, StoryEdit.from(editRequest, overlayUrls, track, mediaType),
+                Instant.now());
         try {
             return ownerView(storyRepository.insert(story));
         } catch (DuplicateKeyException e) {
@@ -99,6 +114,35 @@ public class StoryServiceImpl implements StoryService {
             // lifecycle rule, and the first story's is untouched, as its key comes from its own id.
             throw new ForeignUploadException();
         }
+    }
+
+    /**
+     * Each overlay is read by media-worker as the story's own media is, so it gets the same checks:
+     * the caller's own upload, a PNG, and actually there.
+     *
+     * @return each overlay in canonical form, in order; empty for none
+     */
+    private List<String> checkedOverlays(Long userId, StoryEditRequest edit) {
+        if (edit == null || edit.overlays() == null) {
+            return List.of();
+        }
+        List<String> urls = new ArrayList<>();
+        for (StoryEditRequest.Overlay overlay : edit.overlays()) {
+            String key;
+            try {
+                key = storyMedia.keyOf(userId, overlay.imageUrl());
+            } catch (ForeignUploadException e) {
+                throw new ForeignUploadException("edit.overlays[].imageUrl");
+            }
+            if (!key.endsWith(".png")) {
+                throw new UnsupportedUploadTypeException(key.substring(key.lastIndexOf('.')), Set.of("png"));
+            }
+            if (!storyMedia.exists(key)) {
+                throw new UploadNotFoundException();
+            }
+            urls.add(storyMedia.canonicalUrl(key));
+        }
+        return urls;
     }
 
     @Override
@@ -218,7 +262,7 @@ public class StoryServiceImpl implements StoryService {
         return new StoryResponse(current.id(), current.userId(), current.mediaUrl(), current.mediaType(),
                 current.caption(), visibility, current.status(), current.durationSeconds(), current.viewCount(),
                 current.viewedByMe(), current.myReaction(), current.reactionCounts(), current.createdAt(),
-                current.expiresAt());
+                current.expiresAt(), current.music());
     }
 
     @Override
@@ -298,6 +342,20 @@ public class StoryServiceImpl implements StoryService {
                 .filter(found -> !storyAudience.isHidden(found.getUserId()))
                 .orElseThrow(() -> new StoryNotFoundException(storyId));
         return new StoryAnnouncementResponse(story.getUserId(), story.getVisibility());
+    }
+
+    @Override
+    public List<StoryCardResponse> viewable(Long viewerId, List<String> storyIds) {
+        List<Story> live = storyRepository.findAllById(storyIds.stream().distinct().limit(50).toList()).stream()
+                .filter(story -> story.getDeletedAt() == null && !story.isExpired())
+                .toList();
+        List<Story> others = live.stream().filter(story -> !isOwner(viewerId, story)).toList();
+        Set<String> allowed = visibleOf(viewerId, others).stream().map(Story::getId).collect(Collectors.toSet());
+        return live.stream()
+                .filter(story -> isOwner(viewerId, story) ? story.getStatus() == StoryStatus.ACTIVE : allowed.contains(story.getId()))
+                .map(story -> new StoryCardResponse(story.getId(), story.getUserId(), story.getMediaType(),
+                        storyMedia.signedGet(story.getMediaKey())))
+                .toList();
     }
 
     /** Not deleted, not expired, and either the requester's own or ACTIVE and in their audience. */

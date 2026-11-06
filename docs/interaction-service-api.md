@@ -97,8 +97,9 @@ Endpoint này chỉ cho **một** video. Render cả trang feed thì dùng bản
 Request (`AddCommentRequest`):
 ```json
 {
-  "content": "Video hay quá",   // bắt buộc, tối đa 150 ký tự (đếm theo code point — emoji tính 1), không được rỗng sau khi làm sạch
-  "parentId": 7312458901234999  // tuỳ chọn — id comment đang trả lời (comment gốc HOẶC một reply)
+  "content": "Video hay quá",   // tối đa 150 ký tự (đếm theo code point — emoji tính 1); bắt buộc và không được rỗng sau khi làm sạch, TRỪ KHI có stickerId
+  "parentId": 7312458901234999, // tuỳ chọn — id comment đang trả lời (comment gốc HOẶC một reply)
+  "stickerId": "grinning-face"  // tuỳ chọn — một sticker trong bộ của chat-service (GET /conversations/stickers)
 }
 ```
 
@@ -115,13 +116,22 @@ Response `data` → `CommentResponse`:
   "likeCount": 0,                // số like của comment này
   "likedByMe": false,           // user gọi đã like chưa — luôn false khi list không kèm token
   "replyCount": 3,              // số reply còn sống, cho nút "Xem 3 phản hồi". Luôn 0 với một reply
-  "status": "VISIBLE"            // VISIBLE | HELD — xem "Kiểm duyệt tự động" bên dưới
+  "status": "VISIBLE",           // VISIBLE | HELD — xem "Kiểm duyệt tự động" bên dưới
+  "sticker": {                   // null nếu comment không có sticker
+    "stickerId": "grinning-face",
+    "url": "https://media.example/video-media/stickers/fluent-3d/v1/grinning-face.png", // public, không ký
+    "width": 256,
+    "height": 256
+  },
+  "editedAt": null               // thời điểm tác giả sửa lần cuối (mục 3.6a); null nếu chưa sửa
 }
 ```
 
 Response **không kèm thông tin user** (tên, avatar) — service này chỉ giữ `userId`. Client tự ghép từ user-service hoặc từ dữ liệu người dùng hiện tại đang có sẵn.
 
-**Reply chỉ một cấp** (giống TikTok). Gửi `parentId` là id một comment gốc để trả lời nó. Nếu `parentId` trỏ vào một reply thì server tự dời lên comment gốc của reply đó — cây bình luận luôn phẳng một tầng — và ghi `replyToUserId` = tác giả reply bị nhắm, để client hiện "A > B". `parentId` trỏ vào comment không tồn tại (hoặc đã xoá, hoặc không thuộc `videoId` này) → `COMMENT_NOT_FOUND` (404). Chưa có sửa bình luận. Reply cũng tính vào `commentCount` như một comment thường.
+**Reply chỉ một cấp** (giống TikTok). Gửi `parentId` là id một comment gốc để trả lời nó. Nếu `parentId` trỏ vào một reply thì server tự dời lên comment gốc của reply đó — cây bình luận luôn phẳng một tầng — và ghi `replyToUserId` = tác giả reply bị nhắm, để client hiện "A > B". `parentId` trỏ vào comment không tồn tại (hoặc đã xoá, hoặc không thuộc `videoId` này) → `COMMENT_NOT_FOUND` (404). Sửa bình luận: mục 3.6a. Reply cũng tính vào `commentCount` như một comment thường.
+
+**Sticker.** Comment là chữ, một sticker, hoặc cả hai. `stickerId` lấy từ bộ sticker của chat-service (`GET /conversations/stickers`) — hai service đọc chung một manifest, nên id hợp lệ ở chat thì hợp lệ ở đây. Sticker không tồn tại hoặc đã ngừng cung cấp → `INVALID_STICKER` (400), không lưu gì. Comment chỉ có sticker trả `content: ""`; nó vẫn qua bộ lọc của chủ video ("giữ mọi comment" vẫn giữ nó), và thông báo/event của nó mang chữ `[Sticker]`. Sticker đã gửi thì vẫn hiện kể cả khi sau này bị ngừng cung cấp.
 
 **Server làm sạch nội dung trước khi kiểm tra độ dài:** chuẩn hoá NFC (tiếng Việt gõ kiểu tổ hợp được ghép lại), bỏ ký tự vô hình (zero-width, đảo chiều U+202E, ký tự "lấp chỗ" Hangul/Braille), gộp khoảng trắng, tối đa một dòng trống liên tiếp, cắt hai đầu. Nội dung chỉ toàn ký tự vô hình → `VALIDATION_ERROR` (400). Giới hạn 150 tính theo **code point** — đếm phía client bằng `[...text].length` (JS) / `text.runes.length` (Dart), không dùng `.length`.
 
@@ -219,7 +229,13 @@ Cách dùng:
 
 > **Một trang có thể trả ít hơn `size` item, thậm chí `items: []`, mà `hasMore` vẫn `true`.** Comment bị xoá được lọc **sau** khi Cassandra đã cắt trang. Server tự đọc tiếp tối đa 5 trang khi gặp trang rỗng, nhưng một chuỗi dài comment đã xoá vẫn có thể ra trang rỗng. Đây là hành vi bình thường, **không** phải hết dữ liệu. Client phải lặp theo `hasMore`/`nextCursor`, tuyệt đối đừng dừng khi thấy trang rỗng — và đừng dùng `items.length < size` làm điều kiện dừng.
 
-`size` mặc định 20, bị kẹp vào khoảng **1–50**. Không nhận tham số `sort`. Cursor hỏng/không giải mã được → `INVALID_COMMENT_CURSOR` (400).
+`size` mặc định 20, bị kẹp vào khoảng **1–50**. Cursor hỏng/không giải mã được → `INVALID_COMMENT_CURSOR` (400).
+
+**`sort`** (tuỳ chọn): `newest` (mặc định, như trên) hoặc `top`. Giá trị khác được coi là `newest`.
+- `sort=top`: xếp theo **tương tác** = `likeCount + replyCount`, cao nhất trước; bằng điểm thì comment mới hơn trước. App mobile dùng `top`.
+- Chỉ **500 comment gốc mới nhất** được xếp hạng. Hết 500 cái đó, `nextCursor` chuyển sang cursor thường và các comment cũ hơn đi tiếp theo thứ tự mới nhất trước. Không comment nào bị mất.
+- Cursor trong phần xếp hạng có dạng `top.<offset>`. Vẫn coi là chuỗi mờ, truyền lại nguyên văn **kèm `sort=top`**.
+- Thứ hạng được tính lại ở mỗi trang. Một comment có thể được like giữa hai lần tải trang và nhảy qua ranh giới trang, nên client phải **bỏ các `commentId` đã có**.
 
 Video đã tắt comment (hoặc tài khoản chủ đặt `NO_ONE`) → trang rỗng, `hasMore: false`, không lỗi.
 
@@ -231,6 +247,18 @@ Video đã tắt comment (hoặc tài khoản chủ đặt `NO_ONE`) → trang r
 - `commentId` là id comment gốc. Comment không tồn tại hoặc không có reply → trang rỗng, **không** 404.
 - Video tắt comment → trang rỗng như 3.5. Video không xem được → `VIDEO_NOT_FOUND` (404).
 - Dùng `replyCount` ở mục 3.4 để biết có nên hiện nút hay không, thay vì gọi thử.
+
+### 3.6a `PATCH /videos/{videoId}/comments/{commentId}` — sửa bình luận của mình
+**Bắt buộc token, chỉ tác giả** — chủ video xoá được comment của người khác nhưng **không** sửa được. Body `{ "content": "..." }` (làm sạch và giới hạn như mục 3.4, không được rỗng). Trả `200 OK`, `data` → `CommentResponse` đã cập nhật (`editedAt` có giá trị). Sticker (nếu có) giữ nguyên, không đổi được qua endpoint này. Gửi lại đúng nội dung cũ → trả comment như cũ, không ghi gì, `editedAt` không đổi.
+
+Nội dung mới đi qua **đúng** bộ kiểm duyệt của mục 3.4:
+- Bị từ chối → `COMMENT_REJECTED` (422), tính một strike, nội dung cũ giữ nguyên.
+- Lẽ ra bị giữ lại chờ duyệt (link, số điện thoại, từ khoá chủ video lọc, chủ video bật "giữ mọi comment"...) → `COMMENT_EDIT_NEEDS_REVIEW` (422), **không lưu**, nội dung cũ giữ nguyên. Không chuyển một comment đang hiển thị về trạng thái chờ duyệt — client báo "Bản sửa cần được duyệt nên chưa được lưu".
+- Video đã tắt comment / người gọi không còn trong audience → `COMMENTS_DISABLED` / `COMMENTS_NOT_ALLOWED` (403), như khi đăng mới.
+
+Comment đang chờ duyệt (`HELD`) hoặc đã xoá → `COMMENT_NOT_FOUND`. Like và reply của comment giữ nguyên sau khi sửa. Giới hạn 60 lần sửa / giờ cho mỗi comment.
+
+Lỗi: `VALIDATION_ERROR` (400), `NOT_COMMENT_OWNER` (403), `COMMENTING_RESTRICTED` (403), `COMMENTS_DISABLED` (403), `COMMENTS_NOT_ALLOWED` (403), `COMMENT_NOT_FOUND` (404), `COMMENT_REJECTED` (422), `COMMENT_EDIT_NEEDS_REVIEW` (422), `COMMENT_EDIT_RATE_LIMITED` (429), `401`.
 
 ### 3.6 `DELETE /videos/{videoId}/comments/{commentId}` — xoá bình luận của mình
 **Bắt buộc token.** Trả `200 OK`, `data` null. Xoá mềm: comment biến mất khỏi mục 3.5 ngay và `commentCount` giảm 1.
@@ -317,9 +345,13 @@ Request (`WatchRequest`):
 ```json
 {
   "watchedMs": 12500,    // bắt buộc, >= 0. Tổng thời gian ĐÃ PHÁT trong phiên, cộng dồn cả các lần lặp lại
-  "durationMs": 15000    // bắt buộc, > 0. Độ dài video theo player — chỉ là tham khảo, xem bên dưới
+  "durationMs": 15000,   // bắt buộc, > 0. Độ dài video theo player — chỉ là tham khảo, xem bên dưới
+  "source": "SEARCH",    // tuỳ chọn — màn hình đang phát video, xem bên dưới
+  "searchQuery": "tiny house" // tuỳ chọn — từ khoá đã tìm; chỉ có nghĩa khi source = SEARCH; dài quá 100 ký tự thì bị bỏ (không 400)
 }
 ```
+
+`source` là **nguồn xem** cho TikTok Studio (mục "Traffic source" của trang phân tích video), một trong `FOR_YOU` (trang chủ), `FOLLOWING`, `FRIENDS`, `EXPLORE`, `PROFILE` (lưới video trên trang cá nhân), `SEARCH` (kết quả tìm kiếm), `MESSAGE` (video chia sẻ trong tin nhắn), `DIRECT` (mở bằng link). Thiếu `source` → ghi là `OTHER` (app Flutter hiện chưa gửi, vẫn được chấp nhận). Gửi giá trị không có trong danh sách → `400 BAD_REQUEST` ("Invalid request content."). `searchQuery` được server cắt khoảng trắng hai đầu và chuyển về chữ thường; gửi kèm `source` khác `SEARCH`, hoặc toàn khoảng trắng, thì bị bỏ (không lỗi). Chỉ từ khoá có **từ 3 lượt xem** trở lên mới hiện cho chủ video.
 
 `watchedMs` là **thời gian phát thật**, không phải vị trí con trỏ và không phải thời gian mở màn hình: tua tới không làm nó tăng, tạm dừng không làm nó tăng, xem lặp lại 3 vòng một video 15 giây thì gửi `45000`.
 
@@ -427,6 +459,11 @@ Lọc (đều tuỳ chọn, gửi lại **đúng bộ lọc đó** cùng `cursor
 | `status` | `HELD` = chỉ comment chờ duyệt, `VISIBLE` = chỉ comment đang hiện |
 | `q` | nội dung có chứa chuỗi này, **không phân biệt hoa thường và dấu** (`hay qua` khớp `Hay quá`) |
 | `from`, `to` | ISO-8601 instant (vd. `2026-10-01T00:00:00Z`); `from` tính cả, `to` không tính |
+| `sort` | `NEWEST` (mặc định), `MOST_LIKED`, `MOST_REPLIED` — **cần `videoId`** |
+| `replied` | `true` = chỉ thread chủ video đã trả lời, `false` = chỉ thread chưa trả lời — **cần `videoId`**. Với một reply: chủ video đã trả lời đúng người đó trong thread |
+| `followers` | CSV của `UNDER_1K`, `FROM_1K_TO_10K`, `FROM_10K_TO_100K`, `OVER_100K` — chỉ comment của tài khoản có số follower trong một khoảng đó — **cần `videoId`**. Hỏi user-service `/stats/batch`; không hỏi được → `FOLLOWER_COUNT_UNAVAILABLE` (503) |
+
+Có `sort` khác `NEWEST`, `replied` hoặc `followers` thì service đọc **cả video** (tối đa 5.000 comment mới nhất), lọc và xếp trong bộ nhớ, rồi trang theo offset: `nextCursor` khi đó là offset, chỉ dùng được với đúng bộ lọc đó. Không có `videoId` mà gửi một trong ba tham số này → `INBOX_FILTER_NEEDS_VIDEO` (400). Với `followers`, số follower chỉ được hỏi tới đâu trang cần tới đó (mỗi lần 100 tác giả); tác giả không còn profile bị loại.
 
 Trang có thể ít hơn `size` (kể cả rỗng) mà `hasMore` vẫn `true` khi bộ lọc loại nhiều comment: cứ tải tiếp theo `nextCursor`.
 
@@ -452,8 +489,10 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `content` rỗng sau khi làm sạch / quá 150 ký tự (mục 3.4); thiếu `watchedMs`/`durationMs`, `watchedMs` âm, `durationMs` <= 0 (mục 3.9) |
 | `INVALID_COMMENT_CURSOR` | 400 | `cursor` của danh sách comment/reply không giải mã được (mục 3.5, 3.5b) |
+| `INBOX_FILTER_NEEDS_VIDEO` | 400 | `sort`/`replied`/`followers` của inbox Studio gửi mà thiếu `videoId` |
 | `INVALID_CURSOR` | 400 | `cursor` của danh sách video đã like/lưu/repost không giải mã được (mục 3.11, 3.15) |
-| `NOT_COMMENT_OWNER` | 403 | Xoá bình luận của người khác trên video không phải của mình (mục 3.6) |
+| `NOT_COMMENT_OWNER` | 403 | Xoá bình luận của người khác trên video không phải của mình (mục 3.6), hoặc sửa bình luận không phải của mình (mục 3.6a) |
+| `INVALID_STICKER` | 400 | `stickerId` không có trong bộ sticker, hoặc đã ngừng cung cấp (mục 3.4) |
 | `NOT_VIDEO_OWNER` | 403 | Xem hàng chờ duyệt / duyệt comment trên video không phải của mình — hoặc không xác nhận được chủ video (mục 3.4b–3.4c) |
 | `COMMENTING_RESTRICTED` | 403 | Người gọi bị hạn chế bình luận vì nhiều comment bị từ chối/bị admin gỡ gần đây. Có header `Retry-After` (giây tới khi hết hạn chế). Xem mục 3.4, 3.4a |
 | `REPLY_NOT_ALLOWED` | 403 | Reply vào comment của người đã chặn mình hoặc bị mình chặn (mục 3.4) |
@@ -461,7 +500,9 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 | `COMMENTS_NOT_ALLOWED` | 403 | Cài đặt **tài khoản** của chủ video không nhận comment từ người gọi — `NO_ONE`, hoặc `FRIENDS` mà không follow lẫn nhau (mục 3.4) |
 | `PRIVATE_ACCOUNT` | 403 | Tab Reposts (mục 3.11) của tài khoản riêng tư mà người gọi không phải chủ hay follower |
 | `COMMENT_NOT_FOUND` | 404 | Bình luận không tồn tại, đã xoá, đang chờ duyệt (với like/reply), hoặc `videoId` trên URL không khớp với bình luận đó |
-| `COMMENT_REJECTED` | 422 | Nội dung chứa từ ngữ nặng nhất trong blocklist; không lưu gì (mục 3.4) |
+| `COMMENT_REJECTED` | 422 | Nội dung chứa từ ngữ nặng nhất trong blocklist; không lưu gì (mục 3.4, 3.6a) |
+| `COMMENT_EDIT_NEEDS_REVIEW` | 422 | Nội dung sửa lẽ ra bị giữ lại chờ duyệt; không lưu (mục 3.6a) |
+| `COMMENT_EDIT_RATE_LIMITED` | 429 | Sửa một comment quá 60 lần / giờ (mục 3.6a) |
 | `COMMENT_RATE_LIMITED` | 429 | Bình luận quá nhanh / quá nhiều theo phút, giờ, ngày hoặc trên một video. Có header `Retry-After` (giây). Xem mục 6 |
 | `DUPLICATE_COMMENT` | 429 | Cùng nội dung trên cùng video, hoặc trên hơn 5 video, trong 10 phút (mục 3.4). Có header `Retry-After` |
 | `LIKE_RATE_LIMITED`, `COMMENT_LIKE_RATE_LIMITED`, `SAVE_RATE_LIMITED`, `REPOST_RATE_LIMITED`, `SHARE_RATE_LIMITED`, `VIEW_RATE_LIMITED`, `WATCH_RATE_LIMITED` | 429 | Vượt 60 lần/giờ cho cùng một (người dùng, video) — hoặc (người dùng, comment) với like comment. Xem mục 6 |

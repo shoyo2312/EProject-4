@@ -12,6 +12,7 @@ public record CreatorVideoStatsResponse(
         long newViewers,
         long likes,
         long comments,
-        long shares
+        long shares,
+        long saves
 ) {
 }

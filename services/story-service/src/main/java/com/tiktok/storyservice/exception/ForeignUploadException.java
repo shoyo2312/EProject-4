@@ -11,4 +11,9 @@ public class ForeignUploadException extends ForbiddenException {
     public ForeignUploadException() {
         super("FOREIGN_UPLOAD", "mediaUrl must point at a file you uploaded for a new story");
     }
+
+    /** For another field naming an upload, such as an overlay of the edit. */
+    public ForeignUploadException(String field) {
+        super("FOREIGN_UPLOAD", field + " must point at a file you uploaded");
+    }
 }
