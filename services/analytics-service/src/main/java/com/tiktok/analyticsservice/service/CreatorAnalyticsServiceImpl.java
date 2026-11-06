@@ -47,8 +47,12 @@ public class CreatorAnalyticsServiceImpl implements CreatorAnalyticsService {
     private static final WatchTotals NO_WATCHES = new WatchTotals(null, 0, 0, 0, 0);
     private static final EngagementTotals NO_ENGAGEMENT = new EngagementTotals(null, 0, 0, 0, 0);
 
-    /** How long one answer is reused — Studio asks these on every tab switch, and each is several FINAL scans. */
-    private static final long TTL_NANOS = Duration.ofSeconds(60).toNanos();
+    /**
+     * How long one answer is reused — Studio asks these on every tab switch, and each is several FINAL scans.
+     * Short, because Studio asks again ~3s after a like or follow is pushed to the creator: a memo still
+     * holding the answer from before it would show the page the old number.
+     */
+    private static final long TTL_NANOS = Duration.ofSeconds(2).toNanos();
 
     private final CreatorAnalyticsRepository repository;
 

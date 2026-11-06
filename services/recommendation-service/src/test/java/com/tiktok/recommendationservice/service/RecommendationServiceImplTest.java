@@ -127,6 +127,25 @@ class RecommendationServiceImplTest {
         verify(zSetOperations).add(eq("reco:tag:dance"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
     }
 
+    /** An open Inspiration page refetches on the approval itself, so the ranking cannot wait a minute. */
+    @Test
+    void recordVideoReady_rebuildsTheRankingAtOnce() {
+        recommendationService.recordVideoReady("vid1");
+
+        verify(zSetOperations).unionAndStore(
+                startsWith("reco:trend:"), anyList(), eq("reco:trending"), eq(Aggregate.SUM), any(Weights.class));
+    }
+
+    @Test
+    void recordVideoReady_forAHiddenVideo_leavesTheRankingAlone() {
+        when(setOperations.isMember("reco:video:private", "vid1")).thenReturn(true);
+
+        recommendationService.recordVideoReady("vid1");
+
+        verify(zSetOperations, never()).unionAndStore(
+                anyString(), anyList(), anyString(), any(Aggregate.class), any(Weights.class));
+    }
+
     /**
      * Publish time is a ranking feature in its own right, so it has to be recorded for videos
      * with no tags too. Writing it alongside the tag indexes would have skipped exactly those
