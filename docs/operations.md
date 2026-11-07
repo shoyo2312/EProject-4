@@ -259,3 +259,29 @@ Chạy lại không sao: `eventId` suy từ id của edge nên `ReplacingMergeTr
 chứa thêm chừng ấy dòng mỗi lần chạy. Import seed ClickHouse: file `.native` cũ (thiếu cột `source`,
 `search_query`, `source_video_id`) vẫn insert được, các cột mới nhận giá trị mặc định (`OTHER`, `''`) — không
 cần cờ gì thêm.
+
+## 10. Model xếp hạng feed (rank-service)
+
+`rank-service` đọc model từ volume `rank-model` (`/app/model/model.txt`). Volume này bắt đầu trống: `/health` trả
+`"model_version":"none"`, `/rank` không trả điểm nào, và recommendation-service xếp feed bằng heuristic của nó. Feed
+vẫn chạy, chỉ là không dùng model. Image đã có `train.py` cùng đủ thư viện, nên train ngay trên server bằng dữ liệu
+ClickHouse của prod:
+
+```bash
+RANK=$(docker ps -qf name=rank-service)
+
+# Train từ ClickHouse prod, ghi /app/model/model.txt vào volume rank-model. In AUC và nDCG@10.
+docker exec -e CLICKHOUSE_HOST=clickhouse -e CLICKHOUSE_PASSWORD="$CLICKHOUSE_PASSWORD" $RANK python train.py
+
+# Nạp model mới, không cần restart
+docker exec $RANK python -c "import urllib.request; print(urllib.request.urlopen(urllib.request.Request('http://localhost:8098/reload', method='POST')).read())"
+# → {"model_version":"model.txt@<mtime>"}
+```
+
+- **Train thử trước**: `python train.py --dry-run` in ra cùng các số đó nhưng không ghi file. Nếu AUC dưới khoảng 0.6
+  thì đừng nạp model: xoá `/app/model/model.txt` rồi gọi `/reload`, feed sẽ quay về heuristic.
+- **Kiểm tra sau khi nạp**: mỗi item của `GET /api/v1/recommendations/feed` phải có `"model"` trong `reasons`.
+- **Train lại**: model nằm trên volume nên không mất khi deploy lại. Chạy lại hai lệnh trên khi dữ liệu xem đã thay đổi
+  nhiều, ví dụ vài tuần một lần.
+- **Local**: dùng `make rank-train`. Nếu chạy rank-service từ IDE, để trống `MODEL_PATH` (mặc định là
+  `model/model.txt`). Đặt sai đường dẫn thì service vẫn chạy bình thường, chỉ báo `model_version: "none"`.
