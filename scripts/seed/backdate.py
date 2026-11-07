@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """Second pass of the demo seed: rewrite timestamps and counters in every store from ledger.json.
 
-    python3 -I backdate.py <media-dir> [--seed 2026] [--only auth,user,...]
+    python3 -I backdate.py <media-dir> [--seed 2026] [--only auth,user,...] [--grow 8 --months 12]
 
-Idempotent. Run only after seed.py finished (every video out of PROCESSING / PENDING_MODERATION).
+Idempotent. `--grow` re-times the seed as steady growth before writing (see `regrow`); the ledger
+file keeps the planned times, so running without it puts them back. Run only after seed.py finished (every video out of PROCESSING / PENDING_MODERATION).
 Writes go through the CLIs inside the containers (psql, mongosh, cqlsh, clickhouse-client, redis-cli)
 and Elasticsearch over HTTP; nothing to install.
 """
 import argparse
+import bisect
 import json
+import math
 import random
 import subprocess
 import sys
 import urllib.request
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -245,8 +248,11 @@ def backdate_cassandra(plan, ledger):
             api_likes[x["video"]] += 1
         counters = [f"UPDATE video_counters SET view_count = view_count + {rec['views']}, like_count = like_count + {max(0, rec['likes'] - api_likes[key])} WHERE video_id={rec['id']};"
                     for key, rec in ledger.videos.items() if rec["status"] == "PUBLISHED"]
-        ledger.admin["counters_applied"] = True
-        ledger.save()
+        # Saved from a fresh read: the ledger in hand may carry `regrow`'s times, which must not
+        # reach the file, or a second --grow would warp them again.
+        fresh = Ledger(ledger.path)
+        fresh.admin["counters_applied"] = ledger.admin["counters_applied"] = True
+        fresh.save()
         cqlsh("\n".join(counters))
     log(f"cassandra: {len(lines)} statements, {moved} listing rows moved")
 
@@ -395,31 +401,67 @@ def backdate_clickhouse(plan, ledger):
     clickhouse(f"ALTER TABLE video_tags UPDATE published_at = multiIf({tag_conds}, published_at) WHERE 1")
     su = ", ".join(f"user_id={uid[u['username']]}, {ch_ts(u['join_at'])}" for u in plan["users"])
     clickhouse(f"ALTER TABLE user_signup_events UPDATE occurred_at = multiIf({su}, occurred_at) WHERE 1")
-    n = int(clickhouse("SELECT count() FROM watch_events WHERE event_id LIKE 'seed-%'").strip() or 0)
+    fo = [f for f in ledger.follows if f.get("status") != "REQUESTED"]
+    for i in range(0, len(fo), 500):
+        chunk = fo[i:i + 500]
+        conds = ", ".join(f"follower_id={uid[f['follower']]} AND following_id={uid[f['following']]}, {ch_ts(f['at'])}" for f in chunk)
+        where = " OR ".join(f"(follower_id={uid[f['follower']]} AND following_id={uid[f['following']]})" for f in chunk)
+        clickhouse(f"ALTER TABLE follow_events UPDATE occurred_at = multiIf({conds}, occurred_at) WHERE followed = 1 AND ({where})")
+    # Rebuilt every run, so the viewers follow whatever join dates this run wrote.
+    clickhouse("ALTER TABLE watch_events DELETE WHERE event_id LIKE 'seed-%' SETTINGS mutations_sync = 1")
     inserted = 0
-    if n == 0:
-        rnd = random.Random(7)
-        t1 = parse(plan["t1"])
-        users = [uid[u["username"]] for u in plan["users"]]
-        buf = []
-        for k, rec in ledger.videos.items():
-            if rec["status"] != "PUBLISHED":
-                continue
-            dur = max(1, rec["duration"]) * 1000
-            for i, at in enumerate(scenario._burst_times(rnd, parse(rec["at"]), t1, rec["views"])):
-                completed = i < rec["completions"]
-                watched = dur if completed else int(dur * rnd.uniform(0.3, 0.89))
-                buf.append(json.dumps({"event_id": f"seed-{rec['id']}-{i}", "video_id": rec["id"], "user_id": rnd.choice(users),
-                                       "watched_ms": watched, "duration_ms": dur, "completed": int(completed),
-                                       "occurred_at": iso(at)[:23].replace("T", " ")}))
-            if len(buf) >= 100000:
-                clickhouse("INSERT INTO watch_events FORMAT JSONEachRow", "\n".join(buf))
-                inserted += len(buf)
-                buf = []
-        if buf:
+    rnd = random.Random(7)
+    t1 = parse(plan["t1"])
+    viewers = _daily_viewers(plan, uid)
+    buf = []
+    for k, rec in ledger.videos.items():
+        if rec["status"] != "PUBLISHED":
+            continue
+        dur = max(1, rec["duration"]) * 1000
+        for i, at in enumerate(scenario._burst_times(rnd, parse(rec["at"]), t1, rec["views"])):
+            completed = i < rec["completions"]
+            watched = dur if completed else int(dur * rnd.uniform(0.3, 0.89))
+            buf.append(json.dumps({"event_id": f"seed-{rec['id']}-{i}", "video_id": rec["id"], "user_id": rnd.choice(viewers(at)),
+                                   "watched_ms": watched, "duration_ms": dur, "completed": int(completed),
+                                   "occurred_at": iso(at)[:23].replace("T", " ")}))
+        if len(buf) >= 100000:
             clickhouse("INSERT INTO watch_events FORMAT JSONEachRow", "\n".join(buf))
             inserted += len(buf)
-    log(f"clickhouse: {len(items)} engagement rows, {inserted} watch rows inserted ({n} existed)")
+            buf = []
+    if buf:
+        clickhouse("INSERT INTO watch_events FORMAT JSONEachRow", "\n".join(buf))
+        inserted += len(buf)
+    # Watch rows written outside the seed (the Studio test clips) under seed users: drawn again from
+    # the same daily viewers, or each of their days would count every seed user as active.
+    seed_ids = {str(i) for i in uid.values()}
+    others = [json.loads(line) for line in clickhouse(
+        "SELECT * FROM watch_events WHERE event_id NOT LIKE 'seed-%' ORDER BY event_id FORMAT JSONEachRow").splitlines()]
+    others = [r for r in others if r["user_id"] in seed_ids]
+    if others:
+        ids = ",".join(seed_ids)
+        clickhouse(f"ALTER TABLE watch_events DELETE WHERE event_id NOT LIKE 'seed-%' AND user_id IN ({ids}) SETTINGS mutations_sync = 1")
+        for r in others:
+            at = datetime.strptime(r["occurred_at"], "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=timezone.utc)
+            r["user_id"] = rnd.choice(viewers(at))
+        clickhouse("INSERT INTO watch_events FORMAT JSONEachRow", "\n".join(json.dumps(r) for r in others))
+    log(f"clickhouse: {len(items)} engagement rows, {len(fo)} follow rows, {inserted} watch rows, {len(others)} other watch rows re-drawn")
+
+
+def _daily_viewers(plan, uid):
+    """at -> the users who watch that day: those who had joined by then, each on about half their
+    days (a fixed 30–80 % per user), so daily actives follow the signups instead of counting
+    everyone from the first day."""
+    joined = sorted((parse(u["join_at"]), uid[u["username"]]) for u in plan["users"])
+    habit = {u: random.Random(u).uniform(0.3, 0.8) for _, u in joined}
+    cache = {}
+
+    def viewers(at):
+        day = at.date()
+        if day not in cache:
+            members = [u for j, u in joined if j <= at]
+            cache[day] = [u for u in members if random.Random(f"{day}-{u}").random() < habit[u]] or members
+        return cache[day] or [joined[0][1]]
+    return viewers
 
 
 def flush_redis_caches(ledger):
@@ -430,11 +472,190 @@ def flush_redis_caches(ledger):
     log(f"redis: {len(keys)} cache keys dropped")
 
 
+# --------------------------------------------------------------------------------------------- regrow
+
+def regrow(plan, ledger, factor, months, end, seed=11):
+    """Re-time the plan and ledger in memory as a platform growing steadily: `months` of history
+    ending at `end` (now, so the charts run up to today instead of stopping at the day it was
+    seeded), each month about factor^(1/months) busier than the one before.
+
+    Signups and uploads are laid on that curve: people join in their original order, and each
+    upload slot goes to a clip of someone who has joined by then. Everything else keeps its distance
+    from what it answers (a like from its video, a reply from its parent, a follow from the
+    follower's join): the first three days as they were, the rest scaled to the time left before
+    the end. Anything that would still land before its author joined is pushed past the join by a day
+    or so, and a ban past the banned user's last act. Pending reports keep their age: the
+    stale-report sweep reads it.
+    """
+    t1 = end  # the new end; `was` is the planned one
+    was = parse(plan["t1"])
+    n0 = t1 - timedelta(days=round(months * 30.44))
+    span, rnd = t1 - n0, random.Random(seed)
+    last = t1 - timedelta(minutes=1)
+    burst = timedelta(days=3)
+
+    def curve(q):  # share of all signups (or uploads) so far -> instant, density growing by `factor`
+        return n0 + span * (math.log1p(q * (factor - 1)) / math.log(factor))
+
+    def keep(t, old, new):
+        """`t` was this long after `old`; the same, measured from `new`."""
+        d = parse(t) - old
+        if d <= burst or t1 - new <= burst or was - old <= burst:
+            return min(new + max(d, timedelta(0)), last)
+        return new + burst + (d - burst) * ((t1 - new - burst) / (was - old - burst))
+
+    def after(t, *floors):
+        floor = max(floors, default=t)
+        if t <= floor:
+            t = floor + timedelta(hours=rnd.expovariate(1 / 24))
+        return min(t, last)
+
+    users = sorted(plan["users"], key=lambda u: u["join_at"])
+    old_join = {u["username"]: parse(u["join_at"]) for u in users}
+    join = {u["username"]: curve((i + rnd.random()) / len(users)) for i, u in enumerate(users)}
+    for u in users:
+        u["join_at"] = iso(join[u["username"]])
+
+    # Upload slots on the curve, each keeping the hour of day of the clip it goes to.
+    keys = list(ledger.videos)
+    old_vat = {key: parse(ledger.videos[key]["at"]) for key in keys}
+    slots = [curve((i + rnd.random()) / len(keys)) for i in range(len(keys))]
+    waiting = sorted(keys, key=lambda key: join[ledger.videos[key]["owner"]])
+    # A hit (tens of thousands of views) lands in the later half, when the audience is there to watch it.
+    pull = {key: 0.55 + 0.45 * rnd.random() if ledger.videos[key]["views"] >= 10000 else rnd.random() for key in keys}
+    vat, ready = {}, []
+    for t in slots:
+        while waiting and join[ledger.videos[waiting[0]]["owner"]] + timedelta(hours=1) <= t:
+            ready.append(waiting.pop(0))
+        if not ready:
+            continue
+        key = min(ready, key=lambda k: pull[k])
+        ready.remove(key)
+        local = old_vat[key].astimezone(scenario.VN)
+        day = t.astimezone(scenario.VN).replace(hour=local.hour, minute=local.minute, second=local.second)
+        vat[key] = after(day.astimezone(t1.tzinfo), join[ledger.videos[key]["owner"]])
+    for key in ready + waiting:  # slots ran out before their owner joined: shortly after the join
+        vat[key] = after(join[ledger.videos[key]["owner"]])
+    for key in keys:
+        ledger.videos[key]["at"] = iso(vat[key])
+
+    busy = defaultdict(lambda: n0)  # each user's last act, so a ban can come after it
+
+    def act(who, t, *floors):
+        t = after(t, join[who], *floors)
+        busy[who] = max(busy[who], t)
+        return iso(t)
+
+    for section in ("likes", "shares", "reposts", "saves"):
+        for x in getattr(ledger, section):
+            if parse(x["at"]) <= was:  # later ones were sent by --refresh at their real time
+                v = x["video"]
+                x["at"] = act(x["actor"], keep(x["at"], old_vat[v], vat[v]), vat[v])
+    old_cat, cat = {}, {}
+    for cid, c in sorted(ledger.comments.items(), key=lambda kv: kv[1]["at"]):
+        old_cat[cid] = parse(c["at"])
+        parent = c.get("parent_cid")
+        if parent in cat:
+            t = keep(c["at"], old_cat[parent], cat[parent])
+            c["at"] = act(c["author"], t, cat[parent], vat[c["video"]])
+        else:
+            c["at"] = act(c["author"], keep(c["at"], old_vat[c["video"]], vat[c["video"]]), vat[c["video"]])
+        cat[cid] = parse(c["at"])
+    for x in ledger.comment_likes:
+        if x["cid"] in cat:
+            x["at"] = act(x["actor"], keep(x["at"], old_cat[x["cid"]], cat[x["cid"]]), cat[x["cid"]])
+    for section, a, b in (("follows", "follower", "following"), ("blocks", "blocker", "blocked"), ("mutes", "muter", "muted")):
+        for x in getattr(ledger, section):
+            x["at"] = act(x[a], keep(x["at"], old_join[x[a]], join[x[a]]), join[x[b]])
+    for c in ledger.chats:
+        msgs = c["messages"]
+        if not msgs:
+            continue
+        old_both, both = max(old_join[c["a"]], old_join[c["b"]]), max(join[c["a"]], join[c["b"]])
+        start = min(after(keep(msgs[0]["at"], old_both, both), both), last - timedelta(minutes=len(msgs)))
+        g = [parse(m["at"]) for m in msgs]
+        length = (g[-1] - g[0]).total_seconds()
+        scale = min(1.0, (last - start).total_seconds() / length) if length else 1.0
+        for m, x in zip(msgs, g):
+            m["at"] = iso(start + (x - g[0]) * scale)
+            busy[m["from"]] = max(busy[m["from"]], parse(m["at"]))
+
+    for a in plan["admin"]:
+        at0 = parse(a["at"])
+        if a["kind"] == "report":
+            tt, target = a["target_type"], a["target"]
+            if tt == "VIDEO":
+                t, floors = keep(a["at"], old_vat[target], vat[target]), [vat[target]]
+            elif tt == "USER":
+                t, floors = keep(a["at"], old_join[target], join[target]), [join[target]]
+            else:
+                t, floors = (keep(a["at"], old_cat[target], cat[target]), [cat[target]]) if target in cat else (at0 + (t1 - was), [])
+            if a["outcome"] == "pending":  # as old as it was at seeding
+                t = at0 + (t1 - was)
+            if a["outcome"] == "BAN_USER":
+                floors.append(busy[target])
+            t = after(t, join[a["reporter"]], *floors)
+            if a.get("resolved_at"):
+                a["resolved_at"] = iso(min(t + (parse(a["resolved_at"]) - at0), last))
+        elif a["kind"] in ("warn", "revoke_sessions"):
+            t = after(keep(a["at"], old_join[a["target"]], join[a["target"]]), join[a["target"]])
+        elif a["kind"] == "remove_comment" and a["cid"] in cat:
+            t = after(keep(a["at"], old_cat[a["cid"]], cat[a["cid"]]), cat[a["cid"]])
+        else:
+            t = min(at0 + (t1 - was), last)
+        a["at"] = iso(t)
+        rec = ledger.actions.get(a["key"])
+        if rec and rec.get("at"):
+            rec["at"] = iso(min(t + (parse(rec["at"]) - at0), last))
+    for key, rec in ledger.actions.items():
+        video = key[len("restore-"):]
+        if key.startswith("restore-") and rec and video in vat:
+            rec["at"] = iso(after(keep(rec["at"], old_vat[video], vat[video]), vat[video]))
+    plan["t1"] = iso(t1)  # the watch rows are drawn up to here
+    return join
+
+
+def check_growth(plan, ledger):
+    """Asserts the orderings `regrow` must keep, and prints the monthly counts the admin charts show."""
+    t1 = plan["t1"]
+    join = {u["username"]: u["join_at"] for u in plan["users"]}
+    vat = {k: r["at"] for k, r in ledger.videos.items()}
+    for k, r in ledger.videos.items():
+        assert join[r["owner"]] <= r["at"] <= t1, (k, r["at"])
+    for section in ("likes", "shares", "reposts", "saves"):
+        for x in getattr(ledger, section):
+            assert x["at"] > t1 or (join[x["actor"]] <= x["at"] and vat[x["video"]] <= x["at"]), (section, x)
+    for cid, c in ledger.comments.items():
+        assert join[c["author"]] <= c["at"] and vat[c["video"]] <= c["at"] <= t1, (cid, c["at"])
+        p = ledger.comments.get(c.get("parent_cid") or "")
+        assert not p or p["at"] <= c["at"], cid
+    for f in ledger.follows:
+        assert join[f["follower"]] <= f["at"] and join[f["following"]] <= f["at"] <= t1, f
+    for c in ledger.chats:
+        times = [m["at"] for m in c["messages"]]
+        assert times == sorted(times) and (not times or (join[c["a"]] <= times[0] and join[c["b"]] <= times[0] and times[-1] <= t1)), c["id"]
+    for a in plan["admin"]:
+        assert a["at"] <= t1 and (not a.get("resolved_at") or a["at"] <= a["resolved_at"] <= t1), a["key"]
+    months = defaultdict(lambda: [0, 0, 0])
+    for j in join.values():
+        months[j[:7]][0] += 1
+    for r in ledger.videos.values():
+        months[r["at"][:7]][1] += 1
+    for x in ledger.likes + ledger.shares + list(ledger.comments.values()):
+        months[x["at"][:7]][2] += 1
+    print("month    signups  uploads  likes+shares+comments")
+    for m in sorted(months):
+        print(f"{m}  {months[m][0]:7}  {months[m][1]:7}  {months[m][2]:7}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("media_dir", nargs="?", default="~/Projects/EProject/EProject4/seed-media")
     ap.add_argument("--seed", type=int, default=2026)
     ap.add_argument("--only", help="comma-separated stores: auth,user,video,es,reco,cassandra,chat,notifications,admin,clickhouse,redis")
+    ap.add_argument("--grow", type=float, help="re-time as steady growth, last month about this many times the first (e.g. 8)")
+    ap.add_argument("--months", type=int, default=12, help="history length for --grow")
+    ap.add_argument("--check", action="store_true", help="with --grow: verify and print the monthly counts, write nothing")
     args = ap.parse_args()
     media_dir = Path(args.media_dir).expanduser()
     manifest = json.loads((media_dir / "manifest.json").read_text())
@@ -443,6 +664,11 @@ def main():
     waiting = [k for k, r in ledger.videos.items() if not _finished(r)]
     if waiting:
         raise SystemExit(f"{len(waiting)} videos still in the pipeline; run seed.py --phase videos first")
+    if args.grow:
+        regrow(plan, ledger, args.grow, args.months, datetime.now(timezone.utc))
+        check_growth(plan, ledger)
+        if args.check:
+            return
     steps = [
         ("auth", lambda: backdate_auth(plan, ledger)),
         ("user", lambda: backdate_user(plan, ledger)),

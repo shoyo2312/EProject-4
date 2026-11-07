@@ -71,6 +71,17 @@ make seed SEED_AUTH_LOG=/path/to/auth-service.log   # ~2.5 h, resumable
 make seed-backdate                                  # ~5 min, idempotent
 ```
 
+For charts that show a growing platform, re-time the backdate (about 2 min, re-runnable; without
+`--grow` it puts the planned times back):
+
+```
+python3 -I scripts/seed/backdate.py "$SEED_MEDIA" --grow 8 --months 12 --check   # print the monthly counts only
+python3 -I scripts/seed/backdate.py "$SEED_MEDIA" --grow 8 --months 12
+```
+
+Signups, uploads and daily actives then rise steadily over 12 months ending at the moment it ran,
+the last month about 8× the first. Run it again shortly before a demo, so the data reaches that day.
+
 `make seed` runs users (profiles, follows, blocks, mutes) → videos (waits for transcode +
 moderation, ~1 h for 600 clips) → restores every held video beyond twelve so the review queue stays
 small → engagement → chat → admin (reports, bans, warnings, a session revocation, comment removals,
