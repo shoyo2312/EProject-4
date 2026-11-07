@@ -71,6 +71,18 @@ class FeedKeywordFilterTest {
         assertThat(kept(FeedKind.FOR_YOU, video("b", "thi tạch rồi", null, List.of()))).isEmpty();
     }
 
+    /** A phrase matches its words in a row, or written as one hashtag; the words apart do not. */
+    @Test
+    void phraseMatchesItsWordsInARow() {
+        forYou("nhà cái");
+
+        assertThat(kept(FeedKind.FOR_YOU,
+                video("a", "kèo nhà cái hôm nay", null, List.of()),
+                video("b", "Sunday", null, List.of("nhàcái")),
+                video("c", "nhà của cái tôi", null, List.of())))
+                .containsExactly("c");
+    }
+
     @Test
     void onlyTheRequestedFeedsList() {
         when(userSettingsClient.feedKeywords(VIEWER)).thenReturn(new FeedKeywords(List.of(), List.of("cat"), List.of()));

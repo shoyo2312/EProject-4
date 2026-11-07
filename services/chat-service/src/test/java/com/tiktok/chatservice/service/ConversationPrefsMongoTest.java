@@ -133,18 +133,18 @@ class ConversationPrefsMongoTest {
     }
 
     @Test
-    void aFourthPinIsRefusedAndNothingIsUnpinnedForYou() {
-        for (int i = 1; i <= 4; i++) {
+    void aSixthPinIsRefusedAndNothingIsUnpinnedForYou() {
+        for (int i = 1; i <= 6; i++) {
             conversation("c" + i, 10 + i);
         }
-        prefsService.pin(A, "c1");
-        prefsService.pin(A, "c2");
-        prefsService.pin(A, "c3");
+        for (int i = 1; i <= 5; i++) {
+            prefsService.pin(A, "c" + i);
+        }
 
-        assertThatThrownBy(() -> prefsService.pin(A, "c4")).isInstanceOf(PinLimitReachedException.class);
+        assertThatThrownBy(() -> prefsService.pin(A, "c6")).isInstanceOf(PinLimitReachedException.class);
 
-        assertThat(prefsRepository.findById(A).orElseThrow().getPins()).hasSize(3);
-        assertThat(prefsService.pin(A, "c3").pinnedAt()).isNotNull(); // already pinned: fine, even when full
+        assertThat(prefsRepository.findById(A).orElseThrow().getPins()).hasSize(ChatUserPrefs.MAX_PINS);
+        assertThat(prefsService.pin(A, "c5").pinnedAt()).isNotNull(); // already pinned: fine, even when full
     }
 
     @Test
@@ -163,7 +163,7 @@ class ConversationPrefsMongoTest {
     }
 
     @Test
-    void parallelPinsFromManyDevicesNeverExceedThree() throws Exception {
+    void parallelPinsFromManyDevicesNeverExceedTheLimit() throws Exception {
         int chats = 10;
         for (int i = 1; i <= chats; i++) {
             conversation("c" + i, 10 + i);
@@ -193,8 +193,8 @@ class ConversationPrefsMongoTest {
             pool.shutdownNow();
         }
 
-        assertThat(prefsRepository.findById(A).orElseThrow().getPins()).hasSize(3);
-        assertThat(refused.get()).isEqualTo(chats - 3);
+        assertThat(prefsRepository.findById(A).orElseThrow().getPins()).hasSize(ChatUserPrefs.MAX_PINS);
+        assertThat(refused.get()).isEqualTo(chats - ChatUserPrefs.MAX_PINS);
     }
 
     @Test
@@ -379,18 +379,18 @@ class ConversationPrefsMongoTest {
 
     @Test
     void deletingReturnsThePinSlotAndKeepsTheMute() {
-        for (int i = 1; i <= 4; i++) {
+        for (int i = 1; i <= 6; i++) {
             conversation("c" + i, 10 + i);
         }
-        prefsService.pin(A, "c1");
-        prefsService.pin(A, "c2");
-        prefsService.pin(A, "c3");
+        for (int i = 1; i <= 5; i++) {
+            prefsService.pin(A, "c" + i);
+        }
         prefsService.mute(A, "c1", MuteRequest.Length.INDEFINITE);
 
         prefsService.deleteForMe(A, "c1");
 
         assertThat(prefsRepository.findById(A).orElseThrow().pinnedAt("c1")).isNull();
-        assertThat(prefsService.pin(A, "c4").pinnedAt()).isNotNull();
+        assertThat(prefsService.pin(A, "c6").pinnedAt()).isNotNull();
         assertThat(conversationService.getById(A, "c1").muteMode()).isEqualTo(MuteMode.INDEFINITE);
     }
 

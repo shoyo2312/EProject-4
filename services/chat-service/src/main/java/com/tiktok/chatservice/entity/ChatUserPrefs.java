@@ -31,7 +31,7 @@ import java.util.Map;
 public class ChatUserPrefs {
 
     /** How many conversations a person can keep pinned. */
-    public static final int MAX_PINS = 3;
+    public static final int MAX_PINS = 5;
 
     /** The user id. */
     @Id

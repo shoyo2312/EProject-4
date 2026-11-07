@@ -71,18 +71,17 @@ class FeedKeywordFilterServiceImplTest {
     }
 
     @Test
-    void create_rejectsTwoWords() {
-        assertThatThrownBy(() -> service.create(USER, forYou("cat video")))
-                .isInstanceOf(InvalidUserSettingsException.class)
-                .hasMessageContaining("keyword");
+    void create_acceptsAPhrase_withItsSpacesCollapsed() {
+        assertThat(service.create(USER, forYou("  cat   video  ")).keyword()).isEqualTo("cat video");
+
+        // The same phrase spaced differently is the same keyword.
+        assertThatThrownBy(() -> service.create(USER, forYou("Cat  Video")))
+                .isInstanceOf(DuplicateKeywordFilterException.class);
     }
 
     @Test
-    void create_acceptsAHashtag_butNotAHashInsideTheWord() {
+    void create_acceptsAHashtag() {
         assertThat(service.create(USER, forYou("#cat")).keyword()).isEqualTo("#cat");
-
-        assertThatThrownBy(() -> service.create(USER, forYou("cat#dog")))
-                .isInstanceOf(InvalidUserSettingsException.class);
     }
 
     /** Only emoji or punctuation: it would never match a thing, and the viewer would think it did. */

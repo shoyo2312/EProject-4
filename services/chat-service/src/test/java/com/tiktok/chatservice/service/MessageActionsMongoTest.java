@@ -14,6 +14,7 @@ import com.tiktok.chatservice.entity.Conversation;
 import com.tiktok.chatservice.entity.Message;
 import com.tiktok.chatservice.exception.InvalidReactionException;
 import com.tiktok.chatservice.exception.InvalidReplyTargetException;
+import com.tiktok.chatservice.exception.MessageAlreadySeenException;
 import com.tiktok.chatservice.exception.MessageNotFoundException;
 import com.tiktok.chatservice.exception.MessageRecalledException;
 import com.tiktok.chatservice.exception.NotMessageAuthorException;
@@ -186,6 +187,45 @@ class MessageActionsMongoTest {
         assertThat(seenByB.recalledAt()).isNotNull();
 
         long revision = update.revision();
+        assertThat(messageService.recall("c1", A, m.id()).revision()).isEqualTo(revision);
+    }
+
+    @Test
+    void aMessageTheOtherSideHasReadCannotBeRecalledButCanStillBeDeletedForMe() {
+        MessageResponse older = send(A, "first");
+        MessageResponse read = send(A, "second");
+        MessageResponse unread = send(A, "third");
+        messageService.markRead("c1", B, read.id());
+
+        assertThatThrownBy(() -> messageService.recall("c1", A, older.id()))
+                .isInstanceOf(MessageAlreadySeenException.class);
+        assertThatThrownBy(() -> messageService.recall("c1", A, read.id()))
+                .isInstanceOf(MessageAlreadySeenException.class);
+        assertThat(messageRepository.findById(read.id()).orElseThrow().getContent()).isEqualTo("second");
+
+        // Past the read mark: still the sender's to take back.
+        assertThat(messageService.recall("c1", A, unread.id()).recalledAt()).isNotNull();
+
+        // Deleting from the sender's own side is not limited by what the other side read.
+        messageService.hide("c1", A, read.id());
+        assertThat(find(A, read.id())).isNull();
+        assertThat(find(B, read.id()).content()).isEqualTo("second");
+    }
+
+    @Test
+    void aDeliveredButUnreadMessageCanStillBeRecalled() {
+        MessageResponse m = send(A, "on its way");
+        messageService.markDelivered("c1", B, List.of(m.id()));
+
+        assertThat(messageService.recall("c1", A, m.id()).recalledAt()).isNotNull();
+    }
+
+    @Test
+    void repeatingARecallAfterTheOtherSideReadsTheNoticeIsStillANoOp() {
+        MessageResponse m = send(A, "oops");
+        long revision = messageService.recall("c1", A, m.id()).revision();
+        messageService.markRead("c1", B, null);
+
         assertThat(messageService.recall("c1", A, m.id()).revision()).isEqualTo(revision);
     }
 

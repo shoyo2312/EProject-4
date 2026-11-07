@@ -33,7 +33,7 @@ public class ConversationPrefsService {
     private final ChatEventPublisher eventPublisher;
     private final ConversationViews views;
 
-    /** Refuses (and unpins nothing) when the viewer already has three others pinned. Pinning a pinned one changes nothing. */
+    /** Refuses (and unpins nothing) when the viewer already has {@code MAX_PINS} (5) others pinned. Pinning a pinned one changes nothing. */
     public ConversationResponse pin(Long userId, String conversationId) {
         Conversation conversation = conversationService.requireParticipant(userId, conversationId);
         PinOutcome outcome = prefsRepository.pin(userId, conversationId, Instant.now());
