@@ -463,7 +463,7 @@ Không bao giờ gợi ý: chính bạn; người bạn đang follow hoặc đan
 | `PUT /me/keyword-filters/{id}` | Cùng body, thay toàn bộ | như `POST` + `KEYWORD_FILTER_NOT_FOUND` 404 |
 | `DELETE /me/keyword-filters/{id}` | `data` null | `KEYWORD_FILTER_NOT_FOUND` 404 |
 
-`KeywordFilterResponse`: `{ id, keyword, forYou, following, friends }`. `keyword` là **một từ hoặc một hashtag** (`#` tuỳ chọn ở đầu, không khoảng trắng), tối đa 200 ký tự, có ít nhất một chữ cái hoặc chữ số; phải chọn ít nhất một trong `forYou`/`following`/`friends` — vi phạm là `VALIDATION_ERROR`. Trùng (không phân biệt hoa thường) → 409. Tối đa **100** từ khoá mỗi tài khoản. Id không phải của người gọi → 404.
+`KeywordFilterResponse`: `{ id, keyword, forYou, following, friends }`. `keyword` là **một từ, một hashtag hoặc một cụm từ** (nhiều khoảng trắng liền nhau gộp thành một; cụm từ khớp khi các từ đứng liền nhau, hoặc viết liền thành một hashtag — `nhà cái` lọc cả `#nhàcái`), tối đa 200 ký tự, có ít nhất một chữ cái hoặc chữ số; phải chọn ít nhất một trong `forYou`/`following`/`friends` — vi phạm là `VALIDATION_ERROR`. Trùng (không phân biệt hoa thường) → 409. Tối đa **100** từ khoá mỗi tài khoản. Id không phải của người gọi → 404.
 
 ### 3.26 Endpoint nội bộ — `/api/v1/users/internal/**`
 Chỉ service khác gọi: header `X-Internal-Token` (không phải JWT), gateway `denyAll`, client không gọi được. Ngoài 3.10a, 3.10b và `story-audience` (mục 3.11):
