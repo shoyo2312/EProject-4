@@ -24,6 +24,16 @@ B=$(c backup)
 JAVA="api-gateway auth-service user-service video-service media-worker interaction-service story-service
       recommendation-service chat-service notification-service search-service admin-service analytics-service"
 
+# --- 0. the deployed code must be as new as the export: ClickHouse tables and columns come from
+# analytics-service's schema.sql on start, so an older deployment fails at step 5 with every Java
+# service already stopped. Check before touching anything.
+CH=$(c clickhouse)
+for f in "$DIR"/clickhouse/*.native; do
+    t=$(basename "$f" .native)
+    [ "$(docker exec "$CH" sh -c "clickhouse-client --password \"\$CLICKHOUSE_PASSWORD\" --query \"EXISTS TABLE analytics_db.$t\"")" = 1 ] \
+        || { echo "clickhouse table $t missing: redeploy the current code first, then rerun"; exit 1; }
+done
+
 # --- 1. nothing writes while we replace stores ---------------------------------------------------
 for s in $JAVA; do docker stop "$(c "$s")" > /dev/null; done
 log "java services stopped"
@@ -42,7 +52,7 @@ done
 # Sessions, codes and device memory from the laptop must not come along. Outbox rows already
 # published are not events anymore; unpublished ones would be re-sent into prod's Kafka, so keep them.
 docker exec "$B" bash -c 'PGPASSWORD=$DB_PASSWORD psql -h postgres-auth -U $DB_USERNAME -d auth_db -v ON_ERROR_STOP=1 -q <<SQL
-TRUNCATE refresh_tokens, verification_tokens, known_devices, known_device_accounts, auth_security_events;
+TRUNCATE refresh_tokens, user_sessions, verification_tokens, known_devices, known_device_accounts, auth_security_events;
 DELETE FROM outbox_events WHERE published_at IS NOT NULL;
 SQL'
 docker exec "$B" bash -c "PGPASSWORD=\$DB_PASSWORD psql -h postgres-user -U \$DB_USERNAME -d user_db -v ON_ERROR_STOP=1 -q -c \"UPDATE user_profiles SET avatar_url = replace(avatar_url, '$OLD', '$NEW') WHERE avatar_url LIKE '$OLD%'\""
@@ -76,9 +86,11 @@ done'
 log "cassandra interaction_ks"
 
 # --- 5. ClickHouse (tables already exist: analytics-service created them on first start) ----------
-CH=$(c clickhouse)
+# TRUNCATE first: rows of an earlier import or of prod's own traffic would stay next to the new ones,
+# and watch_events dedupes on (occurred_at, event_id), so re-timed seed rows would count twice.
 for f in "$DIR"/clickhouse/*.native; do
     t=$(basename "$f" .native)
+    docker exec "$CH" sh -c "clickhouse-client --password \"\$CLICKHOUSE_PASSWORD\" -d analytics_db --query 'TRUNCATE TABLE $t'"
     docker exec -i "$CH" sh -c "clickhouse-client --password \"\$CLICKHOUSE_PASSWORD\" -d analytics_db --query 'INSERT INTO $t FORMAT Native'" < "$f"
 done
 log "clickhouse $(ls "$DIR"/clickhouse | wc -l) tables"
@@ -87,6 +99,10 @@ log "clickhouse $(ls "$DIR"/clickhouse | wc -l) tables"
 for index in videos owner_bans; do
     sed "s#$OLD#$NEW#g" "$DIR/elasticsearch/$index.ndjson" > "/tmp/$index.ndjson"
     docker cp "/tmp/$index.ndjson" "$B:/backups/import/elasticsearch/$index.rewritten.ndjson"
+    # Drop the old documents, or videos that no longer exist in Mongo stay searchable.
+    docker exec "$B" bash -c "curl -s -u elastic:\$ELASTIC_PASSWORD -XPOST -H 'Content-Type: application/json' \
+        -d '{\"query\":{\"match_all\":{}}}' 'http://elasticsearch:9200/$index/_delete_by_query?refresh=true&conflicts=proceed' \
+        | grep -o '\"deleted\":[0-9]*'"
     docker exec "$B" bash -c "curl -s -u elastic:\$ELASTIC_PASSWORD -H 'Content-Type: application/x-ndjson' \
         --data-binary @/backups/import/elasticsearch/$index.rewritten.ndjson 'http://elasticsearch:9200/_bulk?refresh=true' \
         | grep -o '\"errors\":[a-z]*'"
