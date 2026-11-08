@@ -238,11 +238,75 @@ PERSONAS = [
 # topic-neutral filler used once a clip's own lines run out.
 # ---------------------------------------------------------------------------------------------
 
-HELD_CAPTIONS = [
-    ("Nhận đặt bánh sinh nhật", "Đặt bánh gọi 0912 345 678, giao tận nơi trong 2 giờ #banh #datbanh"),
-    ("Tour Hà Giang 3 ngày 2 đêm", "Xem lịch trình đầy đủ tại https://example.com/tour-ha-giang #tour #hagiang"),
-    ("Mở lớp nhảy tháng này", "Đăng ký qua số 0988 777 666, giảm 20% cho nhóm 3 người #lopnhay #dangky"),
+# What the two spam accounts post instead of the clip's own caption: listings that read as ads to a
+# person but pass the rules (no phone number, no link, no blocklisted word), so they get published and
+# reported, which is how this kind of spam reaches a moderator. (title, hashtags, report reason)
+SPAM_VIDEO_CAPTIONS = [
+    ("Xả kho cuối năm, đồng giá 99k, số lượng có hạn, nhắn shop ngay", ["xakho", "dongia99k", "sale"], "Deceptive behavior and spam"),
+    ("Nhận order hàng Quảng Châu giá xưởng, ship toàn quốc", ["order", "quangchau", "giaxuong"], "Deceptive behavior and spam"),
+    ("Đồng hồ Rolex rep 1:1 giá chỉ 2 triệu, bao check", ["rolex", "dongho", "rep11"], "Intellectual property violation"),
+    ("Giày Nike Jordan auth giá 450k, full box bill", ["nike", "jordan", "giaysneaker"], "Intellectual property violation"),
+    ("Mua 1 tặng 1 hôm nay thôi, ai nhanh tay thì còn", ["muamottangmot", "sale", "deal"], "Deceptive behavior and spam"),
+    ("Kem trắng da cấp tốc 7 ngày, cam kết hoàn tiền", ["kemtrangda", "lamdep", "skincare"], "Frauds and scams"),
 ]
+# Comments the spam accounts leave under other people's videos (removed directly as spam).
+SPAM_COMMENTS = [
+    "Shop mình đang xả kho, ghé trang cá nhân xem mẫu nha", "Ai cần hàng giống trong video thì ghé shop mình nhé",
+    "Đồng giá 99k, xem thêm mẫu ở trang cá nhân", "Săn sale cùng shop đi mọi người ơi", "Giảm 50% hôm nay thôi, ghé shop liền nha",
+    "Shop có sẵn mẫu này, ghé xem nha", "Hàng về rồi nè mọi người, xem ở trang cá nhân", "Ghé shop mình có quà cho 10 bạn đầu tiên",
+    "Mẫu mới về đủ size, xem trang cá nhân nha", "Ai mua chung đơn không, shop free ship", "Xả kho giá gốc, ghé shop mình nhé",
+    "Shop mình bán rẻ hơn, xem trang cá nhân", "Ai cần sỉ thì ghé shop nha", "Sale cuối tháng, mọi người ghé shop xem",
+]
+# Comments people reported that a moderator removed: harassment and threats that pass the rules
+# (no slur, no blocklisted word), so only a report brings them to anyone. (text, report reason)
+REMOVED_COMMENTS = [
+    ("Mặt như thế mà cũng đòi làm idol, về soi gương lại đi", "Hate and harassment"),
+    ("Xấu mà còn hay khoe, đúng là không biết thân biết phận", "Hate and harassment"),
+    ("Mày đăng thêm cái nữa là tao report cho bay kênh", "Hate and harassment"),
+    ("Ăn mặc như vậy thì bị nói cũng đáng", "Hate and harassment"),
+    ("Người gì đâu mà nhìn đã thấy ghét", "Hate and harassment"),
+    ("Béo thế này mà còn dám mặc đồ bó lên mạng, không biết ngại à", "Hate and harassment"),
+    ("Giọng như vịt đực mà cũng đi hát, tắt video đi cho người ta nhờ", "Hate and harassment"),
+    ("Còn đăng video nữa thì đừng trách, gặp ngoài đường là no đòn", "Violence, abuse, and criminal exploitation"),
+    ("Biết chỗ mày làm rồi, mai tao qua nói chuyện", "Violence, abuse, and criminal exploitation"),
+    ("Nhà nó ở hẻm 42 Trần Hưng Đạo đấy, tối nào cũng đứng bán ở đầu hẻm", "Sharing personal information"),
+    ("Cả nhà nó toàn loại ăn bám, đừng ai ủng hộ", "Hate and harassment"),
+    ("Lần nào cũng câu view rẻ tiền, nhìn mà mệt", "Hate and harassment"),
+]
+# Harsh, but opinions about the video: reported, and dismissed.
+DISMISSED_COMMENTS = [
+    "Edit dở quá, nhạc chẳng hợp gì cả", "Video này đăng lại từ kênh khác mà",
+    "Nói thật quán này đồ ăn bình thường, review hơi quá", "Giá này đắt quá, không đáng",
+    "Xem tới giữa là chán, kéo dài quá", "Lần này không hay bằng mấy video trước",
+]
+# Self-promotion under other creators' videos: the persona gets a direct warning.
+SELF_PROMO_COMMENTS = [
+    "Ghé kênh mình xem video mới nha, follow chéo không ạ", "Ai follow mình mình follow lại liền",
+    "Kênh mình cũng quay chủ đề này, ghé xem nha", "Follow chéo không mọi người ơi",
+]
+# What a moderator writes in the audit log when deciding (the console is in English).
+ADMIN_NOTES = {
+    "TAKEDOWN_VIDEO": {
+        "Deceptive behavior and spam": "Product ad posted as content; account only posts listings",
+        "Intellectual property violation": "Counterfeit branded goods advertised as replicas",
+        "Frauds and scams": "Unverifiable cosmetic claims with money-back bait",
+    },
+    "DISMISS_VIDEO": "Reviewed: no violation, original content",
+    "DISMISS_USER": "Reviewed profile and recent posts: nothing against policy",
+    "DISMISS_COMMENT": "Criticism of the video, not aimed at a person",
+    "REMOVE_COMMENT": {
+        "Hate and harassment": "Insult aimed at the creator",
+        "Violence, abuse, and criminal exploitation": "Threat of physical harm",
+        "Sharing personal information": "Posts a private address",
+    },
+    "WARN_USER": "Comment removed for harassment; first warning",
+    "BAN_SPAM": "Spam account: product listings in videos and comments after takedowns",
+    "BAN_HARASS": "Repeated harassment in comments after removals",
+    "SPAM_COMMENT": "Shop ad under someone else's video",
+    "SELF_PROMO": "Repeated follow-for-follow comments under other creators' videos",
+    "REVOKE": "Owner reported a stolen phone; signed out every device",
+    "RESTORE": "False positive: nothing in the frames breaks policy",
+}
 
 # ---------------------------------------------------------------------------------------------
 # Comments — base lines × light variation = 400+ unique strings.
@@ -338,9 +402,10 @@ CHAT_THREADS = [
 # Reports — labels from admin-service V5__report_queue.sql.
 # ---------------------------------------------------------------------------------------------
 
+# What people pick when they report something that turns out fine: dismissed in the history.
 REPORT_REASONS = {
     "VIDEO": ["Deceptive behavior and spam", "Misinformation", "Dangerous activities and challenges",
-              "Intellectual property violation", "Shocking and graphic content", "Nudity and sexual content"],
+              "Intellectual property violation"],
     "USER": ["Deceptive behavior and spam", "Frauds and scams", "Hate and harassment", "Sharing personal information"],
     "COMMENT": ["Hate and harassment", "Deceptive behavior and spam", "Frauds and scams", "Sharing personal information",
                 "Violence, abuse, and criminal exploitation"],
@@ -360,14 +425,33 @@ STORY_CAPTIONS = [
     "Mưa rồi", "Thành phố chiều nay", "Hoa nở rồi nè", "Bơ ngủ cả ngày", "Biển vắng", "Về quê", "Chill",
 ]
 
-# Terms the admin adds to the managed moderation list (console → Moderation → Terms). (term, category, action, note)
+# Terms the admin adds to the managed moderation list (console → Moderation → Terms), oldest first:
+# each is added on its own day as the problem showed up. (term, category, action, note)
+# Every one of them is absent from blocklist-vi.txt or changes its action there.
 ADMIN_TERMS = [
-    ("bán acc", "SCAM", "HOLD", "Rao bán tài khoản dưới video"),
-    ("kèo thơm", "SCAM", "HOLD", "Mồi cá độ, giữ lại cho chủ video duyệt"),
-    ("nhà cái", "SCAM", "REJECT", "Quảng cáo cá cược"),
-    ("vay nhanh", "SCAM", "REJECT", "Tín dụng đen"),
-    ("cá độ", None, "EXEMPT", "Bình luận bóng đá hay nhắc 'cá độ' theo nghĩa đùa, chủ video tự lọc"),
+    ("bán acc", "SCAM", "HOLD", "Rao bán tài khoản game và mạng xã hội dưới video"),
+    ("vay nhanh", "SCAM", "REJECT", "Quảng cáo tín dụng đen"),
+    ("bốc bát họ", "SCAM", "REJECT", "Cho vay nặng lãi trả góp theo ngày"),
+    ("kèo thơm", "SCAM", "HOLD", "Mồi cá độ dưới video bóng đá, giữ lại cho chủ video duyệt"),
+    ("tăng follow", "SPAM", "HOLD", "Bán follow, tim, view ảo"),
+    ("buff like", "SPAM", "HOLD", "Bán tương tác ảo"),
     ("lô đề", None, "EXEMPT", "Clip cảnh báo lừa đảo nhắc tới từ này, không phải quảng cáo"),
+    ("nhà cái", "SCAM", "REJECT", "Danh sách gốc chỉ giữ lại; quảng cáo nhà cái thì từ chối thẳng"),
+    ("jun88", "SCAM", "REJECT", "Tên nhà cái xuất hiện hàng loạt dưới video bóng đá"),
+    ("8xbet", "SCAM", "REJECT", "Tên nhà cái"),
+    ("789bet", "SCAM", "REJECT", "Tên nhà cái"),
+    ("làm nhiệm vụ", "SCAM", "HOLD", "Lừa đảo 'like video nhận hoa hồng', nạp tiền rồi không rút được"),
+    ("nạp tiền kích hoạt", "SCAM", "REJECT", "Bước nạp tiền của lừa đảo việc làm online"),
+    ("tuyển ctv", "SCAM", "HOLD", "Tuyển cộng tác viên online, thường là việc nhẹ lương cao"),
+    ("bóng cười", "SPAM", "HOLD", "Rao bán khí cười (không có nhóm riêng cho chất cấm)"),
+    ("cỏ mỹ", "SPAM", "HOLD", "Rao bán cần sa bằng tiếng lóng"),
+    ("clip nóng", "SEXUAL", "HOLD", "Mồi link khiêu dâm"),
+    ("cá độ", None, "EXEMPT", "Clip tin tức và cảnh báo về cá độ bị giữ nhầm; quảng cáo vẫn bị 'nhà cái' và tên nhà cái bắt"),
+]
+# Added, then taken out once they held too much ordinary text. (term, category, action, note)
+REMOVED_TERMS = [
+    ("kèo", "SCAM", "HOLD", "Thử giữ mọi bình luận có 'kèo': giữ nhầm 'kèo đi ăn', 'kèo cà phê'"),
+    ("inbox", "SPAM", "HOLD", "Thử chặn rao bán: giữ nhầm hàng trăm câu 'inbox mình nha' của chính chủ video"),
 ]
 
 # Explore tabs of the web client (`EXPLORE_CATEGORY_HASHTAGS` in tiktok-cloned's site-config.ts)

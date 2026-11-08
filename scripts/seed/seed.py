@@ -19,6 +19,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import content as C  # noqa: E402
 import scenario  # noqa: E402
 
 AUTH, USER, VIDEO, INTERACTION, STORY, CHAT, ADMIN = (
@@ -41,9 +42,9 @@ class Api:
     def __init__(self, base):
         self.base = base
 
-    def call(self, method, path, body=None, token=None, expect=(200, 201, 204), retries=3):
+    def call(self, method, path, body=None, token=None, expect=(200, 201, 204), retries=3, headers=None):
         data = json.dumps(body).encode() if body is not None else None
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": "application/json", **(headers or {})}
         if data is not None:
             headers["Content-Type"] = "application/json"
         if token:
@@ -55,7 +56,7 @@ class Api:
                     raw = r.read()
                     if r.status not in expect:
                         raise ApiError(r.status, "UNEXPECTED_STATUS", raw[:200].decode(errors="replace"))
-                    return json.loads(raw)["data"] if raw else None
+                    return json.loads(raw).get("data") if raw else None  # null data is left out of the body
             except urllib.error.HTTPError as e:
                 raw = e.read()
                 try:
@@ -124,7 +125,7 @@ def sql(container, db, statement):
 
 class Ledger:
     LISTS = ("likes", "shares", "reposts", "saves", "comment_likes", "follows", "blocks", "mutes", "chats", "stories", "refresh", "dropped")
-    MAPS = ("users", "videos", "comments", "reports", "actions", "admin", "phase_done")
+    MAPS = ("users", "videos", "comments", "reports", "actions", "admin", "phase_done", "realism")
 
     def __init__(self, path):
         self.path = Path(path)
@@ -162,12 +163,36 @@ def log(msg):
 TOKEN_MAX_AGE = 600  # access tokens live 15 min; re-login after 10
 
 
+import threading  # noqa: E402
+
+_TOKEN_LOCK = threading.Lock()
+
+
 def token_of(ledger, username):
-    rec = ledger.users[username]
-    if time.time() - rec.get("token_at", 0) > TOKEN_MAX_AGE:
-        rec["token"], _ = login(username)
-        rec["token_at"] = time.time()
-    return rec["token"]
+    return fresh_token(ledger.users[username], username)
+
+
+def fresh_token(rec, username):
+    """The access token in `rec`, renewed when old. Renewal rotates the refresh token, as the app does,
+    so the persona keeps one session per device. A second login from the same device type replaces the
+    first session and revokes every token still held from it (other threads, queued uploads), hence
+    the lock and no fresh logins."""
+    with _TOKEN_LOCK:
+        if time.time() - rec.get("token_at", 0) > TOKEN_MAX_AGE:
+            rec["token"], rec["refresh"] = _rotate(username, rec.get("refresh"))
+            rec["token_at"] = time.time()
+        return rec["token"]
+
+
+def _rotate(username, refresh):
+    if refresh:
+        try:
+            t = auth.call("POST", "/api/v1/auth/refresh", {"refreshToken": refresh}, headers=origin_headers(username))
+            return t["accessToken"], t["refreshToken"]
+        except ApiError as e:
+            if e.status not in (400, 401, 403):
+                raise
+    return login(username)
 
 
 def uid_of(ledger, username):
@@ -175,8 +200,61 @@ def uid_of(ledger, username):
 
 
 def login(username):
-    t = auth.call("POST", "/api/v1/auth/login", {"usernameOrEmail": username, "password": PASSWORD})
-    return t["accessToken"], None  # the refresh token is never used; keep it out of the ledger
+    t = auth.call("POST", "/api/v1/auth/login", {"usernameOrEmail": username, "password": PASSWORD}, headers=origin_headers(username))
+    return t["accessToken"], t.get("refreshToken")
+
+
+# One phone (and for some a laptop) per persona, in one Vietnamese city, so sign-in history, sessions and
+# the new-device logic read like real people. The gateway is the only caller auth-service takes
+# X-Client-Ip from (it proves it with the internal token); the seed talks to auth-service directly, so it
+# sends the same pair, and GeoIpLocator turns the address into a place.
+_PHONES = [
+    ("NowaApp/1.6.2 (Linux; Android 14; Mobile)", "14.0.0", "SM-A556E"),
+    ("NowaApp/1.6.2 (Linux; Android 14; Mobile)", "14.0.0", "Redmi Note 13"),
+    ("NowaApp/1.6.2 (Linux; Android 13; Mobile)", "13.0.0", "CPH2591"),
+    ("NowaApp/1.6.2 (Linux; Android 15; Mobile)", "15.0.0", "SM-S928B"),
+    ("NowaApp/1.6.2 (Linux; Android 14; Mobile)", "14.0.0", "V2318"),
+    ("NowaApp/1.6.1 (iPhone; CPU iPhone OS 18_6 like Mac OS X; Mobile)", "18.6", None),
+    ("NowaApp/1.6.1 (iPhone; CPU iPhone OS 17_7 like Mac OS X; Mobile)", "17.7", None),
+    ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1", "18.6", None),
+    ("Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36", "14.0.0", "SM-A356E"),
+]
+_DESKTOPS = [
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36", "15.0.0", None),
+    ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15", None, None),
+    ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0", "10.0.0", None),
+]
+# Consumer ISP /24s that DB-IP City Lite (data/geoip, 2026-10) places in one city at every host, weighted
+# toward the two big cities. Most Vietnamese blocks resolve to Hanoi (the ISPs' seat), so these were
+# picked city by city; a newer DB file can move some of them.
+_NETWORKS = (["1.52.48", "1.52.64", "1.52.80", "1.52.128", "1.52.144", "14.161.64", "14.166.0", "14.166.16",
+              "14.166.32", "14.166.48"]                                                             # Ho Chi Minh City
+             + ["1.52.90", "1.52.170", "1.53.90", "1.53.170", "222.252.170", "222.253.10", "103.121.90", "123.24.90"]  # Hanoi
+             + ["113.187.48", "113.187.96"] + ["14.0.16", "116.101.16"] + ["14.191.112", "42.96.0"]  # Can Tho, Haiphong, Da Nang
+             + ["113.184.16", "113.184.64"] + ["116.99.80", "113.180.80", "14.173.240"])             # Bien Hoa; Nha Trang, Vung Tau, Da Lat
+
+
+def origin_headers(username, desktop=None):
+    import hashlib
+    h = hashlib.sha256(username.encode()).digest()
+    use_desktop = (h[0] % 5 == 0) if desktop is None else desktop
+    ua, version, model = (_DESKTOPS[h[1] % len(_DESKTOPS)] if use_desktop else _PHONES[h[1] % len(_PHONES)])
+    headers = {"User-Agent": ua, "X-Device-Id": h.hex()[:24] + ("-pc" if use_desktop else ""),
+               "X-Client-Ip": f"{_NETWORKS[h[2] % len(_NETWORKS)]}.{h[3] % 250 + 2}",
+               "X-Internal-Token": internal_token()}
+    if version:
+        headers["Sec-CH-UA-Platform-Version"] = f'"{version}"'
+    if model:
+        headers["Sec-CH-UA-Model"] = f'"{model}"'
+    return headers
+
+
+@__import__("functools").cache
+def internal_token():
+    try:
+        return _env("INTERNAL_API_TOKEN")
+    except SystemExit:
+        return "local-internal-api-token-not-for-production"  # common-lib InternalApiToken.LOCAL_DEFAULT
 
 
 # --------------------------------------------------------------------------------------------- users
@@ -195,7 +273,7 @@ def phase_users(plan, ledger, media_dir):
             ledger.save()
         if "token" not in rec:
             sql("tt-postgres-auth", "auth_db", f"UPDATE users SET email_verified=true, email_verified_at=now() WHERE id={rec['id']};")
-            rec["token"], _ = login(name)
+            rec["token"], rec["refresh"] = login(name)
             rec["token_at"] = time.time()
             ledger.touch()
         if not rec.get("profile_done"):
@@ -261,8 +339,8 @@ WAITING = ("PROCESSING", "PENDING_MODERATION")
 
 def _upload_raw(args):
     """upload-url + MinIO POST for one video; returns fileUrl. Runs in a worker thread."""
-    media_dir, v, token = args
-    u = video_api.call("POST", "/api/v1/videos/upload-url", {"contentType": "video/mp4"}, token=token)
+    media_dir, v, ledger = args
+    u = video_api.call("POST", "/api/v1/videos/upload-url", {"contentType": "video/mp4"}, token=token_of(ledger, v["owner"]))
     blob = (Path(media_dir) / v["file"]).read_bytes()
     post_minio(u["uploadUrl"], u["formFields"], blob, "video/mp4", filename=Path(v["file"]).name)
     return u["fileUrl"]
@@ -273,7 +351,7 @@ def phase_videos(plan, ledger, media_dir):
     todo = [v for v in plan["videos"] if "id" not in ledger.videos.get(v["key"], {})]
     log(f"videos: {len(todo)} to create, {len(plan['videos']) - len(todo)} existing")
     with ThreadPoolExecutor(max_workers=3) as pool:
-        uploads = pool.map(_upload_raw, [(media_dir, v, token_of(ledger, v["owner"])) for v in todo])
+        uploads = pool.map(_upload_raw, [(media_dir, v, ledger) for v in todo])
         for v, file_url in zip(todo, uploads):
             body = {"title": v["title"], "description": v["description"], "rawFileUrl": file_url,
                     "visibility": v["visibility"], "tags": v["tags"]}
@@ -565,7 +643,8 @@ def admin_login(ledger):
     if ledger.admin.get("device_token"):
         try:
             t = auth.call("POST", "/api/v1/auth/login", {"usernameOrEmail": email, "password": password,
-                                                        "turnstileToken": TURNSTILE, "deviceToken": ledger.admin["device_token"]})
+                                                        "turnstileToken": TURNSTILE, "deviceToken": ledger.admin["device_token"]},
+                          headers=origin_headers(email, desktop=True))
             ledger.admin["token"], ledger.admin["token_at"] = t["accessToken"], time.time()
             ledger.save()
             return t["accessToken"]
@@ -573,14 +652,16 @@ def admin_login(ledger):
             if e.code != "MFA_REQUIRED":
                 raise
     try:
-        auth.call("POST", "/api/v1/auth/login", {"usernameOrEmail": email, "password": password, "turnstileToken": TURNSTILE})
+        auth.call("POST", "/api/v1/auth/login", {"usernameOrEmail": email, "password": password, "turnstileToken": TURNSTILE},
+                  headers=origin_headers(email, desktop=True))
         raise RuntimeError("admin login did not ask for MFA; is this account ADMIN?")
     except ApiError as e:
         if e.code != "MFA_REQUIRED":
             raise
     time.sleep(2)
     otp = _otp_from_log() or input("Admin OTP from auth-service log: ").strip()
-    t = auth.call("POST", "/api/v1/auth/login/otp", {"usernameOrEmail": email, "otp": otp, "turnstileToken": TURNSTILE, "rememberDevice": True})
+    t = auth.call("POST", "/api/v1/auth/login/otp", {"usernameOrEmail": email, "otp": otp, "turnstileToken": TURNSTILE, "rememberDevice": True},
+                  headers=origin_headers(email, desktop=True))
     ledger.admin["token"], ledger.admin["device_token"], ledger.admin["token_at"] = t["accessToken"], t.get("deviceToken"), time.time()
     ledger.save()
     return t["accessToken"]
@@ -593,33 +674,28 @@ def admin_token(ledger):
 
 
 def early_restore(plan, ledger):
-    """After the pipeline: keep ≤ 12 videos in the review queue, restore the rest so engagement can target them."""
+    """After the pipeline: restore every clip it held, so engagement can target them."""
     held = [k for k, v in ledger.videos.items() if v["status"] == "PENDING_REVIEW"]
     if not held:
         return
-    keep = [k for k in held if ledger.videos[k]["held"]]
-    extra = sorted((k for k in held if k not in keep), key=lambda k: ledger.videos[k]["views"])
-    keep += extra[:max(0, 12 - len(keep))]
+    keep = []  # the review queue is realism.py's flagged clips; a clip from the pool held here is a false positive
     to_restore = [k for k in held if k not in keep]
     log(f"review queue: {len(held)} held by the pipeline, keeping {len(keep)}, restoring {len(to_restore)}")
     if not to_restore:
         return
-    tok = admin_login(ledger)
-    restores = [a["key"] for a in plan["admin"] if a["kind"] == "restore"]
-    for n, k in enumerate(to_restore):
+    admin_login(ledger)
+    for k in to_restore:
         rec = ledger.videos[k]
-        r = admin_api.call("POST", f"/api/v1/admin/videos/{rec['id']}/restore", {"reason": "Reviewed: nothing wrong"}, token=admin_token(ledger))
+        r = admin_api.call("POST", f"/api/v1/admin/videos/{rec['id']}/restore", {"reason": C.ADMIN_NOTES["RESTORE"]}, token=admin_token(ledger))
+        # Undoing the classifier's mistakes on stock clips is seed plumbing, not a moderator's work:
+        # keep it out of the audit log. Hard delete on purpose (the log does not filter deleted_at).
+        sql("tt-postgres-admin", "admin_db", f"DELETE FROM moderation_actions WHERE id={r['id']} AND action_type='RESTORE_VIDEO';")
         for _ in range(30):
             v = video_api.call("GET", f"/api/v1/videos/{rec['id']}", token=token_of(ledger, rec["owner"]))
             if v["status"] == "PUBLISHED":
                 break
             time.sleep(1)
         rec["status"] = "PUBLISHED"
-        if n < len(restores):
-            planned = next(a for a in plan["admin"] if a["key"] == restores[n])
-            ledger.actions[restores[n]] = {"id": r["id"], "at": planned["at"]}
-        else:
-            ledger.actions[f"restore-{k}"] = {"id": r["id"], "at": scenario.iso(scenario.parse(rec["at"]) + scenario.DAY)}
         ledger.save()
 
 
@@ -649,7 +725,7 @@ def phase_admin(plan, ledger):
                 ledger.save()
             rep = ledger.reports[key]
             if rep and a["outcome"] != "pending" and rep.get("status") == "PENDING" and key not in ledger.actions:
-                body = {"actionType": a["outcome"], "reason": a["reason"]}
+                body = {"actionType": a["outcome"], "reason": a.get("note") or a["reason"]}
                 if a.get("ban_days"):
                     body["banDays"] = a["ban_days"]
                 r = admin_api.call("POST", f"/api/v1/admin/reports/{rep['id']}/resolve", body, token=admin_token(ledger))
@@ -680,10 +756,15 @@ def phase_admin(plan, ledger):
             ledger.save()
         # "restore" entries are bound in early_restore
     done = ledger.admin.setdefault("terms", [])
+    ids = ledger.admin.setdefault("term_ids", {})
     for t in plan["terms"]:
         if t["term"] in done:
             continue
-        admin_api.call("POST", "/api/v1/admin/moderation/terms", t, token=admin_token(ledger), expect=(200, 201, 409))
+        body = {k: t[k] for k in ("term", "category", "action", "note")}
+        r = admin_api.call("POST", "/api/v1/admin/moderation/terms", body, token=admin_token(ledger), expect=(200, 201))
+        ids[t["term"]] = r["id"]
+        if t["removed_at"]:
+            admin_api.call("DELETE", f"/api/v1/admin/moderation/terms/{r['id']}", token=admin_token(ledger))
         done.append(t["term"])
         ledger.save()
     log(f"admin: {len(done)} managed terms")
@@ -699,7 +780,7 @@ def phase_refresh(plan, ledger):
     import random
     rnd = random.Random()
     import content as C
-    banned = {p["username"] for p in C.PERSONAS if p["spam"] or p["temp_ban"]}
+    banned = {p["username"] for p in C.PERSONAS if p["spam"] or p["temp_ban"]} | set(ledger.realism.get("closed", []))
     users = [u for u in ledger.users if u not in banned]
     top = sorted((k for k, v in ledger.videos.items() if v["status"] == "PUBLISHED"), key=lambda k: -ledger.videos[k]["views"])[:30]
     liked = {(x["actor"], x["video"]) for x in ledger.likes} | {(x["actor"], x["video"]) for x in ledger.refresh if x.get("kind") == "like"}
@@ -743,7 +824,12 @@ def phase_refresh(plan, ledger):
 
 # --------------------------------------------------------------------------------------------- main
 
-PHASES = ["users", "videos", "engagement", "chat", "admin", "stories"]
+PHASES = ["users", "videos", "engagement", "chat", "admin", "stories", "realism"]
+
+
+def phase_realism(plan, ledger, media_dir):
+    import realism
+    realism.run(plan, ledger, media_dir)
 
 
 def selftest():
@@ -811,7 +897,7 @@ def run_phases(phases, plan, ledger, media_dir, skip_done):
                 log(f"== phase {ph}: done earlier, skipped")
                 continue
             log(f"== phase {ph}")
-            fn(plan, ledger, media_dir) if ph in ("users", "videos", "stories") else fn(plan, ledger)
+            fn(plan, ledger, media_dir) if ph in ("users", "videos", "stories", "realism") else fn(plan, ledger)
             if ph == "videos":
                 early_restore(plan, ledger)
     finally:

@@ -210,8 +210,10 @@ def build(manifest, seed=2026, now=None):
     quota = {}
     for p in personas:
         quota[p["username"]] = {"creator": rnd.randint(10, 20), "regular": rnd.randint(3, 8), "viewer": rnd.choice([0, 0, 1, 1, 2])}[p["role"]]
+    for p in spams:  # three listings each: the takedowns before their ban
+        quota[p["username"]] = len(C.SPAM_VIDEO_CAPTIONS) // len(spams)
     total = sum(quota.values())
-    names = sorted(quota, key=lambda n: -quota[n])
+    names = sorted((n for n in quota if not by_name[n]["spam"]), key=lambda n: -quota[n])
     i = 0
     while total != len(pool):
         name = names[i % len(names)]
@@ -253,19 +255,28 @@ def build(manifest, seed=2026, now=None):
     for p, v in remaining:  # clips without a slot: post them within the last day or so
         videos.append({"key": v["file"][:-4], "id": v["id"], "file": v["file"], "owner": p["username"], "topic": v["topic"],
                        "duration": v["duration"], "at": room(max(t1 - timedelta(hours=rnd.uniform(3, 30)), p["join_at"] + timedelta(hours=1)))})
+    for v in videos:  # a spam account's listings go up between its join and a few days before its ban
+        if by_name[v["owner"]]["spam"]:
+            p = by_name[v["owner"]]
+            lo, hi = p["join_at"] + timedelta(hours=1), banned_after[p["username"]] - timedelta(days=4)
+            v["at"] = room(lo + (hi - lo) * rnd.random() if hi > lo else lo, v["at"])
     videos.sort(key=lambda v: v["at"])
-    held_pick = rnd.sample([v for v in videos if by_name[v["owner"]]["role"] == "regular" and v["owner"] not in banned_after], 3)
+    # Nothing from the clip pool is held for review: the review queue is the flagged clips of realism.py,
+    # held by the real pipeline. Whatever the pipeline holds here anyway is restored (seed.early_restore).
     own_comments, own_replies = {}, {}
+    spam_caps = iter(C.SPAM_VIDEO_CAPTIONS)
     for v in videos:
         cap = caps[str(v["id"])]  # written against the clip's thumbnail, or its original caption (import-ytdlp.py)
         v["title"], v["description"], v["tags"] = cap["title"], "", cap["hashtags"][:10]  # TikTok has one caption: title + tags
         own_comments[v["key"]] = rnd.sample(cap["comments"], len(cap["comments"]))
         own_replies[v["key"]] = list(cap["replies"])
-        v["held"] = v in held_pick
-        v["visibility"] = "PUBLIC" if v["held"] else rnd.choices(["PUBLIC", "FRIENDS", "PRIVATE"], [90, 6, 4])[0]
+        v["held"] = False
+        v["visibility"] = rnd.choices(["PUBLIC", "FRIENDS", "PRIVATE"], [90, 6, 4])[0]
         v["taken_down_at"] = None
-    for i, (title, desc) in enumerate(C.HELD_CAPTIONS):
-        held_pick[i]["title"], held_pick[i]["description"] = title, desc
+        v["spam_reason"] = None
+        if by_name[v["owner"]]["spam"]:
+            v["title"], v["tags"], v["spam_reason"] = next(spam_caps)
+            v["visibility"] = "PUBLIC"
     ranked = sorted(videos, key=lambda v: {"creator": 3, "regular": 1.2, "viewer": 0.5}[by_name[v["owner"]]["role"]] * rnd.random(), reverse=True)
     for rank, v in enumerate(ranked, 1):
         v.update(_zipf_counters(rnd, rank, len(videos)))
@@ -307,8 +318,9 @@ def build(manifest, seed=2026, now=None):
             if not cands:
                 break
             p = rnd.choice(cands)
-            mine = own_comments[v["key"]]
-            text = next((t for t in mine[:1] + rnd.sample(C.COMMENTS, 12) if (p["username"], t) not in used_text and (v["key"], t) not in used_text), None)
+            mine = [] if p["spam"] else own_comments[v["key"]]
+            bank = rnd.sample(C.SPAM_COMMENTS, len(C.SPAM_COMMENTS)) if p["spam"] else mine[:1] + rnd.sample(C.COMMENTS, 12)
+            text = next((t for t in bank if (p["username"], t) not in used_text and (v["key"], t) not in used_text), None)
             if text is None:
                 continue
             if mine and text == mine[0]:
@@ -370,75 +382,119 @@ def build(manifest, seed=2026, now=None):
                         "visibility": "PRIVATE" if i >= 38 else "FRIENDS" if i >= 32 else "PUBLIC",
                         "at": t1 - timedelta(hours=rnd.uniform(0.5, 20))})
 
-    # ---- admin: 60 reports (24 VIDEO, 16 USER, 20 COMMENT) + 10 direct comment removals + 4 restores
-    # + 3 direct warnings + 1 session revocation + the managed moderation terms
+    # ---- admin history. Every report points at something that earns its outcome: removals and warnings at
+    # comments that harass or threaten, takedowns at the spam accounts' listings, dismissals at criticism or
+    # at ordinary videos people reported anyway. Nothing is left pending here: the open queue is realism.py,
+    # recent and about content that is actually there.
     admin = []
-    public_videos = [v for v in videos if v["visibility"] == "PUBLIC" and not v["held"] and v["owner"] not in banned_after]
+    public_videos = [v for v in videos if v["visibility"] == "PUBLIC" and v["owner"] not in banned_after]
     reporters = [p for p in personas if p["role"] == "viewer" and p["username"] not in banned_after]
+    N = C.ADMIN_NOTES
 
     def reporter_for(at, exclude=()):
         cands = [p for p in reporters if p["join_at"] <= at and p["username"] not in exclude]
         return rnd.choice(cands) if cands else None
 
-    def report(at, target_type, target, outcome, reason=None, ban_days=None, delay_h=None):
+    def report(at, target_type, target, outcome, reason=None, ban_days=None, delay_h=None, note=None, reporter=None):
         if reason is None:
             reason = rnd.choice(C.REPORT_REASONS[target_type])
-        if outcome == "pending" and at < t1 - timedelta(days=14) and reason not in C.NON_EXPIRING_REASONS:
-            reason = rnd.choice(sorted(C.NON_EXPIRING_REASONS & set(C.REPORT_REASONS[target_type])) or sorted(C.NON_EXPIRING_REASONS))
         owner = target if target_type == "USER" else (target["owner"] if target_type == "VIDEO" else target["actor"])
-        rep = reporter_for(at, {owner})
+        rep = reporter or reporter_for(at, {owner})
         if rep is None:
             return None
-        resolved_at = None if outcome == "pending" else at + timedelta(hours=delay_h if delay_h is not None else rnd.uniform(1, 72))
+        resolved_at = min(at + timedelta(hours=delay_h if delay_h is not None else rnd.uniform(1, 30)), t1 - timedelta(minutes=30))
         entry = {"kind": "report", "at": at, "reporter": rep["username"], "target_type": target_type, "reason": reason,
-                 "outcome": outcome, "ban_days": ban_days, "resolved_at": resolved_at,
+                 "outcome": outcome, "ban_days": ban_days, "resolved_at": resolved_at, "note": note,
                  "target": target if target_type == "USER" else target["key"] if target_type == "VIDEO" else target["cid"]}
         admin.append(entry)
         return entry
 
-    vids = rnd.sample(public_videos, 24)
-    for i, v in enumerate(vids):
-        outcome = "TAKEDOWN_VIDEO" if i < 6 else "DISMISS_REPORT" if i < 16 else "pending"
-        at = v["at"] + timedelta(days=rnd.uniform(0.2, 20)) if outcome != "pending" else t1 - timedelta(days=rnd.uniform(0.3, 13))
-        at = min(max(at, v["at"] + timedelta(hours=1)), t1 - timedelta(hours=1))
-        e = report(at, "VIDEO", v, outcome)
-        if e and outcome == "TAKEDOWN_VIDEO":
-            v["taken_down_at"] = e["resolved_at"]
+    def plant(actor, text, lo, hi, owners=None):
+        """A comment by `actor` on someone's public video between lo and hi; appended to the events."""
+        lo, hi = max(lo, actor["join_at"] + timedelta(hours=1)), min(hi, t1 - timedelta(hours=2))
+        cands = [v for v in public_videos if v["owner"] != actor["username"] and v["at"] < hi
+                 and (actor["username"], v["owner"]) not in blocked_pairs and (v["key"], text) not in used_text
+                 and (owners is None or by_name[v["owner"]]["role"] in owners)
+                 and not by_name[v["owner"]]["keyword_filter"]]  # that creator's filter would hold it before anyone saw it
+        if not cands or hi <= lo:
+            return None
+        v = rnd.choice(cands)
+        start = max(lo, v["at"] + timedelta(minutes=10))
+        at = start + (hi - start) * rnd.random() if hi > start else start
+        used_text.add((v["key"], text))
+        ev = {"kind": "comment", "at": at, "actor": actor["username"], "video": v["key"], "text": text, "cid": new_cid()}
+        events.append(ev)
+        return ev
+
+    # Spam accounts: each listing reported and taken down, their shop comments removed, then the ban.
+    for v in videos:
+        if v["spam_reason"]:
+            at = min(v["at"] + timedelta(hours=rnd.uniform(3, 60)), banned_after[v["owner"]] - 2 * DAY)
+            e = report(at, "VIDEO", v, "TAKEDOWN_VIDEO", reason=v["spam_reason"], note=N["TAKEDOWN_VIDEO"][v["spam_reason"]])
+            if e:
+                v["taken_down_at"] = e["resolved_at"]
+    spam_comments = [e for e in all_comments if by_name[e["actor"]]["spam"] and e["at"] < banned_after[e["actor"]] - DAY]
+    for e in rnd.sample(spam_comments, min(10, len(spam_comments))):
+        admin.append({"kind": "remove_comment", "at": min(e["at"] + timedelta(hours=rnd.uniform(1, 30)), banned_after[e["actor"]] - DAY),
+                      "video": e["video"], "cid": e["cid"], "reason": N["SPAM_COMMENT"]})
     for p in spams:
-        report(banned_after[p["username"]] - DAY, "USER", p["username"], "BAN_USER", reason="Deceptive behavior and spam", ban_days=None, delay_h=24)
+        report(banned_after[p["username"]] - DAY, "USER", p["username"], "BAN_USER", reason="Deceptive behavior and spam",
+               ban_days=None, delay_h=24, note=N["BAN_SPAM"])
+
+    # Harassment: a comment someone reported, removed, and a warning; the two temp-banned personas twice
+    # each before their ban. Half the reports come from the creator who was targeted.
+    texts = rnd.sample(C.REMOVED_COMMENTS, len(C.REMOVED_COMMENTS))
+    offenders = rnd.sample([p for p in personas if p["role"] != "creator" and not (p["spam"] or p["temp_ban"] or p["private"])
+                            and p is not personas[0]], len(texts) - 2 * len(temps))
+    removals = [(p, t1 - timedelta(days=100), t1 - timedelta(days=2)) for p in offenders]
+    for p in temps:
+        ban = banned_after[p["username"]]
+        removals += [(p, ban - timedelta(days=9), ban - timedelta(days=2))] * 2
+    for (p, lo, hi), (text, reason) in zip(removals, texts):
+        ev = plant(p, text, lo, hi, owners=("creator", "regular"))
+        if not ev:
+            continue
+        owner = by_name[vid_by_key[ev["video"]]["owner"]]
+        at = ev["at"] + timedelta(hours=rnd.uniform(0.3, 20))
+        e = report(at, "COMMENT", ev, "REMOVE_COMMENT", reason=reason, note=N["REMOVE_COMMENT"][reason],
+                   reporter=owner if rnd.random() < 0.5 else None)
+        if e and not p["temp_ban"]:
+            admin.append({"kind": "warn", "at": e["resolved_at"] + timedelta(minutes=rnd.uniform(2, 15)),
+                          "target": p["username"], "reason": N["WARN_USER"]})
     for i, p in enumerate(temps):
-        report(banned_after[p["username"]] - DAY, "USER", p["username"], "BAN_USER", reason="Hate and harassment", ban_days=5 + 2 * i, delay_h=24)
-    warn_targets = rnd.sample([p for p in personas if p["role"] != "creator" and p["username"] not in banned_after and p is not personas[0]], 12)
-    for i, p in enumerate(warn_targets):
-        outcome = "WARN_USER" if i < 10 else "DISMISS_REPORT"
-        at = t1 - timedelta(days=rnd.uniform(1, 100)) if outcome != "pending" else t1 - timedelta(days=rnd.uniform(0.5, 20))
-        report(min(max(at, p["join_at"] + DAY), t1 - timedelta(hours=1)), "USER", p["username"], outcome)
-    banned_comments = [e for e in all_comments if e["actor"] in banned_after]
-    other_comments = [e for e in all_comments if e["actor"] not in banned_after and e["actor"] != personas[0]["username"]]
-    rnd.shuffle(other_comments)
-    removal_authors, removal_reports = set(), []
-    for e in other_comments:
-        if e["actor"] not in removal_authors and len(removal_reports) < 8:
-            removal_authors.add(e["actor"])
-            removal_reports.append(e)
-    rest = [e for e in other_comments if e not in removal_reports][:12]
-    for i, e in enumerate(removal_reports + rest):
-        outcome = "REMOVE_COMMENT" if i < 8 else "DISMISS_REPORT" if i < 12 else "pending"
-        at = parse(iso(e["at"])) if False else e["at"]
-        at = at + timedelta(hours=rnd.uniform(1, 200)) if outcome != "pending" else max(at + timedelta(hours=1), t1 - timedelta(days=rnd.uniform(0.5, 13)))
-        report(min(at, t1 - timedelta(hours=1)), "COMMENT", e, outcome)
-    for e in rnd.sample(banned_comments, min(10, len(banned_comments))):
-        admin.append({"kind": "remove_comment", "at": min(e["at"] + timedelta(hours=rnd.uniform(1, 100)), t1 - timedelta(hours=1)),
-                      "video": e["video"], "cid": e["cid"], "reason": "Spam"})
+        report(banned_after[p["username"]] - DAY, "USER", p["username"], "BAN_USER", reason="Hate and harassment",
+               ban_days=5 + 2 * i, delay_h=24, note=N["BAN_HARASS"])
+
+    # Criticism of a video, reported as harassment and dismissed.
+    critics = rnd.sample([p for p in reporters if not p["private"] and p not in offenders], len(C.DISMISSED_COMMENTS))
+    for p, text in zip(critics, C.DISMISSED_COMMENTS):
+        ev = plant(p, text, t1 - timedelta(days=90), t1 - timedelta(days=2))
+        if ev:
+            report(ev["at"] + timedelta(hours=rnd.uniform(1, 30)), "COMMENT", ev, "DISMISS_REPORT", reason="Hate and harassment",
+                   note=N["DISMISS_COMMENT"], reporter=by_name[vid_by_key[ev["video"]]["owner"]])
+
+    # Ordinary videos and accounts people reported anyway.
+    for v in rnd.sample([v for v in public_videos if not v["spam_reason"]], 10):
+        at = min(v["at"] + timedelta(days=rnd.uniform(0.2, 20)), t1 - timedelta(days=1))
+        report(at, "VIDEO", v, "DISMISS_REPORT", note=N["DISMISS_VIDEO"])
+    for p in rnd.sample([p for p in personas if p["role"] == "creator" and p is not personas[0]], 2):
+        report(t1 - timedelta(days=rnd.uniform(5, 80)), "USER", p["username"], "DISMISS_REPORT", note=N["DISMISS_USER"])
+
+    # Follow-for-follow comments: two each, then a direct warning.
+    promoters = rnd.sample([p for p in reporters if not p["private"] and p not in offenders and p not in critics], 2)
+    for p, pair in zip(promoters, (C.SELF_PROMO_COMMENTS[:2], C.SELF_PROMO_COMMENTS[2:])):
+        evs = [ev for ev in (plant(p, t, t1 - timedelta(days=60), t1 - timedelta(days=3), owners=("creator",)) for t in pair) if ev]
+        if evs:
+            admin.append({"kind": "warn", "at": max(ev["at"] for ev in evs) + timedelta(hours=rnd.uniform(2, 30)),
+                          "target": p["username"], "reason": N["SELF_PROMO"]})
     for _ in range(4):
-        admin.append({"kind": "restore", "at": t1 - timedelta(days=rnd.uniform(5, 60)), "video": None, "reason": "Reviewed: nothing wrong"})
-    direct = rnd.sample([p for p in personas if p["role"] != "creator" and p["username"] not in banned_after
-                         and p not in warn_targets and p is not personas[0]], 4)
-    for p in direct[:3]:
-        admin.append({"kind": "warn", "at": min(p["join_at"] + timedelta(days=rnd.uniform(3, 60)), t1 - timedelta(hours=1)),
-                      "target": p["username"], "reason": "Repeated off-topic comments"})
-    admin.append({"kind": "revoke_sessions", "at": t1 - timedelta(days=rnd.uniform(1, 10)), "target": direct[3]["username"],
-                  "reason": "Account owner reported a stolen phone"})
+        admin.append({"kind": "restore", "at": t1 - timedelta(days=rnd.uniform(5, 60)), "video": None, "reason": N["RESTORE"]})
+    victim = rnd.choice([p for p in personas if p["role"] != "creator" and p["username"] not in banned_after
+                         and p not in offenders and p not in promoters and p is not personas[0]])
+    admin.append({"kind": "revoke_sessions", "at": t1 - timedelta(days=rnd.uniform(1, 10)), "target": victim["username"],
+                  "reason": N["REVOKE"]})
+    for a in admin:
+        a["at"] = min(a["at"], t1 - timedelta(hours=1))
     admin.sort(key=lambda e: e["at"])
     restores = 0
     for a in admin:  # stable keys: the ledger is keyed by these, never by list position
@@ -451,7 +507,12 @@ def build(manifest, seed=2026, now=None):
         else:
             a["key"] = f"restore:{restores}"
             restores += 1
-    terms = [{"term": t, "category": c, "action": act, "note": n} for t, c, act, n in C.ADMIN_TERMS]
+    # Terms: added one by one over the months as each problem showed up; two taken out again.
+    term_days = sorted(rnd.uniform(5, 110) for _ in C.ADMIN_TERMS + C.REMOVED_TERMS)[::-1]
+    terms = [{"term": t, "category": c, "action": act, "note": n, "at": t1 - timedelta(days=d, hours=rnd.uniform(0, 10)),
+              "removed_at": None} for (t, c, act, n), d in zip(C.ADMIN_TERMS + C.REMOVED_TERMS, term_days)]
+    for t in terms[len(C.ADMIN_TERMS):]:
+        t["removed_at"] = t["at"] + timedelta(days=rnd.uniform(1, 4))
 
     def ser(obj):
         if isinstance(obj, datetime):
@@ -489,7 +550,7 @@ def check(plan, clips):
     videos = {v["key"]: v for v in plan["videos"]}
     t1 = parse(plan["t1"])
     assert len(plan["users"]) == 200 and len(plan["videos"]) == clips, (len(plan["users"]), len(plan["videos"]))
-    assert sum(v["held"] for v in plan["videos"]) == 3
+    assert not any(v["held"] for v in plan["videos"])
     for v in plan["videos"]:
         assert v["at"] >= users[v["owner"]]["join_at"], v
     per_day = Counter(parse(v["at"]).astimezone(VN).date() for v in plan["videos"])
@@ -511,11 +572,19 @@ def check(plan, clips):
     demo = C.PERSONAS[0]["username"]
     cids = {e["cid"]: e for e in plan["events"] if e["kind"] in ("comment", "reply")}
     reports = [a for a in plan["admin"] if a["kind"] == "report"]
-    assert len(reports) == 60, len(reports)
+    assert 40 <= len(reports) <= 60, len(reports)
+    assert all(a["outcome"] != "pending" for a in reports), "the open queue belongs to realism.py"
+    assert all(a.get("note") for a in reports if a["outcome"] != "pending"), "every decision carries a moderator note"
+    spam_users = {u for u, x in users.items() if x["spam"]}
+    assert sum(a["outcome"] == "TAKEDOWN_VIDEO" for a in reports) == len(C.SPAM_VIDEO_CAPTIONS)
+    assert all(videos[a["target"]]["owner"] in spam_users for a in reports if a["outcome"] == "TAKEDOWN_VIDEO")
+    removed = {t for t, _ in C.REMOVED_COMMENTS}
+    assert all(cids[a["target"]]["text"] in removed for a in reports if a["outcome"] == "REMOVE_COMMENT")
+    assert all(cids[a["target"]]["text"] in C.DISMISSED_COMMENTS for a in reports if a["target_type"] == "COMMENT" and a["outcome"] == "DISMISS_REPORT")
+    assert all(cids[a["cid"]]["actor"] in spam_users for a in plan["admin"] if a["kind"] == "remove_comment")
+    assert all(a["at"] < (a.get("resolved_at") or plan["t1"]) <= plan["t1"] for a in plan["admin"]), "decisions after the report, before now"
     assert len({a["key"] for a in plan["admin"]}) == len(plan["admin"]), "admin keys must be unique"
     for a in reports:
-        if a["outcome"] == "pending":  # StaleReportSweep dismisses expiring reasons after 30 d; leave 16 d for the demo
-            assert parse(a["at"]) > t1 - timedelta(days=14) or a["reason"] in C.NON_EXPIRING_REASONS, a
         if a["target_type"] == "COMMENT" and a["outcome"] == "REMOVE_COMMENT":
             assert cids[a["target"]]["actor"] != demo
     for a in plan["admin"]:

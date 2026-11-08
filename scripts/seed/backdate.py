@@ -108,13 +108,37 @@ def epoch(s):
 
 # --------------------------------------------------------------------------------------------- stores
 
+def last_acts(ledger):
+    """Each user's latest planned act: when they were last signed in."""
+    last = {}
+
+    def see(who, at):
+        if who and at > last.get(who, ""):
+            last[who] = at
+    for section in ("likes", "shares", "reposts", "saves", "comment_likes", "follows", "blocks", "mutes"):
+        for x in getattr(ledger, section):
+            see(x.get("actor") or x.get("follower") or x.get("blocker") or x.get("muter"), x["at"])
+    for c in ledger.comments.values():
+        see(c["author"], c["at"])
+    for c in ledger.chats:
+        for m in c["messages"]:
+            see(m["from"], m["at"])
+    for v in ledger.videos.values():
+        see(v["owner"], v["at"])
+    return last
+
+
 def backdate_auth(plan, ledger):
+    import realism
     lines = []
+    last = last_acts(ledger)
     for u in plan["users"]:
         rec = ledger.users[u["username"]]
         t = pg_ts(u["join_at"])
-        lines.append(f"UPDATE users SET created_at={t}, updated_at={t}, email_verified_at={t}, last_login_at={t} WHERE id={rec['id']};")
-        lines.append(f"UPDATE auth_security_events SET created_at={t} WHERE user_id={rec['id']};")
+        seen = max(last.get(u["username"], u["join_at"]), u["join_at"])
+        lines.append(f"UPDATE users SET created_at={t}, updated_at={t}, email_verified_at={t}, last_login_at={pg_ts(seen)} WHERE id={rec['id']};")
+        # sign-ins kept in order between joining and the last thing they did, not all on the day they joined
+        lines.append(realism.spread_events(rec["id"], u["join_at"], seen))
     for a in plan["admin"]:
         if a["kind"] == "report" and a["outcome"] == "BAN_USER":
             lines.append(f"UPDATE users SET banned_at={pg_ts(a['resolved_at'])} WHERE id={ledger.users[a['target']]['id']} AND status='BANNED';")
@@ -247,7 +271,7 @@ def backdate_cassandra(plan, ledger):
         for x in ledger.likes:
             api_likes[x["video"]] += 1
         counters = [f"UPDATE video_counters SET view_count = view_count + {rec['views']}, like_count = like_count + {max(0, rec['likes'] - api_likes[key])} WHERE video_id={rec['id']};"
-                    for key, rec in ledger.videos.items() if rec["status"] == "PUBLISHED"]
+                    for key, rec in ledger.videos.items() if rec["status"] in ("PUBLISHED", "DELETED")]  # a deleted one keeps its counts in the trash
         # Saved from a fresh read: the ledger in hand may carry `regrow`'s times, which must not
         # reach the file, or a second --grow would warp them again.
         fresh = Ledger(ledger.path)
@@ -360,6 +384,12 @@ def backdate_admin(plan, ledger):
         if act and act.get("id"):
             t = pg_ts(act["at"])
             lines.append(f"UPDATE moderation_actions SET created_at={t}, updated_at={t} WHERE id={act['id']};")
+    ids = ledger.admin.get("term_ids", {})
+    for t in plan["terms"]:  # each term on the day it was added; the two removed ones a few days later
+        if t["term"] in ids:
+            gone = f", deleted_at={pg_ts(t['removed_at'])}" if t.get("removed_at") else ""
+            lines.append(f"UPDATE moderation_terms SET created_at={pg_ts(t['at'])}, updated_at={pg_ts(t.get('removed_at') or t['at'])}{gone} "
+                         f"WHERE id={ids[t['term']]};")
     for key, act in ledger.actions.items():
         if key.startswith("restore-") and act:
             t = pg_ts(act["at"])
@@ -382,6 +412,8 @@ def backdate_clickhouse(plan, ledger):
         rows.append(("COMMENTED", vid[c["video"]], uid[c["author"]], c["at"]))
     for x in ledger.shares:
         rows.append(("SHARED", vid[x["video"]], uid[x["actor"]], x["at"]))
+    for x in ledger.saves:
+        rows.append(("SAVED", vid[x["video"]], uid[x["actor"]], x["at"]))
     for a in plan["admin"]:  # admin comment removals produce UNCOMMENTED rows
         cid = a.get("cid") if a["kind"] == "remove_comment" else a.get("target") if a["kind"] == "report" and a["target_type"] == "COMMENT" and a["outcome"] == "REMOVE_COMMENT" else None
         c = ledger.comments.get(cid or "")
@@ -652,7 +684,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("media_dir", nargs="?", default="~/Projects/EProject/EProject4/seed-media")
     ap.add_argument("--seed", type=int, default=2026)
-    ap.add_argument("--only", help="comma-separated stores: auth,user,video,es,reco,cassandra,chat,notifications,admin,clickhouse,redis")
+    ap.add_argument("--only", help="comma-separated stores: auth,user,video,es,reco,cassandra,chat,notifications,admin,clickhouse,realism,redis")
     ap.add_argument("--grow", type=float, help="re-time as steady growth, last month about this many times the first (e.g. 8)")
     ap.add_argument("--months", type=int, default=12, help="history length for --grow")
     ap.add_argument("--check", action="store_true", help="with --grow: verify and print the monthly counts, write nothing")
@@ -664,8 +696,10 @@ def main():
     waiting = [k for k, r in ledger.videos.items() if not _finished(r)]
     if waiting:
         raise SystemExit(f"{len(waiting)} videos still in the pipeline; run seed.py --phase videos first")
+    end = parse(ledger.admin["t1"])
     if args.grow:
-        regrow(plan, ledger, args.grow, args.months, datetime.now(timezone.utc))
+        end = datetime.now(timezone.utc)
+        regrow(plan, ledger, args.grow, args.months, end)
         check_growth(plan, ledger)
         if args.check:
             return
@@ -680,6 +714,7 @@ def main():
         ("notifications", lambda: backdate_notifications(plan, ledger)),
         ("admin", lambda: backdate_admin(plan, ledger)),
         ("clickhouse", lambda: backdate_clickhouse(plan, ledger)),
+        ("realism", lambda: __import__("realism").backdate(ledger, end)),  # after auth: it re-times its own accounts
         ("redis", lambda: flush_redis_caches(ledger)),
     ]
     only = set(args.only.split(",")) if args.only else None

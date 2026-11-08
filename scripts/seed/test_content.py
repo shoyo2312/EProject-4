@@ -5,7 +5,8 @@ BLOCK = pathlib.Path("libs/moderation-lib/src/main/resources/moderation/blocklis
 terms = [l.split("|")[0].strip().lower() for l in BLOCK.read_text().splitlines()
          if l.strip() and not l.startswith("#") and "|" in l]
 texts = [*c.COMMENTS, *c.REPLIES, *[l for t in c.CHAT_THREADS for l in t], *c.STORY_CAPTIONS,
-         *[s for p in c.HELD_CAPTIONS for s in p],
+         *[t for t, _, _ in c.SPAM_VIDEO_CAPTIONS], *c.SPAM_COMMENTS, *[t for t, _ in c.REMOVED_COMMENTS],
+         *c.DISMISSED_COMMENTS, *c.SELF_PROMO_COMMENTS,
          *[p["bio"] for p in c.PERSONAS], *[p["display_name"] for p in c.PERSONAS]]
 assert len(c.PERSONAS) == 200 and len({p["username"] for p in c.PERSONAS}) == 200
 assert all(re.fullmatch(r"[a-z][a-z0-9._]{2,49}", p["username"]) for p in c.PERSONAS)
@@ -17,9 +18,10 @@ assert all(1 <= len(p["topics"]) <= 3 for p in c.PERSONAS)
 assert len(c.COMMENTS) >= 200 and len(set(c.COMMENTS)) == len(c.COMMENTS) and max(len(s) for s in c.COMMENTS) <= 150
 assert len(c.REPLIES) >= 100 and len(set(c.REPLIES)) == len(c.REPLIES)
 assert len(c.CHAT_THREADS) >= 15 and all(5 <= len(t) <= 20 for t in c.CHAT_THREADS)
-assert len(c.HELD_CAPTIONS) == 3
-assert all(re.search(r"\d{3,4}[ .]?\d{3}[ .]?\d{3,4}|https?://", d) for _, d in c.HELD_CAPTIONS)
+assert not any(re.search(r"\d{3,4}[ .]?\d{3}[ .]?\d{3,4}|https?://", t) for t, _, _ in c.SPAM_VIDEO_CAPTIONS), "a number or link would hold it"
 assert len(c.NON_EXPIRING_REASONS) == 4 and all(len(v) >= 4 for v in c.REPORT_REASONS.values())
+assert len({t for t, *_ in c.ADMIN_TERMS + c.REMOVED_TERMS}) == len(c.ADMIN_TERMS) + len(c.REMOVED_TERMS)
+assert all((cat is None) == (act == "EXEMPT") for _, cat, act, _ in c.ADMIN_TERMS + c.REMOVED_TERMS), "admin-service: HOLD/REJECT need a category, EXEMPT has none"
 assert len(c.STORY_CAPTIONS) >= 12
 import json
 CAPS = pathlib.Path(__file__).with_name("captions.json")
@@ -37,8 +39,16 @@ if CAPS.exists():  # one entry per clip in the manifest, written against its thu
         assert imported or (6 <= len(e["comments"]) and len(set(e["comments"])) == len(e["comments"]) and all(1 <= len(x) <= 150 for x in e["comments"])), k
         assert imported or (3 <= len(e["replies"]) and all(1 <= len(x) <= 150 for x in e["replies"])), k
         texts += [e["title"], e["description"], *e["comments"], *e["replies"]]
-for s in texts:
+import realism as r
+late = [*(f[2] for f in r.FLAGGED), *(x for f in r.FLAGGED for x in f[6]), *(x[1] for x in r.REPORTED_COMMENTS),
+        *(x[1] for n, x in enumerate(r.NEW_ACCOUNTS) if x[1]), *(x[2] for x in r.NEW_ACCOUNTS if x[2])]
+live = [t.lower() for t, _, act, _ in c.ADMIN_TERMS if act != "EXEMPT"]  # added before realism and seed-refresh run
+for s in texts + late:
     low = s.lower()
     hit = [t for t in terms if t and re.search(r"(?<![\w])" + re.escape(t) + r"(?![\w])", low)]
+    assert not hit, (s, hit)
+posted = late[:len(r.FLAGGED) + sum(len(f[6]) for f in r.FLAGGED) + len(r.REPORTED_COMMENTS)]  # captions + comments, not profiles
+for s in posted + c.COMMENTS:
+    hit = [t for t in live if re.search(r"(?<![\w])" + re.escape(t) + r"(?![\w])", s.lower())]
     assert not hit, (s, hit)
 print("ok")
