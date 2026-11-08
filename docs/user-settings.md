@@ -260,9 +260,10 @@ Under `/api/v1/users/me/keyword-filters` (`FeedKeywordFilterController`): `GET` 
 `POST` (`201`), `PUT /{id}`, `DELETE /{id}` (soft delete; the keyword can be added again). A filter
 is `{ id, keyword, forYou, following, friends }`.
 
-- The keyword is sanitized like a title, then must be one word or one hashtag (`^#?[^\s#]+$`), at
-  most 200 code points, and have something to match (`Blocklist.isMatchable`) — `VALIDATION_ERROR`
-  otherwise; at least one feed, likewise. The spelling typed is kept.
+- The keyword is sanitized like a title (runs of spaces become one), then must be at most 200 code
+  points and have something to match (`Blocklist.isMatchable`) — `VALIDATION_ERROR` otherwise; at
+  least one feed, likewise. A word, a hashtag or a phrase: a phrase matches its words in a row, or
+  written as one hashtag (`nhà cái` drops `#nhàcái`). The spelling typed is kept.
 - `KEYWORD_FILTER_DUPLICATE` (409) when the account already filters it in any capitalization — a
   check by `lower(keyword)` backed by the unique index, which also turns a lost race into the same
   409. `TOO_MANY_KEYWORD_FILTERS` (409) past 100 (a check, not a lock: two parallel creates can
@@ -639,7 +640,7 @@ user-service:
 - heartbeat: day/night split at 06:00 and 22:00 local, local date after midnight, the 120s clamp,
   twenty parallel heartbeats add up exactly, the zone is stored and a stale settings save cannot
   undo it
-- keyword filters: one word or hashtag, 200 code points, case-insensitive duplicates, the 101st,
+- keyword filters: a phrase with its spaces collapsed, 200 code points, case-insensitive duplicates, the 101st,
   someone else's id is not found, a deleted keyword can be added again, and the internal policy
   carries the per-feed lists
 - digest: due from Monday 09:00 local, once per week even across two concurrent runs, a zero week
