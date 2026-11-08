@@ -28,6 +28,7 @@ import com.tiktok.chatservice.exception.InvalidReactionException;
 import com.tiktok.chatservice.exception.InvalidReceiptException;
 import com.tiktok.chatservice.repository.ConversationRepositoryCustom;
 import com.tiktok.chatservice.exception.InvalidReplyTargetException;
+import com.tiktok.chatservice.exception.MessageAlreadySeenException;
 import com.tiktok.chatservice.exception.MessageNotFoundException;
 import com.tiktok.chatservice.exception.MessageRecalledException;
 import com.tiktok.chatservice.exception.MessageRequestLimitReachedException;
@@ -524,6 +525,11 @@ public class MessageServiceImpl implements MessageService {
         if (!userId.equals(message.getSenderId())) {
             throw new NotMessageAuthorException();
         }
+        // Once the other side has read it, it is theirs too. An already recalled message is let
+        // through, so repeating a recall stays a no-op rather than turning into an error.
+        if (!message.isRecalled() && seenByOthers(conversation, message)) {
+            throw new MessageAlreadySeenException();
+        }
 
         boolean changed = messageRepository.recall(conversationId, messageId, userId, Instant.now());
         MessageUpdateResponse update = updateOf(reload(conversationId, messageId));
@@ -554,6 +560,32 @@ public class MessageServiceImpl implements MessageService {
         eventPublisher.toUser(userId, ChatEvent.hidden(conversationId, messageId));
         conversationRepository.findByIdAndDeletedAtIsNull(conversation.getId())
                 .ifPresent(fresh -> eventPublisher.conversationChangedFor(fresh, userId));
+    }
+
+    /**
+     * Whether a participant other than the sender has a read mark at or past the message. Read by
+     * position, like every receipt: a mark covers everything up to it in thread order.
+     */
+    private static boolean seenByOthers(Conversation conversation, Message message) {
+        Map<String, ReceiptMark> marks = conversation.getReadMark();
+        if (marks == null) {
+            return false;
+        }
+        for (Long participant : conversation.getParticipantIds()) {
+            if (participant.equals(message.getSenderId())) {
+                continue;
+            }
+            ReceiptMark mark = marks.get(String.valueOf(participant));
+            if (mark != null && covers(mark, message)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean covers(ReceiptMark mark, Message message) {
+        int bySentAt = mark.sentAt().compareTo(message.getSentAt());
+        return bySentAt > 0 || (bySentAt == 0 && mark.messageId().compareTo(message.getId()) >= 0);
     }
 
     /** When the viewer deleted the whole conversation from their side, or null. */

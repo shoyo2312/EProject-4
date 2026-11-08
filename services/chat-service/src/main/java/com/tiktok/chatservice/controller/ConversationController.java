@@ -61,7 +61,7 @@ public class ConversationController {
         return ApiResponse.success(conversationService.declineRequest(currentUserId, conversationId));
     }
 
-    /** Pins the conversation above the caller's others; refused (409) when three are already pinned. */
+    /** Pins the conversation above the caller's others; refused (409) when {@code MAX_PINS} (5) are already pinned. */
     @PutMapping("/{conversationId}/pin")
     public ApiResponse<ConversationResponse> pin(
             @AuthenticationPrincipal Long currentUserId,

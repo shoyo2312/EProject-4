@@ -17,14 +17,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
 public class FeedKeywordFilterServiceImpl implements FeedKeywordFilterService {
-
-    /** "Enter a single word or hashtag": an optional leading #, then no spaces and no other #. */
-    private static final Pattern ONE_WORD_OR_HASHTAG = Pattern.compile("^#?[^\\s#]+$");
 
     /** No Snowflake id is 0, so nothing is excluded when creating. */
     private static final Long NO_ID = 0L;
@@ -98,7 +94,10 @@ public class FeedKeywordFilterServiceImpl implements FeedKeywordFilterService {
         }
     }
 
-    /** Sanitized like a title, then checked; the spelling typed is the one kept. */
+    /**
+     * Sanitized like a title (runs of spaces become one), then checked; the spelling typed is the
+     * one kept. A phrase is fine: the matcher looks for its syllables in a row.
+     */
     private static String validKeyword(String raw) {
         String keyword = TextSanitizer.sanitizeLine(raw);
         if (keyword == null || keyword.isBlank()) {
@@ -106,9 +105,6 @@ public class FeedKeywordFilterServiceImpl implements FeedKeywordFilterService {
         }
         if (keyword.codePointCount(0, keyword.length()) > MAX_KEYWORD_CODE_POINTS) {
             throw new InvalidUserSettingsException("keyword: must be at most " + MAX_KEYWORD_CODE_POINTS + " characters");
-        }
-        if (!ONE_WORD_OR_HASHTAG.matcher(keyword).matches()) {
-            throw new InvalidUserSettingsException("keyword: must be a single word or hashtag");
         }
         if (!Blocklist.isMatchable(keyword)) {
             // Only emoji or punctuation would never match anything, and the viewer would think it did.
