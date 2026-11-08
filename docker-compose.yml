@@ -298,6 +298,10 @@ services:
   rank-service:
     build: ./services/rank-service
     container_name: tt-rank-service
+    # Loopback only, like moderation-service: recommendation-service run with `make run-recommendation`
+    # lives on the host and calls localhost:8098. Without this it falls back to the heuristic ordering.
+    ports:
+      - "127.0.0.1:8098:8098"
     environment:
       MODEL_PATH: /app/model/model.txt
     volumes:
