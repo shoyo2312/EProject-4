@@ -16,7 +16,8 @@ are one message for every existing send policy, request quota, and 15-day retry 
 blank means null and the maximum is 300 Java UTF-16 units. `stickerId` must be null.
 `clientRequestId` is optional, at most 64 characters, scoped to conversation and sender.
 `replyToMessageId` may be supplied using the existing reply rules. Client-supplied card
-metadata is ignored. TEXT/STICKER requests cannot carry a videoId.
+metadata is ignored. Only VIDEO requests can carry a videoId (TEXT, STICKER, STORY_REPLY and IMAGE
+are refused with INVALID_MESSAGE).
 
 A newly stored message returns HTTP 201. An existing `(conversationId, senderId, clientRequestId)`
 returns HTTP 200 with the same MessageResponse shape and message id. It does not broadcast,
@@ -146,12 +147,3 @@ without cards or media URLs:
 TEXT/STICKER export JSON is unchanged. A reply to a video has its card stripped from export too.
 The user-service consumer retains videoId and caption, writes Type=VIDEO and Video ID in the
 archive, and supplies the required viewerId when fetching conversation history.
-
-## Concurrent branch integration
-
-The other agent owns ConversationViews and ConversationResponse. Its fallback preview path for
-hidden/cleared conversations must also suppress VIDEO captions: use
-`latest.isRecalled() || latest.getType() == MessageType.VIDEO ? null : latest.getContent()` when
-rebuilding the preview, or enforce the same rule in ConversationResponse.withPreview. Those files
-are intentionally untouched here. Until that change is integrated, the fallback can expose a
-caption even though recordMessage stores a null preview. This is a required merge check.

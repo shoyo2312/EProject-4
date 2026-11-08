@@ -2,14 +2,14 @@
 
 Tài liệu này mô tả **những gì client (Flutter/Dart) cần biết** để tích hợp đúng với `interaction-service`: like, comment, share, save (yêu thích), repost, view (đếm lượt xem) và watch (báo cáo phiên xem). Không phải tài liệu thiết kế backend — chỉ phần hợp đồng API (contract). Đọc kèm `docs/auth-service-api.md` để lấy `accessToken`, và `docs/video-service-api.md` vì các counter hiển thị trên màn video đến từ **cả hai** service.
 
-Quy tắc token ở đây: **mọi thao tác ghi (`POST`/`DELETE`) đều bắt buộc token**; chỉ năm endpoint đọc là public (`GET /counts`, `GET /counts/batch`, `GET /comments`, `GET /like-status`, `GET /users/{userId}/reposts`). Mọi `GET` khác — kể cả `GET /comments/{id}/replies` — đều bắt buộc token. Ở `GET /like-status` thì có token hay không **vẫn đổi kết quả** — xem mục 3.3.
+Quy tắc token ở đây: **mọi thao tác ghi (`POST`/`DELETE`) đều bắt buộc token**; chỉ sáu endpoint đọc là public (`GET /counts`, `GET /counts/batch`, `GET /comments`, `GET /comments/{id}/replies`, `GET /like-status`, `GET /users/{userId}/reposts`). Mọi `GET` khác đều bắt buộc token. Ở `GET /like-status` thì có token hay không **vẫn đổi kết quả** — xem mục 3.3.
 
 ## 1. Tech stack liên quan đến client
 
 | Thành phần | Công nghệ |
 |---|---|
 | Giao thức | REST/HTTP, JSON |
-| Auth | JWT access token, Bearer scheme — bắt buộc với `POST`/`DELETE`, optional với 5 `GET` public |
+| Auth | JWT access token, Bearer scheme — bắt buộc với `POST`/`DELETE`, optional với 6 `GET` public |
 | Entry point cho mobile | **api-gateway** (`:8080`), KHÔNG gọi thẳng `interaction-service:8085` |
 | Base URL (qua gateway) | `http://<gateway-host>:8080/api/v1/interactions` |
 | Docs tương tác | `http://localhost:8085/swagger-ui.html` (chạy trực tiếp interaction-service khi dev) |
@@ -47,7 +47,7 @@ Lỗi:
 
 Base path: `/api/v1/interactions`. Phần lớn endpoint nằm dưới `/videos/{videoId}/...`; các endpoint theo lô nằm dưới `/videos/.../batch`, còn danh sách theo người dùng nằm dưới `/users/...` (mục 3.11, 3.15). `/admin/**` (ADMIN) và `/internal/**` (chỉ service nội bộ) không dành cho client.
 
-**Mọi thao tác ghi hỏi video-service trước** (`GET /api/v1/videos/{id}` kèm token của người gọi): video không tồn tại, riêng tư, chưa publish, hoặc người gọi và chủ video đang chặn nhau → `404 VIDEO_NOT_FOUND`. video-service không trả lời được (sập, timeout) thì thao tác vẫn đi qua — một sự cố ở đó không được làm tê liệt mọi lượt like.
+**Mọi thao tác ghi tạo mới hỏi video-service trước** (`GET /api/v1/videos/{id}` kèm token của người gọi): video không tồn tại, riêng tư, chưa publish, hoặc người gọi và chủ video đang chặn nhau → `404 VIDEO_NOT_FOUND`. Các thao tác gỡ (`DELETE /like`, `/save`, `/repost`, `/comments/{id}`, `/comments/{id}/like`) không hỏi. video-service không trả lời được (sập, timeout) thì thao tác vẫn đi qua — một sự cố ở đó không được làm tê liệt mọi lượt like.
 
 ### 3.1 `POST /videos/{videoId}/like` — thích video
 **Bắt buộc token.** Trả `200 OK` (không phải `201`).
@@ -67,14 +67,14 @@ Response `data` → `LikeStatusResponse`:
 
 `liked` trong response **luôn** là `true` (đó là kết quả mong muốn của thao tác, không phải trạng thái trước đó). Muốn biết "vừa rồi có phải like mới không" thì so `likeCount` với số đang giữ trên UI — nhưng thường không cần: đã gọi `/like` thì trạng thái cuối là đã like.
 
-Lỗi: `INTERACTION_CONFLICT` (409), `401`. Xem mục 5 về 409.
+Lỗi: `VIDEO_NOT_FOUND` (404), `INTERACTION_CONFLICT` (409), `LIKE_RATE_LIMITED` (429), `INTERACTION_NOT_RECORDED` (503), `401`. Xem mục 5 về 409.
 
 ### 3.2 `DELETE /videos/{videoId}/like` — bỏ thích
 **Bắt buộc token.** Trả `200 OK`, `data` → `LikeStatusResponse` với `liked: false`.
 
 Cũng idempotent theo cùng cơ chế (`IF EXISTS`): bỏ like khi chưa từng like trả `200`, `likeCount` không giảm. Không có lỗi "chưa like".
 
-Lỗi: `INTERACTION_CONFLICT` (409), `401`.
+Lỗi: `INTERACTION_CONFLICT` (409), `LIKE_RATE_LIMITED` (429), `INTERACTION_NOT_RECORDED` (503), `401`.
 
 ### 3.3 `GET /videos/{videoId}/like-status` — trạng thái like của chính mình
 **Không bắt buộc token, nhưng nên gửi nếu đã đăng nhập.** Trả `200 OK`, `data` → `LikeStatusResponse`.
@@ -149,9 +149,11 @@ Comment `HELD` không xuất hiện ở mục 3.5/3.5b, không like được, kh
 
 **Bị hạn chế bình luận.** Mỗi comment bị từ chối (422) hoặc bị admin gỡ là một "strike". Đủ 3 strike trong 24 giờ → tài khoản không được bình luận ở bất kỳ đâu trong 1 giờ; lần hạn chế kế tiếp (trong vòng 30 ngày) 24 giờ, rồi 7 ngày. Comment bị giữ lại (`HELD`) **không** tính là strike. Trong thời gian bị hạn chế mọi lần gửi trả `COMMENTING_RESTRICTED` (403) kèm header `Retry-After` (giây tới khi hết hạn chế), kiểm tra trước mọi thứ khác — client hiện "Bạn tạm thời không thể bình luận do vi phạm nhiều lần" và có thể dùng `Retry-After` hoặc `restrictedUntil` ở mục 3.4a để nói đến khi nào. Like, xoá, đọc comment không bị ảnh hưởng.
 
-**Chống trùng lặp.** Cùng một nội dung (không phân biệt hoa thường, dấu, dấu câu, khoảng trắng — "Hay quá!!!" và "hay qua" là một) từ cùng một người:
-- trên **cùng video** trong 10 phút → `DUPLICATE_COMMENT` (429);
-- trên **hơn 5 video khác nhau** trong 10 phút → `DUPLICATE_COMMENT` (429).
+**Chống trùng lặp.** Cùng một nội dung (không phân biệt hoa thường, dấu, dấu câu, khoảng trắng — "Hay quá!!!" và "hay qua" là một) từ cùng một người. Một "chỗ" là thread gốc của một video, hoặc một comment cụ thể đang được trả lời (`parentId`) — trả lời hai người khác nhau bằng cùng một câu là hai chỗ:
+- ở **cùng một chỗ** trong 10 phút → `DUPLICATE_COMMENT` (429);
+- ở **hơn 5 chỗ khác nhau** trong 10 phút → `DUPLICATE_COMMENT` (429).
+
+Chủ video bình luận trên video của mình không bị kiểm tra trùng lặp (cảm ơn từng fan bằng cùng một câu là chuyện bình thường).
 
 Comment bị từ chối (422) hoặc lỗi server không tính là "đã gửi", nên gửi lại sau lỗi 5xx không bị báo trùng. Phía Flutter vẫn phải khoá nút gửi cho tới khi có response: bấm hai lần nhanh thì lần thứ hai nhận `DUPLICATE_COMMENT` (hoặc `COMMENT_RATE_LIMITED`) thay vì tạo comment đôi — đừng hiện lỗi đó như một thất bại của comment đầu.
 
@@ -168,7 +170,7 @@ Cờ từng video và cài đặt tài khoản **đều là hạn chế**, khôn
 
 Nếu video-service không trả lời được thì comment **vẫn đi qua** (fail-open) — một sự cố ở video-service không được phép chặn toàn bộ comment của hệ thống. Riêng nhánh `FRIENDS` thì fail-closed: không xác nhận được quan hệ follow là từ chối, vì "chỉ bạn bè" không được phép biến thành "tất cả mọi người" lúc user-service chết.
 
-Lỗi: `VALIDATION_ERROR` (400), `COMMENTS_DISABLED` (403), `COMMENTS_NOT_ALLOWED` (403), `COMMENTING_RESTRICTED` (403, có `Retry-After`), `REPLY_NOT_ALLOWED` (403), `COMMENT_NOT_FOUND` (404 — `parentId` không hợp lệ, đã xoá, hoặc đang chờ duyệt), `COMMENT_REJECTED` (422), `COMMENT_RATE_LIMITED` (429), `DUPLICATE_COMMENT` (429), `401`.
+Lỗi: `VALIDATION_ERROR` (400), `INVALID_STICKER` (400), `COMMENTS_DISABLED` (403), `COMMENTS_NOT_ALLOWED` (403), `COMMENTING_RESTRICTED` (403, có `Retry-After`), `REPLY_NOT_ALLOWED` (403), `VIDEO_NOT_FOUND` (404), `COMMENT_NOT_FOUND` (404 — `parentId` không hợp lệ, đã xoá, hoặc đang chờ duyệt), `COMMENT_REJECTED` (422), `COMMENT_RATE_LIMITED` (429), `DUPLICATE_COMMENT` (429), `INTERACTION_NOT_RECORDED` (503), `401`.
 
 ### 3.4a `GET /videos/{videoId}/comment-permission` — người gọi có được bình luận không
 **Bắt buộc token.** Trả `200 OK`, `data` → `CommentPermissionResponse`:
@@ -229,7 +231,7 @@ Cách dùng:
 
 > **Một trang có thể trả ít hơn `size` item, thậm chí `items: []`, mà `hasMore` vẫn `true`.** Comment bị xoá được lọc **sau** khi Cassandra đã cắt trang. Server tự đọc tiếp tối đa 5 trang khi gặp trang rỗng, nhưng một chuỗi dài comment đã xoá vẫn có thể ra trang rỗng. Đây là hành vi bình thường, **không** phải hết dữ liệu. Client phải lặp theo `hasMore`/`nextCursor`, tuyệt đối đừng dừng khi thấy trang rỗng — và đừng dùng `items.length < size` làm điều kiện dừng.
 
-`size` mặc định 20, bị kẹp vào khoảng **1–50**. Cursor hỏng/không giải mã được → `INVALID_COMMENT_CURSOR` (400).
+`size` mặc định 20, bị kẹp vào khoảng **1–50**. Cursor hỏng/không giải mã được → `INVALID_COMMENT_CURSOR` (400). Video không xem được (không tồn tại, riêng tư, chặn nhau) → `VIDEO_NOT_FOUND` (404).
 
 **`sort`** (tuỳ chọn): `newest` (mặc định, như trên) hoặc `top`. Giá trị khác được coi là `newest`.
 - `sort=top`: xếp theo **tương tác** = `likeCount + replyCount`, cao nhất trước; bằng điểm thì comment mới hơn trước. App mobile dùng `top`.
@@ -239,10 +241,10 @@ Cách dùng:
 
 Video đã tắt comment (hoặc tài khoản chủ đặt `NO_ONE`) → trang rỗng, `hasMore: false`, không lỗi.
 
-**Comment của tài khoản đang bị ban không được trả về** (ở cả 3.5, 3.5b, 3.4b) cho tới khi hết ban hoặc được gỡ ban — lúc đó chúng hiện lại nguyên vẹn. `commentCount`/`replyCount` vẫn đếm chúng, nên tổng số có thể lớn hơn số comment đọc được trong lúc ban còn hiệu lực. Đây là một lý do nữa để không dừng phân trang theo `items.length`.
+**Comment của tài khoản đang bị ban hoặc đã tự đóng (deactivate) không được trả về** (ở cả 3.5, 3.5b, 3.4b) cho tới khi hết ban / được gỡ ban / tài khoản được mở lại — lúc đó chúng hiện lại nguyên vẹn. `commentCount`/`replyCount` vẫn đếm chúng, nên tổng số có thể lớn hơn số comment đọc được trong lúc ban còn hiệu lực. Đây là một lý do nữa để không dừng phân trang theo `items.length`.
 
 ### 3.5b `GET /videos/{videoId}/comments/{commentId}/replies` — reply của một comment
-**Bắt buộc token.** Cùng cách phân trang và cùng response `CommentPageResponse` như 3.5, nhưng thứ tự **cũ nhất trước** (đọc như một cuộc hội thoại) và `size` mặc định **3** (đủ cho lần bấm "Xem phản hồi" đầu tiên; tối đa 50).
+Không cần token (gửi nếu đã đăng nhập để `likedByMe` đúng). Cùng cách phân trang và cùng response `CommentPageResponse` như 3.5, nhưng thứ tự **cũ nhất trước** (đọc như một cuộc hội thoại) và `size` mặc định **3** (đủ cho lần bấm "Xem phản hồi" đầu tiên; tối đa 50).
 
 - `commentId` là id comment gốc. Comment không tồn tại hoặc không có reply → trang rỗng, **không** 404.
 - Video tắt comment → trang rỗng như 3.5. Video không xem được → `VIDEO_NOT_FOUND` (404).
@@ -258,10 +260,10 @@ Nội dung mới đi qua **đúng** bộ kiểm duyệt của mục 3.4:
 
 Comment đang chờ duyệt (`HELD`) hoặc đã xoá → `COMMENT_NOT_FOUND`. Like và reply của comment giữ nguyên sau khi sửa. Giới hạn 60 lần sửa / giờ cho mỗi comment.
 
-Lỗi: `VALIDATION_ERROR` (400), `NOT_COMMENT_OWNER` (403), `COMMENTING_RESTRICTED` (403), `COMMENTS_DISABLED` (403), `COMMENTS_NOT_ALLOWED` (403), `COMMENT_NOT_FOUND` (404), `COMMENT_REJECTED` (422), `COMMENT_EDIT_NEEDS_REVIEW` (422), `COMMENT_EDIT_RATE_LIMITED` (429), `401`.
+Lỗi: `VALIDATION_ERROR` (400), `NOT_COMMENT_OWNER` (403), `COMMENTING_RESTRICTED` (403), `COMMENTS_DISABLED` (403), `COMMENTS_NOT_ALLOWED` (403), `VIDEO_NOT_FOUND` (404), `COMMENT_NOT_FOUND` (404), `COMMENT_REJECTED` (422), `COMMENT_EDIT_NEEDS_REVIEW` (422), `COMMENT_EDIT_RATE_LIMITED` (429), `401`.
 
 ### 3.6 `DELETE /videos/{videoId}/comments/{commentId}` — xoá bình luận của mình
-**Bắt buộc token.** Trả `200 OK`, `data` null. Xoá mềm: comment biến mất khỏi mục 3.5 ngay và `commentCount` giảm 1.
+**Bắt buộc token.** Trả `200 OK`, `data` null. Xoá mềm: comment biến mất khỏi mục 3.5 ngay và `commentCount` giảm 1. Xoá một **comment gốc** thì mọi reply của nó cũng bị xoá theo — mỗi reply giảm `commentCount` thêm 1 và phát `CommentDeletedEvent` riêng (reply mồ côi không bao giờ hiện được, nhưng vẫn nằm trong counter). Admin gỡ comment gốc (mục 7) cũng xoá theo như vậy.
 
 Xoá được comment của **chính mình**, và chủ video xoá được **mọi** comment trên video của mình — đó cũng là cách từ chối một comment đang chờ duyệt (mục 3.4b). Xoá comment `HELD` không đổi `commentCount` (nó chưa từng được đếm).
 
@@ -281,9 +283,9 @@ Lưu ý: `videoId` trên URL là **một phần khoá** của comment, không ph
 
 Idempotent: `POST` hai lần chỉ tính một like (giống `/like` của video ở mục 3.1), `DELETE` khi chưa like là no-op. `likeCount` này cũng là `CommentResponse.likeCount` ở mục 3.4/3.5; `likedByMe` ở đó cho biết token hiện tại đã like comment nào.
 
-`videoId` là một phần khoá của comment. `commentId` không tồn tại / đã xoá / không thuộc `videoId` → `COMMENT_NOT_FOUND` (404). Lỗi khác: `401`.
+`videoId` là một phần khoá của comment. `commentId` không tồn tại / đã xoá / không thuộc `videoId` → `COMMENT_NOT_FOUND` (404). Lỗi khác: `VIDEO_NOT_FOUND` (404, chỉ `POST`), `INTERACTION_CONFLICT` (409), `COMMENT_LIKE_RATE_LIMITED` (429), `401`.
 
-> Đếm like comment lưu **denormalized** trên chính comment, cập nhật không qua LWT — hai người like đúng cùng khoảnh khắc có thể hụt 1. Chấp nhận được, không có gì phụ thuộc con số chính xác tuyệt đối.
+> Đếm like comment lưu **denormalized** trên chính comment, cập nhật bằng ghi có điều kiện (so với giá trị vừa đọc), thua thì đọc lại và thử lại — tối đa 4 lần. Chỉ khi cả 4 lần đều thua (nhiều người like đúng cùng khoảnh khắc) con số mới hụt 1. Chấp nhận được, không có gì phụ thuộc con số chính xác tuyệt đối.
 
 ### 3.7 `POST /videos/{videoId}/share` — chia sẻ
 **Bắt buộc token.** Trả `200 OK`.
@@ -297,13 +299,13 @@ Không có request body. Response `data` → `ShareResponse`:
 }
 ```
 
-**Mỗi lần gọi là một lượt chia sẻ mới**, không khử trùng lặp và không giới hạn theo người dùng: cùng một user gọi 5 lần thì `shareCount` tăng 5. Khác like ở chỗ đó. Vì vậy:
+**Mỗi lần gọi là một lượt chia sẻ mới**, không khử trùng lặp: cùng một user gọi 5 lần thì `shareCount` tăng 5. Khác like ở chỗ đó. Giới hạn duy nhất là 60 lần / giờ cho mỗi cặp (người dùng, video) — vượt → `SHARE_RATE_LIMITED` (429). Vì vậy:
 - Gọi **sau** khi thao tác chia sẻ thật sự diễn ra (user đã chọn xong app đích trong share sheet), không phải lúc mở share sheet;
 - **Không** retry tự động khi timeout — sẽ đếm đôi.
 
 `shareId` trả về dùng để đối soát/log phía client nếu cần; hiện chưa có endpoint nào tra cứu theo `shareId`.
 
-Lỗi: `401`.
+Lỗi: `VIDEO_NOT_FOUND` (404), `SHARE_RATE_LIMITED` (429), `INTERACTION_NOT_RECORDED` (503), `401`.
 
 ### 3.8 `POST /videos/{videoId}/view` — đếm lượt xem
 **Bắt buộc token.** Trả `200 OK`. Đây là endpoint làm `viewCount` nhích lên; **server không tự biết ai đang xem**, không gọi thì con số đứng yên mãi mãi.
@@ -328,13 +330,13 @@ Response `data` → `ViewResponse`:
 
 - Gọi **một lần khi bắt đầu xem** một video, không gọi theo tick thời gian.
 - **Đếm theo từng lần phát.** Cùng một user xem lại video 3 lần = 3 view, giống cách TikTok đếm. Điều kiện duy nhất: mỗi lần phát là một `playId` mới.
-- Gửi lại **cùng `playId`** trả `counted: false` và `viewCount` không đổi. Đó là để retry mạng an toàn, không phải lỗi — đừng hiện thông báo gì cho user. Nhớ giữ nguyên `playId` khi retry; sinh mới lúc retry sẽ đếm đôi.
+- Gửi lại **cùng `playId`** trong vòng 15 phút trả `counted: false` và `viewCount` không đổi. Đó là để retry mạng an toàn, không phải lỗi — đừng hiện thông báo gì cho user. Nhớ giữ nguyên `playId` khi retry; sinh mới lúc retry sẽ đếm đôi.
 - Giới hạn **60 lần phát / giờ** cho mỗi cặp (người xem, video). Vượt → `VIEW_RATE_LIMITED` (429). Người xem thật không bao giờ chạm ngưỡng này.
 - **Xem ẩn danh không được tính.** Không token → `401`, không phải "tính vào lượt xem chung". Không có danh tính thì không có giới hạn nào áp được, và một trình duyệt sẽ thổi phồng được số vô hạn.
 
 Khác `POST /watch` (mục 3.9) như thế nào: `/view` là **con số hiển thị**, bắn lúc bắt đầu phát; `/watch` là **dữ liệu huấn luyện gợi ý**, bắn lúc kết thúc phiên và kèm thời lượng đã phát. Cả hai đều tính mọi lần xem lại. Cần gọi cả hai, ở hai thời điểm khác nhau.
 
-Lỗi: `VIEW_RATE_LIMITED` (429), `401`.
+Lỗi: `VALIDATION_ERROR` (400 — thiếu/rỗng `playId`, dài quá 64), `VIDEO_NOT_FOUND` (404), `VIEW_RATE_LIMITED` (429), `INTERACTION_NOT_RECORDED` (503), `401`.
 
 ### 3.9 `POST /videos/{videoId}/watch` — báo cáo phiên xem
 **Bắt buộc token.** Trả `200 OK`.
@@ -373,7 +375,7 @@ Response `data` → `WatchResponse`:
 
 Endpoint này **không đổi bất kỳ counter nào** — `viewCount`, `likeCount`... đều không nhích. Nó cũng không có endpoint đọc tương ứng: không có API nào trả về lịch sử xem hay thời lượng đã xem của user.
 
-Lỗi: `VALIDATION_ERROR` (400 — thiếu field, `watchedMs` âm, `durationMs` <= 0), `401`.
+Lỗi: `VALIDATION_ERROR` (400 — thiếu field, `watchedMs` âm, `durationMs` <= 0), `BAD_REQUEST` (400 — `source` lạ), `VIDEO_NOT_FOUND` (404), `WATCH_RATE_LIMITED` (429), `401`.
 
 ### 3.10 `GET /videos/{videoId}/counts` — 6 counter của một video
 Không cần token. Trả `200 OK`, `data` → `InteractionCountResponse`:
@@ -449,7 +451,7 @@ Lỗi: `VIDEO_NOT_FOUND` (404), `REPOST_RATE_LIMITED` (429), `INTERACTION_CONFLI
 **Bắt buộc token.** `?cursor=<nextCursor>&size=20` (1–50). Trả `data` → `VideoIdPageResponse` (cùng shape mục 3.11), **mới nhất trước**. Chỉ có id — đổi sang video qua `GET /api/v1/videos/batch` của video-service. Chỉ xem được của chính mình; không có endpoint xem like/lưu của người khác. Cursor hỏng → `INVALID_CURSOR` (400).
 
 ### 3.16 `GET /users/me/comments` — hộp bình luận của TikTok Studio
-**Bắt buộc token.** `?cursor=<nextCursor>&size=20` (1–50). Trả `data` → `CommentPageResponse` (cùng shape mục 3.5): bình luận người khác để lại trên **mọi video của người gọi**, mới nhất trước. Comment đang chờ duyệt có trong danh sách với `status = "HELD"`; duyệt hoặc xoá qua mục 3.4c / 3.6 bằng `videoId` của từng item. Comment của chính chủ video, comment đã xoá và comment của tài khoản đang bị ban không có. `likedByMe` và `replyCount` luôn là `false` / `0` ở đây. Comment đăng trước khi có tính năng này **không** nằm trong hộp (không có backfill). Cursor hỏng → `INVALID_CURSOR` (400).
+**Bắt buộc token.** `?cursor=<nextCursor>&size=20` (1–50). Trả `data` → `CommentPageResponse` (cùng shape mục 3.5): bình luận người khác để lại trên **mọi video của người gọi**, mới nhất trước. Comment đang chờ duyệt có trong danh sách với `status = "HELD"`; duyệt hoặc xoá qua mục 3.4c / 3.6 bằng `videoId` của từng item. Comment của chính chủ video, comment đã xoá và comment của tài khoản đang bị ban không có. `likedByMe` và `replyCount` luôn là `false` / `0` ở đây. Không lọc `videoId` thì comment đăng trước khi có tính năng này **không** nằm trong hộp (không có backfill); có `videoId` thì service đọc thẳng danh sách comment của video nên có cả comment cũ. Cursor hỏng → `INVALID_COMMENT_CURSOR` (400).
 
 Lọc (đều tuỳ chọn, gửi lại **đúng bộ lọc đó** cùng `cursor` khi tải trang sau):
 
@@ -466,6 +468,10 @@ Lọc (đều tuỳ chọn, gửi lại **đúng bộ lọc đó** cùng `cursor
 Có `sort` khác `NEWEST`, `replied` hoặc `followers` thì service đọc **cả video** (tối đa 5.000 comment mới nhất), lọc và xếp trong bộ nhớ, rồi trang theo offset: `nextCursor` khi đó là offset, chỉ dùng được với đúng bộ lọc đó. Không có `videoId` mà gửi một trong ba tham số này → `INBOX_FILTER_NEEDS_VIDEO` (400). Với `followers`, số follower chỉ được hỏi tới đâu trang cần tới đó (mỗi lần 100 tác giả); tác giả không còn profile bị loại.
 
 Trang có thể ít hơn `size` (kể cả rỗng) mà `hasMore` vẫn `true` khi bộ lọc loại nhiều comment: cứ tải tiếp theo `nextCursor`.
+
+Có `videoId` mà video đó không phải của người gọi — hoặc video-service không xác nhận được chủ video (fail-closed như 3.4b) → `NOT_VIDEO_OWNER` (403).
+
+Lỗi: `BAD_REQUEST` (400 — giá trị enum/instant không hợp lệ), `INVALID_COMMENT_CURSOR` (400), `INBOX_FILTER_NEEDS_VIDEO` (400), `NOT_VIDEO_OWNER` (403), `FOLLOWER_COUNT_UNAVAILABLE` (503), `401`.
 
 ## 4. Counter đến từ hai nơi — đọc số nào, khi nào
 
@@ -488,12 +494,13 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 | `code` | HTTP status | Khi nào xảy ra |
 |---|---|---|
 | `VALIDATION_ERROR` | 400 | `content` rỗng sau khi làm sạch / quá 150 ký tự (mục 3.4); thiếu `watchedMs`/`durationMs`, `watchedMs` âm, `durationMs` <= 0 (mục 3.9) |
-| `INVALID_COMMENT_CURSOR` | 400 | `cursor` của danh sách comment/reply không giải mã được (mục 3.5, 3.5b) |
+| `INVALID_COMMENT_CURSOR` | 400 | `cursor` của danh sách comment/reply/hàng chờ duyệt/inbox Studio không giải mã được (mục 3.4b, 3.5, 3.5b, 3.16) |
 | `INBOX_FILTER_NEEDS_VIDEO` | 400 | `sort`/`replied`/`followers` của inbox Studio gửi mà thiếu `videoId` |
 | `INVALID_CURSOR` | 400 | `cursor` của danh sách video đã like/lưu/repost không giải mã được (mục 3.11, 3.15) |
+| `BAD_REQUEST` | 400 | Body/query param không đọc được — vd. `source` không có trong danh sách (mục 3.9), enum/instant sai ở inbox (mục 3.16) |
 | `NOT_COMMENT_OWNER` | 403 | Xoá bình luận của người khác trên video không phải của mình (mục 3.6), hoặc sửa bình luận không phải của mình (mục 3.6a) |
 | `INVALID_STICKER` | 400 | `stickerId` không có trong bộ sticker, hoặc đã ngừng cung cấp (mục 3.4) |
-| `NOT_VIDEO_OWNER` | 403 | Xem hàng chờ duyệt / duyệt comment trên video không phải của mình — hoặc không xác nhận được chủ video (mục 3.4b–3.4c) |
+| `NOT_VIDEO_OWNER` | 403 | Xem hàng chờ duyệt / duyệt comment / lọc inbox theo `videoId` trên video không phải của mình — hoặc không xác nhận được chủ video (mục 3.4b–3.4c, 3.16) |
 | `COMMENTING_RESTRICTED` | 403 | Người gọi bị hạn chế bình luận vì nhiều comment bị từ chối/bị admin gỡ gần đây. Có header `Retry-After` (giây tới khi hết hạn chế). Xem mục 3.4, 3.4a |
 | `REPLY_NOT_ALLOWED` | 403 | Reply vào comment của người đã chặn mình hoặc bị mình chặn (mục 3.4) |
 | `COMMENTS_DISABLED` | 403 | Chủ video đã tắt comment cho **video đó** (mục 3.4). Listing (mục 3.5) không lỗi mà trả trang rỗng — tài khoản đặt `NO_ONE` cũng trả trang rỗng như vậy |
@@ -506,8 +513,9 @@ Ba con số của video-service có thể **lệch vĩnh viễn** với `/counts
 | `COMMENT_RATE_LIMITED` | 429 | Bình luận quá nhanh / quá nhiều theo phút, giờ, ngày hoặc trên một video. Có header `Retry-After` (giây). Xem mục 6 |
 | `DUPLICATE_COMMENT` | 429 | Cùng nội dung trên cùng video, hoặc trên hơn 5 video, trong 10 phút (mục 3.4). Có header `Retry-After` |
 | `LIKE_RATE_LIMITED`, `COMMENT_LIKE_RATE_LIMITED`, `SAVE_RATE_LIMITED`, `REPOST_RATE_LIMITED`, `SHARE_RATE_LIMITED`, `VIEW_RATE_LIMITED`, `WATCH_RATE_LIMITED` | 429 | Vượt 60 lần/giờ cho cùng một (người dùng, video) — hoặc (người dùng, comment) với like comment. Xem mục 6 |
-| `INTERACTION_CONFLICT` | 409 | Ghi vào Cassandra không xác nhận được kết quả sau 3 lần thử (like/unlike ở mục 3.1–3.2, view ở mục 3.8). Xem bên dưới |
+| `INTERACTION_CONFLICT` | 409 | Ghi vào Cassandra không xác nhận được kết quả sau 3 lần thử (like/unlike ở mục 3.1–3.2, like comment ở mục 3.6b, save ở mục 3.12, repost ở mục 3.13). Xem bên dưới |
 | `PRIVACY_CHECK_UNAVAILABLE` | 503 | Tab Reposts (mục 3.11) của người khác khi không hỏi được user-service tài khoản có riêng tư không. Thử lại; **không** có nghĩa tài khoản riêng tư |
+| `FOLLOWER_COUNT_UNAVAILABLE` | 503 | Lọc inbox Studio theo `followers` (mục 3.16) khi không hỏi được user-service số follower. Thử lại |
 | `INTERACTION_NOT_RECORDED` | 503 | Kafka không nhận event đi kèm thao tác nên thao tác đã được **hoàn tác** — like/unlike, repost, save, comment (tạo/xoá), share, view. Xem bên dưới |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 
@@ -515,9 +523,9 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của interaction-service
 
 > **`INTERACTION_NOT_RECORDED` (503) nghĩa là không có gì được lưu.** Khác 409 ở chỗ server biết chắc kết quả: thao tác đã bị hoàn tác, counter không đổi. Retry là an toàn; nếu client đã optimistic update thì đảo lại sau khi retry cũng thất bại.
 
-> **`INTERACTION_CONFLICT` (409) không phải lỗi của request.** Nó nghĩa là "server không biết chắc thao tác đã xong hay chưa" — hạ tầng lưu trữ trả về timeout ở một thao tác mà đoán bừa sẽ làm sai counter. **Retry được, và retry là an toàn**: like/unlike idempotent, và `/view` idempotent theo `playId` (mục 3.1, 3.8). Hiện thông báo dạng "thử lại" chứ đừng hiện lỗi kỹ thuật, và đừng đảo ngược optimistic update ngay lập tức — retry một lần trước đã.
+> **`INTERACTION_CONFLICT` (409) không phải lỗi của request.** Nó nghĩa là "server không biết chắc thao tác đã xong hay chưa" — hạ tầng lưu trữ trả về timeout ở một thao tác mà đoán bừa sẽ làm sai counter. **Retry được, và retry là an toàn**: like/unlike, like comment, save và repost đều idempotent (mục 3.1, 3.6b, 3.12, 3.13). Hiện thông báo dạng "thử lại" chứ đừng hiện lỗi kỹ thuật, và đừng đảo ngược optimistic update ngay lập tức — retry một lần trước đã.
 
-`VIDEO_NOT_FOUND` (404): video-service không cho người gọi xem video đó — không tồn tại, riêng tư, chưa publish, hoặc người gọi và chủ video đang chặn nhau. Mọi thao tác ghi (like, comment, save, repost, share, view) đều hỏi video-service trước; nếu video-service không trả lời được thì thao tác vẫn đi qua (fail-open).
+`VIDEO_NOT_FOUND` (404): video-service không cho người gọi xem video đó — không tồn tại, riêng tư, chưa publish, hoặc người gọi và chủ video đang chặn nhau. Mọi thao tác ghi tạo mới (like, comment, sửa comment, like comment, save, repost, share, view, watch) đều hỏi video-service trước — thao tác gỡ (unlike, unsave, unrepost, xoá comment, bỏ like comment) thì không; nếu video-service không trả lời được thì thao tác vẫn đi qua (fail-open).
 
 ## 6. Rate limiting
 
@@ -540,16 +548,23 @@ Ngoài ra `401 Unauthorized` (không có `code` riêng của interaction-service
 
 Phần này cho người tích hợp backend. Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
 
-### Tiêu thụ (consumer) — `AdminModerationEventConsumer`
+### Tiêu thụ (consumer) — `AdminModerationEventConsumer`, `AccountStateEventConsumer`
 
-Một consumer duy nhất (dùng `kafka-lib`): `admin.moderation-events`, route theo header `eventType`; event khác trên topic bị bỏ qua.
+Hai consumer (dùng `kafka-lib`). `AdminModerationEventConsumer` đọc `admin.moderation-events`, route theo header `eventType`; event khác trên topic bị bỏ qua.
 
 - `CommentRemovedEvent` → `CommentService.removeByAdmin()`, và một strike cho tác giả comment. Không có bảng inbox: thao tác ghi là LWT `markDeletedIfNotDeleted`, redelivery thấy comment đã xoá thì không giảm counter và không tính strike lần hai. `targetId` dạng `"videoId:commentId"`.
 - `UserBannedEvent` / `UserUnbannedEvent` → bảng Cassandra `user_bans` (`banned_until`, `changed_at`), đọc khi liệt kê comment (mục 3.5). Ghi có điều kiện theo thời điểm admin quyết định (LWT trên `changed_at`), nên redelivery lặp lại cùng giá trị và event cũ đến muộn không đè quyết định mới hơn.
 
+`AccountStateEventConsumer` đọc `auth.account-events`:
+
+- `AccountStateChangedEvent` (tài khoản tự đóng / mở lại) → cùng bảng `user_bans`, nhưng ghi cặp cột riêng `deactivated_at` + `account_state_changed_at` (guard riêng, không đụng field của ban — unban không được mở lại tài khoản chủ đã đóng). Comment của tài khoản đã đóng bị ẩn như comment của tài khoản bị ban (mục 3.5).
+
 ### Admin (không dành cho client, ROLE_ADMIN)
 
-- `GET /admin/videos/{videoId}/comments` … — danh sách comment cho console (kể cả đã xoá); mỗi comment có `status` và `moderationReason` — comment `VISIBLE` mà có `moderationReason` là comment bị gắn cờ nhưng vẫn được đăng (luật đang tắt, chủ video tự bình luận, chủ video miễn lọc, hoặc ghi chú của mô hình).
+- `GET /admin/videos/{videoId}/comments?filter=&cursor=&size=` — danh sách comment cho console, mới nhất trước. `filter`: `THREAD` (mặc định — chỉ comment gốc, reply lấy ở endpoint replies bên dưới), `REPLIES` (mọi reply trên video), `REMOVED` (mọi comment đã bị xoá), `HELD` (mọi comment đang chờ chủ video duyệt — nơi duy nhất thấy comment gốc `HELD`). Comment đã xoá có mặt ở mọi filter trừ `HELD`. `size` mặc định 50, kẹp 1–100.
+- `GET /admin/videos/{videoId}/comments/by-ids?ids=1,2,3` — tra từng comment theo id (vd. comment gốc mà một reply đang trả lời), tối đa 100 id.
+- `GET /admin/videos/{videoId}/comments/{commentId}/replies?cursor=&size=` — reply của một comment, cũ nhất trước, `size` mặc định 20 (tối đa 100).
+- Mọi item ở ba endpoint trên là `AdminCommentResponse` (`commentId, videoId, userId, content, parentId, replyToUserId, likeCount, replyCount, hasReplies, createdAt, deletedAt, status, moderationReason`); mỗi comment có `status` và `moderationReason` — comment `VISIBLE` mà có `moderationReason` là comment bị gắn cờ nhưng vẫn được đăng (luật đang tắt, chủ video tự bình luận, chủ video miễn lọc, hoặc ghi chú của mô hình).
 - `GET /admin/users/{userId}/comment-restriction` → `{ "userId", "restrictedUntil", "strikes", "step" }` — `restrictedUntil` null khi không bị hạn chế; `strikes` là số strike đang tính cho lần hạn chế kế tiếp; `step` là số lần đã bị hạn chế trong 30 ngày.
 - `DELETE /admin/users/{userId}/comment-restriction` — gỡ hạn chế ngay và xoá strike lẫn bậc hạn chế (dùng khi một từ khoá sai đã hạn chế nhầm người).
 
@@ -562,14 +577,14 @@ Không có outbox (Cassandra không có transaction đa bảng để ghép). Tha
 | Topic | Event | Payload | Phát khi | Xác nhận ack? |
 |---|---|---|---|---|
 | `interaction.like-events` | `VideoLikeEvent` | `eventId, occurredAt, videoId, userId, liked` | `POST`/`DELETE /like` (chỉ khi hàng LWT thực sự đổi) | có |
-| `interaction.comment-events` | `CommentCreatedEvent` (header `eventType=CommentCreatedEvent`) | `eventId, occurredAt, commentId, videoId, userId, content` | `POST /comments` khi comment được đăng ngay, hoặc lúc chủ video duyệt comment `HELD` (mục 3.4c). Comment đang chờ duyệt **không** phát event | có |
+| `interaction.comment-events` | `CommentCreatedEvent` (header `eventType=CommentCreatedEvent`) | `eventId, occurredAt, commentId, videoId, userId, content, parentId, replyToUserId, parentAuthorId` (ba field cuối null với comment gốc) | `POST /comments` khi comment được đăng ngay, hoặc lúc chủ video duyệt comment `HELD` (mục 3.4c). Comment đang chờ duyệt **không** phát event | có |
 | `interaction.comment-events` | `CommentDeletedEvent` (header `eventType=CommentDeletedEvent`) | `eventId, occurredAt, commentId, videoId, userId` | `DELETE /comments/{id}` của comment đã hiển thị (xoá comment `HELD` không phát gì) | có |
 | `interaction.share-events` | `VideoSharedEvent` | `eventId, occurredAt, shareId, videoId, userId` | `POST /share` (mỗi lần một event) | có |
 | `interaction.comment-like-events` | `CommentLikeChangedEvent` | `eventId, occurredAt, commentId, videoId, userId, liked, likeCount, commentAuthorId` | `POST`/`DELETE /comments/{id}/like` | **không** (số chuẩn đã nằm trong Cassandra và trả về trong response) |
 | `interaction.save-events` | `VideoSavedEvent` | `eventId, occurredAt, videoId, userId, saved` | `POST`/`DELETE /save` (chỉ khi hàng LWT thực sự đổi) | có |
 | `interaction.repost-events` | `VideoRepostedEvent` | `eventId, occurredAt, videoId, userId, reposted` | `POST`/`DELETE /repost` (chỉ khi hàng LWT thực sự đổi) | có |
 | `interaction.view-events` | `VideoViewedEvent` | `eventId, occurredAt, videoId, userId` | `POST /view` — **chỉ** view sống sót qua dedupe theo `playId` | có |
-| `interaction.watch-events` | `VideoWatchEvent` | `eventId, occurredAt, videoId, userId, watchedMs, durationMs, completed` | `POST /watch` — **mọi** phiên, kể cả xem lại | **không** (fire-and-forget, chỉ log khi lỗi) |
+| `interaction.watch-events` | `VideoWatchEvent` | `eventId, occurredAt, videoId, userId, watchedMs, durationMs, completed, source, searchQuery` | `POST /watch` — **mọi** phiên, kể cả xem lại | **không** (fire-and-forget, chỉ log khi lỗi) |
 
 Vì sao `watch-events` không chờ ack: không counter nào phụ thuộc nó (chỉ là training row + tag affinity), một phiên mất trong hàng trăm phiên/ngày không ảnh hưởng, còn chặn request để chờ ack thì đặt stream dày nhất service này sinh ra lên critical path của mỗi lần cuộn.
 
@@ -581,8 +596,8 @@ Vì sao `watch-events` không chờ ack: không counter nào phụ thuộc nó (
 | `interaction.comment-events` | video-service, recommendation-service, search-service, notification-service, chat-service, analytics-service | `commentCount`; điểm trending (giảm khi comment bị xoá); `commentCount` search; thông báo; realtime; thống kê |
 | `interaction.comment-like-events` | notification-service, chat-service | thông báo cho tác giả comment; đẩy số like comment realtime |
 | `interaction.share-events` | recommendation-service, search-service, notification-service, chat-service, analytics-service | điểm trending; `shareCount` search; thông báo; realtime; thống kê |
-| `interaction.save-events` | chat-service | đẩy số realtime |
-| `interaction.repost-events` | — | chưa có consumer |
+| `interaction.save-events` | chat-service, analytics-service | đẩy số realtime; thống kê |
+| `interaction.repost-events` | notification-service | thông báo cho chủ video |
 | `interaction.view-events` | video-service, search-service, chat-service | `viewCount`; `viewCount` search; realtime |
 | `interaction.watch-events` | recommendation-service, analytics-service | tag affinity + quality score; sink training data cho `rank-service` |
 
@@ -590,7 +605,7 @@ Vì sao `watch-events` không chờ ack: không counter nào phụ thuộc nó (
 
 - Không retry tự động `POST /comments`, `POST /share`, `POST /watch` — ba endpoint này **không** khử trùng lặp, retry sẽ tạo comment đôi / đếm share đôi / bẩn dữ liệu huấn luyện. (Retry `/like`, `/like-status` an toàn; retry `/view` an toàn **nếu giữ nguyên `playId`**.)
 - Không gọi `/view` theo tick thời gian, và không gọi `/watch` theo tiến độ phát — `/view` một lần lúc bắt đầu, `/watch` một lần lúc kết thúc.
-- Không coi `counted: false` ở mục 3.8 là lỗi — đó là "hôm nay bạn đã được tính rồi".
+- Không coi `counted: false` ở mục 3.8 là lỗi — đó là "lần phát (`playId`) này đã được tính rồi".
 - Không dừng phân trang comment khi gặp trang rỗng — lặp theo `hasMore`, vì comment đã xoá được lọc sau khi cắt trang (mục 3.5).
 - Không gọi `/like-status` hay `/counts` từng video cho cả trang feed — dùng `/like-status/batch`, `/counts/batch`, `/repost-context/batch` (mục 3.3b, 3.10b, 3.14).
 - Không parse hay tự dựng `nextCursor` — chuỗi mờ, truyền lại nguyên văn.

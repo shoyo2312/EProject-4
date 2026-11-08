@@ -27,6 +27,7 @@ Mở app, tải inbox, nhận notification, tải lịch sử hay chỉ kết n�
 Tất cả dưới `/api/v1/conversations/{id}/messages`, user lấy từ JWT (không nhận `userId` từ client).
 
 * `POST /delivered` body `{ "messageIds": [..<=100] }` -> `ReceiptView` của **chính người gọi**.
+  * Danh sách rỗng, quá 100 id hay id dài quá 64 ký tự -> `400 VALIDATION_ERROR` (Bean Validation, trước khi vào service).
   * Mọi id phải thuộc hội thoại, do **phía kia** gửi, chưa bị xóa; nếu không -> `400 INVALID_RECEIPT`, không ghi gì.
   * Mốc chỉ đi qua một đoạn tin **đều được nêu tên**. Server lấy các tin của phía kia nằm giữa mốc hiện tại và tin lớn nhất được nêu; dừng ở tin đầu tiên không được nêu. Tin người nhận đã xóa phía mình không chặn đoạn.
   * Chưa có mốc: bắt đầu từ tin được nêu đầu tiên (phần trước đó là lịch sử).
@@ -51,9 +52,9 @@ Broker là `simpleBroker` trong process: frame chỉ tới socket nằm trên **
 `SEND /app/chat.typing/{conversationId}` payload `{ "typing": true|false }`.
 
 * Người gửi là `Principal` đã xác thực; session là session do server cấp, không phải giá trị client khai.
-* Chỉ chấp nhận khi: là participant, `SendPolicy == ALLOWED` (nên **không** có typing khi request chưa accept, đã xóa phải mở lại, hay hết lượt), và không có block. Mọi lỗi (kể cả không kiểm tra được block) -> bỏ im lặng, không báo lý do cho phía kia. Kết quả được nhớ 5s.
+* Chỉ chấp nhận khi: là participant, `SendPermission.ALLOWED` (nên **không** có typing khi request chưa accept, đã xóa phải mở lại, hay hết lượt), và không có block. Mọi lỗi (kể cả không kiểm tra được block) -> bỏ im lặng, không báo lý do cho phía kia. Kết quả được nhớ 5s.
 * Không lưu, không tạo tin, không đụng unread, `lastMessageAt`, không qua Kafka/outbox.
-* Theo từng session: user "đang nhập" khi **bất kỳ** session nào còn hiệu lực; một tab dừng không xóa typing của tab khác. Socket đóng -> bỏ session ngay.
+* Theo từng session: user "đang nhập" khi **bất kỳ** session nào còn hiệu lực; một tab dừng không xóa typing của tab khác. Socket đóng -> bỏ session ngay. Tối đa `TypingService.MAX_SESSIONS_PER_USER = 20` session mỗi user trong một hội thoại; session mới quá mức đó bị bỏ qua.
 
 Hằng số (một chỗ định nghĩa, khớp nhau):
 

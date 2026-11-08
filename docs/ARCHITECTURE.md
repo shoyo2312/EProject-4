@@ -16,35 +16,45 @@ API Gateway :8080          ← Rate limit, JWT verify, Route
 
 ## 2. Hai Luồng Quan Trọng
 
-### 2a. Upload Video → Feed Fan-out
+### 2a. Upload Video → Kiểm duyệt → Feed
 
 ```
-Client → video-service (lưu metadata MongoDB)
-    → Kafka: VideoPublishedEvent
-        ├→ media-worker (transcode, thumbnail → MinIO)
-        ├→ video-service consumer (cập nhật status = READY)
-        ├→ recommendation-service (index video)
-        └→ Feed Fan-out consumer (ghi vào Redis/Cassandra feed của followers)
+Client → video-service (lưu metadata MongoDB, status = PROCESSING)
+    → Kafka video.video-events: VideoPublishedEvent
+        ├→ media-worker (ffmpeg: transcode, thumbnail, preview → MinIO)
+        ├→ search-service / recommendation-service (lưu metadata + tag, chưa ai tìm/thấy được)
+    → media-worker → Kafka media.video-transcoded-events: VideoTranscodedEvent
+        ├→ video-service (status = PENDING_MODERATION, hoặc FAILED)
+        └→ media-worker (group media-worker-moderation): rải frame → moderation-service :8099
+    → media-worker → Kafka media.video-moderation-events: VideoModerationCompletedEvent
+        ├→ video-service (PUBLISHED / PENDING_REVIEW / REJECTED)
+        └→ search-service, recommendation-service (tìm thấy được / vào candidate pool chỉ khi APPROVED)
 ```
+
+Không có bước fan-out ghi feed cho follower: feed "Following" do video-service truy vấn lúc đọc, feed "For You"
+do recommendation-service xếp hạng lúc đọc (`docs/ranking-model.md`). Chi tiết kiểm duyệt: `docs/moderation.md`.
 
 ### 2b. Chat Realtime
 
 ```
-Client A ──WebSocket──► chat-service (instance 1)
-Client B ──WebSocket──► chat-service (instance 2)
+Client A ──WebSocket (STOMP)──► chat-service
+Client B ──WebSocket (STOMP)──► chat-service
 
-A gửi msg → instance 1 → lưu MongoDB
-                        → publish Redis Pub/Sub "chat:{conversationId}"
-                              → instance 2 subscribe → push xuống Client B
+A gửi msg → lưu MongoDB → convertAndSend("/topic/conversations/{conversationId}")
+                              → simple broker trong bộ nhớ → push xuống Client B
 ```
+
+chat-service dùng `enableSimpleBroker("/topic", "/queue")` (`WebSocketConfig`) — broker nằm trong process, không có
+Redis Pub/Sub hay broker relay. Hai client chỉ nhận được tin của nhau khi nối vào **cùng một instance**: chạy
+nhiều replica chat-service thì tin không đi chéo instance cho tới khi có broker relay.
 
 ## 3. Patterns áp dụng
 
 | Pattern                  | Dùng ở                                            | Mục đích                                           |
 |--------------------------|---------------------------------------------------|----------------------------------------------------|
-| **Outbox**               | auth, admin, video                                | Đảm bảo event publish không mất khi crash          |
+| **Outbox**               | auth, admin, user, video, story                   | Đảm bảo event publish không mất khi crash          |
 | **CQRS**                 | video-service, interaction-service                | Tách read model (Redis/Cassandra) khỏi write model |
-| **Idempotent Consumer**  | Mọi Kafka consumer                                | Chống xử lý trùng (inbox_events table)             |
+| **Idempotent Consumer**  | Mọi Kafka consumer                                | Claim `eventId` trước khi xử lý: `inbox_events` (PostgreSQL), unique index trên `eventId` (MongoDB), `op_type=create` (Elasticsearch), `SETNX reco:inbox:*` (recommendation, Redis) |
 | **Soft Delete**          | Tất cả services                                   | `deleted_at` thay vì xoá thật                      |
 | **Optimistic Lock**      | `BaseEntity` (`@Version`)                         | Chống race condition trên update                   |
 | **Dead Letter Queue**    | Mọi service có `@KafkaListener` (qua `kafka-lib`) | Dependency chết → retry tới khi sống lại; lỗi do chính record → 3 lần → `<topic>.DLT` thay vì kẹt consumer vô hạn. Xem §5b |
@@ -57,15 +67,20 @@ A gửi msg → instance 1 → lưu MongoDB
 | video, story, chat, notification | MongoDB       | `@Document`                |
 | interaction                      | Cassandra     | write-heavy (like/comment) |
 | search                           | Elasticsearch | sync từ Kafka              |
-| analytics                        | ClickHouse    | OLAP                       |
+| analytics                        | ClickHouse    | OLAP (+ sink dữ liệu huấn luyện cho rank-service) |
+| recommendation                   | Redis         | không có DB riêng — mọi state là key `reco:*`, dựng từ Kafka |
+| media-worker                     | MinIO         | không có DB; media của video/story/avatar (video, story, user-service cũng ghi MinIO qua account riêng) |
+| rank-service (Python)            | —             | đọc file model (`model/model.txt`), không lưu gì |
+| moderation-service (Python)      | —             | model nướng sẵn trong image, không lưu gì |
 
 Redis dùng chung, và không chỉ là cache: nó giữ revocation token (`auth:blacklist:*`), bộ đếm OTP/login,
 và các set ẩn video của recommendation-service (`reco:video:taken-down`/`private`/`held`). Vì vậy
 `maxmemory-policy` **phải là `noeviction`** ở mọi môi trường — policy LRU nào (kể cả `volatile-lru`,
 vì revocation key và bộ đếm đều có TTL) cũng có thể lặng lẽ xoá chúng: token đã logout dùng lại được,
 giới hạn đoán OTP reset, video bị gỡ quay lại feed. Đầy bộ nhớ thì Redis từ chối ghi và lỗi hiện ra,
-thay vì mất dữ liệu âm thầm. Thứ tăng không có TTL là các hash/zset theo video của recommendation
-(`reco:video:published`, `owner`, `watches`, `completions`) — theo dõi `used_memory` theo đó.
+thay vì mất dữ liệu âm thầm. Các zset theo video của recommendation không có TTL nhưng bị chặn trên:
+`reco:video:published`, `watches`, `completions` được `rebuildTrending` cắt còn `QUALITY_TRIM_TO` (100k) mỗi phút.
+Thứ duy nhất tăng theo catalogue là hash `reco:video:owner` (chỉ bớt khi video bị xoá) — theo dõi `used_memory` theo đó.
 
 ## 5. Shared Libraries (`libs/`)
 
@@ -73,20 +88,29 @@ thay vì mất dữ liệu âm thầm. Thứ tăng không có TTL là các hash/
 common-lib       ← Mọi service đều phụ thuộc
   ├── BaseEntity          (id Snowflake, createdAt, updatedAt, deletedAt, version)
   ├── ApiResponse<T>      (success, code, message, data, timestamp)
-  ├── DomainException     (sealed — mọi custom exception kế thừa)
-  ├── GlobalExceptionHandler
+  ├── DomainException     (abstract — mọi custom exception kế thừa)
+  ├── BaseExceptionHandler (mỗi service kế thừa thành GlobalExceptionHandler @ControllerAdvice của mình)
   ├── InternalApiToken    (X-Internal-Token của endpoint nội bộ: so constant-time, fail-fast, bean @Lazy)
   └── SnowflakeIdGenerator
 
 event-schema     ← Services produce/consume Kafka events (mọi record implements DomainEvent: eventId, occurredAt)
-  ├── user/        UserRegisteredEvent, SocialAvatarDiscoveredEvent, AvatarMirroredEvent
-  ├── video/       VideoPublishedEvent, VideoDeletedEvent, VideoPurgedEvent, VideoTranscodedEvent
-  ├── interaction/ VideoLikeEvent, CommentCreatedEvent, CommentDeletedEvent,
-  │                VideoSharedEvent, VideoViewedEvent, VideoWatchEvent
-  └── admin/       UserBannedEvent, UserUnbannedEvent, VideoTakenDownEvent, VideoRestoredEvent,
-                   CommentRemovedEvent
+  ├── user/         UserRegisteredEvent, UsernameChangedEvent, AccountStateChangedEvent (+ AccountState),
+  │                 NewDeviceSignInEvent, SocialAvatarDiscoveredEvent, AvatarMirroredEvent,
+  │                 UserFollowChangedEvent, FollowRequestedEvent, UserBlockChangedEvent,
+  │                 UserPrivacyChangedEvent, UserBirthDateSetEvent, WeeklyScreenTimeSummaryEvent
+  ├── video/        VideoPublishedEvent, VideoDeletedEvent, VideoPurgedEvent, VideoVisibilityChangedEvent,
+  │                 VideoCaptionChangedEvent, VideoTranscodedEvent, VideoModerationCompletedEvent
+  │                 (+ ModerationVerdict), VideoLikeOwnerEvent, VideoFilter
+  ├── interaction/  VideoLikeEvent, CommentCreatedEvent, CommentDeletedEvent, CommentLikeChangedEvent,
+  │                 VideoSharedEvent, VideoViewedEvent, VideoWatchEvent, VideoRepostedEvent, VideoSavedEvent
+  ├── story/        StoryCreatedEvent, StoryModerationCompletedEvent, StoryActivatedEvent
+  ├── notification/ NotificationCreatedEvent
+  └── admin/        UserBannedEvent, UserUnbannedEvent, UserWarnedEvent, UserSessionsRevokedEvent,
+                    VideoTakenDownEvent, VideoRestoredEvent, VideoPurgeRequestedEvent, CommentRemovedEvent,
+                    ReportSubmittedEvent, ReportResolvedEvent, StaleReportsDismissedEvent
 
-crypto-lib       ← auth-service + api-gateway + admin-service
+crypto-lib       ← api-gateway, auth-service + mọi service dùng security-lib (admin, analytics, chat, interaction,
+                   notification, story, user, video khai trực tiếp; recommendation nhận qua security-lib)
   ├── JwtProvider         (generate, validate, extract claims)
   ├── HashUtils           (SHA-256, BCrypt wrappers)
   └── AesEncryptor        (PII encryption)
@@ -112,12 +136,12 @@ kafka-lib        ← Centralized Kafka consumer error handling + outbox dispatch
   │   └── Gửi cả batch rồi mới chờ ack (pipeline), timeout `tiktok.kafka.outbox.ack-timeout` (30s)
   ├── OutboxBacklog (MeterBinder — mỗi outbox một bean trong `config/OutboxMetricsConfig` của service)
   │   └── `outbox_pending_events{outbox}` + `outbox_oldest_pending_age_seconds{outbox}`, query lại mỗi lần scrape
-  │   └── outbox: `outbox_events` (auth, admin, user); video có 5 slot: published, deleted, visibility, purge, purge-request
+  │   └── outbox: `outbox_events` (auth, admin, user); video có 6 slot: published, deleted, visibility, caption, purge, purge-request; story có 2: story-created, story-activated
   ├── DeadLetters (đọc + replay DLT, có kiểm tra thứ tự theo key — §5b): dùng bởi DltReplay (`make dlt-list` / `make dlt-replay`) và console admin qua admin-service
   └── META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
       └── Auto-register bean khi service thêm dependency, không cần @Configuration cục bộ
 
-moderation-lib   ← Text người xem đọc được: video-service (caption), interaction-service (comment), user-service (từ khoá của creator), admin-service (term + preview)
+moderation-lib   ← Text người xem đọc được: video-service (caption), story-service (caption story), interaction-service (comment), user-service (từ khoá của creator), admin-service (term + preview)
   ├── TextSanitizer + @MaxCodePoints (NFC, bỏ ký tự vô hình/bidi, đếm độ dài theo code point)
   ├── TextModerator (blocklist tiếng Việt + tín hiệu spam → ALLOW / HOLD / REJECT, in-process)
   │   └── Counter `text_moderation_decisions_total{surface,decision,category,enforced}`
@@ -186,28 +210,36 @@ Nguồn sự thật cho phần events trong mọi `docs/*-service-api.md`. Key c
 
 | Topic | Producer | eventType header | Event(s) | Consumers |
 |---|---|---|---|---|
-| `auth.user-events` | auth-service (outbox) | — (1 shape) | `UserRegisteredEvent` | user-service, chat-service (`AdminFanout`: chỉ báo console admin tải lại, không đọc payload) |
+| `auth.user-events` | auth-service (outbox) | — (1 shape) | `UserRegisteredEvent` | user-service, notification-service, analytics-service, chat-service (`AdminFanout`: chỉ báo console admin tải lại, không đọc payload) |
+| `auth.account-events` | auth-service (outbox, key `userId`) | — (1 shape) | `AccountStateChangedEvent` (tự đóng / mở lại / xoá tài khoản) | user-service, video-service, search-service, interaction-service, story-service (ghi `deactivatedAt`, ẩn nội dung) |
 | `auth.social-avatar-events` | auth-service (fire-and-forget; tài khoản vừa tạo: outbox, ngay sau `UserRegisteredEvent`) | — | `SocialAvatarDiscoveredEvent` | media-worker |
 | `auth.username-events` | auth-service (outbox, key `userId`) | — (1 shape) | `UsernameChangedEvent` | user-service (bản sao `username` của profile) |
 | `auth.new-device-events` | auth-service (outbox, key `userId`, cùng transaction với refresh token) | — (1 shape) | `NewDeviceSignInEvent` | notification-service (thông báo `SYSTEM`, `referenceId` `account-security`) |
 | `video.video-events` | video-service (outbox per-doc) | `VideoPublishedEvent` / `VideoDeletedEvent` / `VideoPurgedEvent` / `VideoVisibilityChangedEvent` / `VideoCaptionChangedEvent` (vắng ⇒ Published) | `VideoPublishedEvent`, `VideoDeletedEvent` (ngay khi xoá — gỡ khỏi index), `VideoPurgedEvent` (hết hạn thùng rác — chỉ media-worker xoá media), `VideoVisibilityChangedEvent`, `VideoCaptionChangedEvent` (sửa caption — search-service + recommendation-service) | media-worker, search-service, recommendation-service, analytics-service, chat-service |
-| `media.video-transcoded-events` | media-worker (chờ ack 30s) | — | `VideoTranscodedEvent` | video-service, search-service, recommendation-service |
+| `media.video-transcoded-events` | media-worker (chờ ack 30s) | — | `VideoTranscodedEvent` | video-service, search-service, recommendation-service, media-worker (group `media-worker-moderation`: bước kiểm duyệt frame) |
 | `media.video-moderation-events` | media-worker (chờ ack) | — (1 shape) | `VideoModerationCompletedEvent` (verdict của classifier; lỗi classifier vẫn phát REVIEW) | video-service, search-service, recommendation-service, chat-service (`VideoStateFanout`, `AdminFanout`) |
 | `media.avatar-events` | media-worker (chờ ack 30s) | — | `AvatarMirroredEvent` | user-service |
-| `user.follow-events` | user-service (outbox) | — (1 shape) | `UserFollowChangedEvent` (+ `requestApproved` khi là lời mời vừa được duyệt) | notification-service, chat-service |
+| `story.story-events` | story-service (outbox trên document, slot `story-created`) | — (1 shape) | `StoryCreatedEvent` | media-worker (kiểm duyệt story; KHÔNG route theo header — đừng phát event khác lên topic này) |
+| `media.story-moderation-events` | media-worker (chờ ack 30s) | — (1 shape) | `StoryModerationCompletedEvent` | story-service (`ACTIVE` / `HELD` / `REJECTED`) |
+| `story.activation-events` | story-service (outbox trên document, slot `story-activated`, key = id chủ story) | — (1 shape) | `StoryActivatedEvent` | notification-service (`StoryActivationEventConsumer`, hỏi lại story-service rồi fan-out) |
+| `user.follow-events` | user-service (outbox) | — (1 shape) | `UserFollowChangedEvent` (+ `requestApproved` khi là lời mời vừa được duyệt) | notification-service, chat-service, analytics-service |
 | `user.follow-request-events` | user-service (outbox) | — (1 shape) | `FollowRequestedEvent` | notification-service |
 | `user.privacy-events` | user-service (outbox) | — (1 shape) | `UserPrivacyChangedEvent` | video-service |
-| `interaction.like-events` | interaction-service (chờ ack 5s) | — | `VideoLikeEvent` | video-service, recommendation-service, search-service |
-| `interaction.comment-events` | interaction-service (chờ ack 5s) | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | video-service, recommendation-service, search-service |
-| `interaction.share-events` | interaction-service (chờ ack 5s) | — | `VideoSharedEvent` | recommendation-service, search-service |
-| `interaction.view-events` | interaction-service (chờ ack 5s) | — | `VideoViewedEvent` | video-service, search-service |
+| `user.follow-backfill-events` | user-service (outbox, chỉ do `POST /users/internal/follow-backfill`) | — (1 shape) | `UserFollowChangedEvent` (edge cũ phát lại) | analytics-service (topic riêng để notification/chat không thấy) |
+| `user.block-events` | user-service (outbox) | — (1 shape) | `UserBlockChangedEvent` | chat-service (`BlockEventFanout`) |
+| `user.profile-events` | user-service (outbox, key `userId`) | — (1 shape) | `UserBirthDateSetEvent` | analytics-service (nhóm tuổi) |
+| `user.screen-time-summary-events` | user-service (outbox, key `userId`) | — (1 shape) | `WeeklyScreenTimeSummaryEvent` | notification-service |
+| `interaction.like-events` | interaction-service (chờ ack 5s) | — | `VideoLikeEvent` | video-service, recommendation-service, search-service, notification-service, analytics-service, chat-service (`VideoStatsFanout`, `AdminFanout`) |
+| `interaction.comment-events` | interaction-service (chờ ack 5s) | `CommentCreatedEvent` / `CommentDeletedEvent` (vắng ⇒ Created) | `CommentCreatedEvent`, `CommentDeletedEvent` | video-service, recommendation-service, search-service, notification-service, analytics-service, chat-service (`VideoStatsFanout`, `AdminFanout`) |
+| `interaction.share-events` | interaction-service (chờ ack 5s) | — | `VideoSharedEvent` | recommendation-service, search-service, notification-service, analytics-service, chat-service (`VideoStatsFanout`, `AdminFanout`) |
+| `interaction.view-events` | interaction-service (chờ ack 5s) | — | `VideoViewedEvent` | video-service, search-service, chat-service (`VideoStatsFanout`) |
 | `interaction.watch-events` | interaction-service (fire-and-forget) | — | `VideoWatchEvent` | recommendation-service, analytics-service |
 | `interaction.comment-like-events` | interaction-service (fire-and-forget, log nếu broker từ chối) | — | `CommentLikeChangedEvent` | notification-service, chat-service (`VideoStatsFanout`) |
-| `interaction.repost-events` | interaction-service (chờ ack) | — | `VideoRepostedEvent` | (chưa có consumer) |
-| `interaction.save-events` | interaction-service (chờ ack) | — | `VideoSavedEvent` | chat-service (`VideoStatsFanout`) |
+| `interaction.repost-events` | interaction-service (chờ ack) | — | `VideoRepostedEvent` | notification-service |
+| `interaction.save-events` | interaction-service (chờ ack) | — | `VideoSavedEvent` | chat-service (`VideoStatsFanout`), analytics-service |
 | `video.like-owner-events` | video-service (fire-and-forget, key `ownerId`) | — | `VideoLikeOwnerEvent` | chat-service (`UserStatsFanout`) |
 | `notification.created` | notification-service (chỉ announce, không outbox) | — | `NotificationCreatedEvent` | chat-service (`NotificationFanout`: đẩy badge xuống socket) |
-| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / `CommentRemovedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `VideoPurgeRequestedEvent` + `UserBannedEvent`/`UserUnbannedEvent` → `owner_bans`), search-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `UserBannedEvent`/`UserUnbannedEvent` → index `owner_bans`), recommendation-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), auth-service (`UserBannedEvent` + `UserUnbannedEvent` + `UserSessionsRevokedEvent`), interaction-service (`CommentRemovedEvent` + `UserBannedEvent`/`UserUnbannedEvent` → `user_bans`), notification-service (`UserBannedEvent`, `VideoTakenDownEvent`, `UserWarnedEvent`), media-worker (`VideoTakenDownEvent` + `VideoRestoredEvent`: quarantine media), chat-service (mọi event) |
+| `admin.moderation-events` | admin-service (outbox) | `VideoTakenDownEvent` / `VideoRestoredEvent` / `UserBannedEvent` / `CommentRemovedEvent` / … | mixed (route theo header, bắt buộc) | video-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `VideoPurgeRequestedEvent` + `UserBannedEvent`/`UserUnbannedEvent` → `owner_bans`), search-service (`VideoTakenDownEvent` + `VideoRestoredEvent` + `UserBannedEvent`/`UserUnbannedEvent` → index `owner_bans`), recommendation-service (`VideoTakenDownEvent` + `VideoRestoredEvent`), auth-service (`UserBannedEvent` + `UserUnbannedEvent` + `UserSessionsRevokedEvent`), interaction-service (`CommentRemovedEvent` + `UserBannedEvent`/`UserUnbannedEvent` → `user_bans`), notification-service (`UserBannedEvent`, `VideoTakenDownEvent`, `UserWarnedEvent`), media-worker (`VideoTakenDownEvent` + `VideoRestoredEvent`: quarantine media), story-service (`UserBannedEvent`/`UserUnbannedEvent` → `owner_bans`), chat-service (mọi event) |
 | `admin.report-events` | admin-service (outbox) | `ReportSubmittedEvent` / `ReportResolvedEvent` / `StaleReportsDismissedEvent` | `ReportSubmittedEvent` (có report mới), `ReportResolvedEvent` (mọi report đang chờ của một target vừa được xử lý), `StaleReportsDismissedEvent` (một lô report quá hạn vừa bị `StaleReportSweep` tự đóng) | chat-service (`AdminFanout`, group riêng `admin-realtime-<uuid>` mỗi instance: chỉ báo console admin tải lại, không đọc payload; gộp mỗi loại event còn tối đa một frame trong mỗi cửa sổ `realtime.flush-interval-millis`) |
 
 Ghi chú:
@@ -215,7 +247,7 @@ Ghi chú:
 - **DLT**: mọi service có consumer đều dùng error handler của `kafka-lib` (§5b). DLT chỉ nhận record lỗi do chính nó; dependency chết thì partition đứng chờ thay vì đẩy event vào DLT. Một topic `<topic>.DLT` gom record của **mọi** consumer group đọc topic đó.
 - **Ban**: video-service và search-service tự giữ bản ghi ban theo user (`owner_bans`) và lọc lúc đọc, theo `bannedUntil > now` — vì ban tạm hết hạn do `ExpiredBanSweep` của auth-service gỡ mà **không phát event**. Feed recommendation và trending đi qua `/videos/batch` nên cũng được lọc ở video-service. Comment: interaction-service giữ `user_bans` (Cassandra) và bỏ comment của người đang bị ban khỏi mọi danh sách, counter giữ nguyên.
 - **Restore vs verdict**: `VideoRestoredEvent` và verdict đi hai topic khác nhau. search-service và recommendation-service lưu thời điểm admin quyết định (`approvedAt` / `reco:video:approved-at:{id}`); verdict REVIEW/REJECTED sinh **trước** mốc đó được coi là đã duyệt.
-- `analytics-service` là consumer của `video.video-events` + `interaction.watch-events` (sink training data cho `rank-service`) — xem `docs/ranking-model.md`. Ngoài phạm vi các doc client.
+- `analytics-service` đọc `video.video-events` + `interaction.watch-events` (sink training data cho `rank-service` — xem `docs/ranking-model.md`), cùng `auth.user-events`, `interaction.like/comment/share/save-events`, `user.follow-events`, `user.follow-backfill-events`, `user.profile-events` cho trang phân tích của Studio (`docs/tiktok-studio-api.md`). Ngoài phạm vi các doc client.
 - Cách feature xếp hạng đi từ các event này tới `rank-service`: `docs/ranking-model.md` §2.
 
 ## 6. Ports nhanh
@@ -264,20 +296,12 @@ gateway; chạy local, `make run-*` cho mọi service trừ gateway bind `127.0.
   mà chưa tới Kafka — poll chạy 5s/lần nên tuổi vượt vài phút là poller kẹt chứ không phải tải cao; video
   đếm cả bản ghi bị `eventFailedAt` gác lại, nên alert còn bật tới khi có người gỡ cờ), HTTP latency/5xx
   (`http_server_requests_seconds_*`).
-- **Alert tối thiểu** (repo chưa chạy Prometheus; dán vào `rule_files`). Nhiều replica cùng đọc một DB
-  nên lấy `max`, không cộng:
-  ```yaml
-  groups:
-    - name: tiktok-events
-      rules:
-        - alert: OutboxStuck
-          expr: max by (application, outbox) (outbox_oldest_pending_age_seconds) > 120
-          for: 5m
-        - alert: EventDeadLettered
-          expr: sum by (application, topic) (increase(kafka_consumer_dead_letters_total[10m])) > 0
-  ```
+- **Prometheus + Alertmanager** chạy trong `docker-compose.prod.yml`: scrape 13 service Java theo danh sách cứng
+  `scripts/monitoring/prometheus.yml`, rule ở `scripts/monitoring/alerts.yml` (`ServiceDown`, `OutboxStuck` — tuổi > 300s
+  trong 5 phút, `DeadLetters`, `ServerErrors`). Nhiều replica cùng đọc một DB nên rule outbox lấy `max`, không cộng.
+  Vận hành, cách mở UI: `docs/operations.md` §4.
 - **`INTERNAL_API_TOKEN`** (≥ 32 byte, **cùng một giá trị**): bắt buộc ở api-gateway, auth, user, video,
-  interaction, chat, notification, recommendation, search; thiếu thì service không khởi động (ngoài profile
+  interaction, chat, notification, recommendation, search, story, admin; thiếu thì service không khởi động (ngoài profile
   local/test). Lệch giá trị giữa các service → mọi call nội bộ 403. Đổi token: (1) mọi service thêm
   `INTERNAL_API_TOKEN_ROTATING=<mới>`, (2) đổi chỗ hai giá trị ở mọi service, (3) bỏ `..._ROTATING`.
 - **Elasticsearch 9**: client của Spring Data Elasticsearch 6 chỉ nói chuyện với server 9, mà ES 9 không khởi
@@ -299,7 +323,16 @@ gateway; chạy local, `make run-*` cho mọi service trừ gateway bind `127.0.
 | [`interaction-service-api.md`](interaction-service-api.md) | client | Like / comment / share / view / watch + §7 events |
 | [`recommendation-service-api.md`](recommendation-service-api.md) | client | `/trending`, `/feed` (chỉ trả id) + §8 events |
 | [`search-service-api.md`](search-service-api.md) | client | Tìm video (q / hashtag) + §7 events |
-| [`media-worker.md`](media-worker.md) | vận hành | Transcode (copy, chưa ffmpeg), cleanup MinIO, mirror avatar |
+| [`story-service-api.md`](story-service-api.md) | client | Đăng story ảnh/video, feed/rings, người đã xem |
+| [`tiktok-studio-api.md`](tiktok-studio-api.md) | client (web) | Studio của creator: số liệu từ `analytics-service`, quản lý nội dung |
+| [`chat-receipts-and-typing.md`](chat-receipts-and-typing.md) | client + backend | chat-service: đã gửi / đã nhận / đã xem, "đang nhập" (REST + STOMP) |
+| [`video-chat-sharing.md`](video-chat-sharing.md) | client | Chia sẻ video qua tin nhắn |
+| [`user-settings.md`](user-settings.md) | backend | Settings tài khoản: storage, contract, enforcement |
+| [`media-worker.md`](media-worker.md) | vận hành | Transcode bằng ffmpeg (normalize / faststart remux, thumbnail, preview), cleanup MinIO, mirror avatar |
+| [`moderation.md`](moderation.md) | backend + vận hành | Kiểm duyệt video/story/chữ tự động, `moderation-service` |
 | [`ranking-model.md`](ranking-model.md) | vận hành | Huấn luyện + phục vụ `rank-service`, hợp đồng feature |
+| [`operations.md`](operations.md) | vận hành | Deploy `docker-compose.prod.yml`: env, mật khẩu, backup/restore, monitoring, GeoIP |
 
-Chưa có doc riêng: `admin-service`, `analytics-service`, `story/chat/notification` (chưa expose qua gateway).
+Chưa có doc riêng: `admin-service` (console), `notification-service`, và API chat ngoài hai doc trên. Mọi service đều đã
+có route ở gateway (`/api/v1/{auth,users,videos,interactions,recommendations,admin,notifications,conversations,search,stories,analytics}/**`
+và `/ws/**`); chỉ `rank-service` và `moderation-service` không có.

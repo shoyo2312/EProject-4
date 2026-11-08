@@ -96,7 +96,8 @@ Response `data` → `UserResponse`:
   "emailVerified": false,     // luôn false ngay sau khi đăng ký — xem mục 3.6
   "createdAt": "2026-08-01T10:00:00Z",
   "usernameChangeableAt": null, // khi nào được đổi username lần tới; null = đổi được ngay (mục 3.16)
-  "hasPassword": true         // false = tài khoản social chưa đặt mật khẩu; đặt qua forgot-password → reset (mục 3.8, 3.9)
+  "hasPassword": true,        // false = tài khoản social chưa đặt mật khẩu; đặt qua forgot-password → reset (mục 3.8, 3.9)
+  "providers": []             // provider đã liên kết: GOOGLE / FACEBOOK (dùng ở mục 3.19)
 }
 ```
 
@@ -146,7 +147,7 @@ Response: `TokenResponse` giống `/login` — access + refresh token **mới**.
 
 Lỗi: `INVALID_REFRESH_TOKEN` (401) → hết hạn, không hợp lệ, hoặc **đã bị xoay rồi** → **buộc logout local, quay về màn hình đăng nhập**.
 
-**Replay detection — bắt buộc client phải xử lý đúng:** trình lại 1 refresh token đã xoay mà chưa hết hạn được coi là dấu hiệu token bị đánh cắp → server **giết toàn bộ phiên của tài khoản đó** (mọi refresh token bị thu hồi + mọi access token đang sống bị vô hiệu ngay). Hậu quả với user: bị đá khỏi tất cả thiết bị. Ngoại lệ duy nhất là **grace window 10 giây** — trong 10s kể từ lúc token bị xoay, request trùng chỉ nhận `401` chứ không giết phiên, để client retry một `/refresh` bị mất response không bị phạt oan.
+**Replay detection — bắt buộc client phải xử lý đúng:** trình lại 1 refresh token đã xoay mà chưa hết hạn được coi là dấu hiệu token bị đánh cắp → server **giết cả chain của lần đăng nhập đó** (mọi refresh token cùng family bị thu hồi + mọi access token sinh ra từ lần đăng nhập đó bị vô hiệu ngay). Hậu quả với user: thiết bị đó bị đăng xuất; thiết bị khác không chung chain nên vẫn sống. Riêng token từ trước khi có family thì server giết mọi phiên của tài khoản. Ngoại lệ duy nhất là **grace window 10 giây** — trong 10s kể từ lúc token bị xoay, request trùng chỉ nhận `401` chứ không giết phiên, để client retry một `/refresh` bị mất response không bị phạt oan.
 
 Hai luật rút ra cho Flutter, sai là user bị logout hàng loạt:
 1. **Single-flight**: chỉ được có **đúng 1** request `/refresh` chạy tại một thời điểm. Nhiều request 401 song song phải cùng chờ chung 1 Future refresh (Dio interceptor + lock/`Completer`), không được mỗi request tự gọi `/refresh` bằng token cũ.
@@ -155,12 +156,14 @@ Hai luật rút ra cho Flutter, sai là user bị logout hàng loạt:
 Không được retry `/refresh` sau khi đã nhận `401` — lần thử thứ hai nằm ngoài grace window sẽ kích hoạt replay detection và giết chain của lần đăng nhập đó (thiết bị này phải đăng nhập lại; thiết bị khác không bị ảnh hưởng).
 
 ### 3.4 `POST /logout`
-Header `Authorization: Bearer <accessToken>` (optional nhưng nên gửi để access token bị blacklist ngay lập tức thay vì chờ hết hạn). Trả `204 No Content` (không có body).
+Header `Authorization: Bearer <accessToken>` (optional nhưng nên gửi để access token bị blacklist ngay lập tức thay vì chờ hết hạn). Trả `200 OK`, `data` rỗng.
 
-Request:
+Request (body cũng optional — client mất refresh token vẫn logout được bằng header):
 ```json
 { "refreshToken": "eyJ..." }
 ```
+
+Idempotent: token lạ hoặc đã thu hồi không phải lỗi.
 
 ### 3.5 `GET /me`
 **Bắt buộc** header `Authorization: Bearer <accessToken>`. Trả `200 OK`.
@@ -170,7 +173,7 @@ Response `data` → `UserResponse` (giống mục 3.1, bao gồm `emailVerified`
 Lỗi: `401 Unauthorized` nếu token thiếu/hết hạn/đã bị blacklist (do logout).
 
 ### 3.6 `POST /verify-email`
-Không cần token. Trả `204 No Content`.
+Không cần token. Trả `200 OK`, `data` rỗng.
 
 Request:
 ```json
@@ -206,7 +209,7 @@ Nếu email tồn tại và tài khoản đang `ACTIVE`, gửi OTP reset passwor
 Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `TOO_MANY_OTP_REQUESTS` (429).
 
 ### 3.9 `POST /reset-password`
-Không cần token. Trả `204 No Content`.
+Không cần token. Trả `200 OK`, `data` rỗng.
 
 Request:
 ```json
@@ -217,7 +220,7 @@ Request:
 
 Mã được gửi tới hòm thư, nên dùng được mã cũng là chứng minh sở hữu địa chỉ: tài khoản chưa verify email sẽ được **đánh dấu đã verify** luôn. Đây là đường duy nhất để một tài khoản tạo bằng social mà provider không khẳng định email (Facebook) có được mật khẩu đăng nhập được — nếu không, `/login` sẽ trả `403 EMAIL_NOT_VERIFIED` với chính mật khẩu vừa đặt.
 
-Hệ quả cho client: thiết bị vừa reset password **cũng** mất phiên — sau `204` phải điều hướng về màn hình đăng nhập và cho user login lại bằng mật khẩu mới, không được giữ token cũ trong app.
+Hệ quả cho client: thiết bị vừa reset password **cũng** mất phiên — sau `200` phải điều hướng về màn hình đăng nhập và cho user login lại bằng mật khẩu mới, không được giữ token cũ trong app.
 
 Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400), `TOO_MANY_OTP_REQUESTS` (429 — nhập sai OTP quá **5 lần/15 phút** theo email, độc lập với giới hạn gửi lại OTP ở mục 3.8).
 
@@ -233,7 +236,7 @@ Cùng kết quả với `/reset-password` ở trên, nhưng tách làm hai để
 ```
 Mã OTP bị **tiêu luôn** ở bước này và tính chung ngân sách đoán sai với `/reset-password` (5 lần/15 phút theo email). Chưa có gì của tài khoản thay đổi. Lỗi: `VALIDATION_ERROR` (400), `INVALID_OTP` (400), `TOO_MANY_OTP_REQUESTS` (429).
 
-`/reset-password/complete` — không cần token, trả `204 No Content`:
+`/reset-password/complete` — không cần token, trả `200 OK`, `data` rỗng:
 ```json
 { "resetToken": "<opaque>", "newPassword": "N3wP@ssw0rd" }
 ```
@@ -318,7 +321,7 @@ Request:
 
 Server lưu email ở trạng thái **chưa xác thực** rồi gửi OTP 6 số. Xác nhận bằng `POST /verify-email` (mục 3.6) như luồng đăng ký thường — không có endpoint riêng.
 
-Lỗi: `VALIDATION_ERROR` (400), `EMAIL_ALREADY_EXISTS` (409 — email đang thuộc tài khoản khác), `EMAIL_ALREADY_LINKED` (409 — tài khoản này đã có email **đã verify**; đổi email đã verify là thao tác khác, chưa hỗ trợ), `TOO_MANY_OTP_REQUESTS` (429 — dùng chung counter với `resend-verification`), `401` nếu thiếu/sai access token.
+Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `EMAIL_ALREADY_EXISTS` (409 — email đang thuộc tài khoản khác), `EMAIL_ALREADY_LINKED` (409 — tài khoản này đã có email **đã verify**; đổi email đã verify là thao tác khác, chưa hỗ trợ), `TOO_MANY_OTP_REQUESTS` (429 — dùng chung counter với `resend-verification`), `401` nếu thiếu/sai access token.
 
 ### 3.13 `POST /register/start`
 Không cần token. Trả `200 OK`, `data` → `{ "resendTicket": "..." }`.
@@ -369,7 +372,7 @@ Request:
 
 Không có `email` trong request: địa chỉ là cái mà vé đã chứng minh, nên không đổi được sang một địa chỉ chưa verify.
 
-`birthDate` được kiểm tra **trước khi tiêu vé**: sai thì trả `400 BIRTH_DATE_INVALID` và vé vẫn dùng được, client sửa ngày rồi gửi lại. auth-service không lưu ngày sinh — nó đi theo `UserRegisteredEvent` sang user-service (`user-service-api.md` mục 3.1, chỉ chủ tài khoản thấy). Tài khoản Google/Facebook không có bước này: client hỏi ngày sinh một lần sau đăng nhập khi `GET /me` trả `birthDate: null`.
+`birthDate` được kiểm tra **trước khi tiêu vé**: sai thì trả `400 BIRTH_DATE_INVALID` và vé vẫn dùng được, client sửa ngày rồi gửi lại. auth-service không lưu ngày sinh — nó đi theo `UserRegisteredEvent` sang user-service (`user-service-api.md` mục 3.1, chỉ chủ tài khoản thấy). Tài khoản Google/Facebook không có bước này: client hỏi ngày sinh một lần sau đăng nhập khi `GET /api/v1/me` của gateway (`api-gateway.md` mục 3) trả `birthDate: null` — `GET /api/v1/auth/me` không có field này.
 
 Response `data` → `TokenResponse` (giống mục 3.2). Tài khoản được tạo **đã verify email** và đăng nhập luôn — lưu cặp token như sau `/login`, không cần gọi `/login` nữa.
 
@@ -414,7 +417,7 @@ Lỗi: `VALIDATION_ERROR` (400), `TURNSTILE_VERIFICATION_FAILED` (403), `INVALID
 ### 3.18 Endpoint cho admin console — `/admin/**`
 **Bắt buộc token có role ADMIN**; app mobile không dùng.
 
-- `GET /admin/users`, `GET /admin/users/{userId}` — danh bạ tài khoản (`status`, `role`), xem `CLAUDE.md` §Ban. Mỗi phần tử còn có `deactivatedAt` và `deletionScheduledAt` (mục 3.19): giữ nguyên khi bị ban, nên một tài khoản `BANNED` vẫn có thể đang chờ xoá. Lọc `?status=DEACTIVATED` được.
+- `GET /admin/users`, `GET /admin/users/{userId}` — danh bạ tài khoản (`status`, `role`), xem `CLAUDE.md` §Ban. Mỗi phần tử còn có `deactivatedAt` và `deletionScheduledAt` (mục 3.19): giữ nguyên khi bị ban, nên một tài khoản `BANNED` vẫn có thể đang chờ xoá. Lọc `?status=DEACTIVATED` được; `?q=` tìm theo username hoặc email (tối đa 100 ký tự, bỏ trống = tất cả). Mặc định 25/trang, mới nhất trước.
 - `GET /admin/users/{userId}/security-events?page=0&size=25` — nhật ký bảo mật của một tài khoản, **mới nhất trước**: đăng nhập thành công/thất bại, reset mật khẩu, đổi email, OTP admin. Không ghi lại refresh token và lệnh ban (ban nằm ở audit log của admin-service). Mỗi phần tử: `id, eventType, ipAddress, userAgent, deviceLabel, deviceModel, location, detail, createdAt`. `location` là nơi gần đúng của `ipAddress` ("Ho Chi Minh City, Vietnam", có khi chỉ quốc gia), tra từ file GeoIP lúc ghi; null với row cũ và với địa chỉ không tra được.
 
 ### 3.19 Đóng tài khoản — `/account/**`
@@ -446,6 +449,17 @@ Trình duyệt hiện mã QR, app (đã đăng nhập) quét rồi xác nhận, 
 - Màn xác nhận trên app **phải** hiện `deviceLabel` + `location` — đó là thứ chặn chiêu đưa mã QR của kẻ khác cho nạn nhân quét.
 - Tài khoản bị ban/đóng/xoá giữa lúc duyệt và lúc trình duyệt hỏi: `/status` trả `REJECTED`, không có token.
 
+### 3.21 Thiết bị đăng nhập — `/sessions/**`
+**Bắt buộc token.** Mỗi phiên là một thiết bị; mọi token của cùng một chuỗi `/refresh` thuộc cùng phiên.
+
+| Endpoint | Trả |
+|---|---|
+| `GET /sessions` | `200`, `data` → mảng `{ id, deviceType, deviceLabel, deviceModel, ipAddress, location, signedInAt, lastActiveAt, current }`, hoạt động gần nhất trước. `current: true` là thiết bị đang gọi (token cũ chưa có phiên thì không có phần tử nào `current`). `deviceType`: `DESKTOP` / `MOBILE` |
+| `DELETE /sessions/{sessionId}` | `200`. Đăng xuất một thiết bị: refresh token của nó hỏng, access token bị chặn ngay. `404 SESSION_NOT_FOUND` nếu phiên không thuộc tài khoản này hoặc đã kết thúc |
+| `DELETE /sessions` | `200`, `data` → số thiết bị bị đăng xuất. Đăng xuất mọi thiết bị **trừ** thiết bị đang gọi |
+
+**Giới hạn thiết bị**: mỗi tài khoản tối đa 1 phiên `DESKTOP` + 1 phiên `MOBILE` (phone/tablet), xác định từ User-Agent. Đăng nhập trên thiết bị mới cùng loại **đá phiên cũ** chứ không bị từ chối — máy cũ sẽ nhận `401` ở request kế tiếp và `/refresh` cũng hỏng. Tài khoản ADMIN không bị giới hạn.
+
 ## 4. Luồng xác thực (auth flow) cho Flutter
 
 1. `register` → `verify-email` (OTP 6 số gửi qua mail) → `login` → lưu `accessToken` + `refreshToken` an toàn (`flutter_secure_storage`, **không** lưu SharedPreferences plaintext). Bỏ qua bước verify thì `login` trả `403 EMAIL_NOT_VERIFIED`. Luồng web thì khác: `register/start` → `register/verify` → `register/complete` (mục 3.13–3.15), bước cuối trả token luôn.
@@ -453,7 +467,7 @@ Trình duyệt hiện mã QR, app (đã đăng nhập) quét rồi xác nhận, 
 3. Access token sống **15 phút**. Khi API trả `401`, gọi `/refresh` bằng `refreshToken` **đúng một lần, và chỉ một request tại một thời điểm** (xem luật single-flight ở mục 3.3); nếu `/refresh` lỗi (`INVALID_REFRESH_TOKEN`) → xoá token, điều hướng về màn hình login. **Không retry `/refresh`** — lần thử thứ hai bị coi là replay và giết chain của lần đăng nhập đó.
 4. Refresh token sống **7 ngày** (`604800000ms`) nhưng **xoay mỗi lần dùng**: mỗi `/refresh` thành công trả về refresh token mới, phải ghi đè token cũ ngay. Nên chủ động refresh khi app resume nếu access token gần hết hạn, tránh chờ 401 (giảm giật UI).
 5. Logout: gọi `/logout` với access token hiện có + refresh token, rồi xoá token local. Việc gọi API logout quan trọng vì nó blacklist access token trên server (Redis) — nếu chỉ xoá local, token cũ (nếu bị lộ) vẫn dùng được tới khi tự hết hạn. Logout chỉ giết **phiên hiện tại**; các thiết bị khác vẫn đăng nhập bình thường.
-6. Có 2 trường hợp server giết phiên đang chạy, app sẽ đột ngột nhận `401` ở mọi request và `/refresh` cũng hỏng: reset password (mục 3.9, mọi thiết bị) và replay detection (mục 3.3, chỉ chain của lần đăng nhập bị trình lại). Interceptor phải xử lý được tình huống này — xoá token, về màn hình login — chứ không loop retry.
+6. Có 4 trường hợp server giết phiên đang chạy, app sẽ đột ngột nhận `401` ở mọi request và `/refresh` cũng hỏng: reset password (mục 3.9, mọi thiết bị), replay detection (mục 3.3, chỉ chain của lần đăng nhập bị trình lại), bị đăng xuất từ thiết bị khác, và đăng nhập trên thiết bị khác cùng loại (mục 3.21). Interceptor phải xử lý được tình huống này — xoá token, về màn hình login — chứ không loop retry.
 
 Khuyến nghị dùng interceptor (Dio) để tự động gắn header và refresh-on-401, tránh lặp code ở từng repository. Interceptor bắt buộc phải có cơ chế khoá (single-flight) cho `/refresh`.
 
@@ -494,11 +508,12 @@ ACTIVE, LOCKED, BANNED, DEACTIVATED   // DEACTIVATED: chủ tự đóng, mục 3
 | `QR_LOGIN_NOT_ALLOWED` | 403 | Tài khoản ADMIN hoặc không ACTIVE quét mã QR (mục 3.20) |
 | `TOO_MANY_QR_LOGIN_REQUESTS` | 429 | Quá 30 mã QR / 10 phút từ một IP (mục 3.20) |
 | `USER_NOT_FOUND` | 404 | (hiếm gặp qua API public, thường nội bộ) |
+| `SESSION_NOT_FOUND` | 404 | `DELETE /sessions/{id}` với phiên không thuộc tài khoản này hoặc đã kết thúc (mục 3.21) |
 | `INVALID_OTP` | 400 | OTP sai, đã dùng, hết hạn, hoặc email không khớp (`verify-email`, `reset-password`, `reset-password/verify`, `register/verify`) |
 | `RESET_SESSION_EXPIRED` | 400 | `resetToken` của `reset-password/complete` hết hạn hoặc đã dùng — xin mã mới |
 | `SIGNUP_SESSION_EXPIRED` | 400 | `signupToken` sai, hết hạn (30 phút) hoặc đã dùng ở `register/complete` → quay lại `register/start` |
 | `TURNSTILE_VERIFICATION_FAILED` | 403 | Thiếu hoặc sai `turnstileToken` ở một lời gọi gửi OTP, hoặc `resendTicket` gửi kèm đã hết hạn / không phải của địa chỉ và luồng này (xem đầu mục 3) |
-| `TOO_MANY_OTP_REQUESTS` | 429 | (a) Quá 3 lần gọi `resend-verification`/`forgot-password`/`register/start` trong 15 phút (theo email), **hoặc** (b) quá 5 lần nhập sai OTP trong 15 phút ở `verify-email`/`reset-password`/`register/verify` (theo email) — 2 counter độc lập, client cần xử lý cả hai trường hợp |
+| `TOO_MANY_OTP_REQUESTS` | 429 | (a) Quá 3 lần gửi mã trong 15 phút ở cùng một luồng (`resend-verification`, `forgot-password`, `register/start`…, theo email — xem mục 7), **hoặc** (b) quá 5 lần nhập sai OTP trong 15 phút ở `verify-email`/`reset-password`/`register/verify` (theo email) — 2 counter độc lập, client cần xử lý cả hai trường hợp |
 | `CONCURRENT_MODIFICATION` | 409 | Hai request cùng sửa 1 bản ghi đúng lúc (vd. 2 lần `verify-email`/`reset-password` gửi song song). An toàn để **thử lại 1 lần** sau khi đọc lại trạng thái — khác hẳn các mã 409 khác vốn là lỗi nghiệp vụ không nên retry |
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định — hiển thị generic error, không show message raw cho user |
 
@@ -507,14 +522,16 @@ ACTIVE, LOCKED, BANNED, DEACTIVATED   // DEACTIVATED: chủ tự đóng, mục 3
 ## 7. Rate limiting (ảnh hưởng tới UX)
 
 - **Gateway** (`:8080`): giới hạn theo IP — 20 request/giây, burst 40 (áp dụng cho toàn bộ API, không riêng auth).
-- **Auth-service**, 7 counter độc lập, đều theo **tài khoản/email** chứ không theo IP (nên đổi mạng/VPN không reset được):
+- **Auth-service**, các counter dưới đây theo **tài khoản/email** chứ không theo IP (nên đổi mạng/VPN không reset được):
   - Login sai: 5 lần/15 phút → `429 TOO_MANY_LOGIN_ATTEMPTS`. Tính theo tài khoản, nên gõ lúc `username` lúc `email` vẫn chung 1 counter.
-  - Gửi OTP (`resend-verification`, `forgot-password`, `POST /email`): 3 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`.
-  - Nhập sai OTP (`verify-email`, `reset-password`): 5 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`.
-  - Gửi mã social-link (mục 3.11, sinh bởi `POST /oauth/{provider}`): 3 lần/15 phút, **namespace riêng** — không tiêu ngân sách của 2 counter trên và ngược lại. Vượt ngưỡng thì server ngừng gửi mail nhưng **vẫn trả `409`**, không bao giờ `429` (xem mục 3.11).
-  - Nhập sai mã social-link (mục 3.11): 5 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`, cũng namespace riêng.
-  - Gửi mã đăng ký email-first (`register/start`, mục 3.13): 3 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`, **namespace riêng** — địa chỉ chưa có tài khoản nên không dùng chung counter với `resend-verification`.
-  - Nhập sai mã đăng ký (`register/verify`, mục 3.14): 5 lần/15 phút → `429 TOO_MANY_OTP_REQUESTS`, cũng namespace riêng.
+  - Mã OTP: **mỗi luồng một cặp counter riêng** theo email — gửi mã 3 lần/15 phút, nhập sai 5 lần/15 phút, cả hai → `429 TOO_MANY_OTP_REQUESTS`. Luồng nào không tiêu ngân sách của luồng khác:
+    - Xác thực email: gửi = `resend-verification` + `POST /email` (dùng chung), nhập = `verify-email`.
+    - Reset mật khẩu: gửi = `forgot-password`, nhập = `reset-password` + `reset-password/verify` (dùng chung).
+    - Đăng ký email-first: gửi = `register/start` (mục 3.13 — địa chỉ chưa có tài khoản nên không chung với `resend-verification`), nhập = `register/verify` (mục 3.14).
+    - Social-link (mục 3.11, mã sinh bởi `POST /oauth/{provider}`): vượt ngưỡng gửi thì server ngừng gửi mail nhưng **vẫn trả `409`**, không bao giờ `429` (xem mục 3.11); nhập sai thì `429` như thường.
+    - OTP đăng nhập admin (`/login` → `/login/otp`, mục 3.17).
+    - Mã đóng tài khoản (`account/closure-code` → `account/deactivate|delete`, mục 3.19).
+- **QR login** là ngoại lệ, tính theo **IP**: tối đa 30 mã / 10 phút → `429 TOO_MANY_QR_LOGIN_REQUESTS` (mục 3.20).
 
 Gửi lại bằng `resendTicket` (đầu mục 3) vẫn tính vào các counter gửi OTP ở trên: ticket chỉ thay cho Turnstile, không thay cho giới hạn.
 
@@ -526,25 +543,25 @@ Khi gặp `429`, UI nên disable nút tương ứng tạm thời + hiển thị 
 - Không lưu access/refresh token ở nơi không mã hoá.
 - Không gọi thẳng `auth-service:8081` từ production build — luôn qua gateway `:8080`.
 - Không hardcode message lỗi tiếng Anh từ server ra UI — dùng `code` để map.
-- **Không gọi `/refresh` song song từ nhiều request** và không retry `/refresh` sau khi nó trả `401` — refresh token xoay mỗi lần dùng, trình lại token đã xoay bị coi là token bị đánh cắp và server giết phiên trên **mọi thiết bị** của user (xem mục 3.3).
+- **Không gọi `/refresh` song song từ nhiều request** và không retry `/refresh` sau khi nó trả `401` — refresh token xoay mỗi lần dùng, trình lại token đã xoay bị coi là token bị đánh cắp và server giết cả chain của lần đăng nhập đó, tức thiết bị này bị đăng xuất (xem mục 3.3).
 - Không giữ lại access token cũ sau khi `reset-password` thành công — token đó đã chết ngay trên server (mục 3.9), giữ lại chỉ tạo ra chuỗi 401 khó hiểu.
 - Không dùng refresh token làm `Authorization: Bearer` — 2 loại token ký cùng secret nhưng server phân biệt bằng claim `tokenType`, gửi nhầm sẽ luôn `401`.
 
 ## 9. Sự kiện Kafka (Events)
 
-Phần này cho người tích hợp backend, không phải client mobile. `auth-service` **chỉ phát**, không tiêu thụ event nào. Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
+Phần này cho người tích hợp backend, không phải client mobile. `auth-service` phát các event dưới đây, và tiêu thụ đúng một topic: `admin.moderation-events` (`AdminModerationEventConsumer`, route theo header `eventType`) — `UserBannedEvent` đặt `UserStatus.BANNED` và huỷ mọi phiên (tài khoản ADMIN bị bỏ qua), `UserUnbannedEvent` gỡ ban, `UserSessionsRevokedEvent` huỷ mọi phiên; các event type khác trên topic bị bỏ qua. Bảng đầy đủ toàn hệ thống: `docs/ARCHITECTURE.md` §5c.
 
 | Topic | Event | Payload | Cơ chế phát | Consumer |
 |---|---|---|---|---|
-| `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl` (`avatarUrl` null với đăng ký bằng mật khẩu) | **Outbox** (`outbox_events`, ghi cùng transaction tạo `User`). `OutboxPublisher` poll → `OutboxDispatcher` của `kafka-lib` chỉ `markPublished` **sau** khi broker ack | user-service (tạo profile) |
+| `auth.user-events` | `UserRegisteredEvent` | `eventId, occurredAt, userId, username, email, avatarUrl, birthDate` (`avatarUrl` null với đăng ký bằng mật khẩu; `birthDate` chỉ có ở `register/complete`, null ở `register` và social) | **Outbox** (`outbox_events`, ghi cùng transaction tạo `User`). `OutboxPublisher` poll → `OutboxDispatcher` của `kafka-lib` chỉ `markPublished` **sau** khi broker ack | user-service (tạo profile) |
 | `auth.social-avatar-events` | `SocialAvatarDiscoveredEvent` | `eventId, occurredAt, userId, avatarUrl` | **Gửi thẳng broker, fire-and-forget** (chỉ log khi lỗi). Không qua outbox: đăng nhập social gặp tài khoản sẵn có thì không ghi DB nào để "atomic" cùng, và Kafka chết không được làm hỏng login vì một tấm ảnh. **Ngoại lệ — lần đăng nhập tạo tài khoản**: ghi vào **outbox** (aggregate `SOCIAL_AVATAR`) ngay sau `UserRegisteredEvent`, cùng transaction. Gửi thẳng thì nó tới media-worker trước registration tới một chu kỳ poll (5s), bản sao tới user-service khi profile chưa tồn tại và mọi tài khoản mới kẹt ở URL của provider | media-worker (sao ảnh về MinIO) |
 | `auth.account-events` | `AccountStateChangedEvent` | `eventId, occurredAt, userId, state (DEACTIVATED / ACTIVE / DELETED), deletionScheduledAt` | **Outbox**, aggregate `ACCOUNT`, key `userId`, cùng transaction với việc đóng / mở lại / xoá (mục 3.19). Consumer áp `DEACTIVATED`/`ACTIVE` như một phép gán có guard `occurredAt`; `DELETED` là fan-out | user-service (ẩn profile; DELETED gỡ mọi follow và chỉnh counter), video-service, search-service, interaction-service (ẩn video / kết quả tìm kiếm / comment; video-service đưa video vào thùng rác khi DELETED) |
-| `auth.username-events` | `UsernameChangedEvent` | `eventId, occurredAt, userId, username, previousUsername` | **Outbox** (cùng transaction với việc đổi username, mục 3.16), key `userId`. `OutboxPublisher` chọn topic theo `aggregate_type` (`USER` / `USERNAME` / `SOCIAL_AVATAR`) — deploy bản có bảng route này phải dừng hết instance cũ trước, vì instance cũ đẩy mọi row lên `auth.user-events` | user-service (cập nhật bản sao username trong profile) |
+| `auth.username-events` | `UsernameChangedEvent` | `eventId, occurredAt, userId, username, previousUsername` | **Outbox** (cùng transaction với việc đổi username, mục 3.16), key `userId`. `OutboxPublisher` chọn topic theo `aggregate_type` (`USER` / `USERNAME` / `SOCIAL_AVATAR` / `ACCOUNT` / `NEW_DEVICE`) — deploy bản có bảng route này phải dừng hết instance cũ trước, vì instance cũ đẩy mọi row lên `auth.user-events` | user-service (cập nhật bản sao username trong profile) |
 | `auth.new-device-events` | `NewDeviceSignInEvent` | `eventId, occurredAt, userId, deviceLabel, location`. `deviceLabel` chỉ gồm từ cố định ("Chrome on macOS 27", không có model); hai field cuối có thể null | **Outbox**, aggregate `NEW_DEVICE`, key `userId`, cùng transaction với refresh token và với việc ghi nhận thiết bị (header `X-Device-Id`, mục 3) | notification-service (thông báo `SYSTEM`, `referenceId` `"account-security"`) |
 
 Phát `SocialAvatarDiscoveredEvent` **mỗi lần** đăng nhập social có mang ảnh, không chỉ lần đầu — URL của provider (nhất là Facebook) hết hạn sau vài ngày, nên phát lại là cách media-worker luôn có URL còn sống để sao, và cũng là cách backfill tài khoản social cũ chưa có ảnh.
 
-Ba topic tách nhau vì `auth.user-events` chỉ mang đúng một shape và các consumer parse thẳng không đọc header — đăng một shape thứ hai lên đó sẽ deserialize thành `UserRegisteredEvent` với mọi field null và tạo profile rác. `UsernameChangedEvent` còn tệ hơn: nó có đủ `userId` và `username`, nên sẽ được đọc như một lần đăng ký thật. `auth.new-device-events` tách riêng vì cùng lý do: đăng lên `auth.user-events` thì mỗi cảnh báo sẽ thành một lời chào "Welcome" mới.
+Các topic tách nhau vì `auth.user-events` chỉ mang đúng một shape và các consumer parse thẳng không đọc header — đăng một shape thứ hai lên đó sẽ deserialize thành `UserRegisteredEvent` với mọi field null và tạo profile rác. `UsernameChangedEvent` còn tệ hơn: nó có đủ `userId` và `username`, nên sẽ được đọc như một lần đăng ký thật. `auth.new-device-events` tách riêng vì cùng lý do: đăng lên `auth.user-events` thì mỗi cảnh báo sẽ thành một lời chào "Welcome" mới.
 
 `ExpiredRecordCleanup` (job retention) chỉ xoá row outbox đã `published_at IS NOT NULL` — row chưa publish là event chưa tồn tại ở đâu khác.
 

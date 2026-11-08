@@ -2,14 +2,14 @@
 
 Tài liệu này mô tả **những gì client (Flutter/Dart) cần biết** để tích hợp đúng với `video-service`. Không phải tài liệu thiết kế backend — chỉ phần hợp đồng API (contract). Đọc kèm `docs/auth-service-api.md` để lấy `accessToken`.
 
-Khác `user-service` (bắt buộc token ở mọi endpoint): ở đây **mọi `GET` đều public**, chỉ `POST`/`DELETE` mới bắt buộc token. Nhưng **có token hay không vẫn ảnh hưởng đến kết quả của `GET`** — xem mục 3.4 và 3.5.
+Khác `user-service` (bắt buộc token ở mọi endpoint): ở đây **mọi `GET` đều public** (trừ `GET /me` và `GET /music`), còn `POST`/`PATCH`/`DELETE` bắt buộc token. Nhưng **có token hay không vẫn ảnh hưởng đến kết quả của `GET`** — xem mục 3.4 và 3.5.
 
 ## 1. Tech stack liên quan đến client
 
 | Thành phần | Công nghệ |
 |---|---|
 | Giao thức | REST/HTTP, JSON |
-| Auth | JWT access token, Bearer scheme — bắt buộc với `POST`/`DELETE`, optional với `GET` |
+| Auth | JWT access token, Bearer scheme — bắt buộc với `POST`/`PATCH`/`DELETE` và `GET /me`, `GET /music`; optional với các `GET` khác |
 | Entry point cho mobile | **api-gateway** (`:8080`), KHÔNG gọi thẳng `video-service:8083` |
 | Base URL (qua gateway) | `http://<gateway-host>:8080/api/v1/videos` |
 | Docs tương tác | `http://localhost:8083/swagger-ui.html` (chạy trực tiếp video-service khi dev) |
@@ -36,7 +36,7 @@ Giống hệt `auth-service`/`user-service` — mọi response bọc trong `ApiR
 
 `size` bị chặn trên ở **50** (xin lớn hơn thì bị kẹp xuống, không báo lỗi); không truyền thì mặc định **20**. Hai giới hạn này giống nhau ở cả hai endpoint. `last` = `number + 1 >= totalPages` (chỉ có ở `PageResponse`).
 
-**Sắp xếp là cố định, không cấu hình được:** cả `/feed` lẫn `/users/{userId}` luôn trả theo `createdAt` giảm dần (mới nhất trước) — thứ tự này nằm sẵn trong query ở server. Đừng thiết kế UI dựa trên việc truyền `sort`.
+**Sắp xếp là cố định, không cấu hình được:** cả `/feed` lẫn `/users/{userId}` luôn trả theo `createdAt` giảm dần (mới nhất trước) — riêng `/users/{userId}` đưa video ghim lên đầu trước (mục 3.8c). Thứ tự này nằm sẵn trong query ở server. Đừng thiết kế UI dựa trên việc truyền `sort`.
 
 **Cẩn thận trùng/nhảy item khi infinite scroll — chỉ với `/users/{userId}`.** Đó là phân trang theo offset: nếu có video mới chèn vào **đầu** danh sách giữa lúc load trang 0 và trang 1, các item cũ bị đẩy lùi xuống và trả lại lần nữa ở trang sau. Phía Flutter phải **khử trùng lặp theo `id`** khi append (giữ một `Set<String>` các id đã có). `/feed` không có vấn đề này vì cursor neo vào video cuối của trang trước.
 
@@ -90,7 +90,7 @@ Luồng đầy đủ phía client:
 
 Không có bước "báo upload xong": nếu client bỏ ngang giữa chừng thì chỉ còn một object mồ côi trong bucket, không có bản ghi Video nào được tạo. Object mồ côi tự hết hạn sau 7 ngày — bucket có lifecycle rule trên prefix `raw/` (khai ở `scripts/minio/lifecycle.json`, do `minio-init` áp). Nghĩa là **POST file xong thì gọi `POST /` (mục 3.2) trong vòng 7 ngày**, quá hạn file biến mất dù `fileUrl` vẫn còn trong tay client.
 
-Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 3 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không ký được URL — lỗi phía server, không phải request sai.
+Lỗi: `UNSUPPORTED_UPLOAD_TYPE` (400) khi `contentType` ngoài 4 loại trên, `VALIDATION_ERROR` (400) khi thiếu `contentType`, `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không ký được URL — lỗi phía server, không phải request sai.
 
 ### 3.2 `POST /` — đăng video
 **Bắt buộc token.** Trả `201 Created`.
@@ -101,7 +101,7 @@ Request (`CreateVideoRequest`):
   "title": "Tiêu đề",                                // bắt buộc, một dòng, tối đa 150 ký tự, không được rỗng sau khi làm sạch
   "description": "Mô tả",                             // optional, tối đa 2000 ký tự
   "rawFileUrl": "s3://video-media/raw/123456789012345/7312.mp4",  // bắt buộc, tối đa 500 ký tự, xem ràng buộc bên dưới
-  "visibility": "PUBLIC",                             // bắt buộc: PUBLIC | PRIVATE
+  "visibility": "PUBLIC",                             // bắt buộc: PUBLIC | FRIENDS | PRIVATE
   "tags": ["dance", "food"],                          // optional, tối đa 10 tag, mỗi tag tối đa 50 ký tự
   "commentsDisabled": false,                          // optional, mặc định false. true = đăng với comment tắt sẵn (cùng cờ mục 3.8)
   "edit": {                                           // optional, xem "Chỉnh sửa trong app" bên dưới
@@ -166,6 +166,8 @@ Response `data` → `VideoResponse`:
   "previewUrl": null,             // WebP động cho hover; null nghĩa là fallback về thumbnailUrl
   "hlsUrl": null,                 // null cho tới khi transcode xong
   "durationSeconds": null,        // null cho tới khi transcode xong
+  "width": null,                  // kích thước khung hình sau transcode; null cho tới khi transcode xong
+  "height": null,
   "status": "PROCESSING",
   "visibility": "PUBLIC",
   "viewCount": 0,
@@ -176,7 +178,12 @@ Response `data` → `VideoResponse`:
   "ownerPrivate": false,          // tài khoản chủ video đang riêng tư → video PUBLIC chỉ follower xem được; hiện ổ khoá. `visibility` vẫn là lựa chọn của chủ video
   "tags": ["dance", "food"],      // đã chuẩn hoá, có thể rỗng nhưng không bao giờ null
   "createdAt": "2026-08-12T10:00:00Z",
-  "failureReason": null           // chuỗi giải thích khi status = FAILED; null ở mọi trạng thái khác
+  "updatedAt": "2026-08-12T10:00:00Z",
+  "publishedAt": null,            // lần đầu thành PUBLISHED; null nếu chưa từng publish
+  "failureReason": null,          // chuỗi giải thích khi status = FAILED; null ở mọi trạng thái khác
+  "takedownReason": null,         // lý do admin ghi khi gỡ (TAKEN_DOWN); null nếu không bị gỡ tay
+  "pinnedAt": null,               // mục 3.8c
+  "music": null                   // credit nhạc nền, mục 3.10
 }
 ```
 
@@ -188,7 +195,7 @@ Response `data` → `VideoResponse`:
 
 > **`FAILED` có `failureReason` — hiện thẳng cho user.** Khi `status = FAILED`, `failureReason` là chuỗi giải thích do media-worker sinh ra, ví dụ `"Video is 12m30s; the maximum is 10m00s."` (clip dài quá 10 phút) hoặc `"Video is 812 MB; the maximum is 500 MB."` (file lọt qua client nhưng media-worker vẫn từ chối vì vượt kích thước). Với mọi `status` khác, `failureReason` là `null`. Nếu `failureReason` là `null` mà vẫn `FAILED` (lỗi transcode không phân loại được), hiện thông điệp mặc định kiểu "Xử lý video thất bại, thử đăng lại".
 
-Lỗi: `VALIDATION_ERROR` (400), `FOREIGN_UPLOAD` (400), `UPLOAD_NOT_FOUND` (400), `RAW_FILE_ALREADY_PUBLISHED` (400), `VIDEO_TITLE_REJECTED` / `VIDEO_DESCRIPTION_REJECTED` / `VIDEO_TAGS_REJECTED` (422), `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không kiểm được file trong storage.
+Lỗi: `VALIDATION_ERROR` (400), `FOREIGN_UPLOAD` (400), `UNSUPPORTED_UPLOAD_TYPE` (400), `UPLOAD_NOT_FOUND` (400), `RAW_FILE_ALREADY_PUBLISHED` (400), `MUSIC_NOT_FOUND` (400), `VIDEO_TITLE_REJECTED` / `VIDEO_DESCRIPTION_REJECTED` / `VIDEO_TAGS_REJECTED` / `VIDEO_OVERLAY_REJECTED` (422), `401` (thiếu/hết hạn token), `UPLOAD_URL_UNAVAILABLE` (503) khi server không kiểm được file trong storage, `MUSIC_UNAVAILABLE` (503).
 
 ### 3.3 `GET /feed`
 Không cần token. **Phân trang bằng cursor, không phải `page`** — khác mục 3.5. Query param: `?cursor=<nextCursor>&size=20`. Trả `200 OK`, `data` → `CursorPage<VideoResponse>`:
@@ -209,6 +216,8 @@ Cách dùng:
 
 `size` mặc định 20, tối đa 50. Gửi lớn hơn thì bị **kẹp xuống 50**, không báo lỗi.
 
+`feed` (optional): `FOR_YOU` | `FOLLOWING` | `FRIENDS` — feed này đang được hiển thị ở tab nào. Có `feed` và có token thì server bỏ các video khớp **từ khoá lọc** người xem đặt cho tab đó (Settings → Filter keywords, đọc từ user-service; so trên title/description/tag). Không gửi `feed` thì không lọc. Lọc sau khi cắt trang nên trang có thể **ngắn hơn `size`** dù `nextCursor` khác `null` — cứ đi tiếp theo cursor. user-service không trả lời thì trả trang như không lọc.
+
 Vì sao bỏ `?page=`: feed là danh sách vô hạn, mà `page=500` bắt Mongo bước qua 10.000 document rồi vứt đi, và mỗi request còn tốn thêm một lần đếm toàn bộ collection để trả con số không màn hình nào hiển thị. Cursor bắt đầu đúng chỗ trang trước dừng, nên trang 500 rẻ ngang trang 1.
 
 > **Feed đổi trong lúc user đang cuộn là bình thường.** Cursor neo vào video cuối của trang trước, nên video mới đăng sau đó **không** chen vào giữa và **không** gây lặp/nhảy item như `page` cũ. Muốn thấy video mới thì kéo-để-làm-mới, tức gọi lại mà không kèm `cursor`.
@@ -220,7 +229,7 @@ Lỗi: `INVALID_FEED_CURSOR` (400 — cursor không phải do server này cấp,
 ### 3.3b `GET /feed/following`
 Tab **Following**: đúng feed ở mục 3.3, nhưng chỉ lấy video của những tài khoản người xem đang follow. Cùng dạng `CursorPage<VideoResponse>`, cùng giao thức cursor, cùng `size` mặc định 20 / tối đa 50.
 
-Query param: `?followedUserIds=1,2,3&cursor=<nextCursor>&size=20`.
+Query param: `?followedUserIds=1,2,3&cursor=<nextCursor>&size=20`, cộng `feed` như mục 3.3 — ở đây mặc định `FOLLOWING`; tab Friends gọi cùng endpoint với `feed=FRIENDS`.
 
 **Danh sách tác giả do client truyền vào, service này không tự đọc đồ thị follow.** Follow graph nằm ở user-service; client gọi `GET /api/v1/users/{userId}/following` (phân trang) trước, gom `userId` lại rồi truyền xuống đây — cùng cách `story-service` nhận feed của nó. Đổi lại video-service không phải gọi đồng bộ sang service khác trên đường đọc nóng nhất của nó.
 
@@ -244,7 +253,7 @@ Lỗi: `VIDEO_NOT_FOUND` (404) — dùng chung cho **cả 4 trường hợp**: i
 ### 3.4b `GET /batch?ids=…`
 Nạp **một danh sách id đã có sẵn** trong đúng một request. Sinh ra cho trường hợp client cầm một bảng xếp hạng mà không cầm video: `GET /api/v1/recommendations/feed` chỉ trả `videoId` + `score`, vì recommendation-service không có đường đọc vào Mongo của video-service và không được phép có.
 
-Không bắt buộc token, nhưng gửi nếu đã đăng nhập — quy tắc hiển thị y hệt mục 3.4.
+Không bắt buộc token, nhưng gửi nếu đã đăng nhập — quy tắc hiển thị như mục 3.4, **trừ kiểm tra chặn**: batch không lọc video của người đang chặn nhau với người gọi (chỉ `GET /{videoId}` trả 404 cho trường hợp đó). Nhận thêm `feed` như mục 3.3 (`feed=FOR_YOU` khi hydrate feed For You).
 
 ```
 GET /api/v1/videos/batch?ids=7312458901234567,7312458901234568
@@ -264,13 +273,14 @@ Vì sao không gọi `GET /{videoId}` 20 lần: gateway giới hạn **20 req/s 
 Danh sách video của 1 user. Không bắt buộc token. **Phân trang bằng `?page=0&size=20` (offset), KHÁC feed ở mục 3.3** — đây là lưới hữu hạn, người dùng nhảy trang được và chủ tài khoản có nhu cầu biết tổng số, nên `Page` vẫn đúng chỗ ở đây. Trả `200 OK`, `data` → `Page<VideoResponse>`.
 
 - Gọi **chính mình** (token khớp `userId`): trả **tất cả** video chưa xoá, gồm cả `PROCESSING`, `PRIVATE`, `FAILED`, `TAKEN_DOWN`. Đây là endpoint cho màn "Video của tôi".
-- Gọi user khác (hoặc không token): chỉ `PUBLISHED` + `PUBLIC`.
+- Gọi user khác (hoặc không token): chỉ `PUBLISHED` + `PUBLIC`; nếu người gọi là bạn bè (follow lẫn nhau) của chủ thì thêm cả `PUBLISHED` + `FRIENDS`.
+- Video ghim (mục 3.8c) đứng đầu, rồi mới tới mới nhất.
 - Tài khoản **riêng tư**, người gọi không phải follower (hoặc không token): `PRIVATE_ACCOUNT` (403) — UI hiện "This account is private" thay vì lưới trống. Follower xem lưới như bình thường. `GET /users/{userId}/stats` vẫn công khai (các con số trên header profile).
 
 Không có lỗi `USER_NOT_FOUND` — `userId` không tồn tại chỉ trả về trang rỗng (`content: []`), vì video-service không giữ dữ liệu user.
 
 ### 3.5b `GET /me` — bảng Bài đăng của TikTok Studio
-**Bắt buộc token** (thiếu token → 403 như mọi endpoint ghi). Luôn trả video của **chính người gọi**, mọi status trừ video đã xoá, giống mục 3.5 khi gọi chính mình. Phân trang offset `?page=0&size=20` (tối đa 50), `data` → `Page<VideoResponse>`.
+**Bắt buộc token** (thiếu token → 403 do video-service trả: gateway để mọi `GET /api/v1/videos/**` đi qua, nên khác các endpoint ghi — ở đó gateway trả 401). Luôn trả video của **chính người gọi**, mọi status trừ video đã xoá, giống mục 3.5 khi gọi chính mình. Phân trang offset `?page=0&size=20` (tối đa 50), `data` → `Page<VideoResponse>`.
 
 | Tham số | Giá trị | Ý nghĩa |
 |---|---|---|
@@ -322,6 +332,9 @@ Tối đa **3** video ghim mỗi tài khoản — ghim cái thứ tư → `PIN_L
 
 Lỗi khác: như 3.7.
 
+### 3.8d `GET /users/{userId}/stats` — số liệu trên header profile
+Không bắt buộc token. Trả `data` → `UserVideoStatsResponse` (`userId, videoCount, totalLikes, totalViews`), chưa xoá: người khác (kể cả bạn bè) chỉ thấy số của video `PUBLISHED` + `PUBLIC`; gửi token của **chính chủ** thì tính cả video ẩn của mình. Tài khoản bị ban/đã đóng trả toàn số 0 cho người khác. Vẫn công khai với tài khoản riêng tư.
+
 ### 3.9 `GET /users/stats/batch?ids=1,2,3` — số liệu profile của nhiều người
 Không cần token. Trả `data` → `UserVideoStatsResponse[]` (`userId, videoCount, totalLikes, totalViews`), cùng con số công khai như `GET /users/{userId}/stats`. Tối đa 50 id (`max-page-size`), id trùng bị gộp.
 
@@ -333,6 +346,13 @@ Không cần token. Trả `data` → `UserVideoStatsResponse[]` (`userId, videoC
 - Server gọi Jamendo bằng `JAMENDO_CLIENT_ID` (chỉ client id, không cần secret) và cache mỗi trang 10 phút trong bộ nhớ; trang rỗng không cache (Jamendo đôi khi trả rỗng nhất thời, server tự hỏi lại 3 lần). Thiếu client id → `503 MUSIC_UNAVAILABLE`.
 
 `VideoResponse.music` (mọi đường đọc): `{ trackId, title, artist, licenseUrl, shareUrl }` hoặc `null`. Mọi giấy phép CC đều đòi ghi công (BY): app hiện "♫ title · artist" ở chỗ sound pill của feed. Lưu ý giấy phép `-nc` (NonCommercial): dùng được cho dự án phi thương mại; bán quảng cáo trên video có nhạc `-nc` cần license thương mại riêng của Jamendo.
+
+### 3.11 `/admin/**` — console admin (không dành cho app)
+**Bắt buộc token có `ROLE_ADMIN`** (video-service tự chặn; gateway chỉ đòi token hợp lệ). App mobile không gọi các endpoint này.
+- `GET /admin?q=&status=&ownerId=&deleted=&purged=&page=&size=` — mọi video toàn sàn, mọi status, kể cả đã xoá. `ownerId` lặp được; `deleted`/`purged` bỏ trống = không lọc (thùng rác là `deleted=true&purged=false`). Mặc định 25/trang, mới nhất trước. `data` → `Page<VideoResponse>` kèm `moderation`/`textModeration`/`rawFileUrl`/`deletedAt`.
+- `GET /admin/stats/by-status?q=&ownerId=&deleted=&purged=` — số video theo từng status (đủ mọi status, kể cả 0) với cùng bộ lọc.
+- `GET /admin/stats/daily?days=7` — số upload mỗi ngày, `days` 1–1095.
+- `GET /admin/{videoId}` — một video theo id, kể cả đã xoá.
 
 ## 4. Enums
 
@@ -378,11 +398,14 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `RAW_FILE_ALREADY_PUBLISHED` | 400 | `rawFileUrl` này đã có video rồi. Thường là retry sau timeout — lần trước đã thành công |
 | `INVALID_FEED_CURSOR` | 400 | `cursor` ở mục 3.3 không phải do server cấp. Bỏ cursor đang giữ, tải lại feed từ đầu |
 | `TOO_MANY_FOLLOWED_USERS` | 400 | `followedUserIds` ở mục 3.3b quá 500 id. Cắt danh sách following theo trang thay vì gửi hết một lần |
-| `NOT_VIDEO_OWNER` | 403 | `DELETE` video của người khác |
+| `NOT_VIDEO_OWNER` | 403 | `DELETE` hoặc `PATCH` (mục 3.7–3.8c) video của người khác |
 | `VIDEO_TITLE_REJECTED` | 422 | `title` chứa từ ngữ bị cấm hẳn; không lưu gì, sửa rồi gửi lại cùng `rawFileUrl` (mục 3.2) |
 | `VIDEO_DESCRIPTION_REJECTED` | 422 | Như trên, cho `description` |
 | `VIDEO_TAGS_REJECTED` | 422 | Như trên, cho tag (đọc liền nhau, nên một cụm bị cấm tách ra nhiều tag vẫn bị bắt) |
 | `VIDEO_OVERLAY_REJECTED` | 422 | Như trên, cho chữ vẽ trên video (`edit.overlays[].texts`, đọc liền nhau) |
+| `VIDEO_CAPTION_HELD` | 422 | `PATCH /{id}/caption` (mục 3.8b): caption mà lúc đăng sẽ bị giữ chờ duyệt. Caption cũ giữ nguyên |
+| `PIN_LIMIT_REACHED` | 409 | Ghim video thứ tư (mục 3.8c) |
+| `VIDEO_NOT_PINNABLE` | 409 | Ghim video chưa `PUBLISHED` hoặc đang `PRIVATE` (mục 3.8c) |
 | `MUSIC_NOT_FOUND` | 400 | `edit.music.trackId` không còn trong catalogue hoặc không được phép ghép vào video (mục 3.2) |
 | `MUSIC_UNAVAILABLE` | 503 | Không đọc được catalogue nhạc (mục 3.10, và lúc publish có `edit.music`): chưa cấu hình `JAMENDO_CLIENT_ID`, Jamendo không trả lời hoặc từ chối |
 | `PRIVATE_ACCOUNT` | 403 | Lưới video (mục 3.5) của tài khoản riêng tư mà người gọi không follow |
@@ -390,7 +413,7 @@ Server không tự biết ai đang xem. `viewCount` chỉ nhích khi client gọ
 | `INTERNAL_ERROR` | 500 | Lỗi không xác định |
 | `UPLOAD_URL_UNAVAILABLE` | 503 | Không ký được presigned URL ở mục 3.1. Cấu hình storage sai hoặc storage chết — retry được, nhưng sửa request không giúp gì |
 
-Ngoài ra `401 Unauthorized` (không có `code` riêng của video-service, đến từ `security-lib`/gateway) xảy ra ở `POST`/`DELETE` khi thiếu/hết hạn/token bị thu hồi — xử lý giống auth-service doc (thử `/refresh` **một lần** rồi mới logout local).
+Ngoài ra `401 Unauthorized` (không có `code` riêng của video-service, đến từ `security-lib`/gateway) xảy ra ở `POST`/`PATCH`/`DELETE` khi thiếu/hết hạn/token bị thu hồi (riêng `GET /me` và `GET /music` thiếu token thì nhận `403`, xem mục 3.5b) — xử lý giống auth-service doc (thử `/refresh` **một lần** rồi mới logout local).
 
 Ở các `GET` public: không gửi token thì server coi bạn là khách vãng lai và giấu bớt video (PROCESSING/PRIVATE của chính mình). Gửi token **hết hạn** thì gateway trả `401` như mọi path khác — refresh một lần rồi gửi lại, đừng coi đó là lỗi của `GET`. (Gọi thẳng `video-service:8083`, bỏ qua gateway, thì token hết hạn mới bị hạ xuống khách.)
 
@@ -406,14 +429,15 @@ Phần này cho người tích hợp backend, không phải client mobile. `vide
 
 ### Phát (producer) — `VideoEventPublisher`
 
-Cả bốn loại đi chung topic **`video.video-events`**, key = `videoId`, nên Kafka đảm bảo thứ tự publish→delete theo từng video. Dùng **outbox** (cờ per-document trên `Video`, không có collection riêng vì Mongo deployment này không có replica set → không có transaction đa document). Poll mỗi 5s, đánh dấu published **sau** khi broker ack (`OutboxDispatcher` của `kafka-lib`).
+Cả năm loại đi chung topic **`video.video-events`**, key = `videoId`, nên Kafka đảm bảo thứ tự publish→delete theo từng video. Dùng **outbox** (cờ per-document trên `Video`, không có collection riêng vì Mongo deployment này không có replica set → không có transaction đa document). Poll mỗi 5s, đánh dấu published **sau** khi broker ack (`OutboxDispatcher` của `kafka-lib`).
 
 | eventType header | Event | Payload | Khi nào |
 |---|---|---|---|
-| `VideoPublishedEvent` | `VideoPublishedEvent` | `eventId, occurredAt, videoId, userId, title, description, rawFileUrl, visibility, tags[], textVerdict` | Sau `POST /` — `eventId` derive từ `videoId` (publish đúng 1 lần dù outbox retry) |
+| `VideoPublishedEvent` | `VideoPublishedEvent` | `eventId, occurredAt, videoId, userId, title, description, rawFileUrl, visibility, tags[], textVerdict, edit` (`edit` = công thức chỉnh sửa cho media-worker, `null` khi không chỉnh) | Sau `POST /` — `eventId` derive từ `videoId` (publish đúng 1 lần dù outbox retry) |
 | `VideoDeletedEvent` | `VideoDeletedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Ngay sau `DELETE /{id}` — gỡ video khỏi search và feed đề xuất; media-worker chỉ cách ly media |
-| `VideoPurgedEvent` | `VideoPurgedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Khi hết `video.trash.retention` (mặc định 30 ngày) kể từ lúc xoá — chỉ media-worker xử lý, xoá hẳn media. Phát cả cho video bị xoá trước khi kịp công bố |
+| `VideoPurgedEvent` | `VideoPurgedEvent` | `eventId, occurredAt, videoId, userId, rawFileUrl` | Khi hết `video.trash.retention` (mặc định 30 ngày) kể từ lúc xoá — chỉ media-worker xử lý, xoá hẳn media. Phát cả cho video bị xoá trước khi kịp công bố, và phát sớm khi admin dọn thùng rác (`VideoPurgeRequestedEvent`, xem bảng consumer) |
 | `VideoVisibilityChangedEvent` | `VideoVisibilityChangedEvent` | `eventId, occurredAt, videoId, userId, visibility` (audience thực tế, xem dưới) | Sau `PATCH /{id}/visibility`, hoặc khi tài khoản chủ đổi riêng tư/công khai trong lúc video đang publish. Chỉ gửi sau khi `VideoPublishedEvent` của video đó đã được ack |
+| `VideoCaptionChangedEvent` | `VideoCaptionChangedEvent` | `eventId, occurredAt, videoId, userId, title, description, tags[]` (tag đã tính lại như mục 3.8b) | Sau `PATCH /{id}/caption`. Cùng điều kiện: chỉ gửi sau khi `VideoPublishedEvent` đã được ack |
 
 `description` và `tags` được mang trên `VideoPublishedEvent` vì `search-service`/`recommendation-service` không có đường đọc vào Mongo của video-service. `tags` không bao giờ null (list rỗng).
 
@@ -423,22 +447,24 @@ Cả bốn loại đi chung topic **`video.video-events`**, key = `videoId`, nê
 
 `VideoVisibilityChangedEvent` chỉ được gửi sau khi `VideoPublishedEvent` của chính video đó đã được ack: hai poll chạy trên hai thread riêng, và không có điều kiện này thì event visibility có thể tới partition trước chính video.
 
-Consumer của `video.video-events`: media-worker, search-service, recommendation-service. (analytics-service cũng nghe — ngoài phạm vi doc này.)
+Consumer của `video.video-events`: media-worker, search-service, recommendation-service, chat-service. (analytics-service cũng nghe — ngoài phạm vi doc này.)
 
 ### Tiêu thụ (consumer) — cập nhật counter & trạng thái
 
-Mọi consumer idempotent qua `IdempotentEventProcessor` (bảng `processed_events`, TTL index). Counter cập nhật bằng `$inc` nguyên tử (không load-modify-save) và **bỏ qua video `deletedAt != null`**; `unlike`/`comment deleted` còn thêm điều kiện `count > 0` (chống `$inc` âm vĩnh viễn). Video `TAKEN_DOWN` **vẫn được đếm**: restore đưa nó trở lại, và interaction-service đếm xuyên qua takedown — unlike và xoá comment không cần video hiển thị, còn like gửi ngay trước takedown có thể tới sau nó. Bỏ qua chúng làm video sau restore hiện số like/comment cao hơn thật.
+Mọi consumer idempotent qua `IdempotentEventProcessor` (bảng `processed_events`, TTL index), trừ các consumer chỉ làm phép gán có guard thời gian (privacy, ban/unban, đóng tài khoản — ghi chú trong bảng). Counter cập nhật bằng `$inc` nguyên tử (không load-modify-save) và **bỏ qua video `deletedAt != null`**; `unlike`/`comment deleted` còn thêm điều kiện `count > 0` (chống `$inc` âm vĩnh viễn). Video `TAKEN_DOWN` **vẫn được đếm**: restore đưa nó trở lại, và interaction-service đếm xuyên qua takedown — unlike và xoá comment không cần video hiển thị, còn like gửi ngay trước takedown có thể tới sau nó. Bỏ qua chúng làm video sau restore hiện số like/comment cao hơn thật.
 
 | Topic | Event | Tác dụng |
 |---|---|---|
-| `media.video-transcoded-events` | `VideoTranscodedEvent` | `success` → `status = PUBLISHED` + `hlsUrl`/`thumbnailUrl`/`previewUrl`/`durationSeconds`; ngược lại `status = FAILED` + `failureReason`. Qua `VideoStateUpdater` (re-read nếu có takedown chen giữa) |
+| `media.video-transcoded-events` | `VideoTranscodedEvent` | `success` → `status = PENDING_MODERATION` + `hlsUrl`/`thumbnailUrl`/`previewUrl`/`durationSeconds`/`width`/`height` (verdict kiểm duyệt đã tới trước thì áp luôn verdict đó); ngược lại `status = FAILED` + `failureReason`. Qua `VideoStateUpdater` (re-read nếu có takedown chen giữa) |
+| `media.video-moderation-events` | `VideoModerationCompletedEvent` | Lưu điểm số vào `video.moderation`; video đang `PENDING_MODERATION` → `APPROVED` ⇒ `PUBLISHED`, `REVIEW` ⇒ `PENDING_REVIEW`, `REJECTED` ⇒ `REJECTED`. Chỉ verdict đầu tiên có hiệu lực. Verdict tới khi video còn `PROCESSING` thì được giữ lại, áp lúc transcode xong |
 | `interaction.like-events` | `VideoLikeEvent` | `likeCount += liked ? 1 : -1` |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` (route theo header; vắng ⇒ Created) | `commentCount ± 1` |
 | `interaction.view-events` | `VideoViewedEvent` | `viewCount += 1` (chỉ view đã qua dedupe của interaction-service) |
-| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` (route theo header; **bắt buộc** có header, thiếu → drop + warn) | `status = TAKEN_DOWN` / restore: video đang TAKEN_DOWN thì về trạng thái trước takedown; đang `PENDING_REVIEW`/`REJECTED` thì là admin duyệt → `PUBLISHED`; trạng thái khác (PROCESSING, FAILED, PENDING_MODERATION, PUBLISHED) thì không làm gì |
+| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` / `VideoPurgeRequestedEvent` / `UserBannedEvent` / `UserUnbannedEvent` (route theo header; **bắt buộc** có header, thiếu → drop + warn; loại khác bỏ qua) | `status = TAKEN_DOWN` / restore: video đang TAKEN_DOWN thì về trạng thái trước takedown; đang `PENDING_REVIEW`/`REJECTED` thì là admin duyệt → `PUBLISHED`; trạng thái khác (PROCESSING, FAILED, PENDING_MODERATION, PUBLISHED) thì không làm gì. Purge request: video đang trong thùng rác được đánh dấu để poll kế tiếp phát `VideoPurgedEvent` sớm. Ban/unban: ghi `bannedUntil` lên `owner_bans` (guard `changedAt`, không claim eventId), mọi đường đọc ẩn video của chủ khi `bannedUntil > now` |
+| `auth.account-events` | `AccountStateChangedEvent` | Ghi `deactivatedAt` lên `owner_bans` (guard riêng `accountStateChangedAt`, không claim eventId): tài khoản đóng thì ẩn video, mở lại thì hiện. `DELETED` thì chuyển mọi video của user vào thùng rác |
 | `user.privacy-events` | `UserPrivacyChangedEvent` | Ghi `owner_privacy` (`_id = userId`) nếu event không cũ hơn bản đang có; đánh dấu `ownerPrivate` trên mọi video chưa xoá của user, xếp hàng `VideoVisibilityChangedEvent` cho từng video, xoá cache. Event cũ tới sau (outbox của user-service gửi lại) không làm gì. Consumer này **không** claim qua `IdempotentEventProcessor` (mọi bước đều là phép gán, chạy lại vô hại), và lỗi thì retry mỗi 5s cho tới khi thành công chứ không vào DLT — mất một lần chuyển sang riêng tư là video lộ ra cho người lạ. Chỉ payload không parse được mới vào `user.privacy-events.DLT` |
 
-`kafka-lib` error handler: retry 3 lần → `<topic>.DLT`.
+`kafka-lib` error handler: dependency chết (Mongo/Redis/Kafka không tới được, timeout) → retry **không giới hạn**, backoff mũ trần 30s, partition đứng chờ; mọi lỗi khác (JSON hỏng, bug) → retry 3 lần rồi `<topic>.DLT`. Riêng `user.privacy-events` dùng factory retry-mãi của mình (xem trên).
 
 ## 9. Những điều KHÔNG nên làm phía Flutter
 

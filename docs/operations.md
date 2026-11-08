@@ -15,6 +15,7 @@ trong giá trị sẽ bị compose hiểu là biến.
 | `REDIS_PASSWORD` | có | `app-redis` (`requirepass`) và 6 service dùng Redis (gateway, auth, video, interaction, recommendation, chat) |
 | `KAFKA_PASSWORD` | có | broker (listener `CLIENT`) và mọi service Java (`x-java-env`) |
 | `ELASTIC_PASSWORD` | có | user `elastic` của Elasticsearch, `search-service`, `backup` |
+| `CLICKHOUSE_PASSWORD` | có | user `default` của `clickhouse` và `analytics-service`; container `rank-service` không nhận biến này, nên lệnh train ở §10 tự truyền vào |
 | `MINIO_VIDEO_SECRET_KEY`, `MINIO_STORY_SECRET_KEY`, `MINIO_USER_SECRET_KEY`, `MINIO_WORKER_SECRET_KEY`, `MINIO_BACKUP_SECRET_KEY` | có, ≥ 8 ký tự | mỗi service một account MinIO riêng, do `minio-init` tạo |
 | `ALERT_EMAIL` | không (mặc định `ADMIN_EMAIL`) | nơi Alertmanager gửi cảnh báo |
 | `BACKUP_S3_URL`, `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY` | không, nhưng **nên có** (§3) | bản sao off-site |

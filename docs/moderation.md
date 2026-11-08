@@ -37,14 +37,15 @@ separately.
 
 | Topic | Producer | Consumers |
 |---|---|---|
-| `media.video-transcoded-events` | media-worker | video-service (`video-service`), media-worker (`media-worker-moderation`) |
-| `media.video-moderation-events` | media-worker | video-service (`video-service`), chat-service (`realtime-<uuid>`, `admin-realtime-<uuid>`) |
+| `media.video-transcoded-events` | media-worker | video-service (`video-service`), media-worker (`media-worker-moderation`), search-service (`search-service`), recommendation-service (`recommendation-service`) |
+| `media.video-moderation-events` | media-worker | video-service (`video-service`), search-service (`search-service`), recommendation-service (`recommendation-service`), chat-service (`realtime-<uuid>`, `admin-realtime-<uuid>`) |
 
 ## Statuses
 
 | Status | Meaning | Visible? |
 |---|---|---|
 | `PROCESSING` | uploaded, transcoding | no |
+| `FAILED` | transcode gave up — terminal, never moderated (`failureReason`) | no |
 | `PENDING_MODERATION` | transcoded, waiting on a verdict | no |
 | `PENDING_REVIEW` | the model was unsure, or could not run, or the caption was held — an admin decides | no |
 | `PUBLISHED` | approved | **yes** |
@@ -273,6 +274,17 @@ Set `MODERATION_ENABLED=false` for media-worker to skip the check entirely and a
 — for a local run with no moderation container up. It is an explicit operator choice; nothing
 turns it off on its own when the service is down.
 
+### The API
+
+Internal only: no route at the gateway, no auth.
+
+| Endpoint | |
+|---|---|
+| `POST /moderate` `{"frames": ["<base64 image>", …]}` | `{verdict, label, maxScore, suspiciousFrames, totalFrames, processingTimeMs, model, modelVersion}` — `label` and `maxScore` belong to the label that decided, and `model` is the one that produced `maxScore`. Frames past `MODERATION_MAX_FRAMES` are dropped, not refused; a frame that will not decode is a 400; 503 while the model loads |
+| `POST /moderate/text` | see [The classifier](#the-classifier) |
+| `GET /config` | the models, versions and thresholds in force, read-only, for the admin console — changing one is a deploy |
+| `GET /health` | 503 until every configured model is in memory |
+
 ## Tuning
 
 Thresholds live in moderation-service's environment, not in media-worker, so changing them is a
@@ -286,6 +298,10 @@ restart of one container rather than a rebuild of a Java service:
 | `HARM_REVIEW_THRESHOLD` | `0.55` — the harm labels only; there is no harm reject line |
 | `HARM_MIN_REVIEW_FRAMES` | `2` — frames at or over the harm line, counted across labels, to hold a video |
 | `HARM_REVIEW_ALONE_THRESHOLD` | `0.80` — one frame this high holds it without a second |
+| `MODERATION_MAX_FRAMES` | `32` — frames scored per call, counted again after animations are unpacked; the rest are dropped |
+| `MODERATION_NSFW_LABEL` | `nsfw` — the NSFW model's class name |
+| `MODERATION_MODEL` / `MODERATION_MODEL_VERSION` | `Falconsai/nsfw_image_detection` / `nsfw-v1` |
+| `TEXT_MAX_TEXTS` / `TEXT_MAX_WINDOWS` | `16` / `32` — see [The classifier](#the-classifier) |
 
 Bump `MODERATION_MODEL_VERSION` whenever either the weights or the thresholds change, and
 `HARM_MODERATION_MODEL_VERSION` (`harm-v2`) for any harm threshold or description. Both travel
@@ -322,6 +338,11 @@ only the frames that made them uncertain, stretches the same quota across far mo
 | `MODERATION_AZURE_REJECT_SEVERITY` | `4` | Azure's scale is 0/2/4/6 |
 | `MODERATION_AZURE_APPROVE_SEVERITY` | `0` | Anything between the two still gets a human |
 | `MODERATION_AZURE_CATEGORIES` | `Sexual,Violence,SelfHarm,Hate` | All four come back in one call at no extra quota |
+| `MODERATION_ESCALATE_TIMEOUT` | `10` | Seconds per Azure request, cut to what is left of the budget |
+| `AZURE_CONTENT_SAFETY_API_VERSION` | `2024-09-01` | |
+
+`docker-compose.prod.yml` passes only the endpoint and key: `MODERATION_ESCALATE_FRAMES`,
+`MODERATION_ESCALATE_BUDGET` and the rest keep their defaults on prod whatever `.env` says.
 
 Setting up an account:
 
@@ -330,9 +351,10 @@ Setting up an account:
 3. `docker compose up -d --force-recreate moderation-service`.
 
 F0 stops at 5,000 images a month and returns HTTP 429 rather than billing, so it cannot run up a
-charge. An exhausted quota is recorded on the video as `modelVersion: nsfw-v1+Azure quota exhausted
-for this period` — a month of unexplained `PENDING_REVIEW` should be readable off the videos, not
-only off a log that has since rolled.
+charge. An exhausted quota is recorded on the video as `modelVersion: nsfw-v1+harm-v2+azure-quota`
+— a month of unexplained `PENDING_REVIEW` should be readable off the videos, not only off a log that
+has since rolled. The other codes are `azure-error` (unreachable), `azure-shape` (unknown response),
+`azure-slow`, `azure-none` and, when Azure answered, `azure-sev<N>`.
 
 **Frames leave the machine.** This sends stills from user uploads to Microsoft. Fine for a local
 build; if this ever serves real users it belongs in the privacy terms.
@@ -345,7 +367,7 @@ does not recognise — all three leave the video exactly where the local model l
 Three layers, in this order, each with its own switch:
 
 1. **Rules**, in process (`libs/moderation-lib`): a Vietnamese word list plus spam signals, read by
-   video-service and interaction-service. No network call — nothing to be down. Admins add to the
+   video-service, interaction-service and story-service (story captions). No network call — nothing to be down. Admins add to the
    list, or take terms out of it, from the console without a deploy.
 2. **A video owner's own filters**, comments only: hold everything, hold keywords, or waive spam and
    offence on their own videos.
@@ -396,6 +418,7 @@ every service that screens text polls the live list:
 | Endpoint (ROLE_ADMIN) | |
 |---|---|
 | `GET /api/v1/admin/moderation/terms?q=&action=&page=&size=` | live terms, newest first |
+| `GET /api/v1/admin/moderation/terms/removed?q=&action=&page=&size=` | removed terms, most recently removed first, with who removed each |
 | `GET /api/v1/admin/moderation/terms/summary` | shipped version and size, admin revision, the version a verdict records |
 | `POST /api/v1/admin/moderation/terms` `{term, category, action, note}` | 201; `action` HOLD, REJECT or EXEMPT |
 | `DELETE /api/v1/admin/moderation/terms/{id}` | soft delete |
@@ -548,13 +571,13 @@ retries each, and at 20/s that stalls every transcode.
 
 ### Measuring before enforcing
 
-`moderation.text.enforce=false` (env `TEXT_MODERATION_ENFORCE`, on both services) computes, logs and
+`moderation.text.enforce=false` (env `TEXT_MODERATION_ENFORCE`, on video-, interaction- and story-service) computes, logs and
 counts every rules verdict and acts on none: nothing is held or refused, and videos carry no text
 verdict to media-worker. `moderation.text.classifier.enforce=false` does the same for the model.
 The owner's own filters always act. Every verdict, enforced or not, is counted:
 
 ```
-text_moderation_decisions_total{surface="comment|video_title|video_description|video_tags",
+text_moderation_decisions_total{surface="comment|video_title|video_description|video_tags|video_overlay|story_caption|story_overlay",
                                 decision="allow|hold|reject", category="SPAM|PROFANITY|…|NONE",
                                 enforced="true|false"}
 text_classifier_opinions_total{surface, label="clean|offensive|hate", verdict="allow|hold", enforced}
@@ -575,8 +598,6 @@ db.videos.find({ "textModeration.flags": /model:HATE/ })
 
 ## Not in V1
 
-- **Violence, weapons, gore.** Add a scorer to `SCORERS` in `app.py`; the severity ordering that
-  combines several labels is already in `verdict.py`.
 - **Audio and speech.** Nothing listens to the video.
 - **Text, the rest of it.** Shadow holds (the author sees a held comment as posted), a per-video
   comment audience, the same text from many accounts, bios and display names, strikes from captions.

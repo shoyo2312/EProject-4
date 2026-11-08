@@ -1,16 +1,19 @@
 # Media Worker — Transcode, Avatar Mirror & Media Cleanup
 
-Tài liệu cho người **vận hành**, không phải client. `media-worker` (`:8084`) **không có REST API** và không có route ở gateway — nó chỉ là Kafka consumer + producer, thao tác trên MinIO. Cổng 8084 chỉ phục vụ `/actuator/health|info|prometheus` cho Prometheus; web server có mặt chỉ vì thế. Client không bao giờ gọi thẳng; nó thấy kết quả gián tiếp qua `video-service` (`status` chuyển `PUBLISHED`/`FAILED`, `hlsUrl`) và `user-service` (`avatarUrl` đổi sang bản MinIO).
+Tài liệu cho người **vận hành**, không phải client. `media-worker` (`:8084`) **không có REST API** và không có route ở gateway — nó chỉ là Kafka consumer + producer, thao tác trên MinIO. Cổng 8084 chỉ phục vụ `/actuator/health|info|prometheus` cho Prometheus; web server có mặt chỉ vì thế. Client không bao giờ gọi thẳng; nó thấy kết quả gián tiếp qua `video-service` (`status` chuyển `PENDING_MODERATION`/`FAILED` sau transcode, rồi `PUBLISHED`/`PENDING_REVIEW`/`REJECTED` theo verdict kiểm duyệt, `hlsUrl`) và `user-service` (`avatarUrl` đổi sang bản MinIO).
 
-## 1. media-worker làm 3 việc
+## 1. media-worker làm những việc này
 
-| Việc | Nghe topic | Phát topic | Ghi vào MinIO |
+| Việc | Nghe topic (group) | Phát topic | Ghi vào MinIO |
 |---|---|---|---|
-| Transcode video | `video.video-events` (`VideoPublishedEvent`) | `media.video-transcoded-events` (`VideoTranscodedEvent`) | `hls/{videoId}/source.mp4` + `thumbnails/{videoId}.jpg` + `previews/{videoId}.webp` |
-| Dọn media khi hết hạn thùng rác | `video.video-events` (`VideoPurgedEvent`) | — | xoá `thumbnails/{id}.jpg`, `previews/{id}.webp`, mọi object dưới `hls/{id}/`, và file raw |
+| Transcode video | `video.video-events` (`VideoPublishedEvent`, group `media-worker`) | `media.video-transcoded-events` (`VideoTranscodedEvent`) | `hls/{videoId}/source.mp4` + `thumbnails/{videoId}.jpg` + `previews/{videoId}.webp` + `transcoded/markers/{videoId}` |
+| Kiểm duyệt video (§2.6) | `media.video-transcoded-events` (group `media-worker-moderation`) | `media.video-moderation-events` (`VideoModerationCompletedEvent`) | hold quarantine (§3.1) |
+| Dựng + kiểm duyệt story (§2.1b) | `story.story-events` (`StoryCreatedEvent`, group `media-worker-story-moderation`) | `media.story-moderation-events` (`StoryModerationCompletedEvent`) | `stories/{userId}/{storyId}/rendered.{mp4\|jpg}` |
+| Quarantine khi xoá / takedown / restore (§3.1) | `video.video-events` (`VideoDeletedEvent`), `admin.moderation-events` (`VideoTakenDownEvent`, `VideoRestoredEvent`; group `media-worker`) | — | dời object sang/khỏi `quarantine/`, marker `quarantine/holds/{id}/{HOLD}` |
+| Dọn media khi hết hạn thùng rác | `video.video-events` (`VideoPurgedEvent`) | — | xoá `thumbnails/{id}.jpg`, `previews/{id}.webp`, mọi object dưới `hls/{id}/`, bản quarantine + marker, và file raw (§3) |
 | Sao ảnh đại diện social | `auth.social-avatar-events` (`SocialAvatarDiscoveredEvent`) | `media.avatar-events` (`AvatarMirroredEvent`) | `avatars/{userId}` |
 
-Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi đè cùng key với cùng nội dung (no-op an toàn khi redeliver). Việc idempotent thật nằm ở consumer phía sau (`video-service` / `user-service`), nơi có bảng inbox.
+Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi đè cùng key với cùng nội dung (no-op an toàn khi redeliver). Riêng transcode có một chốt rẻ: sau khi phát `VideoTranscodedEvent`, worker ghi object rỗng `transcoded/markers/{videoId}`; `VideoPublishedEvent` redeliver mà thấy marker thì bỏ qua, không encode lại (check-then-act — cùng key nằm cùng partition, nên chỉ chồng nhau khi rebalance giữa lúc transcode, và video-service bỏ qua kết quả trùng). Việc idempotent thật nằm ở consumer phía sau (`video-service` / `user-service`), nơi có bảng inbox.
 
 ## 2. Transcode — normalize hoặc faststart remux, chưa phải HLS
 
@@ -22,7 +25,7 @@ Không có DB, không có bảng inbox/idempotency: mọi thao tác ghi là ghi 
 4. **Chọn một trong hai đường** theo `ProbedVideo.needsNormalizing()` (xem §2.1). Upload kết quả lên `hls/{videoId}/source.mp4`.
 5. **Thumbnail**: `ffmpeg -ss {t} -i source -frames:v 1 -vf scale=-2:720 -q:v 3` với `t = min(1, duration/2)` giây. Upload lên `thumbnails/{videoId}.jpg`.
 6. **Animated preview** (§2.2): `ffmpeg -ss {t} -t 3 -i source -vf fps=8,scale=-2:240 -an -c:v libwebp_anim -loop 0 -q:v 60` — cùng mốc `t`. Upload lên `previews/{videoId}.webp`, content-type `image/webp`.
-7. Trả `VideoTranscodedEvent.success(videoId, thumbnailUrl, previewUrl, hlsUrl="{endpoint}/{bucket}/hls/{id}/source.mp4", durationSeconds)`.
+7. Trả `VideoTranscodedEvent.success(videoId, thumbnailUrl, previewUrl, hlsUrl="{endpoint}/{bucket}/hls/{id}/source.mp4", durationSeconds, width, height)` — `width`/`height` là kích thước hiển thị, đã áp rotation — kèm `.withTextVerdict(VideoPublishedEvent.textVerdict)` để bước kiểm duyệt gộp verdict caption (§2.6).
 8. `finally`: xoá thư mục tạm — trên mọi đường ra, kể cả khi lỗi.
 
 ### 2.1. Hai đường: rẻ và đắt
@@ -87,16 +90,16 @@ Không có bước Dockerfile nào. `JaveFfmpeg` dùng chính binary mà JAVE2 (
 
 | Lệnh | Timeout | Lý do |
 |---|---|---|
-| faststart remux, still frame, animated preview | 120s | copy stream / decode 1 frame — chặn bởi disk, không theo độ dài video |
-| normalize | 600s | decode + encode từng frame — có tỉ lệ với độ dài video |
+| faststart remux, still frame, animated preview, lấy frame kiểm duyệt, thử decode ảnh story | 120s | copy stream / decode 1 frame — chặn bởi disk, không theo độ dài video |
+| normalize, edit, dựng clip tĩnh từ ảnh story (`stillVideo`) | 600s | decode + encode từng frame — có tỉ lệ với độ dài video |
 
-**Input bị khoá về file local mp4/mov/webm.** Mọi lệnh chạy qua `JaveFfmpeg.run` đều được thêm input option `-protocol_whitelist file -format_whitelist mov,matroska` (ghi gọn ở các lệnh mục 1–2 cho dễ đọc). ffmpeg chọn demuxer theo **nội dung** file chứ không theo tên: một HLS playlist upload dưới đuôi `.mp4` từng được đọc như playlist, và segment của nó có thể trỏ tới bất kỳ file nào worker đọc được — kể cả upload của người khác — rồi lọt vào video transcode của kẻ upload. Bước probe (`JaveVideoProbe`, `MultimediaObject.getInfo()`) đi đường riêng của JAVE nên **không** nhận whitelist này; nó chỉ đọc metadata.
+**Input bị khoá về file local mp4/mov/webm.** Mọi lệnh chạy qua `JaveFfmpeg.run` đều được thêm input option `-protocol_whitelist file -format_whitelist mov,matroska` (ghi gọn ở các lệnh mục 1–2 cho dễ đọc) — trừ hai lệnh đọc ảnh story (`stillVideo` và lần thử decode trước nó), dùng `-format_whitelist image2`. ffmpeg chọn demuxer theo **nội dung** file chứ không theo tên: một HLS playlist upload dưới đuôi `.mp4` từng được đọc như playlist, và segment của nó có thể trỏ tới bất kỳ file nào worker đọc được — kể cả upload của người khác — rồi lọt vào video transcode của kẻ upload. Bước probe (`JaveVideoProbe`, `MultimediaObject.getInfo()`) đi đường riêng của JAVE nên **không** nhận whitelist này; nó chỉ đọc metadata.
 
 Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file tạm**, không phải pipe: pipe không ai đọc sẽ đầy buffer và ffmpeg block vĩnh viễn ở lệnh write — không timeout nào trên `waitFor` bắt được.
 
 ### 2.6. Kiểm duyệt nhìn vào đâu
 
-`VideoModerationConsumer` (group `media-worker-moderation`, đọc lại `VideoTranscodedEvent`) → `ModerationServiceImpl.moderate`, gọi moderation-service **hai lượt** (luật chấm ở `docs/moderation.md`):
+`VideoModerationConsumer` (group `media-worker-moderation`, đọc lại `VideoTranscodedEvent`) → `ModerationServiceImpl.moderate`, gọi moderation-service **hai lượt** (luật chấm ở `docs/moderation.md`). Event transcode lỗi (`success = false`) thì bỏ qua: video `FAILED` không tới tay người xem và không có file playback để lấy frame.
 
 1. **Frame rải đều**: `media.moderation.frame-count` (10) frame từ file playback, rải đều cả video (`Ffmpeg.sampleFrames`, frame đầu ở giây `duration / (2 × count)`). Điểm số của lượt này là thứ ngưỡng được tune theo.
 2. **Cover** (chỉ khi lượt 1 ra `APPROVED`): `thumbnails/{id}.jpg` + `previews/{id}.webp` đúng như đã publish. moderation-service tự bung WebP động thành tối đa 16 frame. Đây là thứ mọi card feed, lưới profile, kết quả search hiện ra, và cả hai lấy từ giây 1 (§2 bước 5–6). Video 60s thì frame rải đều đầu tiên ở giây 3, cách nhau 6s: clip chỉ lộ liễu 2 giây đầu từng được `APPROVED` với cover lộ liễu.
@@ -105,7 +108,7 @@ Hết timeout → `destroyForcibly()`. Diagnostics của ffmpeg ghi ra **file t�
    - Đọc từ `quarantine/` nếu không thấy ở key public, như file playback: takedown/xoá giữa lúc transcode đã dời output sang đó. Vắng ở cả hai chỗ thì bỏ qua (ffmpeg không dựng được, transcode vẫn chạy tiếp); vắng cả hai object thì không gọi lượt 2.
    - Lỗi tải hay lỗi gọi ở lượt nào cũng hỏng cả lần thử: retry `media.moderation.attempts` lần, hết thì `REVIEW`. Thất bại không bao giờ là pass.
 
-Sau đó `CaptionVerdict.combine` mới gộp verdict caption. Video đã `REVIEW` vì cover thì giữ reason của cover; verdict caption vẫn nằm riêng ở `textModeration` bên video-service.
+Sau đó `CaptionVerdict.combine` mới gộp verdict caption. Video đã `REVIEW` vì cover thì giữ reason của cover; verdict caption vẫn nằm riêng ở `textModeration` bên video-service. Story đi cùng đường gộp: `StoryModerationConsumer` gộp `StoryCreatedEvent.textVerdict` vào verdict frame trước khi phát `StoryModerationCompletedEvent`.
 
 ### Retry & báo lỗi
 
@@ -125,8 +128,9 @@ Sau đó `CaptionVerdict.combine` mới gộp verdict caption. Video đã `REVIE
 
 `VideoPurgedEvent` → `MediaCleanupServiceImpl.deleteMediaFor(videoId, rawFileUrl)`. **Không phải** `VideoDeletedEvent`: event đó phát ngay khi owner xoá và là tín hiệu cho search/recommendation gỡ video; media thì giữ lại trong thùng rác (`video.trash.retention`, mặc định 30 ngày) để admin còn xem lại được, và chỉ `VideoPurgedEvent` — video-service phát khi hết hạn — mới xoá. Xoá theo `VideoDeletedEvent` là đổ thùng rác ngay lập tức. Việc `VideoDeletedEvent` làm ở đây là **quarantine** media (hold `DELETED`, xem §3.1): trước đây nó vẫn public theo URL suốt cả tháng owner tưởng đã xoá.
 - Xoá cả bản trong `quarantine/` và mọi marker (`quarantine/markers/{id}`, `quarantine/holds/{id}/*`).
-- Xoá `thumbnails/{id}.jpg`.
-- List đệ quy `hls/{id}/` và xoá từng object (HLS thật = 1 playlist + nhiều segment, nên phải list chứ không đoán key).
+- Xoá `thumbnails/{id}.jpg` và `previews/{id}.webp` (cả bản dưới `quarantine/`).
+- List đệ quy `hls/{id}/` (và `quarantine/hls/{id}/`) rồi xoá từng object (HLS thật = 1 playlist + nhiều segment, nên phải list chứ không đoán key).
+- Xoá marker transcode `transcoded/markers/{id}`.
 - Xoá file raw — chỉ khi `rawFileUrl` nằm trong bucket cấu hình; không thì **bỏ qua + log warn** (đoán key = xoá nhầm object). Khi bỏ qua, lifecycle rule prefix `raw/` (7 ngày, khai ở `minio-init`) là thứ dọn hộ.
 - Lỗi xoá từng object → **log + nuốt**, không ném. Object sót lại là hoá đơn, không phải bug hệ thống thấy được; ném ra chỉ khiến `kafka-lib` retry cả lượt xoá 3 lần rồi park DLT, mất luôn các xoá đã thành công.
 
@@ -156,6 +160,14 @@ URL không fetch được (hết hạn, 403, không phải ảnh, host lạ) →
 | `spring.kafka.consumer.max-poll-records` | 1 | Một batch không được xếp chồng nhiều transcode vào cùng một poll |
 | `media.avatar.allowed-hosts` | 4 host Google/Facebook | Allow-list SSRF cho fetch avatar |
 | `media.avatar.max-bytes` | 5242880 (5 MB) | |
+| `media.moderation.enabled` (`MODERATION_ENABLED`) | true | `false` = duyệt mọi video/story không chấm (chỉ cho chạy local không có moderation-service) |
+| `media.moderation.base-url` (`MODERATION_SERVICE_URL`) | `http://localhost:8099` | |
+| `media.moderation.frame-count` (`MODERATION_FRAME_COUNT`) | 10 | Số frame rải đều mỗi video/story video (§2.6) |
+| `media.moderation.timeout-millis` (`MODERATION_TIMEOUT_MILLIS`) | 30000 | Cho một lần gọi `/moderate`; `MODERATION_ESCALATE_BUDGET` của moderation-service phải ≤ 1/3 số này |
+| `media.moderation.attempts` (`MODERATION_ATTEMPTS`) | 3 | Hết số lần thử → `REVIEW` |
+| `media.moderation.retry-backoff-millis` (`MODERATION_RETRY_BACKOFF_MILLIS`) | 3000 | |
+| `media.music.allowed-host-suffixes` (`MUSIC_ALLOWED_HOST_SUFFIXES`) | `.jamendo.com` | Host được tải nhạc của edit (§2.1b) |
+| `media.music.max-bytes` (`MUSIC_MAX_BYTES`) | 31457280 (30 MB) | |
 | `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` / `MINIO_BUCKET` | localhost:9000 / minioadmin / … / `video-media` | Credential MinIO **chỉ nằm ở service này** — đó là lý do cleanup chạy ở đây chứ không ở video-service |
 
 ### 3.1. Quarantine — media rời đường đọc ẩn danh
@@ -190,9 +202,11 @@ Media chỉ trở lại public khi **không còn hold nào** — gỡ takedown c
 | Story đã dựng | `stories/{userId}/{storyId}/rendered.{mp4\|jpg}` | media-worker (`StoryRenderer`) khi `StoryCreatedEvent.edit` có thay đổi — được chấm thay bản gốc; `StoryModerationCompletedEvent.mediaKey/mediaType` báo story-service phát bản này | lifecycle 3 ngày |
 | Bản quarantine | `quarantine/` + key gốc | quarantine (§3.1) | restore khi hết hold (dời về key gốc), hoặc cleanup |
 | Hold marker | `quarantine/holds/{videoId}/{HOLD}` | quarantine (§3.1) | restore, hoặc cleanup |
+| Marker cũ | `quarantine/markers/{videoId}` | quarantine trước khi có hold | restore, hoặc cleanup |
+| Marker transcode | `transcoded/markers/{videoId}` (object rỗng, ngoài mọi prefix public) | media-worker sau khi phát `VideoTranscodedEvent` (§1) | cleanup |
 
 Mọi lifecycle rule (`raw/`, `exports/`, `stories/`) khai ở **một chỗ duy nhất**: `scripts/minio/lifecycle.json`, do `minio-init` (`scripts/minio/init.sh`) áp, dùng chung cho compose dev và prod. Ghi lifecycle là thay cả config của bucket, nên rule đặt ở nơi khác (trước đây media-worker tự đặt `stories/` lúc khởi động) sẽ xoá các rule kia, hoặc bị chúng xoá, tuỳ bên nào chạy sau.
 
 ## 7. kafka-lib
 
-`media-worker` **có** dùng `kafka-lib` error handler: consumer lỗi → retry 3 lần → `<topic>.DLT`. Chưa có outbox (không cần — không ghi DB, hai producer tự chờ ack).
+`media-worker` **có** dùng `kafka-lib` error handler: dependency chết (lỗi socket/DNS, timeout HTTP, `RetriableException` của Kafka — xem `KafkaConsumerAutoConfiguration.isOutage`) → retry không giới hạn, partition đứng chờ; lỗi khác → retry 3 lần → `<topic>.DLT`. Chưa có outbox (không cần — không ghi DB, cả bốn producer tự chờ ack).

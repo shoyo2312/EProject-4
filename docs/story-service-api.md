@@ -118,7 +118,7 @@ Dựng không được (cắt hết, file hỏng, nhạc không tải được s
 | GET | `/{storyId}` | không | — | `StoryResponse` |
 | PATCH | `/{storyId}/visibility` | chủ story | `{visibility}` | `StoryResponse` |
 | POST | `/{storyId}/views` | cần | — | `204`; xem lại hoặc tự xem story của mình thì không đếm |
-| GET | `/{storyId}/viewers` | chủ story | `before?` (ISO instant), `size?` (1–50, mặc định 20) | `[{viewerId, viewedAt, reaction}]`, mới trước; `reaction` null khi chưa thả |
+| GET | `/{storyId}/viewers` | chủ story | `before?` (ISO instant), `size?` (mặc định 20; ngoài 1–50 thì bị kẹp về khoảng đó, không lỗi) | `[{viewerId, viewedAt, reaction}]`, mới trước; `reaction` null khi chưa thả |
 | PUT | `/{storyId}/reaction` | cần | `{reaction: LIKE\|LOVE\|WOW\|ANGRY\|SAD}` | `204`; một reaction mỗi người, gọi lại là thay; chủ story → `400 STORY_OWN_REACTION`; thả reaction trước khi view được ghi thì tạo luôn view (và đếm `viewCount` đúng một lần) |
 | DELETE | `/{storyId}/reaction` | cần | — | `204`, idempotent; view vẫn giữ |
 | DELETE | `/{storyId}` | chủ story | — | xoá mềm |
@@ -149,6 +149,8 @@ vắng mặt trong kết quả; id trùng chỉ tính một lần.
 | `STORY_OVERLAY_REJECTED` | 422 | chữ vẽ trên story (`edit.overlays[].texts`) chứa từ bị cấm — không lưu gì |
 | `MUSIC_NOT_FOUND` | 400 | `edit.music.trackId` không còn trong catalogue hoặc không được ghép vào hình |
 | `MUSIC_UNAVAILABLE` | 503 | không tra được bài hát (video-service hoặc Jamendo không trả lời) |
+| `STORY_OWN_REACTION` | 400 | thả reaction vào story của chính mình |
+| `VALIDATION_ERROR` | 400 | body sai: thiếu `mediaUrl`/`visibility`, caption > 300, `edit` rỗng, bộ lọc lạ, `end` ≤ `start`, vượt giới hạn của `edit` ở §3… |
 | `TOO_MANY_FOLLOWED_USERS` | 400 | `followedUserIds` quá 500 |
 | `TOO_MANY_RING_USERS` | 400 | `userIds` quá 100 |
 | `STORY_NOT_FOUND` | 404 | không tồn tại, đã xoá, đã hết hạn, hoặc người gọi không được xem |
@@ -162,8 +164,9 @@ Dành cho service khác, không phải client.
 | Method | Path | Trả về |
 |---|---|---|
 | GET | `/api/v1/stories/internal/{storyId}/announcement` | `{userId, visibility}` — chủ story và `visibility` (`PUBLIC` \| `FRIENDS` \| `PRIVATE`) **hiện tại** |
+| GET | `/api/v1/stories/internal/viewable?viewerId=&ids=` | `[{id, userId, mediaType, mediaUrl}]` — chỉ những story `viewerId` đang được xem (§2; story của chính họ khi `ACTIVE`), `mediaUrl` presigned như §3. Id không xem được / đã xoá / hết hạn thì vắng mặt, không 404 từng id; tối đa 50 id khác nhau, phần dư bị bỏ. Người gọi: chat-service |
 
-Người gọi là notification-service, ngay trước khi báo cho người theo dõi một story mới: event
+Người gọi `announcement` là notification-service, ngay trước khi báo cho người theo dõi một story mới: event
 `story.activation-events` chỉ mang `storyId` và `userId`, còn từ lúc event được phát story có thể đã bị xoá,
 hết hạn, đổi `visibility`, hoặc chủ story bị ban / đóng tài khoản.
 

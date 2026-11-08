@@ -13,12 +13,13 @@ của người khác. Base URL qua gateway: `http://<host>:8080`. Envelope `ApiR
 | Trang chủ — bình luận mới nhất | `GET /api/v1/interactions/users/me/comments?size=5` | `interaction-service-api.md` §3.16 |
 | Bài đăng — bảng mọi video | `GET /api/v1/videos/me?status=&visibility=&views=&likes=&comments=&q=&sort=&order=` | **mọi status** (đang xử lý, chờ duyệt, bị từ chối, bị gỡ) kèm `viewCount`/`likeCount`/`commentCount`; lọc, tìm, sắp xếp — `video-service-api.md` §3.5b |
 | Bài đăng — đổi quyền xem, tắt comment, xoá | `PATCH /videos/{id}/visibility`, `PATCH /videos/{id}/comments-setting`, `DELETE /videos/{id}` | đã có sẵn |
+| Bài đăng — sửa tiêu đề/mô tả, ghim | `PATCH /api/v1/videos/{id}/caption`, `PATCH /api/v1/videos/{id}/pin` | `video-service-api.md` §3.8b, §3.8c |
 | Phân tích › Tổng quan | `GET /api/v1/analytics/creator/overview?days=` | §2.1 |
 | Phân tích › Nội dung | `GET /api/v1/analytics/creator/videos/top?days=&sort=` | §2.2, hydrate bằng `GET /api/v1/videos/batch?ids=` |
 | Phân tích › Người xem | `GET /api/v1/analytics/creator/viewers?days=` | §2.4 |
 | Chi tiết một video | `GET /api/v1/analytics/creator/videos/{videoId}?days=` | §2.3 |
-| Bình luận | `GET /api/v1/interactions/users/me/comments?videoId=&status=&q=&from=&to=` | lọc theo video, chờ duyệt, nội dung, khoảng thời gian; duyệt/xoá qua endpoint theo video |
-| Tải lên | `POST /api/v1/videos/upload-url` → PUT file → `POST /api/v1/videos` | đã có sẵn |
+| Bình luận | `GET /api/v1/interactions/users/me/comments?videoId=&status=&q=&from=&to=&sort=&replied=&followers=&cursor=&size=` | lọc theo video, chờ duyệt, nội dung, khoảng thời gian; `sort` (`NEWEST`/`MOST_LIKED`/`MOST_REPLIED`), `replied`, `followers` cần `videoId`; phân trang cursor, `size` 1–50 — `interaction-service-api.md` §3.16; duyệt/xoá qua endpoint theo video |
+| Tải lên | `POST /api/v1/videos/upload-url` → POST form multipart lên `uploadUrl` → `POST /api/v1/videos` | đã có sẵn, `video-service-api.md` §3.1 |
 
 `days` là 7, 28, 60 hoặc 365 theo bộ chọn của Studio; server nhận mọi giá trị 1–365. Ngoài khoảng → 400.
 
@@ -103,10 +104,10 @@ Các số ở cấp cao nhất là **trọn đời**; `current` là cửa sổ `
 ## 3. Nguồn dữ liệu
 
 - Quyền sở hữu video lấy từ dòng `PUBLISHED` mà mọi lần upload ghi vào `engagement_events` (`user_id` = người upload). Không gọi sang video-service.
-- Follower ròng đến từ bảng `follow_events` mới, nạp từ topic `user.follow-events`. Follow xảy ra **trước khi deploy** không có trong biểu đồ.
+- Follower ròng đến từ bảng `follow_events` mới, nạp từ topic `user.follow-events`. Follow xảy ra **trước khi deploy** chỉ có sau khi operator chạy backfill một lần (`POST /api/v1/users/internal/follow-backfill`, phát lại mỗi follow còn sống lên `user.follow-backfill-events` — xem `docs/operations.md` §9); follow đã bỏ trước đó thì không bao giờ có.
 - Hộp bình luận dùng bảng Cassandra `comments_by_owner`, chỉ chứa id. Comment cũ hơn tính năng này không có trong hộp — trừ khi lọc theo `videoId`: khi đó đọc thẳng `comments_by_video` của video đó (video phải là của người gọi, không thì 403), nên comment cũ vẫn thấy.
 
 ## 4. Chưa làm (giai đoạn sau)
 
-Khoảng ngày tuỳ chỉnh (`from`/`to`) cho analytics, nguồn traffic, truy vấn tìm kiếm, lượt xem hồ sơ, follower mới theo từng video, giới tính/tuổi/vị trí,
+Khoảng ngày tuỳ chỉnh (`from`/`to`) cho analytics, lượt xem hồ sơ, giới tính/vị trí người xem (tuổi đã có, §2.3),
 lên lịch đăng bài, kháng nghị video bị gỡ, hạng mục vi phạm hiển thị cho creator khi admin takedown.

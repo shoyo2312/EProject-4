@@ -11,11 +11,11 @@ document had left open, the paragraph says so.
 
 ## 0. Where this sits
 
-There is no settings or preferences concept anywhere in the backend today. A grep for
-`preference|setting|user_settings` across all fifteen services returns nothing but
+Before this work there was no settings or preferences concept anywhere in the backend. A grep for
+`preference|setting|user_settings` across all fifteen services returned nothing but
 `TooManyProfileIdsException` and `recommendation-service`'s `UserMuteClient`. `UserProfileResponse`
-carries `userId, username, displayName, bio, avatarUrl, followerCount, followingCount` and nothing
-else. Every switch on `/setting` is therefore inert, and the web client renders it that way on
+carried `userId, username, displayName, bio, avatarUrl, followerCount, followingCount` and nothing
+else. Every switch on `/setting` was therefore inert, and the web client rendered it that way on
 purpose rather than pretending to save.
 
 This document covers the tier that is **one table, two public endpoints and one internal
@@ -144,6 +144,7 @@ user-service.
   "sleepHoursStart": null,
   "sleepHoursEnd": null,
   "weeklyScreenTimeDigest": true,
+  "privateAccount": false,
   "filterSpamOffensive": true,
   "filterAllComments": false,
   "commentKeywords": [],
@@ -161,7 +162,8 @@ user-service.
 ```
 
 `timeZone` is null until the web has sent a screen-time heartbeat. The passcode itself is
-write-only; `hasScreenTimePasscode` says whether one is set.
+write-only; `hasScreenTimePasscode` says whether one is set. `privateAccount` is read off
+`user_profiles` (V11), not this table, and is `false` until the profile exists.
 
 A **flat keyed object**, not the section/group tree the page draws. Layout is presentation and
 stays in the client; this is the values. Getting that boundary wrong is what forces bespoke wiring
@@ -214,6 +216,9 @@ Validation:
   its wrong-guess count and lock), which is how a forgotten passcode is replaced
 - `sleepHoursStart` — a start, or null to turn sleep hours off; the end follows. A `sleepHoursEnd`
   key from an older client is ignored like any unknown key
+- `privateAccount` — boolean; `null` is a `VALIDATION_ERROR`. Written to `user_profiles`, so
+  sending it before the profile exists is `USER_PROFILE_NOT_FOUND` (404). Switching it off approves
+  every pending follow request
 - the seven notification switches — booleans; `null` is a `VALIDATION_ERROR`
 - `filterSpamOffensive`, `filterAllComments` — booleans; `null` is a `VALIDATION_ERROR`
 - `commentKeywords` — the **whole list**, replacing the stored one; `[]` clears it, `null` is a
@@ -272,8 +277,8 @@ is `{ id, keyword, forYou, following, friends }`.
 
 ### 3.1 `GET /api/v1/users/internal/settings?ids=1,2,3`
 
-The path prefix is **not** cosmetic. `api-gateway`'s `SecurityConfig` line 44 already carries
-`.pathMatchers("/api/v1/users/internal/**").denyAll()`, first in the chain so no later rule can
+The path prefix is **not** cosmetic. `api-gateway`'s `SecurityConfig` already carries
+`/api/v1/users/internal/**` in its `denyAll()` matcher, first in the chain so no later rule can
 open it, and user-service's own `SecurityConfig` admits the same prefix to any caller carrying the
 internal API token (`X-Internal-Token`) and no one else. Putting the endpoint there means **no
 gateway change at all** and no user token — which is mandatory, because chat-service asks these
@@ -320,7 +325,7 @@ gateway and both behind the internal token.
 opposite of `GET /users?ids=`, which drops profiles the viewer cannot see. Omitting here would make
 a caller's "no answer" indistinguishable from "no restriction", and the first such caller to treat
 absence as permission has silently disabled the feature. Cap `ids` at 100, reusing
-`UserProfileService.MAX_BATCH_IDS` (line 14) and `TooManyProfileIdsException`.
+`UserProfileService.MAX_BATCH_IDS` and `TooManyProfileIdsException`.
 
 Tier 2 only ever passes a single id. It is specified as a batch because the tier-3 feed filter will
 need one and it costs nothing to build it that way now.
@@ -339,8 +344,13 @@ So `FRIENDS` DM audience is unimplementable without this. It is a thin wrapper o
 `FollowServiceImpl.friendship`, which is already edge-only and already answers `false` for a
 non-existent user rather than 404.
 
-`200 OK`, `data` → the existing `FriendshipResponse`, so `{ "userId": 2, "friends": true }` — the
-same shape the authenticated endpoint answers, rather than a second DTO carrying one field.
+`200 OK`, `data` → the existing `FriendshipResponse`, so
+`{ "userId": 2, "friends": true, "following": true, "requested": false, "privateAccount": false }` —
+the same shape the authenticated endpoint answers, rather than a second DTO.
+
+`userA` is optional: without it the viewer is anonymous, and only `privateAccount` can be true.
+interaction-service asks it that way for a private account's Reposts tab, where the caller may be a
+guest.
 
 It lives in its own `InternalFollowController` because `FollowController` is mapped under
 `/api/v1/users/{userId}`, which cannot also produce a literal `/internal/` path. Worth knowing:
@@ -392,13 +402,18 @@ Storing the values is the easy half. These are the parts that change behaviour.
 
 ### 4.1 Comment audience
 
-Enforced in **interaction-service**, `CommentServiceImpl.create`, at the existing guard:
+Enforced in **interaction-service**, `CommentServiceImpl.addComment`, where the existing guard
+was:
 
 ```java
 if (videoOwnershipClient.areCommentsDisabled(videoId)) {
     throw new CommentsDisabledException(videoId);
 }
 ```
+
+That guard is now `restrictionFor(videoOwnershipClient.commentPolicy(videoId), commenterId)`: one
+`/policy` read decides both the per-video switch and the audience, and the comment-permission read
+uses the same rule.
 
 **Widen `VideoPolicyResponse` rather than adding a user-service call to interaction-service.**
 interaction-service has exactly one client today (`VideoOwnershipClient`) and already reads
@@ -494,7 +509,7 @@ on the platform during a user-service outage would be the guard failing closed.
 ### 4.2 DM audience
 
 Enforced in **chat-service**, `ConversationServiceImpl.getOrCreate`, immediately after the existing
-`blockClient.requireNotBlocked(currentUserId, otherUserId)` on line 30.
+`blockClient.requireNotBlocked(currentUserId, otherUserId)`.
 
 New `SettingsClient`, modelled on `BlockClient` — tokenless, `downstream.user-service-uri`, timeouts
 from `RestClientConfig`:
@@ -658,7 +673,8 @@ video-service:
   miss
 
 interaction-service:
-- owner comments on their own `NO_ONE` video → allowed
+- owner comments on their own `FRIENDS` video → allowed; on their own `NO_ONE` video →
+  `COMMENTS_NOT_ALLOWED`
 - `commentsDisabled` beats a permissive audience; `NO_ONE` closes a video whose switch is untouched
 - `FRIENDS`: mutual allowed, one-way refused, with `COMMENTS_NOT_ALLOWED` not `COMMENTS_DISABLED`
 - video-service unreachable → comment goes through (fail-open, as today)
