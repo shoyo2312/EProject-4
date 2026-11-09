@@ -411,11 +411,12 @@ services:
   # store and hand to browsers from it, and presigned uploads are signed for that host. Server-side
   # MinIO calls therefore go out through Cloudflare and back in. media-worker is the exception: it
   # moves whole videos, so it calls MinIO in-cluster and takes the public base from MEDIA_PUBLIC_URL.
-  # video-service has a second, in-cluster client for its own calls (MINIO_INTERNAL_ENDPOINT): its
-  # per-row statObject through Cloudflare held the admin dashboard at 6-13 s.
-  # ponytail: user-service and story-service still hairpin their server-side calls (story-service
-  # copies each story's media through it, StoryMedia.copyForStory); give them the same split if
-  # those start failing.
+  # video-service and user-service have a second, in-cluster client for their own calls
+  # (MINIO_INTERNAL_ENDPOINT): video-service's per-row statObject through Cloudflare held the admin
+  # dashboard at 6-13 s, and user-service's export upload failed with "Network is unreachable"
+  # whenever it picked Cloudflare's IPv6 address (the containers have no IPv6 route).
+  # ponytail: story-service still hairpins its server-side calls (StoryMedia.copyForStory); give it
+  # the same split if those start failing.
   user-service:
     <<: *java
     build:
@@ -434,6 +435,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?}
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
+      MINIO_INTERNAL_ENDPOINT: http://minio:9000
       # Its own account (avatars/, exports/), made by minio-init.
       MINIO_ACCESS_KEY: user-service
       MINIO_SECRET_KEY: ${MINIO_USER_SECRET_KEY:?}

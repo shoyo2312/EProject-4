@@ -42,7 +42,7 @@ class MinioConfigTest {
 
     @Test
     void presignsAnExportLinkWithoutAskingTheServerAnything() {
-        MinioClient client = new MinioConfig().minioClient(new MinioProperties(
+        MinioClient client = new MinioConfig().publicMinioClient(new MinioProperties(
                 "http://127.0.0.1:" + server.getAddress().getPort(), "key", "secret", "video-media", "us-east-1"));
 
         assertThatCode(() -> client.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
