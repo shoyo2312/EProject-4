@@ -500,6 +500,8 @@ services:
       USER_SERVICE_URI: http://user-service:8082
       MODERATION_SERVICE_URL: http://moderation-service:8099
       ADMIN_SERVICE_URL: http://admin-service:8096
+      # A story's song is checked against video-service's music catalogue.
+      VIDEO_SERVICE_URI: http://video-service:8083
       # The public address, as for video-service: story media is read through presigned GETs, and
       # SigV4 signs the host the browser will ask.
       MINIO_ENDPOINT: ${MEDIA_PUBLIC_URL:?}
@@ -595,6 +597,8 @@ services:
       USER_SERVICE_URI: http://user-service:8082
       VIDEO_SERVICE_URI: http://video-service:8083
       INTERACTION_SERVICE_URI: http://interaction-service:8085
+      # Story replies: the story a reply quotes.
+      STORY_SERVICE_URI: http://story-service:8086
       # The web app's origin: the socket handshake from anywhere else is refused.
       WEBSOCKET_ALLOWED_ORIGINS: ${SITE_URL:?}
 
