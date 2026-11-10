@@ -5,18 +5,25 @@ import com.tiktok.storyservice.config.StoryUploadLimits;
 import com.tiktok.storyservice.entity.StoryMediaType;
 import com.tiktok.storyservice.exception.ForeignUploadException;
 import com.tiktok.storyservice.exception.UnsupportedUploadTypeException;
+import io.minio.CopyObjectArgs;
+import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
+import io.minio.PostPolicy;
+import io.minio.StatObjectArgs;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class StoryMediaTest {
 
-    private final StoryMedia media = new StoryMedia(mock(MinioClient.class),
+    private final StoryMedia media = new StoryMedia(mock(MinioClient.class), mock(MinioClient.class),
             new MinioProperties("http://minio", "http://minio", "a", "s", "bucket", "us-east-1", Duration.ofMinutes(15)),
             new StoryUploadLimits(10_485_760L, 52_428_800L));
 
@@ -61,5 +68,34 @@ class StoryMediaTest {
     void uploadOfAnUnacceptedTypeIsRefusedBeforeSigning() {
         assertThatThrownBy(() -> media.presignUpload(7L, "video/quicktime"))
                 .isInstanceOf(UnsupportedUploadTypeException.class);
+    }
+
+    /**
+     * In production the public endpoint is reached through Cloudflare, and a container with no IPv6
+     * route cannot always get there: the create's own calls go in-cluster, and only what an app or a
+     * browser will use is signed for the public host.
+     */
+    @Test
+    void ownCallsGoInClusterAndLinksAreSignedForThePublicHost() throws Exception {
+        MinioClient internal = mock(MinioClient.class);
+        MinioClient published = mock(MinioClient.class);
+        when(published.getPresignedPostFormData(any(PostPolicy.class))).thenReturn(java.util.Map.of());
+        when(published.getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class))).thenReturn("https://media/x");
+        StoryMedia split = new StoryMedia(internal, published,
+                new MinioProperties("https://media", "https://media", "a", "s", "bucket", "us-east-1",
+                        Duration.ofMinutes(15)),
+                new StoryUploadLimits(10_485_760L, 52_428_800L));
+
+        split.exists("stories/7/1.mp4");
+        split.copyForStory("stories/7/1.mp4", "57");
+        verify(internal).statObject(any(StatObjectArgs.class));
+        verify(internal).copyObject(any(CopyObjectArgs.class));
+
+        split.presignUpload(7L, "video/mp4");
+        assertThat(split.signedGet("stories/7/57/media.mp4")).isEqualTo("https://media/x");
+        verify(published).getPresignedPostFormData(any(PostPolicy.class));
+        verify(published).getPresignedObjectUrl(any(GetPresignedObjectUrlArgs.class));
+        verify(published, org.mockito.Mockito.never()).statObject(any(StatObjectArgs.class));
+        verify(published, org.mockito.Mockito.never()).copyObject(any(CopyObjectArgs.class));
     }
 }

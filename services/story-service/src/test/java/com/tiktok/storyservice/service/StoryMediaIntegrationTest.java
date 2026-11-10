@@ -49,7 +49,7 @@ class StoryMediaIntegrationTest {
 
     @BeforeAll
     static void createBucket() throws Exception {
-        minioClient = new MinioConfig().minioClient(properties(MINIO.getUserName(), MINIO.getPassword()));
+        minioClient = new MinioConfig().publicMinioClient(properties(MINIO.getUserName(), MINIO.getPassword()));
         minioClient.makeBucket(MakeBucketArgs.builder().bucket(BUCKET).build());
     }
 
@@ -96,7 +96,9 @@ class StoryMediaIntegrationTest {
 
     private static StoryMedia media(String accessKey, String secretKey) {
         MinioProperties properties = properties(accessKey, secretKey);
-        return new StoryMedia(new MinioConfig().minioClient(properties), properties,
+        MinioConfig config = new MinioConfig();
+        return new StoryMedia(config.minioClient(properties, properties.endpoint()),
+                config.publicMinioClient(properties), properties,
                 new StoryUploadLimits(10_485_760L, 52_428_800L));
     }
 

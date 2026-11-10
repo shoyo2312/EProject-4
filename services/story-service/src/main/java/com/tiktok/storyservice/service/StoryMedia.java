@@ -19,6 +19,7 @@ import io.minio.StatObjectArgs;
 import io.minio.errors.ErrorResponseException;
 import io.minio.http.Method;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -60,12 +61,17 @@ public class StoryMedia {
     /** Long enough to watch a tray of stories, short enough that a leaked link soon dies. */
     private static final Duration READ_EXPIRY = Duration.ofHours(1);
 
+    /** In-cluster: the calls story-service makes itself (exists, copy). See MinioConfig. */
     private final MinioClient minioClient;
+    /** Signs upload forms and GETs for the public host apps and browsers reach. */
+    private final MinioClient publicMinioClient;
     private final MinioProperties properties;
     private final StoryUploadLimits limits;
 
-    public StoryMedia(MinioClient minioClient, MinioProperties properties, StoryUploadLimits limits) {
+    public StoryMedia(MinioClient minioClient, @Qualifier("publicMinioClient") MinioClient publicMinioClient,
+                      MinioProperties properties, StoryUploadLimits limits) {
         this.minioClient = minioClient;
+        this.publicMinioClient = publicMinioClient;
         this.properties = properties;
         this.limits = limits;
     }
@@ -91,7 +97,7 @@ public class StoryMedia {
 
         Map<String, String> formFields;
         try {
-            formFields = new HashMap<>(minioClient.getPresignedPostFormData(policy));
+            formFields = new HashMap<>(publicMinioClient.getPresignedPostFormData(policy));
         } catch (Exception e) {
             log.error("Failed to presign a story upload for bucket {}", properties.bucket(), e);
             throw new UploadUrlUnavailableException(e);
@@ -176,7 +182,7 @@ public class StoryMedia {
     /** Null when signing fails: the story renders without media rather than failing the whole tray. */
     public String signedGet(String key) {
         try {
-            return minioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
+            return publicMinioClient.getPresignedObjectUrl(GetPresignedObjectUrlArgs.builder()
                     .method(Method.GET)
                     .bucket(properties.bucket())
                     .object(key)
