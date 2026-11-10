@@ -37,9 +37,11 @@ public class SecurityConfig {
                         // Service-to-service: api-gateway denies this prefix, and the token keeps out
                         // whatever reaches this port without going through the gateway. Before the
                         // ROLE_ADMIN rule, which no service's call could ever satisfy.
-                        .requestMatchers(HttpMethod.GET, "/api/v1/admin/internal/**")
+                        // Any method: a HEAD is answered by the GET handler, so a GET-only rule lets a JWT in.
+                        .requestMatchers("/api/v1/admin/internal/**")
                         .access(new InternalCallerAuthorization(internalApiToken))
-                        .requestMatchers(HttpMethod.POST, "/api/v1/admin/reports").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/admin/reports", "/api/v1/admin/reports/direct-message")
+                        .authenticated()
                         .anyRequest().hasRole("ADMIN")
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

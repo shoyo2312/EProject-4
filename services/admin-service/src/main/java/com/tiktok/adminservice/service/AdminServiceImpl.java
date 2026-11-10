@@ -1,6 +1,7 @@
 package com.tiktok.adminservice.service;
 
 import com.tiktok.adminservice.client.AccountRoleClient;
+import com.tiktok.adminservice.client.CommentAuthorClient;
 import com.tiktok.adminservice.dto.request.ResolveReportRequest;
 import com.tiktok.adminservice.dto.request.SubmitReportRequest;
 import com.tiktok.adminservice.dto.response.DailyAdminStatsResponse;
@@ -10,12 +11,14 @@ import com.tiktok.adminservice.dto.response.ReportResponse;
 import com.tiktok.adminservice.dto.response.StatsSummaryResponse;
 import com.tiktok.adminservice.entity.ModerationAction;
 import com.tiktok.adminservice.entity.ModerationActionType;
+import com.tiktok.adminservice.entity.CommentTarget;
 import com.tiktok.adminservice.entity.Report;
 import com.tiktok.adminservice.entity.ReportStatus;
 import com.tiktok.adminservice.entity.ReportTargetType;
 import com.tiktok.adminservice.event.producer.AdminEventProducer;
 import com.tiktok.adminservice.exception.InvalidModerationTargetException;
 import com.tiktok.adminservice.exception.InvalidSortException;
+import com.tiktok.adminservice.exception.OwnCommentReportException;
 import com.tiktok.adminservice.exception.ReportAlreadyResolvedException;
 import com.tiktok.adminservice.exception.ReportAlreadySubmittedException;
 import com.tiktok.adminservice.exception.ReportNotFoundException;
@@ -51,6 +54,7 @@ public class AdminServiceImpl implements AdminService {
     private final AdminMapper adminMapper;
     private final AdminEventProducer adminEventProducer;
     private final AccountRoleClient accountRoleClient;
+    private final CommentAuthorClient commentAuthorClient;
 
     @Override
     @Transactional
@@ -60,13 +64,26 @@ public class AdminServiceImpl implements AdminService {
         // spelling, or "007" and "7" would be two targets — see ReportTargetType.
         String targetId = request.targetType().canonicalTargetId(request.targetId());
 
-        // The ordinary repeat — the same user reporting the same thing again — answers with the
-        // report they already filed. Reading first rather than inserting and recovering: Postgres
-        // aborts the transaction on a constraint violation, so a SELECT in the catch block runs
-        // against a dead transaction and fails with "current transaction is aborted".
+        // Nobody reports their own comment. The client hides the option; this is the check that
+        // holds when the call is made directly.
+        if (request.targetType() == ReportTargetType.COMMENT) {
+            CommentTarget comment = CommentTarget.parse(targetId);
+            if (commentAuthorClient.authorOf(comment.videoId(), comment.commentId()).filter(reporterId::equals).isPresent()) {
+                throw new OwnCommentReportException();
+            }
+        }
+
+        // The ordinary repeat — the same user reporting the same thing while their report is still
+        // pending — answers with that report. A closed one does not count: the decision on it says
+        // nothing about what the target has done since, and handing it back dropped the new
+        // report with no row and no event. A report closed on arrival below is never pending
+        // either, so each repeat against an enforced target adds another closed row.
+        // Reading first rather than inserting and recovering: Postgres aborts the transaction on
+        // a constraint violation, so a SELECT in the catch block runs against a dead transaction
+        // and fails with "current transaction is aborted".
         Optional<Report> existing = reportRepository
-                .findByReporterIdAndTargetTypeAndTargetIdAndDeletedAtIsNull(
-                        reporterId, request.targetType(), targetId);
+                .findByReporterIdAndTargetTypeAndTargetIdAndStatusAndDeletedAtIsNull(
+                        reporterId, request.targetType(), targetId, ReportStatus.PENDING);
         if (existing.isPresent()) {
             return adminMapper.toResponse(existing.get());
         }
@@ -370,6 +387,12 @@ public class AdminServiceImpl implements AdminService {
      * closed on arrival and never reaches an admin.
      */
     private Optional<ModerationAction> standingEnforcement(ReportTargetType targetType, String targetId) {
+        return standingEnforcement(moderationActionRepository, targetType, targetId);
+    }
+
+    /** Static so a direct-message report applies the same rule as every other one. */
+    static Optional<ModerationAction> standingEnforcement(ModerationActionRepository moderationActionRepository,
+                                                          ReportTargetType targetType, String targetId) {
         Instant now = Instant.now();
         return moderationActionRepository
                 .findFirstByTargetTypeAndTargetIdAndActionTypeInOrderByCreatedAtDesc(

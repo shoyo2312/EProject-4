@@ -10,6 +10,7 @@ import com.tiktok.event.interaction.CommentDeletedEvent;
 import com.tiktok.event.user.AccountState;
 import com.tiktok.event.user.AccountStateChangedEvent;
 import com.tiktok.event.video.ModerationVerdict;
+import com.tiktok.event.video.VideoCaptionChangedEvent;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoModerationCompletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
@@ -564,6 +565,38 @@ class VideoIndexingConsumerTest {
     }
 
     /**
+     * An edited video is found by its new words and no longer by its old ones, and the edit
+     * touches nothing but the caption. A cleared description leaves the document — the client
+     * cannot send it as a null.
+     */
+    @Test
+    void onMessage_captionChange_replacesTheCaptionAndLeavesTheRest() throws Exception {
+        publish("v40", "sunset timelapse", "shot on the pier #ocean", List.of("ocean"));
+        transcode(VideoTranscodedEvent.success("v40", "http://minio/t.jpg", null, "http://minio/m.m3u8", 3));
+        moderate("v40", ModerationVerdict.APPROVED);
+
+        changeCaption("v40", "mountain hike", null, List.of("hiking"));
+
+        VideoDocument edited = video("v40").orElseThrow();
+        assertThat(edited.getTitle()).isEqualTo("mountain hike");
+        assertThat(edited.getDescription()).isNull();
+        assertThat(edited.getTags()).containsExactly("hiking");
+        assertThat(edited.getStatus()).isEqualTo("PUBLISHED");
+        assertThat(edited.getThumbnailUrl()).isEqualTo("http://minio/t.jpg");
+        assertThat(searched("sunset")).isEmpty();
+        assertThat(searched("ocean")).isEmpty();
+        assertThat(searched("mountain")).containsExactly("v40");
+    }
+
+    /** Sent only after the publication, so a video missing here was deleted since: no stub. */
+    @Test
+    void onMessage_captionChangeForAnUnknownVideo_createsNothing() throws Exception {
+        changeCaption("v41", "ghost", "never published", List.of());
+
+        assertThat(video("v41")).isEmpty();
+    }
+
+    /**
      * A ban used to stop at auth-service, and a banned account's videos stayed searchable — title,
      * description and thumbnail. They leave the results while the ban is in force.
      */
@@ -684,6 +717,11 @@ class VideoIndexingConsumerTest {
         VideoPublishedEvent event = VideoPublishedEvent.of(
                 videoId, 1L, title, description, "s3://raw/" + videoId + ".mp4", visibility, tags);
         videoEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("VideoPublishedEvent"));
+    }
+
+    private void changeCaption(String videoId, String title, String description, List<String> tags) throws Exception {
+        VideoCaptionChangedEvent event = VideoCaptionChangedEvent.of(videoId, 1L, title, description, tags, Instant.now());
+        videoEventConsumer.onMessage(objectMapper.writeValueAsString(event), header("VideoCaptionChangedEvent"));
     }
 
     private void transcode(VideoTranscodedEvent event) throws Exception {

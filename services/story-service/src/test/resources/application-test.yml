@@ -1,0 +1,15 @@
+spring:
+  kafka:
+    listener:
+      # Consumer tests invoke the listener methods directly; the containers would only add a
+      # background reconnect loop against a broker that isn't running in tests.
+      auto-startup: false
+
+moderation:
+  text:
+    # No moderation-service or admin-service in tests: the classifier is never asked and no poller
+    # starts. Covered by moderation-lib's own tests and StoryCaptionModerationTest.
+    classifier:
+      base-url: ""
+    admin-terms:
+      base-url: ""

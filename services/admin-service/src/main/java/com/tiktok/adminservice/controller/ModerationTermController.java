@@ -45,6 +45,15 @@ public class ModerationTermController {
         return ApiResponse.success(moderationTermService.list(q, action, pageable));
     }
 
+    /** Removed terms, most recently removed first, with who took each out. */
+    @GetMapping("/terms/removed")
+    public ApiResponse<Page<ModerationTermResponse>> removed(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) AdminTerm.Action action,
+            Pageable pageable) {
+        return ApiResponse.success(moderationTermService.listRemoved(q, action, pageable));
+    }
+
     @GetMapping("/terms/summary")
     public ApiResponse<ModerationTermSummaryResponse> summary() {
         return ApiResponse.success(moderationTermService.summary());

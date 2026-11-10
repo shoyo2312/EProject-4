@@ -1,6 +1,38 @@
-from verdict import APPROVED, REJECTED, REVIEW, Decision, Thresholds, decide, worst
+from verdict import APPROVED, REJECTED, REVIEW, Decision, Thresholds, decide, decide_together, review_only, worst
 
 T = Thresholds()
+HARM = review_only(0.55, min_frames=2, alone_at=0.80)
+
+
+def test_one_frame_over_the_line_is_not_enough_when_two_are_required():
+    assert decide([0.75, 0.1, 0.2], HARM).verdict == APPROVED
+    assert decide([0.75, 0.56, 0.2], HARM).verdict == REVIEW
+
+
+def test_a_frame_at_the_alone_line_needs_no_second():
+    assert decide([0.80, 0.1], HARM).verdict == REVIEW
+    assert decide([0.79, 0.1], HARM).verdict == APPROVED
+
+
+def test_an_image_has_no_second_frame_to_wait_for():
+    # An image story is one frame: that frame is all of it, so it alone sends it to review.
+    assert decide([0.64], HARM).verdict == REVIEW
+    assert decide_together({"drugs": [0.71], "gambling": [0.2]}, HARM)[1].verdict == REVIEW
+    assert decide([0.54], HARM).verdict == APPROVED
+
+
+def test_frames_agree_across_labels():
+    # One scene, split between two labels frame by frame: each label alone has one frame over.
+    label, decision = decide_together({"drugs": [0.62, 0.3, 0.1], "gambling": [0.2, 0.71, 0.1]}, HARM)
+
+    assert decision.verdict == REVIEW
+    assert label == "gambling"
+    assert decision.max_score == 0.71
+    assert decision.suspicious_frames == 2
+
+
+def test_no_frames_together_is_still_review():
+    assert decide_together({"drugs": [], "gambling": []}, HARM)[1].verdict == REVIEW
 
 
 def test_all_clean_frames_are_approved():

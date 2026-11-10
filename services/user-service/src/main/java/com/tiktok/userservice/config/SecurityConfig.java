@@ -42,7 +42,8 @@ public class SecurityConfig {
                                 "/api/v1/users/by-username/*").permitAll()
                         // Service-to-service only. api-gateway denies this prefix, and the token keeps
                         // out whatever reaches this port without going through the gateway.
-                        .requestMatchers(HttpMethod.GET, "/api/v1/users/internal/**")
+                        // Any method: a HEAD is answered by the GET handler, so a GET-only rule lets a JWT in.
+                        .requestMatchers("/api/v1/users/internal/**")
                         .access(new InternalCallerAuthorization(internalApiToken))
                         .anyRequest().authenticated()
                 )

@@ -138,4 +138,26 @@ class DeviceLabelTest {
                 null, null))
                 .isEqualTo("Safari on iOS");
     }
+
+    /**
+     * The alert's label goes into a message the account's owner reads, and both hints are the
+     * client's to write. The model is free text, so it never reaches the alert at all.
+     */
+    @Test
+    void theAlertLabelNeverCarriesTheModel() {
+        assertThat(DeviceLabel.brief("Mozilla/5.0 (Linux; Android 15) Chrome/140.0.0.0 Mobile Safari/537.36",
+                "15.0.0"))
+                .isEqualTo("Chrome on Android 15");
+    }
+
+    /** Otherwise "routine security check, no action needed" would ride into the owner's alert. */
+    @Test
+    void theAlertLabelDropsAVersionThatIsNotANumber() {
+        String mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                + "Chrome/140.0.0.0 Safari/537.36";
+
+        assertThat(DeviceLabel.brief(mac, "27; routine security check, no action needed"))
+                .isEqualTo("Chrome on macOS");
+        assertThat(DeviceLabel.brief(mac, "27.1.0")).isEqualTo("Chrome on macOS 27.1");
+    }
 }

@@ -17,6 +17,15 @@ public interface CommentByVideoRepository extends CassandraRepository<CommentByV
     Slice<CommentByVideo> findByVideoId(@Param("videoId") Long videoId, Pageable pageable);
 
     /**
+     * One video's comments newest first — the table's own clustering order — every status, between
+     * two ids: the owner's inbox narrowed to this video. Ids are Snowflakes, so the id range is a
+     * date range and a clustering slice, as in {@code CommentByOwnerRepository.findNewestFirst}.
+     */
+    @Query("SELECT * FROM comments_by_video WHERE video_id = :videoId AND comment_id >= :fromId AND comment_id < :toId")
+    Slice<CommentByVideo> findNewestFirst(@Param("videoId") Long videoId, @Param("fromId") long fromId,
+                                          @Param("toId") long toId, Pageable pageable);
+
+    /**
      * The rows behind one page of {@code comment_index} ids. A single-partition {@code IN}: the
      * video is fixed and the ids all cluster inside it, so this is one read however long the page.
      *
@@ -111,4 +120,22 @@ public interface CommentByVideoRepository extends CassandraRepository<CommentByV
     boolean markDeletedIfHeld(@Param("videoId") Long videoId,
                               @Param("commentId") Long commentId,
                               @Param("deletedAt") Instant deletedAt);
+
+    /**
+     * The author's edit: new text, when, and what the rules said about it. Conditioned on the comment
+     * not having been deleted since the caller read it — an edit landing after a delete would
+     * otherwise write into a tombstoned row. The like tally is not named, so a like racing the edit
+     * is not overwritten.
+     *
+     * @return false when the comment was deleted in between
+     */
+    @Query("UPDATE comments_by_video SET content = :content, edited_at = :editedAt, "
+            + "mod_reason = :modReason, mod_version = :modVersion "
+            + "WHERE video_id = :videoId AND comment_id = :commentId IF deleted_at = null")
+    boolean editIfNotDeleted(@Param("videoId") Long videoId,
+                             @Param("commentId") Long commentId,
+                             @Param("content") String content,
+                             @Param("editedAt") Instant editedAt,
+                             @Param("modReason") String modReason,
+                             @Param("modVersion") String modVersion);
 }

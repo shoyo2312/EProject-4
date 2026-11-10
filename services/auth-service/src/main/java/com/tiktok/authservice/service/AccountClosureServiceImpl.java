@@ -53,6 +53,8 @@ public class AccountClosureServiceImpl implements AccountClosureService {
     private final OtpProperties otpProperties;
     private final SessionRevoker sessionRevoker;
     private final SecurityEventRecorder securityEventRecorder;
+    private final KnownDevices knownDevices;
+    private final SessionRegistry sessionRegistry;
     private final Duration deletionGrace;
 
     public AccountClosureServiceImpl(List<SocialTokenVerifier> verifiers,
@@ -65,6 +67,8 @@ public class AccountClosureServiceImpl implements AccountClosureService {
                                      OtpProperties otpProperties,
                                      SessionRevoker sessionRevoker,
                                      SecurityEventRecorder securityEventRecorder,
+                                     KnownDevices knownDevices,
+                                     SessionRegistry sessionRegistry,
                                      @Value("${auth.account.deletion-grace:30d}") Duration deletionGrace) {
         verifiers.forEach(verifier -> this.verifiers.put(verifier.provider(), verifier));
         this.userRepository = userRepository;
@@ -76,6 +80,8 @@ public class AccountClosureServiceImpl implements AccountClosureService {
         this.otpProperties = otpProperties;
         this.sessionRevoker = sessionRevoker;
         this.securityEventRecorder = securityEventRecorder;
+        this.knownDevices = knownDevices;
+        this.sessionRegistry = sessionRegistry;
         this.deletionGrace = deletionGrace;
     }
 
@@ -229,9 +235,12 @@ public class AccountClosureServiceImpl implements AccountClosureService {
         user.erase();
         userRepository.save(user);
         int links = userIdentityRepository.deleteAllByUserId(userId);
+        // The data-deletion page promises personal data goes with the account; devices included.
+        knownDevices.forget(userId);
         userEventProducer.publishAccountStateChanged(
                 AccountStateChangedEvent.of(userId, AccountState.DELETED, null));
         sessionRevoker.revokeAllSessions(userId);
+        sessionRegistry.forget(userId);
         log.info("Deleted user {} as scheduled; {} provider link(s) removed", userId, links);
     }
 }

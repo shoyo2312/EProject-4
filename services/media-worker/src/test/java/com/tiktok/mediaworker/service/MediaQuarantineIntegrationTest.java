@@ -126,6 +126,34 @@ class MediaQuarantineIntegrationTest {
         assertThat(exists("quarantine/hls/v3/source.mp4")).isTrue();
     }
 
+    /**
+     * A fresh transcode waits under quarantine for its verdict; an approval puts it back on the
+     * public path, unless something else has held it meanwhile.
+     */
+    @Test
+    void release_liftsThePendingHoldOnly() throws Exception {
+        put("hls/p1/source.mp4");
+        put("thumbnails/p1.jpg");
+        quarantine.hold("p1", Hold.PENDING);
+        assertThat(anonymousStatus("hls/p1/source.mp4")).isNotEqualTo(200);
+
+        quarantine.release("p1", Hold.PENDING);
+
+        assertThat(anonymousStatus("hls/p1/source.mp4")).isEqualTo(200);
+        assertThat(anonymousStatus("thumbnails/p1.jpg")).isEqualTo(200);
+        assertThat(quarantine.isQuarantined("p1")).isFalse();
+
+        put("hls/p2/source.mp4");
+        quarantine.hold("p2", Hold.PENDING);
+        quarantine.hold("p2", Hold.DELETED);
+
+        quarantine.release("p2", Hold.PENDING);
+
+        assertThat(anonymousStatus("hls/p2/source.mp4"))
+                .as("the owner deleted it while it waited, so it stays held")
+                .isNotEqualTo(200);
+    }
+
     @Test
     void enforce_withNothingHoldingTheVideo_leavesTheMediaPublic() throws Exception {
         put("hls/v4/source.mp4");
@@ -209,7 +237,7 @@ class MediaQuarantineIntegrationTest {
     void transcodeMarker_isAbsentUntilRecordedAndNeverPublic() throws Exception {
         TranscodeServiceImpl transcoder = new TranscodeServiceImpl(minioClient,
                 new MinioProperties(MINIO.getS3URL(), MINIO.getS3URL(), MINIO.getUserName(), MINIO.getPassword(), BUCKET),
-                null, null, null);
+                null, null, null, null);
 
         assertThat(transcoder.alreadyTranscoded("v5")).isFalse();
         transcoder.recordTranscoded("v5");

@@ -33,7 +33,7 @@ class UserSettingsClientTest {
             """;
 
     private static final OwnerCommentSettings SEVEN =
-            new OwnerCommentSettings("NO_ONE", false, true, List.of("spoiler"));
+            new OwnerCommentSettings("NO_ONE", false, true, List.of("spoiler"), null);
 
     private final RestClient.Builder builder = RestClient.builder().baseUrl("http://user-service");
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
@@ -42,7 +42,7 @@ class UserSettingsClientTest {
 
     @Test
     void commentSettings_onACacheHit_neverCallUserService() {
-        OwnerCommentSettings cached = new OwnerCommentSettings("FRIENDS", true, false, List.of());
+        OwnerCommentSettings cached = new OwnerCommentSettings("FRIENDS", true, false, List.of(), null);
         when(cache.get(7L)).thenReturn(Optional.of(cached));
 
         assertThat(client.commentSettings(7L)).isEqualTo(cached);
@@ -62,6 +62,35 @@ class UserSettingsClientTest {
         server.verify();
     }
 
+    /** The viewer's side of the same answer: one read and one cache entry serve both. */
+    @Test
+    void feedKeywords_areParsedAndCachedWithTheRest() {
+        when(cache.get(7L)).thenReturn(Optional.empty());
+        server.expect(requestTo("http://user-service/api/v1/users/internal/settings?ids=7"))
+                .andRespond(withSuccess("""
+                        {"success": true, "data": [{"userId": 7, "commentAudience": "EVERYONE",
+                          "filterSpamOffensive": true, "filterAllComments": false, "commentKeywords": [],
+                          "forYouKeywords": ["cat"], "followingKeywords": [], "friendsKeywords": ["dog"]}]}
+                        """, MediaType.APPLICATION_JSON));
+        FeedKeywords expected = new FeedKeywords(List.of("cat"), List.of(), List.of("dog"));
+
+        assertThat(client.feedKeywords(7L)).isEqualTo(expected);
+
+        verify(cache).putAll(Map.of(7L, new OwnerCommentSettings("EVERYONE", true, false, List.of(), expected)));
+    }
+
+    /** No keyword lists at all is a user-service from before them: unknown, so the feed goes unfiltered. */
+    @Test
+    void feedKeywords_fromAnOlderUserService_areUnknown() {
+        when(cache.get(7L)).thenReturn(Optional.empty());
+        server.expect(requestTo("http://user-service/api/v1/users/internal/settings?ids=7"))
+                .andRespond(withSuccess("""
+                        {"success": true, "data": [{"userId": 7, "commentAudience": "EVERYONE"}]}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThat(client.feedKeywords(7L)).isNull();
+    }
+
     /** A user-service from before the filters: relayed as unknown, not as a default made up here. */
     @Test
     void anOlderUserService_withoutTheFilters_relaysThemAsUnknown() {
@@ -71,7 +100,7 @@ class UserSettingsClientTest {
                         {"success": true, "data": [{"userId": 7, "commentAudience": "EVERYONE"}]}
                         """, MediaType.APPLICATION_JSON));
 
-        assertThat(client.commentSettings(7L)).isEqualTo(new OwnerCommentSettings("EVERYONE", null, null, null));
+        assertThat(client.commentSettings(7L)).isEqualTo(new OwnerCommentSettings("EVERYONE", null, null, null, null));
     }
 
     @Test
@@ -94,8 +123,8 @@ class UserSettingsClientTest {
     void closedToComments_asksUserServiceOnceForTheMissesOnly() {
         // One MGET for the page: 7 misses, 8 and 9 answer from the cache.
         when(cache.getAll(Set.of(7L, 8L, 9L))).thenReturn(Map.of(
-                8L, new OwnerCommentSettings("EVERYONE", true, false, List.of()),
-                9L, new OwnerCommentSettings("NO_ONE", true, false, List.of())));
+                8L, new OwnerCommentSettings("EVERYONE", true, false, List.of(), null),
+                9L, new OwnerCommentSettings("NO_ONE", true, false, List.of(), null)));
         server.expect(requestTo("http://user-service/api/v1/users/internal/settings?ids=7"))
                 .andRespond(withSuccess(ONE_POLICY, MediaType.APPLICATION_JSON));
 

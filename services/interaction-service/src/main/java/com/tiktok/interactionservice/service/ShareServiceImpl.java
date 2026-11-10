@@ -44,6 +44,11 @@ public class ShareServiceImpl implements ShareService {
         rateLimiter.require("share-rate", videoId, currentUserId, ShareRateLimitedException::new);
 
         Long shareId = SnowflakeIdGenerator.nextId();
+        persistShare(videoId, currentUserId, shareId);
+        return new ShareResponse(shareId, videoId, shareCount + 1);
+    }
+
+    void persistShare(Long videoId, Long currentUserId, Long shareId) {
         ShareByVideoKey key = ShareByVideoKey.builder().videoId(videoId).shareId(shareId).build();
 
         shareByVideoRepository.save(ShareByVideo.builder()
@@ -72,8 +77,6 @@ public class ShareServiceImpl implements ShareService {
             shareByVideoRepository.deleteById(key);
             throw ex;
         }
-
-        return new ShareResponse(shareId, videoId, shareCount + 1);
     }
 
     /**

@@ -71,7 +71,8 @@ public class StompSubscriptionInterceptor implements ChannelInterceptor {
             // Rewritten per session by the user-destination resolver, so they only ever reach the
             // subscriber's own queue.
             Pattern.compile("^/user/queue/errors$"),
-            Pattern.compile("^/user/queue/notifications$"));
+            Pattern.compile("^/user/queue/notifications$"),
+            Pattern.compile("^/user/queue/chat$"));
 
     private final ConversationService conversationService;
 

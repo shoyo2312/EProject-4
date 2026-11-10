@@ -1,6 +1,7 @@
 package com.tiktok.apigateway.dto;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 /**
  * Mirrors user-service's UserProfileResponse fields. Kept local since api-gateway only
@@ -13,6 +14,8 @@ public record ProfileMeResponse(
         String avatarUrl,
         long followerCount,
         long followingCount,
-        Instant displayNameChangeableAt
+        Instant displayNameChangeableAt,
+        /** Null until the owner gives one; the client asks once after sign-in when it is. */
+        LocalDate birthDate
 ) {
 }

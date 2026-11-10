@@ -151,8 +151,10 @@ class AccountStateServiceImplTest {
         assertThat(followService.friendship(BOB, ALICE).following()).isFalse();
         assertThat(followService.friendship(CAROL, ALICE).requested()).isFalse();
         assertThat(userProfileRepository.findByUserIdAndDeletedAtIsNull(ALICE)).isEmpty();
-        // One unfollow announced per edge, so follow caches and stats frames hear of it.
+        // One unfollow announced per edge, so follow caches and stats frames hear of it, and the
+        // birth date withdrawn, so analytics drops it too.
         assertThat(outboxEventRepository.findAll()).extracting(OutboxEvent::getEventType)
-                .containsExactly("UserFollowChangedEvent", "UserFollowChangedEvent");
+                .containsExactly("UserFollowChangedEvent", "UserFollowChangedEvent", "UserBirthDateSetEvent");
+        assertThat(outboxEventRepository.findAll().getLast().getPayload()).contains("\"birthDate\":null");
     }
 }

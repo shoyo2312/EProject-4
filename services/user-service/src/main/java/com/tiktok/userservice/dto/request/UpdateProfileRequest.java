@@ -4,6 +4,8 @@ import com.tiktok.common.validation.ValidMediaUrl;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.time.LocalDate;
+
 /**
  * PATCH semantics: a null field means "leave unchanged", so a client can send only the field it
  * edits without wiping the rest. To clear an optional field the client sends an empty string,
@@ -23,6 +25,12 @@ public record UpdateProfileRequest(
         // reads its profile and PATCHes it back was being 400'd on our own URL. The allow-list is
         // what makes that safe — the scheme only picks the transport to a host we already named,
         // and in production that host is an https CDN which never answers on plaintext anyway.
-        @Size(max = 500) @ValidMediaUrl(schemes = {"https", "http"}) String avatarUrl
+        @Size(max = 500) @ValidMediaUrl(schemes = {"https", "http"}) String avatarUrl,
+        // Accepted only while the profile has none; a second value is a 409. Cannot be cleared.
+        LocalDate birthDate
 ) {
+
+    public UpdateProfileRequest(String displayName, String bio, String avatarUrl) {
+        this(displayName, bio, avatarUrl, null);
+    }
 }

@@ -182,6 +182,21 @@ public class SearchIndexWriter {
 
     private static final String VISIBILITY_SCRIPT = "ctx._source.visibility = params.visibility;";
 
+    /**
+     * Only the caption fields: status, counters and media belong to other consumers. A cleared
+     * description is removed rather than set to null, since a null cannot travel as a param —
+     * see {@link #withoutNulls}.
+     */
+    private static final String CAPTION_SCRIPT = """
+            ctx._source.title = params.title;
+            if (params.containsKey('description')) {
+              ctx._source.description = params.description;
+            } else {
+              ctx._source.remove('description');
+            }
+            ctx._source.tags = params.tags;
+            """;
+
     private final ElasticsearchOperations elasticsearchOperations;
 
     /**
@@ -271,6 +286,18 @@ public class SearchIndexWriter {
      */
     public void applyVisibility(String videoId, String visibility) {
         update(VideoDocument.class, videoId, VISIBILITY_SCRIPT, Map.of("visibility", visibility), null);
+    }
+
+    /**
+     * No upsert, for the reason {@link #applyVisibility} gives: the edit is only sent after the
+     * publication, so a video missing here was deleted since, and a stub would bring it back.
+     */
+    public void applyCaption(String videoId, String title, String description, List<String> tags) {
+        Map<String, Object> params = new HashMap<>();
+        params.put("title", title);
+        params.put("description", description);
+        params.put("tags", tags == null ? List.of() : tags);
+        update(VideoDocument.class, videoId, CAPTION_SCRIPT, withoutNulls(params), null);
     }
 
     /** @param restoredAt when the admin decided, which a verdict that lands later is held against */

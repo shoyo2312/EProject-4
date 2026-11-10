@@ -108,6 +108,12 @@
             <artifactId>kafka-lib</artifactId>
         </dependency>
 
+        <!-- Reads the DB-IP City Lite file a sign-in's address is resolved to a place with -->
+        <dependency>
+            <groupId>com.maxmind.db</groupId>
+            <artifactId>maxmind-db</artifactId>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

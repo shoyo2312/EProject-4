@@ -55,6 +55,13 @@
     "requesterId" : 1003,
     "targetId" : 1004
   },
+  "NewDeviceSignInEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "deviceLabel" : "deviceLabel-4",
+    "location" : "location-5"
+  },
   "NotificationCreatedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
@@ -91,6 +98,62 @@
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
     "dismissed" : 3
   },
+  "StoryActivatedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "storyId" : "storyId-3",
+    "userId" : 1004
+  },
+  "StoryCreatedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "storyId" : "storyId-3",
+    "userId" : 1004,
+    "mediaKey" : "mediaKey-5",
+    "mediaType" : "mediaType-6",
+    "textVerdict" : "REVIEW",
+    "edit" : {
+      "version" : 1,
+      "segments" : [ {
+        "start" : 1.25,
+        "end" : 2.25,
+        "speed" : 3.25
+      } ],
+      "filter" : {
+        "id" : "id-1",
+        "intensity" : 2.25
+      },
+      "overlays" : [ {
+        "imageUrl" : "imageUrl-1",
+        "start" : 2.25,
+        "end" : 3.25
+      } ],
+      "music" : {
+        "audioUrl" : "audioUrl-1",
+        "start" : 2.25,
+        "volume" : 3.25,
+        "originalVolume" : 4.25
+      }
+    },
+    "photoSeconds" : 9.25
+  },
+  "StoryModerationCompletedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "storyId" : "storyId-3",
+    "verdict" : "REVIEW",
+    "label" : "label-5",
+    "maxScore" : 6.25,
+    "suspiciousFrames" : 7,
+    "totalFrames" : 8,
+    "processingTimeMs" : 1009,
+    "model" : "model-10",
+    "modelVersion" : "modelVersion-11",
+    "reason" : "reason-12",
+    "durationSeconds" : 13,
+    "mediaKey" : "mediaKey-14",
+    "mediaType" : "mediaType-15"
+  },
   "UserBannedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
@@ -99,13 +162,27 @@
     "reason" : "reason-5",
     "bannedUntil" : "2026-10-08T09:30:21.123456789Z"
   },
+  "UserBirthDateSetEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "birthDate" : "2000-01-05"
+  },
+  "UserBlockChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "blockerId" : 1003,
+    "blockedId" : 1004,
+    "blocked" : false
+  },
   "UserFollowChangedEvent" : {
     "eventId" : "eventId-1",
     "occurredAt" : "2026-10-08T09:30:17.123456789Z",
     "followerId" : 1003,
     "followingId" : 1004,
     "followed" : false,
-    "requestApproved" : true
+    "requestApproved" : true,
+    "sourceVideoId" : 1007
   },
   "UserPrivacyChangedEvent" : {
     "eventId" : "eventId-1",
@@ -119,7 +196,8 @@
     "userId" : 1003,
     "username" : "username-4",
     "email" : "email-5",
-    "avatarUrl" : "avatarUrl-6"
+    "avatarUrl" : "avatarUrl-6",
+    "birthDate" : "2000-01-08"
   },
   "UserSessionsRevokedEvent" : {
     "eventId" : "eventId-1",
@@ -149,6 +227,15 @@
     "userId" : 1003,
     "username" : "username-4",
     "previousUsername" : "previousUsername-5"
+  },
+  "VideoCaptionChangedEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "videoId" : "videoId-3",
+    "userId" : 1004,
+    "title" : "title-5",
+    "description" : "description-6",
+    "tags" : [ "tags-a", "tags-b" ]
   },
   "VideoDeletedEvent" : {
     "eventId" : "eventId-1",
@@ -194,7 +281,30 @@
     "rawFileUrl" : "rawFileUrl-7",
     "visibility" : "visibility-8",
     "tags" : [ "tags-a", "tags-b" ],
-    "textVerdict" : "REVIEW"
+    "textVerdict" : "REVIEW",
+    "edit" : {
+      "version" : 1,
+      "segments" : [ {
+        "start" : 1.25,
+        "end" : 2.25,
+        "speed" : 3.25
+      } ],
+      "filter" : {
+        "id" : "id-1",
+        "intensity" : 2.25
+      },
+      "overlays" : [ {
+        "imageUrl" : "imageUrl-1",
+        "start" : 2.25,
+        "end" : 3.25
+      } ],
+      "music" : {
+        "audioUrl" : "audioUrl-1",
+        "start" : 2.25,
+        "volume" : 3.25,
+        "originalVolume" : 4.25
+      }
+    }
   },
   "VideoPurgeRequestedEvent" : {
     "eventId" : "eventId-1",
@@ -279,6 +389,15 @@
     "userId" : 1004,
     "watchedMs" : 1005,
     "durationMs" : 1006,
-    "completed" : false
+    "completed" : false,
+    "source" : "source-8",
+    "searchQuery" : "searchQuery-9"
+  },
+  "WeeklyScreenTimeSummaryEvent" : {
+    "eventId" : "eventId-1",
+    "occurredAt" : "2026-10-08T09:30:17.123456789Z",
+    "userId" : 1003,
+    "weekStart" : "weekStart-4",
+    "totalSeconds" : 1005
   }
 }

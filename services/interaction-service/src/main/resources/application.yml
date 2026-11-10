@@ -11,6 +11,7 @@ spring:
     port: ${CASSANDRA_PORT:9042}
     local-datacenter: ${CASSANDRA_LOCAL_DC:dc1}
     schema-action: CREATE_IF_NOT_EXISTS
+    config: classpath:cassandra-driver.conf
 
   data:
     redis:
@@ -75,6 +76,12 @@ interaction:
       window: ${COMMENT_STRIKE_WINDOW:24h}
       restrictions: ${COMMENT_RESTRICTIONS:1h,24h,7d}
       step-window: ${COMMENT_RESTRICTION_STEP_WINDOW:30d}
+    # Where a comment's sticker image is served from — the same values as chat-service's
+    # chat.stickers, so a sticker's URL is the same in a comment and in a message. What a client
+    # uses to reach MinIO, not the in-cluster address.
+    stickers:
+      public-base-url: ${MEDIA_PUBLIC_URL:${MINIO_ENDPOINT:http://localhost:9000}}
+      bucket: ${MINIO_BUCKET:video-media}
 
 moderation:
   text:

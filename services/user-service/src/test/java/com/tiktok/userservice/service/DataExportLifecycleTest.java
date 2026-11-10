@@ -73,6 +73,9 @@ class DataExportLifecycleTest {
     @MockitoBean
     private MinioClient minioClient;
 
+    @MockitoBean(name = "publicMinioClient")
+    private MinioClient publicMinioClient;
+
     @MockitoBean
     private DataExportSources sources;
 
@@ -97,11 +100,11 @@ class DataExportLifecycleTest {
     @BeforeEach
     void setUp() throws Exception {
         repository.deleteAll();
-        reset(minioClient, sources);
+        reset(minioClient, publicMinioClient, sources);
         when(sources.videosOf(any())).thenReturn(List.of());
         when(sources.activityOf(any(), anyString())).thenReturn(List.of());
         when(sources.conversationsOf(any())).thenReturn(List.of());
-        when(minioClient.getPresignedObjectUrl(any())).thenReturn("https://minio.test/signed");
+        when(publicMinioClient.getPresignedObjectUrl(any())).thenReturn("https://minio.test/signed");
     }
 
     @Test

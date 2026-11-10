@@ -18,10 +18,16 @@ import org.springframework.stereotype.Component;
  * object at the same key and announces the same URL, and the durable change happens in
  * user-service, whose own consumer is where a duplicate actually has to be rejected.
  *
- * <p>A URL that cannot be fetched — expired, refused, not an image, from a host we do not trust —
- * ends up on the DLT after kafka-lib's attempts, and that is the right place for it: nothing about
- * the failure will be different in three seconds, and the next sign-in announces a fresh URL
- * regardless. The profile keeps whatever avatar it already had in the meantime.
+ * <p>A URL the provider answers badly — an error status (an expired URL, a 403), not an image — or
+ * one from a host we do not trust ends up on the DLT after kafka-lib's three retries, and that is
+ * the right place for it: nothing about the failure will be different in three seconds, and the
+ * next sign-in announces a fresh URL regardless. The profile keeps whatever avatar it already had
+ * in the meantime.
+ *
+ * <p>A provider that does not answer at all is different. {@link AvatarMirrorService} fetches with
+ * the JDK HttpClient, whose connect and request timeouts surface as an {@code HttpTimeoutException},
+ * and kafka-lib counts that as an outage, like a refused connection or an unknown host: the record
+ * is not dead-lettered but retried until the provider answers, with the partition waiting meanwhile.
  */
 @Slf4j
 @Component

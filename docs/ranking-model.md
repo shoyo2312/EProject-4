@@ -17,7 +17,7 @@ recommendation-service ──POST /rank (5 feature/video)──► rank-service 
         └─► GET /api/v1/recommendations/feed
 ```
 
-**Chỉ thứ tự là do mô hình quyết định.** Việc *video nào được đưa vào danh sách xét* vẫn do luật cũ làm: trending + tag của người xem, trong `FeedServiceImpl`. Tách như vậy có ba lý do:
+**Chỉ thứ tự là do mô hình quyết định.** Việc *video nào được đưa vào danh sách xét* vẫn do luật cũ làm: trending + tag của người xem + một mẫu ngẫu nhiên từ toàn bộ catalogue (`ZRANDMEMBER reco:video:published`, lý do `explore`, lọc private/taken-down/held, xếp sau cùng để bị cắt trước khi pool chạm trần), trong `FeedServiceImpl`. Mẫu ngẫu nhiên có vì trending + tag trên một instance nhỏ chỉ với tới vài chục video; xem hết là ranking cạn và client rơi về feed theo thời gian, lần nào mở cũng cùng một list. Cùng lý do đó, điểm được cộng nhiễu Gumbel (`EXPLORATION_TEMPERATURE` = 0.25 × khoảng cách điểm cao nhất − thấp nhất) **chỉ để sắp xếp** — response vẫn mang điểm thật; điểm là hàm deterministic của trạng thái gần như không đổi giữa hai lần mở app, không có nhiễu thì trang đầu y hệt nhau. Tách như vậy có ba lý do:
 
 1. Mô hình sai thì feed xấu đi, không rỗng.
 2. Điểm trending là engagement đã suy giảm theo giờ — nó **không tồn tại trong lịch sử event**, nên không thể tái dựng lúc huấn luyện. Cho mô hình học dựa vào nó là dạy nó dựa vào một con số mà lúc phục vụ nó sẽ nhận một con số khác.
@@ -40,12 +40,15 @@ Năm feature, tên trên dây và tên cột ClickHouse **cố ý giống hệt 
 - `features.py` giữ **một** định nghĩa `FEATURE_NAMES`; cả `app.py` lẫn `train.py` import từ đó, không ai chép lại.
 - `app.py` lúc load model so `model.feature_name()` với `FEATURE_NAMES`, lệch thì **từ chối khởi động** thay vì phục vụ.
 - Hai test đối xứng: `RankClientTest.candidateFeatures_serializeUnderTheColumnNamesTheModelWasTrainedOn` (Java) và `test_request_schema_carries_exactly_the_model_features` (Python).
+- `test_feature_contract.py` đọc thẳng hằng số trong `FeedServiceImpl` / `RecommendationServiceImpl` (`TOP_TAGS`, `PER_TAG`, `MIN_WATCHES_FOR_QUALITY`, `NEUTRAL_QUALITY`, `UNKNOWN_AGE_HOURS`, `SKIP_RATIO`, `SKIP_PENALTY`) và so với `features.py` — vì vậy `make rank-test` mount cả repo chứ không chỉ thư mục `rank-service`.
 
 Luật `completion_rate` (ngưỡng 5 lượt) và luật skip (`< 20%` → `-0.5`) cũng nằm trong `features.py`, đúng bằng hằng số trong `FeedServiceImpl` và `RecommendationServiceImpl`. Sửa một bên mà quên bên kia thì cột `tag_affinity` mang hai nghĩa khác nhau ở hai phía.
 
 `PER_TAG` (100) trong `features.py` là cửa sổ ứng viên của một tag: `FeedServiceImpl.videosTagged` đọc `reco:tag:{tag}` bằng `ZREVRANGE 0..PER_TAG-1`, nên video mang tag của người xem nhưng đã rơi khỏi cửa sổ đó nhận `tag_affinity = 0` khi phục vụ — nó vẫn vào pool được qua nhánh trending. `train.candidate_tags` cắt `video_tags` đúng cửa sổ ấy trước khi join, và cắt **trước** bước lọc theo video của frame, vì cửa sổ là 100 video mới nhất của tag chứ không phải 100 video mới nhất có mặt trong frame. Bỏ bước cắt này thì ứng viên đó có giá trị thật khi huấn luyện và bằng 0 khi phục vụ. Cửa sổ được dựng **tại thời điểm cuối cửa sổ nhãn** (`label_end`), không phải tại lúc chạy script: `video_tags` chứa mọi video upload tới hôm nay, và 100 video mới nhất của tất cả chỗ đó là một cửa sổ muộn hơn bất kỳ lần phục vụ nào trong dataset — video upload sau đẩy mất những video người xem lúc đó thật sự được đưa.
 
 **Một lệch còn tồn tại, biết và chấp nhận, ở `log_watches` + `completion_rate`.** Phía phục vụ đọc hai ZSET `reco:video:watches` / `reco:video:completions`; `rebuildTrending` cắt hai set này còn `QUALITY_TRIM_TO` (100k) phần tử cao nhất mỗi phút, và `recordVideoDeleted` xoá hẳn phần tử của video bị xoá. Phía huấn luyện `count()` toàn bộ `watch_events` trước mốc cắt, không cắt gì. Với video nằm trong 100k được giữ lại thì hai con số bằng nhau — và đó đúng là tập video feed có thể đưa ra. Video rơi khỏi ngưỡng chỉ tồn tại ở phía huấn luyện, mà nó rơi ra chính vì gần như không ai xem. Nếu catalogue vượt xa 100k hoặc `QUALITY_TRIM_TO` bị hạ, cột này bắt đầu mang hai nghĩa: sửa bằng cách giới hạn phía huấn luyện theo cùng top-N, **không** phải nới ZSET.
+
+**`age_hours` lệch theo cùng cơ chế.** `rebuildTrending` cũng cắt `reco:video:published` còn 100k video **mới đăng nhất**; video cũ hơn rơi khỏi set và khi phục vụ nhận `UNKNOWN_AGE_HOURS` (24), còn phía huấn luyện vẫn có `published_at` thật từ `video_tags` (chỉ video không có tag mới nhận 24). Video đó vẫn có thể vào pool qua trending, nên khi catalogue vượt 100k, một video cũ vài tháng được phục vụ như video 24 giờ tuổi. Cách sửa cũng vậy: áp cùng ngưỡng top-N theo `published_at` ở phía huấn luyện.
 
 ## 3. Mô hình học cái gì — và không học cái gì
 
@@ -57,26 +60,31 @@ Muốn sửa phải **log impression**: ghi lại những video đã được ph
 
 **Chống rò rỉ nhãn**: feature dựng tại mốc cắt `T`, nhãn lấy trong `[T, T+1 ngày)`. Không dòng nào được chấm bằng một lượt xem chưa xảy ra. Đánh giá dùng mốc cắt **muộn hơn** mốc huấn luyện — chia theo thời gian, không chia ngẫu nhiên, vì câu hỏi thật là "mô hình có chạy được ngày mai không".
 
+**Tập huấn luyện là nhiều cửa sổ xếp chồng** (`training_frame`, `TRAIN_WINDOWS` = 14, env cùng tên): mốc đánh giá là `latest − 1 ngày`, rồi 14 mốc huấn luyện lùi dần mỗi ngày trước đó, mỗi mốc một frame dựng riêng, nối lại. Một cặp (user, video) chỉ được gán nhãn ở cửa sổ chứa lượt xem đầu tiên của nó, vì `build_dataset` bỏ cặp đã xem trước mốc cắt. Trước đây chỉ có **một** cửa sổ huấn luyện: trên prod ngày đó rơi vào lúc chỉ còn hai người dùng thật, ra 126 dòng và AUC 0.42 — bốn tháng lịch sử trước đó chỉ làm feature, không bao giờ làm nhãn. Với 14 cửa sổ cùng dữ liệu đó ra 8.8k dòng, AUC 0.54.
+
 ## 4. Chạy
 
 ```bash
 make infra-up          # cần ClickHouse
 make rank-up           # dựng và chạy rank-service (không publish port ra ngoài)
-make rank-test         # 8 test Python, chạy trong image vì LightGBM cần libgomp
+make rank-test         # 21 test Python (pytest), chạy trong image vì LightGBM cần libgomp
 make rank-train        # huấn luyện từ ClickHouse rồi POST /reload
 ```
 
 Chưa có dữ liệu xem thật thì `train.py` sẽ dừng và nói ra. Muốn demo hoặc smoke test toàn luồng:
 
 ```bash
-docker compose run --rm rank-service python seed_demo_data.py
+docker compose run --rm --no-deps -e CLICKHOUSE_HOST=clickhouse \
+    -v "$(pwd)/services/rank-service:/app" rank-service python seed_demo_data.py
 ```
+
+Image chỉ chứa `features.py`, `app.py`, `train.py` (`Dockerfile`), nên script phải chạy **từ source tree**: lệnh trên mount thư mục `services/rank-service` đè lên `/app`, giống cách `make rank-train` / `make rank-test` làm. Gọi `python seed_demo_data.py` trên image trần sẽ báo không tìm thấy file. Chạy bằng venv trên máy host cũng được (`CLICKHOUSE_HOST` mặc định `localhost`, port 8123 đã publish), nhưng trên macOS LightGBM cần `libgomp` (`brew install libomp`) vì `seed_demo_data.py` import `train`.
 
 `seed_demo_data.py` sinh watch log tổng hợp, trong đó mỗi người thích 2 tag và xem hết video có tag đó nhiều hơn hẳn. Sở thích này **cố ý không phải là một feature** — nếu mô hình không tìm ra nó qua `tag_affinity` thì pipeline đang hỏng. Trên dữ liệu sinh gần đây nhất: AUC 0.7377, nDCG@10 0.3739, và `tag_affinity` là feature quan trọng nhất với khoảng cách lớn — đúng như mong đợi.
 
 ⚠️ Script này ghi thẳng vào bảng mà `analytics-service` đang ghi. Chỉ chạy trên database vứt đi.
 
-`train.py` ghi `services/rank-service/model/model.txt`, thư mục này được bind mount vào container và **không nằm trong git**. Không có file mô hình thì service vẫn chạy, `/health` báo `model_version: "none"`, `/rank` trả về không điểm nào, và recommendation-service tự xếp hạng bằng heuristic.
+`train.py` ghi `services/rank-service/model/model.txt`, thư mục này được bind mount vào container (compose dev) và **không nằm trong git**. Trên production model nằm ở volume `rank-model` (`/app/model/model.txt`) — cách train và nạp ở đó: `docs/operations.md` §10. Không có file mô hình thì service vẫn chạy, `/health` báo `model_version: "none"`, `/rank` trả về không điểm nào, và recommendation-service tự xếp hạng bằng heuristic.
 
 ## 5. Vì sao `rank-service` không có auth và không nằm sau gateway
 
@@ -89,4 +97,4 @@ Timeout gọi sang là **150ms** cho cả connect lẫn read, cấu hình ở `r
 - **Impression logging** — xem mục 3. Đây là hạn chế lớn nhất.
 - **Không có A/B test**: chưa có cách đo mô hình có thật sự tốt hơn heuristic trên người dùng thật. AUC offline không trả lời câu đó.
 - **Huấn luyện thủ công**: không có lịch, không có retrain tự động, không có cảnh báo khi chất lượng tụt.
-- **Mô hình lưu ở bind mount, không phải MinIO**: nhiều replica `rank-service` sẽ không thấy chung một file. Đủ dùng cho một node; thêm replica thì phải chuyển sang object storage.
+- **Mô hình lưu trên volume cục bộ, không phải MinIO** (bind mount ở dev, named volume `rank-model` ở prod): nhiều replica `rank-service` sẽ không thấy chung một file. Đủ dùng cho một node; thêm replica thì phải chuyển sang object storage.

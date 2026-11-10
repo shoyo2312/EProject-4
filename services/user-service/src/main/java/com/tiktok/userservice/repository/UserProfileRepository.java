@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -51,6 +52,11 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
     @Query("update UserProfile p set p.username = null, p.version = p.version + 1 "
             + "where lower(p.username) = lower(:username) and p.userId <> :userId and p.deletedAt is null")
     void releaseUsername(@Param("username") String username, @Param("userId") Long userId);
+
+    /** {@code lower(...)} for V13's index, as {@link #findFirstByUsernameIgnoreCaseAndDeletedAtIsNull}. */
+    @Query("select p from UserProfile p where lower(p.username) in :usernames and p.deletedAt is null "
+            + "and p.deactivatedAt is null order by p.id")
+    List<UserProfile> findLiveByLowerUsernames(@Param("usernames") Collection<String> usernames);
 
     List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<Long> userIds);
 
@@ -169,6 +175,15 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, Long> 
      * which is right: nothing can make an account private before its profile row exists.
      */
     boolean existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue(Long userId);
+
+    /**
+     * {@link #existsByUserIdAndDeletedAtIsNullAndPrivateAccountTrue} for a page of ids in one
+     * query: the subset of {@code userIds} with a live, private profile. A closed account counts
+     * like any other — whether it is shown at all is for the caller's own record of closures.
+     */
+    @Query("select p.userId from UserProfile p where p.userId in :userIds "
+            + "and p.deletedAt is null and p.privateAccount = true")
+    List<Long> findPrivateUserIdsAmong(@Param("userIds") Collection<Long> userIds);
 
     // The four counter updates leave the version alone on purpose: a follow must not fail the
     // owner's concurrent profile edit. That edit cannot write the old count back, because

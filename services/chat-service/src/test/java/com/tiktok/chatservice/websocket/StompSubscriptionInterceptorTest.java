@@ -92,6 +92,9 @@ class StompSubscriptionInterceptorTest {
             "/topic/users.42",
             "/user/7/queue/notifications",
             "/user/queue/notifications",
+            "/user/queue/chat",
+            "/user/7/queue/chat",
+            "/queue/chat",
             "/queue/errors",
             "/app",
             "/application/chat.send/c1"
@@ -157,6 +160,25 @@ class StompSubscriptionInterceptorTest {
         Message<byte[]> message = subscribeTo("/user/queue/errors");
 
         assertThat(interceptor.preSend(message, null)).isSameAs(message);
+    }
+
+    /** Message requests and their state changes arrive here; the id of a new request is not known in advance. */
+    @Test
+    void ownChatQueueIsAllowed() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        Message<byte[]> message = subscribeTo("/user/queue/chat");
+
+        assertThat(interceptor.preSend(message, null)).isSameAs(message);
+    }
+
+    /** Another user's queue is addressed by the broker, never by a client, so it is not on the allowlist. */
+    @Test
+    void anotherUsersChatQueueIsRefused() {
+        StompSubscriptionInterceptor interceptor = new StompSubscriptionInterceptor(conversationService);
+
+        assertThatThrownBy(() -> interceptor.preSend(subscribeTo("/user/7/queue/chat"), null))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /**

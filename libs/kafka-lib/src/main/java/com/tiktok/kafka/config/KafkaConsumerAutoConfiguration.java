@@ -29,6 +29,7 @@ import org.springframework.util.backoff.FixedBackOff;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.net.http.HttpTimeoutException;
 import java.sql.SQLRecoverableException;
 import java.sql.SQLTransientException;
 import java.util.concurrent.TimeoutException;
@@ -131,9 +132,13 @@ public class KafkaConsumerAutoConfiguration {
      * Hikari or a driver reports sits a level or two below that.
      *
      * <p>Matched on Spring's translation of resource failures plus the JDK network exceptions under
-     * them, so no driver has to be on this library's classpath. A client that reports
-     * "unavailable" some other way has it mapped to a {@link TransientDataAccessException} where
-     * it is caught — search-service does this for Elasticsearch's 429 and 503.
+     * them, so no driver has to be on this library's classpath. That includes the JDK HttpClient
+     * behind every service-to-service RestClient (PooledRequestFactory): it times out with an
+     * {@link HttpTimeoutException}, which is neither a {@link SocketException} nor a
+     * {@link SocketTimeoutException}, and a slow downstream is as much an outage as a refused
+     * connection. A client that reports "unavailable" some other way has it mapped to a
+     * {@link TransientDataAccessException} where it is caught — search-service does this for
+     * Elasticsearch's 429 and 503.
      */
     static boolean isOutage(Throwable ex) {
         Throwable t = ex;
@@ -146,6 +151,7 @@ public class KafkaConsumerAutoConfiguration {
                     || t instanceof SQLRecoverableException
                     || t instanceof SocketException                     // refused, reset, no route
                     || t instanceof SocketTimeoutException
+                    || t instanceof HttpTimeoutException                // JDK HttpClient: connect or read timeout
                     || t instanceof UnknownHostException                // a container mid-restart
                     || t instanceof TimeoutException
                     || t instanceof RetriableException) {               // Kafka: broker away, request timed out

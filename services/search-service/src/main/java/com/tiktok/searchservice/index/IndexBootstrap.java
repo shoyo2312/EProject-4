@@ -6,6 +6,8 @@ import com.tiktok.searchservice.document.VideoDocument;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.SmartLifecycle;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.IndexOperations;
 import org.springframework.data.elasticsearch.core.mapping.IndexCoordinates;
@@ -14,6 +16,7 @@ import org.springframework.data.elasticsearch.core.reindex.ReindexRequest;
 import org.springframework.kafka.listener.AbstractMessageListenerContainer;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -54,12 +57,22 @@ public class IndexBootstrap implements SmartLifecycle {
      */
     private static final int PHASE = AbstractMessageListenerContainer.DEFAULT_PHASE - 1000;
 
+    /**
+     * How long start() waits for Elasticsearch to answer. It takes about a minute to come up, and
+     * after a host restart it comes up beside this service, not before it: depends_on does not
+     * apply to containers the Docker daemon restarts.
+     */
+    private static final Duration AWAIT = Duration.ofMinutes(3);
+    private static final Duration AWAIT_PAUSE = Duration.ofSeconds(2);
+
     private final ElasticsearchOperations elasticsearchOperations;
 
     private volatile boolean running;
 
     @Override
     public void start() {
+        awaitElasticsearch(() -> elasticsearchOperations.indexOps(ProcessedEventDocument.class).exists(),
+                AWAIT, AWAIT_PAUSE);
         createOrMigrateVideos();
         create(ProcessedEventDocument.class);
         create(OwnerBanDocument.class);
@@ -80,6 +93,33 @@ public class IndexBootstrap implements SmartLifecycle {
     @Override
     public int getPhase() {
         return PHASE;
+    }
+
+    /**
+     * Runs {@code probe} until Elasticsearch answers. Only an outage is waited out — a refused
+     * connection, or a cluster still allocating shards (503/429); anything else is about the
+     * request and fails at once. Past {@code timeout} the last outage is rethrown, so a cluster
+     * that never comes up still fails the start and leaves the restart to the container.
+     */
+    static void awaitElasticsearch(Runnable probe, Duration timeout, Duration pause) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (true) {
+            try {
+                probe.run();
+                return;
+            } catch (DataAccessResourceFailureException | TransientDataAccessException outage) {
+                if (System.nanoTime() >= deadline) {
+                    throw outage;
+                }
+                log.warn("Elasticsearch is not answering yet, retrying in {}: {}", pause, outage.getMessage());
+                try {
+                    Thread.sleep(pause.toMillis());
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while waiting for Elasticsearch", interrupted);
+                }
+            }
+        }
     }
 
     private void create(Class<?> type) {

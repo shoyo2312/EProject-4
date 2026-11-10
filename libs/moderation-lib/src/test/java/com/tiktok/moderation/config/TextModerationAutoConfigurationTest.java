@@ -7,8 +7,11 @@ import com.tiktok.moderation.TextModerator;
 import com.tiktok.moderation.classifier.TextClassifier;
 import com.tiktok.moderation.rules.AdminTermsSync;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.actuate.info.Info;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -75,5 +78,36 @@ class TextModerationAutoConfigurationTest {
                 .withPropertyValues("spring.profiles.active=test",
                         "moderation.text.admin-terms.base-url=http://localhost:1")
                 .run(context -> assertThat(context).hasSingleBean(AdminTermsSync.class));
+    }
+
+    /** What admin-service reads for the console's Settings: what the running service decides with. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void reportsWhatItEnforces_onActuatorInfo() {
+        runner.withPropertyValues("moderation.text.enforce=false",
+                        "moderation.text.classifier.base-url=http://localhost:8099")
+                .run(context -> {
+                    Info.Builder builder = new Info.Builder();
+                    context.getBean(TextModerationInfoContributor.class).contribute(builder);
+                    Map<String, Object> details = (Map<String, Object>) builder.build().get("textModeration");
+
+                    assertThat(details).containsEntry("enforce", false)
+                            .containsEntry("classifier", Map.of("enabled", true, "enforce", true));
+                    assertThat((String) details.get("version")).startsWith("rules-");
+                });
+    }
+
+    /** A classifier without an address is never asked, so it is reported off whatever enabled says. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void reportsTheClassifierOff_withoutAnAddress() {
+        runner.run(context -> {
+            Info.Builder builder = new Info.Builder();
+            context.getBean(TextModerationInfoContributor.class).contribute(builder);
+            Map<String, Object> classifier = (Map<String, Object>)
+                    ((Map<String, Object>) builder.build().get("textModeration")).get("classifier");
+
+            assertThat(classifier).containsEntry("enabled", false);
+        });
     }
 }

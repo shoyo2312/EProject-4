@@ -52,7 +52,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.testcontainers.containers.GenericContainer;
@@ -61,11 +63,14 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import java.sql.Timestamp;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -139,6 +144,9 @@ class AuthServiceImplTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private PlatformTransactionManager transactionManager;
 
     @Autowired
     private AuthSecurityEventRepository securityEventRepository;
@@ -296,6 +304,35 @@ class AuthServiceImplTest {
     void login_withUnknownUser_throwsInvalidCredentials() {
         assertThatThrownBy(() -> authService.login(new LoginRequest("ghost", "password123")))
                 .isInstanceOf(InvalidCredentialsException.class);
+    }
+
+    /**
+     * Same answer, so the clock must not tell them apart either: an unknown name used to skip
+     * bcrypt and come back ~100ms sooner than a wrong password, which says which names are real.
+     * The bound is loose on purpose — the gap it guards against is two orders of magnitude.
+     */
+    @Test
+    @Transactional
+    void login_unknownUserAndWrongPassword_takeAboutAsLong() {
+        authService.register(validRegisterRequest());
+        assertThatThrownBy(() -> authService.login(new LoginRequest("warmup", "x"))).isInstanceOf(InvalidCredentialsException.class);
+
+        long wrongPassword = 0;
+        long unknownUser = 0;
+        for (int i = 0; i < 3; i++) {
+            long start = System.nanoTime();
+            assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpass")))
+                    .isInstanceOf(InvalidCredentialsException.class);
+            wrongPassword += System.nanoTime() - start;
+
+            String ghost = "ghost" + i;
+            start = System.nanoTime();
+            assertThatThrownBy(() -> authService.login(new LoginRequest(ghost, "wrongpass")))
+                    .isInstanceOf(InvalidCredentialsException.class);
+            unknownUser += System.nanoTime() - start;
+        }
+
+        assertThat(unknownUser).isGreaterThan(wrongPassword * 3 / 10);
     }
 
     @Test
@@ -994,19 +1031,37 @@ class AuthServiceImplTest {
     }
 
     /**
+     * A sign-in from a phone. Two sign-ins without a User-Agent are both laptops, and an account
+     * holds one laptop session at a time — the second would sign the first out (SessionRegistry).
+     */
+    private TokenResponse loginOnPhone() {
+        org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.addHeader("User-Agent", "NowaApp/1.0 (Android; Mobile)");
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(request));
+        try {
+            return authService.login(new LoginRequest("johndoe", "password123"));
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    /**
      * Rotation without replay detection is worse than no rotation: whoever refreshes first keeps
      * a valid chain forever, and the loser just sees "please sign in again" — no alarm anywhere.
-     * A rotated token coming back means two parties hold it, so every session for that user dies
-     * and both sides have to prove who they are again.
+     * A rotated token coming back means two parties hold that chain, so the chain dies — every
+     * token descended from the same sign-in — and both sides have to prove who they are again.
+     * The user's other sign-ins never shared the chain, so they stay: ending every session here
+     * let one stale tab or one lost response sign the user out of every device.
      *
      * <p>Not @Transactional: the revocation runs in its own transaction (it has to survive the
      * rejection that follows), which would deadlock against uncommitted rows held by the test.
      */
     @Test
-    void refresh_replayingARotatedToken_endsEverySessionForThatUser() {
+    void refresh_replayingARotatedToken_endsThatChainOnly() {
         registerVerified();
         TokenResponse stolen = authService.login(new LoginRequest("johndoe", "password123"));
-        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse otherDevice = loginOnPhone();
 
         // The thief gets there first and rotates the chain.
         TokenResponse thiefsChain = authService.refresh(new RefreshTokenRequest(stolen.refreshToken()));
@@ -1020,15 +1075,41 @@ class AuthServiceImplTest {
                 .isInstanceOf(InvalidRefreshTokenException.class);
 
         assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(thiefsChain.refreshToken())))
-                .as("the chain the thief walked away with must be dead too")
+                .as("the chain the thief walked away with must be dead")
+                .isInstanceOf(InvalidRefreshTokenException.class);
+        assertThat(accessTokenBlacklist.isBlacklisted(jwtProvider.extractClaims(thiefsChain.accessToken())))
+                .as("access tokens are stateless — without the family cutoff the thief keeps ~15 minutes")
+                .isTrue();
+
+        assertThat(accessTokenBlacklist.isBlacklisted(jwtProvider.extractClaims(otherDevice.accessToken())))
+                .as("another sign-in's access token is not part of the replayed chain")
+                .isFalse();
+        assertThat(authService.refresh(new RefreshTokenRequest(otherDevice.refreshToken())).accessToken())
+                .as("another sign-in's chain survives")
+                .isNotBlank();
+    }
+
+    /**
+     * Rows minted before families existed carry none, so nothing says which chain they belong to.
+     * Their replay keeps the old answer — every session for the user — until they expire.
+     */
+    @Test
+    void refresh_replayingARotatedTokenWithoutFamily_endsEverySessionForThatUser() {
+        registerVerified();
+        TokenResponse legacy = authService.login(new LoginRequest("johndoe", "password123"));
+        // A phone: a second laptop would take the first one's session slot (SessionRegistry).
+        TokenResponse otherDevice = loginOnPhone();
+        jdbcTemplate.update("UPDATE refresh_tokens SET family_id = NULL WHERE token_hash = ?",
+                HashUtils.sha256(legacy.refreshToken()));
+
+        authService.refresh(new RefreshTokenRequest(legacy.refreshToken()));
+        backdateRotation(legacy.refreshToken(), Duration.ofMinutes(15));
+
+        assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(legacy.refreshToken())))
                 .isInstanceOf(InvalidRefreshTokenException.class);
         assertThatThrownBy(() -> authService.refresh(new RefreshTokenRequest(otherDevice.refreshToken())))
-                .as("every session for the user ends, not just the replayed chain")
+                .as("without a family the chain cannot be told apart, so every session ends")
                 .isInstanceOf(InvalidRefreshTokenException.class);
-
-        assertThat(accessTokenBlacklist.isBlacklisted(jwtProvider.extractClaims(thiefsChain.accessToken())))
-                .as("access tokens are stateless — without the user-wide cutoff the thief keeps ~15 minutes")
-                .isTrue();
     }
 
     /**
@@ -1045,7 +1126,7 @@ class AuthServiceImplTest {
     void refresh_twoConcurrentRefreshesOfOneToken_issueExactlyOneChain() throws Exception {
         registerVerified();
         TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
-        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse otherDevice = loginOnPhone();
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         CyclicBarrier startTogether = new CyclicBarrier(2);
@@ -1074,6 +1155,105 @@ class AuthServiceImplTest {
     }
 
     /**
+     * A password reset that commits after /refresh has read the row. Everything refresh checked
+     * was true when it read it, so only the claim can notice — and it looked at rotated_at alone,
+     * rotated the revoked token anyway and handed out a chain that outlived the reset.
+     *
+     * <p>The reset holds its row lock until the refresh is parked on it, so the interleaving is
+     * forced rather than hoped for.
+     */
+    @Test
+    void refresh_racingAPasswordReset_doesNotMintAChainThatOutlivesIt() throws Exception {
+        UserResponse user = registerVerified();
+        TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Future<?> reset = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+                refreshTokenRepository.revokeAllByUserId(user.id(), Instant.now());
+                locked.countDown();
+                hold(release);
+            }));
+            assertThat(locked.await(30, TimeUnit.SECONDS)).isTrue();
+
+            Future<TokenResponse> refresh = pool.submit(
+                    () -> authService.refresh(new RefreshTokenRequest(session.refreshToken())));
+            awaitBlockedOnRowLock();
+            release.countDown();
+            reset.get(30, TimeUnit.SECONDS);
+
+            assertThatThrownBy(() -> refresh.get(30, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(InvalidRefreshTokenException.class);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(refreshTokenRepository.findAll().stream().filter(RefreshToken::isActive))
+                .as("a session minted from a token the reset had already revoked")
+                .isEmpty();
+    }
+
+    /**
+     * A logout that read the row before a concurrent refresh committed its rotation. Saving the
+     * entity wrote every column back, rotated_at included, so the rotation it never saw was erased
+     * — and with it the only trace that lets a later replay of this token be caught.
+     */
+    @Test
+    void logout_racingARefresh_keepsTheRotationOnRecord() throws Exception {
+        registerVerified();
+        TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
+        String tokenHash = HashUtils.sha256(session.refreshToken());
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        try {
+            Future<?> rotation = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> {
+                refreshTokenRepository.claimForRotation(tokenHash, Instant.now());
+                locked.countDown();
+                hold(release);
+            }));
+            assertThat(locked.await(30, TimeUnit.SECONDS)).isTrue();
+
+            Future<?> logout = pool.submit(() -> authService.logout(session.refreshToken(), null));
+            awaitBlockedOnRowLock();
+            release.countDown();
+            rotation.get(30, TimeUnit.SECONDS);
+            logout.get(30, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT rotated_at FROM refresh_tokens WHERE token_hash = ?", Timestamp.class, tokenHash))
+                .as("without rotated_at a replay of this token reads as a stale logout, not a theft")
+                .isNotNull();
+    }
+
+    private static void hold(CountDownLatch release) {
+        try {
+            assertThat(release.await(30, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Waits until some statement is parked on a lock another transaction holds. */
+    private void awaitBlockedOnRowLock() throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        while (jdbcTemplate.queryForObject("SELECT count(*) FROM pg_stat_activity "
+                + "WHERE wait_event_type = 'Lock' AND datname = current_database()", Integer.class) == 0) {
+            if (System.nanoTime() > deadline) {
+                throw new AssertionError("the racing request never reached the row lock");
+            }
+            Thread.sleep(20);
+        }
+    }
+
+    /**
      * The other half of the same race, and the reason it is not simply "0 rows means theft": a
      * client that retries a refresh whose response it never received presents exactly what a
      * thief presents. Within the grace window that retry is rejected — it will ask again and get
@@ -1083,7 +1263,7 @@ class AuthServiceImplTest {
     void refresh_retryingWithinTheGraceWindow_leavesOtherSessionsAlone() {
         registerVerified();
         TokenResponse session = authService.login(new LoginRequest("johndoe", "password123"));
-        TokenResponse otherDevice = authService.login(new LoginRequest("johndoe", "password123"));
+        TokenResponse otherDevice = loginOnPhone();
 
         TokenResponse rotated = authService.refresh(new RefreshTokenRequest(session.refreshToken()));
 
@@ -1109,7 +1289,7 @@ class AuthServiceImplTest {
     @Test
     void refresh_twoDevicesRefreshingAtOnce_bothKeepTheirSessions() throws Exception {
         registerVerified();
-        String phone = authService.login(new LoginRequest("johndoe", "password123")).refreshToken();
+        String phone = loginOnPhone().refreshToken();
         String laptop = authService.login(new LoginRequest("johndoe", "password123")).refreshToken();
 
         for (int round = 0; round < 10; round++) {
@@ -1295,6 +1475,24 @@ class AuthServiceImplTest {
         assertThat(securityEventRepository.findAll())
                 .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getUserId)
                 .containsExactly(tuple(SecurityEventType.LOGIN_FAILED, registered.id()));
+    }
+
+    /**
+     * The attempts an admin most wants to place are the failed ones: ten wrong passwords from a
+     * country the owner has never been to is the story, more than the sign-in after them.
+     */
+    @Test
+    void aFailedSignInIsFiledWithItsPlace() {
+        UserResponse registered = registerVerified();
+        arriveFrom("81.2.69.160", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                + "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+
+        assertThatThrownBy(() -> authService.login(new LoginRequest("johndoe", "wrongpassword")))
+                .isInstanceOf(InvalidCredentialsException.class);
+
+        assertThat(securityEventRepository.findAll())
+                .extracting(AuthSecurityEvent::getEventType, AuthSecurityEvent::getUserId, AuthSecurityEvent::getLocation)
+                .containsExactly(tuple(SecurityEventType.LOGIN_FAILED, registered.id(), "London, England, United Kingdom"));
     }
 
     /**

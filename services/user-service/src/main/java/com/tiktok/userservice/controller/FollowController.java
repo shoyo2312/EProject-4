@@ -1,6 +1,7 @@
 package com.tiktok.userservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
+import com.tiktok.userservice.dto.request.FollowRequestBody;
 import com.tiktok.userservice.dto.response.FollowResponse;
 import com.tiktok.userservice.dto.response.FriendshipResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
@@ -32,8 +33,10 @@ public class FollowController {
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<FollowResponse> follow(
             @AuthenticationPrincipal Long currentUserId,
-            @PathVariable Long userId) {
-        return ApiResponse.success(followService.follow(currentUserId, userId));
+            @PathVariable Long userId,
+            @RequestBody(required = false) FollowRequestBody body) {
+        Long sourceVideoId = body == null ? null : body.sourceVideoId();
+        return ApiResponse.success(followService.follow(currentUserId, userId, sourceVideoId));
     }
 
     @Operation(summary = "Unfollow a user",

@@ -1,6 +1,8 @@
 package com.tiktok.userservice.service;
 
 import com.tiktok.userservice.dto.response.BlockResponse;
+import com.tiktok.userservice.dto.response.BlockStateResponse;
+import java.util.List;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -15,4 +17,6 @@ public interface BlockService {
 
     /** Whether either user has blocked the other. */
     boolean isBlockedBetween(Long userA, Long userB);
+
+    List<BlockStateResponse> states(Long viewerId, List<Long> otherIds);
 }

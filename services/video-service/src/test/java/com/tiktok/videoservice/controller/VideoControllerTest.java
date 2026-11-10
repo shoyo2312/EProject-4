@@ -8,6 +8,7 @@ import com.tiktok.crypto.jwt.JwtProvider;
 import com.tiktok.security.jwt.JwtSecurityAutoConfiguration;
 import com.tiktok.videoservice.config.SecurityConfig;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.FeedKind;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.VideoStatus;
@@ -43,9 +44,11 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -118,6 +121,18 @@ class VideoControllerTest {
                 .andExpect(status().isOk());
     }
 
+    /**
+     * Spring MVC answers a HEAD with the GET handler, so an internal rule for GET alone lets a HEAD
+     * fall through to anyRequest().authenticated(): a user's JWT would ask any video's policy.
+     */
+    @Test
+    void policy_refusesAHeadWithAUsersJwt() throws Exception {
+        mockMvc.perform(head("/api/v1/videos/v1/policy").header("Authorization", "Bearer " + tokenFor(1L)))
+                .andExpect(status().isForbidden());
+
+        verify(videoService, never()).getPolicy(any());
+    }
+
     @Test
     void publish_withoutToken_isRejected() throws Exception {
         CreateVideoRequest request = new CreateVideoRequest("title", "desc", "s3://video-media/raw/1.mp4", VideoVisibility.PUBLIC, List.of());
@@ -162,6 +177,59 @@ class VideoControllerTest {
                 .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
 
         verify(videoService, never()).publish(any(), any());
+    }
+
+    /** Every bound on the edit is a bound on ffmpeg work the client can ask media-worker for. */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "{\"segments\":[]}",
+            "{\"segments\":[{\"start\":5,\"end\":5,\"speed\":1}]}",
+            "{\"segments\":[{\"start\":0,\"end\":5,\"speed\":10}]}",
+            "{\"segments\":[{\"start\":-1,\"end\":5,\"speed\":1}]}",
+            "{\"segments\":[{\"start\":0,\"end\":5}]}",
+            "{}",
+            "{\"filter\":{\"id\":\"sepia\"}}",
+            "{\"overlays\":[]}",
+            "{\"music\":{\"trackId\":\"abc\"}}",
+            "{\"music\":{\"trackId\":\"1\",\"volume\":2}}",
+            "{\"music\":{\"trackId\":\"1\",\"start\":-1}}",
+            "{\"music\":{}}",
+            "{\"overlays\":[{\"imageUrl\":\"\"}]}",
+            "{\"overlays\":[{\"imageUrl\":\"s3://video-media/raw/1/t.png\",\"start\":4,\"end\":2}]}",
+            "{\"overlays\":[{\"imageUrl\":\"s3://video-media/raw/1/t.png\",\"start\":-1}]}",
+            "{\"overlays\":[{\"imageUrl\":\"s3://video-media/raw/1/t.png\",\"texts\":[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]}]}",
+            "{\"overlays\":[{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"},{\"imageUrl\":\"s3://video-media/raw/1/t.png\"}]}",
+            "{\"filter\":{\"id\":\"warm\",\"intensity\":2}}",
+            "{\"filter\":{\"id\":\"\"}}"
+    })
+    void publish_anEditOutOfBounds_returnsValidationError(String edit) throws Exception {
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"t","rawFileUrl":"s3://video-media/raw/1.mp4","visibility":"PUBLIC","edit":%s}
+                                """.formatted(edit)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_ERROR"));
+
+        verify(videoService, never()).publish(any(), any());
+    }
+
+    /** Only a colour, no cut: the whole upload at normal speed with the filter over it. */
+    @Test
+    void publish_anEditThatOnlyChangesTheColour_isAccepted() throws Exception {
+        VideoResponse response = new VideoResponse("v1", 1L, "t", null, null, null, null, null, null, null,
+                VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoService.publish(eq(1L), any())).thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/videos")
+                        .header("Authorization", "Bearer " + tokenFor(1L))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"title":"t","rawFileUrl":"s3://video-media/raw/1.mp4","visibility":"PUBLIC",
+                                 "edit":{"filter":{"id":"vintage","intensity":0.5}}}
+                                """))
+                .andExpect(status().isCreated());
     }
 
     /** Fillers and zero-width characters render as nothing; sanitized away, the title is blank. */
@@ -258,11 +326,48 @@ class VideoControllerTest {
 
     @Test
     void getFeed_withoutToken_isAllowed() throws Exception {
-        when(videoService.getFeed(any(), any())).thenReturn(new CursorPage<>(List.of(), null));
+        when(videoService.getFeed(any(), any(), any(), any())).thenReturn(new CursorPage<>(List.of(), null));
 
         mockMvc.perform(get("/api/v1/videos/feed"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
+
+        verify(videoService).getFeed(isNull(), isNull(), isNull(), isNull());
+    }
+
+    /** For You's chronological fallback is filtered by the viewer's keywords too, so it needs the viewer. */
+    @Test
+    void getFeed_passesTheCallerAndTheFeed() throws Exception {
+        when(videoService.getFeed(any(), any(), any(), any())).thenReturn(new CursorPage<>(List.of(), null));
+
+        mockMvc.perform(get("/api/v1/videos/feed").param("feed", "FOR_YOU")
+                        .header("Authorization", "Bearer " + tokenFor(5L)))
+                .andExpect(status().isOk());
+
+        verify(videoService).getFeed(eq(5L), isNull(), isNull(), eq(FeedKind.FOR_YOU));
+    }
+
+    @Test
+    void getByIds_passesTheFeedWhenAsked() throws Exception {
+        when(videoService.getByIds(any(), any(), any())).thenReturn(List.of());
+
+        mockMvc.perform(get("/api/v1/videos/batch").param("ids", "a,b").param("feed", "FOR_YOU")
+                        .header("Authorization", "Bearer " + tokenFor(5L)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/videos/batch").param("ids", "a"))
+                .andExpect(status().isOk());
+
+        verify(videoService).getByIds(eq(5L), eq(List.of("a", "b")), eq(FeedKind.FOR_YOU));
+        verify(videoService).getByIds(isNull(), eq(List.of("a")), isNull());
+    }
+
+    /** A typo in the client must be its error, not a 500. */
+    @Test
+    void anUnknownFeed_isABadRequest() throws Exception {
+        mockMvc.perform(get("/api/v1/videos/batch").param("ids", "a").param("feed", "nonsense"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(videoService);
     }
 
     @Test
@@ -371,7 +476,7 @@ class VideoControllerTest {
      */
     @Test
     void getFollowingFeed_passesTheCaller() throws Exception {
-        when(videoService.getFollowingFeed(any(), any(), any(), any())).thenReturn(new CursorPage<>(List.of(), null));
+        when(videoService.getFollowingFeed(any(), any(), any(), any(), any())).thenReturn(new CursorPage<>(List.of(), null));
 
         mockMvc.perform(get("/api/v1/videos/feed/following").param("followedUserIds", "1,2")
                         .header("Authorization", "Bearer " + tokenFor(5L)))
@@ -379,7 +484,20 @@ class VideoControllerTest {
         mockMvc.perform(get("/api/v1/videos/feed/following").param("followedUserIds", "1,2"))
                 .andExpect(status().isOk());
 
-        verify(videoService).getFollowingFeed(eq(5L), eq(List.of(1L, 2L)), isNull(), isNull());
-        verify(videoService).getFollowingFeed(isNull(), eq(List.of(1L, 2L)), isNull(), isNull());
+        // No feed named is the Following tab: an older client keeps the filters it never asked for.
+        verify(videoService).getFollowingFeed(eq(5L), eq(List.of(1L, 2L)), isNull(), isNull(), eq(FeedKind.FOLLOWING));
+        verify(videoService).getFollowingFeed(isNull(), eq(List.of(1L, 2L)), isNull(), isNull(), eq(FeedKind.FOLLOWING));
+    }
+
+    /** The Friends tab draws from the same endpoint, so it has to say which keyword list applies. */
+    @Test
+    void getFollowingFeed_carriesTheFriendsFeed() throws Exception {
+        when(videoService.getFollowingFeed(any(), any(), any(), any(), any())).thenReturn(new CursorPage<>(List.of(), null));
+
+        mockMvc.perform(get("/api/v1/videos/feed/following").param("followedUserIds", "1").param("feed", "FRIENDS")
+                        .header("Authorization", "Bearer " + tokenFor(5L)))
+                .andExpect(status().isOk());
+
+        verify(videoService).getFollowingFeed(eq(5L), eq(List.of(1L)), isNull(), isNull(), eq(FeedKind.FRIENDS));
     }
 }

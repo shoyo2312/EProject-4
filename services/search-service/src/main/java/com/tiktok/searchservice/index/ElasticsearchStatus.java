@@ -5,6 +5,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.data.elasticsearch.ResourceNotFoundException;
 import org.springframework.data.elasticsearch.UncategorizedElasticsearchException;
 
 import java.util.OptionalInt;
@@ -65,6 +66,13 @@ public final class ElasticsearchStatus {
             if (current instanceof UncategorizedElasticsearchException translated
                     && translated.getStatusCode() != null) {
                 return OptionalInt.of(translated.getStatusCode());
+            }
+            // How a 404 on a document arrives: the translator drops the status. Missing the
+            // update target of a counter or a visibility change is the routine 404 above, and
+            // read as no status it went to the DLT instead of being skipped. A missing index is
+            // a NoSuchIndexException, deliberately not matched.
+            if (current instanceof ResourceNotFoundException) {
+                return OptionalInt.of(404);
             }
             if (current instanceof ResponseException transport) {
                 return OptionalInt.of(transport.getResponse().getStatusCode());

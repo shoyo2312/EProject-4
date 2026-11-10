@@ -37,8 +37,14 @@ public class SecurityConfig {
                         // Also before the blanket GET rule: /policy answers for every video whatever
                         // its visibility, for interaction- and notification-service. api-gateway
                         // denies it; the token keeps out whatever reaches this port without the gateway.
-                        .requestMatchers(HttpMethod.GET, "/api/v1/videos/*/policy", "/api/v1/videos/internal/**")
+                        // Any method: a HEAD is answered by the GET handler, so a GET-only rule lets a JWT in.
+                        .requestMatchers("/api/v1/videos/*/policy", "/api/v1/videos/internal/**")
                         .access(new InternalCallerAuthorization(internalApiToken))
+                        // Studio's Posts table answers for the caller only, so it needs to know who.
+                        .requestMatchers("/api/v1/videos/me").authenticated()
+                        // Also before it: every music search spends this service's catalogue quota,
+                        // so only signed-in users may.
+                        .requestMatchers("/api/v1/videos/music", "/api/v1/videos/music/**").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/videos/**").permitAll()
                         .anyRequest().authenticated()
                 )

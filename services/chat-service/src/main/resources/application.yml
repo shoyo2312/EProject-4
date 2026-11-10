@@ -24,14 +24,21 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+  servlet:
+    multipart:
+      # A little over ImageInspector.MAX_BYTES (5 MB), so the service answers the size error itself.
+      max-file-size: 6MB
+      max-request-size: 7MB
+
   task:
     scheduling:
       # One thread per @Scheduled method: the two counter flushers, which can block on a
       # downstream read, the session sweep and AdminFanout's flush. On the default pool of one they
       # take turns, and a slow interaction-service stalls the profile stats, the video counters and
-      # the admin consoles' refresh along with it.
+      # the admin consoles' refresh along with it. The sticker-suggestion refresh is a fifth: it
+      # makes a GIPHY call per topic and must not hold up the others.
       pool:
-        size: 4
+        size: 5
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
@@ -47,6 +54,17 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
+chat:
+  stickers:
+    # What a browser uses to reach MinIO — not the in-cluster address. The sticker URLs sent to
+    # clients are built from it; they carry no signature, so the bucket policy (media-worker's
+    # BucketInitializer) is what makes stickers/* readable.
+    public-base-url: ${MEDIA_PUBLIC_URL:${MINIO_ENDPOINT:http://localhost:9000}}
+    bucket: ${MINIO_BUCKET:video-media}
+  giphy:
+    # Free beta key: 100 calls an hour, which GiphyClient's cache is there to respect. Blank turns the picker off.
+    api-key: ${GIPHY_API_KEY:}
+
 jwt:
   secret: ${JWT_SECRET:change-this-secret-in-production-please-0123456789}
 
@@ -58,6 +76,7 @@ downstream:
   interaction-service-uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
   video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
+  story-service-uri: ${STORY_SERVICE_URI:http://localhost:8086}
 
 realtime:
   flush-interval-millis: 500

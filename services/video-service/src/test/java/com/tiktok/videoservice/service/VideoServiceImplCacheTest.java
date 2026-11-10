@@ -7,9 +7,12 @@ import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
 import com.tiktok.videoservice.entity.Video;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.PinLimitReachedException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
+import com.tiktok.videoservice.exception.VideoNotPinnableException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
@@ -28,7 +31,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -62,6 +67,12 @@ class VideoServiceImplCacheTest {
     private final com.tiktok.videoservice.client.FollowClient followClient =
             mock(com.tiktok.videoservice.client.FollowClient.class);
 
+    private final com.tiktok.videoservice.repository.OwnerBanRepository bans = mock(com.tiktok.videoservice.repository.OwnerBanRepository.class);
+    private final CaptionModeration captionModeration = mock(CaptionModeration.class);
+    private final QuarantinedMediaUrls quarantinedMediaUrls = new QuarantinedMediaUrls(quarantineClient,
+            new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret",
+                    "video-media", "us-east-1", Duration.ofMinutes(15)), quarantineClient);
+
     private final VideoService videoService = new VideoServiceImpl(
             videoRepository,
             videoMapper,
@@ -72,15 +83,15 @@ class VideoServiceImplCacheTest {
             videoCache,
             friendshipClient,
             new UploadLimitProperties(524_288_000L, 600),
-            new QuarantinedMediaUrls(quarantineClient, new MinioProperties("http://localhost:9000", "http://localhost:9000", "key", "secret",
-                    "video-media", "us-east-1", Duration.ofMinutes(15))),
+            quarantinedMediaUrls,
                 blockClient,
                 userSettingsClient,
                 followClient,
                 mock(com.tiktok.videoservice.repository.OwnerPrivacyRepository.class),
-                mock(com.tiktok.videoservice.repository.OwnerBanRepository.class),
-                mock(CaptionModeration.class),
-                mock(UploadRateLimiter.class));
+                bans,
+                captionModeration,
+                new FeedKeywordFilter(userSettingsClient),
+                mock(MusicService.class));
 
     @Test
     void getById_onCacheHit_neverTouchesMongo() {
@@ -138,7 +149,7 @@ class VideoServiceImplCacheTest {
         when(videoRepository.findByIdInAndDeletedAtIsNull(List.of("B"))).thenReturn(List.of(entity));
         when(videoMapper.toResponse(entity)).thenReturn(fromMongo);
 
-        List<VideoResponse> response = videoService.getByIds(OWNER, List.of("A", "B"));
+        List<VideoResponse> response = videoService.getByIds(OWNER, List.of("A", "B"), null);
 
         assertThat(response).containsExactly(cached, fromMongo);
         verify(videoRepository).findByIdInAndDeletedAtIsNull(List.of("B"));
@@ -150,7 +161,7 @@ class VideoServiceImplCacheTest {
         when(videoCache.getAll(List.of("A", "B")))
                 .thenReturn(Map.of("A", publicVideo("A"), "B", publicVideo("B")));
 
-        assertThat(videoService.getByIds(OWNER, List.of("A", "B"))).hasSize(2);
+        assertThat(videoService.getByIds(OWNER, List.of("A", "B"), null)).hasSize(2);
 
         verifyNoInteractions(videoRepository);
     }
@@ -168,8 +179,8 @@ class VideoServiceImplCacheTest {
 
         when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", privateVideo));
 
-        assertThat(videoService.getByIds(999L, List.of("A"))).isEmpty();
-        assertThat(videoService.getByIds(OWNER, List.of("A"))).containsExactly(privateVideo);
+        assertThat(videoService.getByIds(999L, List.of("A"), null)).isEmpty();
+        assertThat(videoService.getByIds(OWNER, List.of("A"), null)).containsExactly(privateVideo);
     }
 
     /**
@@ -213,7 +224,7 @@ class VideoServiceImplCacheTest {
     void getPolicy_carriesTheOwnersCommentAudience_andTheirCommentFilters() {
         when(videoCache.get(VIDEO_ID)).thenReturn(Optional.of(publicVideo(VIDEO_ID)));
         when(userSettingsClient.commentSettings(OWNER)).thenReturn(
-                new OwnerCommentSettings("FRIENDS", false, true, List.of("spoiler")));
+                new OwnerCommentSettings("FRIENDS", false, true, List.of("spoiler"), null));
 
         VideoPolicyResponse policy = videoService.getPolicy(VIDEO_ID);
 
@@ -300,7 +311,7 @@ class VideoServiceImplCacheTest {
         when(videoMapper.toResponse(any(Video.class))).thenReturn(mapped);
 
         assertThat(videoService.getById(OWNER, VIDEO_ID)).isEqualTo(mapped);
-        assertThat(videoService.getByIds(OWNER, List.of(VIDEO_ID))).containsExactly(mapped);
+        assertThat(videoService.getByIds(OWNER, List.of(VIDEO_ID), null)).containsExactly(mapped);
     }
 
     /**
@@ -319,6 +330,169 @@ class VideoServiceImplCacheTest {
 
         assertThat(videoService.getById(OWNER, "A").hlsUrl()).isEqualTo("signed");
         verify(videoCache, org.mockito.Mockito.never()).put(any());
+    }
+
+    /** A removed video keeps its tile for the owner: the thumbnail is signed, playback is not. */
+    @Test
+    void getById_ownersRejectedVideo_signsTheThumbnailOnly() throws Exception {
+        VideoResponse rejected = new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null,
+                "http://localhost:9000/video-media/hls/A/source.mp4",
+                10, 1080, 1920, VideoStatus.REJECTED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoCache.get("A")).thenReturn(Optional.of(rejected));
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        VideoResponse response = videoService.getById(OWNER, "A");
+
+        assertThat(response.thumbnailUrl()).isEqualTo("signed");
+        assertThat(response.hlsUrl()).isEqualTo("http://localhost:9000/video-media/hls/A/source.mp4");
+    }
+
+    /**
+     * Rejected before the transcode produced HLS: there is no playback object to look for, and the
+     * tile the owner keeps is the thumbnail, so that is the object whose move is checked.
+     */
+    @Test
+    void getById_ownersRejectedVideoWithoutHls_stillSignsTheThumbnail() throws Exception {
+        VideoResponse rejected = new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null, null,
+                10, 1080, 1920, VideoStatus.REJECTED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoCache.get("A")).thenReturn(Optional.of(rejected));
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        assertThat(videoService.getById(OWNER, "A").thumbnailUrl()).isEqualTo("signed");
+        verify(quarantineClient).statObject(argThat(args -> "quarantine/thumbnails/A.jpg".equals(args.object())));
+    }
+
+    /**
+     * media-worker holds a fresh transcode under quarantine until moderation answers, so the
+     * uploader watches it, and the console reviews it, through signed copies until then.
+     */
+    @Test
+    void pendingModeration_isSignedForTheOwnerAndTheConsole() throws Exception {
+        VideoResponse pending = new VideoResponse(
+                "P", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/P.jpg", null,
+                "http://localhost:9000/video-media/hls/P/source.mp4",
+                10, 1080, 1920, VideoStatus.PENDING_MODERATION, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        VideoResponse owners = quarantinedMediaUrls.forOwner(pending);
+        assertThat(owners.thumbnailUrl()).isEqualTo("signed");
+        assertThat(owners.hlsUrl()).as("the owner can still watch what they uploaded").isEqualTo("signed");
+        assertThat(quarantinedMediaUrls.forAdmin(pending).hlsUrl()).isEqualTo("signed");
+    }
+
+    /** A Studio page is up to fifty quarantined rows, each a blocking stat: the answer is kept for a while. */
+    @Test
+    void forOwner_twiceForTheSameVideo_asksMinioOnce() throws Exception {
+        VideoResponse rejected = new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null, null,
+                10, 1080, 1920, VideoStatus.REJECTED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        assertThat(quarantinedMediaUrls.forOwner(rejected).thumbnailUrl()).isEqualTo("signed");
+        assertThat(quarantinedMediaUrls.forOwner(rejected).thumbnailUrl()).isEqualTo("signed");
+
+        verify(quarantineClient, times(1)).statObject(any());
+    }
+
+    /**
+     * A pin is for the profile, and only a published video that is not private shows there to
+     * anyone else; pinning anything else spent one of the three slots on nothing visible.
+     */
+    @Test
+    void updatePinned_refusesAVideoOthersCannotSee_butAlwaysUnpins() {
+        Video processing = Video.builder().id("A").userId(OWNER).status(VideoStatus.PROCESSING)
+                .visibility(VideoVisibility.PUBLIC).build();
+        Video privateOne = Video.builder().id("B").userId(OWNER).status(VideoStatus.PUBLISHED)
+                .visibility(VideoVisibility.PRIVATE).build();
+        Video pinnedPrivate = Video.builder().id("C").userId(OWNER).status(VideoStatus.PUBLISHED)
+                .visibility(VideoVisibility.PRIVATE).pinnedAt(Instant.now()).build();
+        when(videoRepository.findByIdAndDeletedAtIsNull("A")).thenReturn(Optional.of(processing));
+        when(videoRepository.findByIdAndDeletedAtIsNull("B")).thenReturn(Optional.of(privateOne));
+        when(videoRepository.findByIdAndDeletedAtIsNull("C")).thenReturn(Optional.of(pinnedPrivate));
+        when(videoMapper.toResponse(any(Video.class))).thenReturn(publicVideo("C"));
+
+        assertThatThrownBy(() -> videoService.updatePinned(OWNER, "A", true)).isInstanceOf(VideoNotPinnableException.class);
+        assertThatThrownBy(() -> videoService.updatePinned(OWNER, "B", true)).isInstanceOf(VideoNotPinnableException.class);
+
+        videoService.updatePinned(OWNER, "C", false);
+        assertThat(pinnedPrivate.getPinnedAt()).as("a pin left from before can always be taken off").isNull();
+    }
+
+    /**
+     * Two pins at once both passed the count and left four pinned. Whichever was pinned later
+     * sees three before it once both are written, and takes itself back off.
+     */
+    @Test
+    void updatePinned_racingAnotherPin_backsOutTheLaterOne() {
+        Video video = Video.builder().id("A").userId(OWNER).status(VideoStatus.PUBLISHED)
+                .visibility(VideoVisibility.PUBLIC).build();
+        when(videoRepository.findByIdAndDeletedAtIsNull("A")).thenReturn(Optional.of(video));
+        when(videoRepository.countByUserIdAndPinnedAtIsNotNullAndDeletedAtIsNull(OWNER)).thenReturn(2L);
+        when(videoRepository.countByUserIdAndPinnedAtBeforeAndDeletedAtIsNull(any(), any())).thenReturn(3L);
+
+        assertThatThrownBy(() -> videoService.updatePinned(OWNER, "A", true))
+                .isInstanceOf(PinLimitReachedException.class);
+
+        assertThat(video.getPinnedAt()).isNull();
+        verify(videoRepository, times(2)).updatePinned(video);
+    }
+
+    /**
+     * Studio lets the owner fix the caption of a video that is not live, but the read paths that
+     * copy captions only hold live videos: nothing to announce until it is published.
+     */
+    @Test
+    void updateCaption_onATakenDownVideo_stillQueuesTheAnnouncement() {
+        // The read paths flag a taken-down video rather than drop it, so an edit made while it is
+        // down has to reach them: once an admin restores it, the copy they show must be the new one.
+        when(captionModeration.screen(any(), any(), anyList())).thenReturn(VideoTextModeration.builder().build());
+        when(videoMapper.toResponse(any(Video.class))).thenReturn(publicVideo("A"));
+        Video takenDown = Video.builder().id("A").userId(OWNER).status(VideoStatus.TAKEN_DOWN).build();
+        when(videoRepository.findByIdAndDeletedAtIsNull("A")).thenReturn(Optional.of(takenDown));
+
+        videoService.updateCaption(OWNER, "A", "title", "description");
+
+        assertThat(takenDown.getTitle()).isEqualTo("title");
+        assertThat(takenDown.getCaptionEventPendingAt()).as("queued for the copies search and feeds hold").isNotNull();
+        verify(videoRepository).updateCaption(takenDown);
+    }
+
+    /** The studio swaps the row for this response, so it must carry the same signed URLs the list did. */
+    @Test
+    void updateCommentsDisabled_onAVideoInReview_returnsSignedUrls() throws Exception {
+        Video entity = Video.builder().id("A").userId(OWNER).build();
+        when(videoRepository.findByIdAndDeletedAtIsNull("A")).thenReturn(Optional.of(entity));
+        when(videoMapper.toResponse(entity)).thenReturn(new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null,
+                "http://localhost:9000/video-media/hls/A/source.mp4",
+                10, 1080, 1920, VideoStatus.PENDING_REVIEW, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null));
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        assertThat(videoService.updateCommentsDisabled(OWNER, "A", false).thumbnailUrl()).isEqualTo("signed");
+        assertThat(videoService.updateVisibility(OWNER, "A", VideoVisibility.PUBLIC).thumbnailUrl()).isEqualTo("signed");
+    }
+
+    /** Studio analytics hydrates its top posts through the batch read, so the owner's removed tile is signed there too. */
+    @Test
+    void getByIds_ownersRejectedVideo_signsTheThumbnail_butNotForAStranger() throws Exception {
+        VideoResponse rejected = new VideoResponse(
+                "A", OWNER, "t", "d", "http://localhost:9000/video-media/thumbnails/A.jpg", null,
+                "http://localhost:9000/video-media/hls/A/source.mp4",
+                10, 1080, 1920, VideoStatus.REJECTED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(),
+                Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+        when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", rejected));
+        when(quarantineClient.getPresignedObjectUrl(any())).thenReturn("signed");
+
+        assertThat(videoService.getByIds(OWNER, List.of("A"), null))
+                .extracting(VideoResponse::thumbnailUrl).containsExactly("signed");
+        assertThat(videoService.getByIds(999L, List.of("A"), null)).isEmpty();
     }
 
     @Test
@@ -371,7 +545,7 @@ class VideoServiceImplCacheTest {
                 "A", followed, "B", notFollowed, "C", own, "D", publicOwners));
         when(followClient.followedAmong(7L, Set.of(50L, 51L))).thenReturn(Set.of(50L));
 
-        assertThat(videoService.getByIds(7L, List.of("A", "B", "C", "D")))
+        assertThat(videoService.getByIds(7L, List.of("A", "B", "C", "D"), null))
                 .containsExactly(followed, own, publicOwners);
         verify(followClient).followedAmong(7L, Set.of(50L, 51L));
         verifyNoMoreInteractions(followClient);
@@ -383,7 +557,7 @@ class VideoServiceImplCacheTest {
         when(videoCache.getAll(List.of("A", "B")))
                 .thenReturn(Map.of("A", publicVideo("A"), "B", publicVideo("B")));
 
-        assertThat(videoService.getByIds(7L, List.of("A", "B"))).hasSize(2);
+        assertThat(videoService.getByIds(7L, List.of("A", "B"), null)).hasSize(2);
         verifyNoInteractions(followClient);
     }
 
@@ -398,5 +572,61 @@ class VideoServiceImplCacheTest {
         return new VideoResponse(
                 id, OWNER, "title", "description", "https://cdn/t.jpg", "https://cdn/p.webp", "https://cdn/v.m3u8",
                 10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(), null, null, null, null, null, null, null, null, false, false, null);
+    }
+
+    @Test
+    void viewableOrdersRequestedIdsAndChecksBlocksOncePerOwner() {
+        when(videoCache.getAll(List.of("B", "A", "C"))).thenReturn(Map.of(
+                "A", publicVideo("A"), "B", publicVideo("B"), "C", privateOwnersVideo("C", VideoVisibility.PUBLIC, 77L)));
+        when(followClient.followedAmong(7L, Set.of(77L))).thenReturn(Set.of(77L));
+        when(blockClient.isBlockedBetween(77L, 7L)).thenReturn(true);
+        assertThat(videoService.getViewable(7L, List.of("B", "A", "C")))
+                .extracting(com.tiktok.videoservice.dto.response.ViewableVideoResponse::id).containsExactly("B", "A");
+        verify(blockClient).isBlockedBetween(OWNER, 7L);
+        verify(blockClient).isBlockedBetween(77L, 7L);
+        verifyNoMoreInteractions(blockClient);
+    }
+
+    @Test
+    void viewablePrivateFriendsAndPrivateOwnerAudiencesUseTheBatchPolicy() {
+        when(videoCache.getAll(List.of("private", "friends", "follower", "stranger"))).thenReturn(Map.of(
+                "private", privateOwnersVideo("private", VideoVisibility.PRIVATE, OWNER),
+                "friends", privateOwnersVideo("friends", VideoVisibility.FRIENDS, OWNER),
+                "follower", privateOwnersVideo("follower", VideoVisibility.PUBLIC, 50L),
+                "stranger", privateOwnersVideo("stranger", VideoVisibility.PUBLIC, 51L)));
+        when(followClient.followedAmong(7L, Set.of(50L, 51L))).thenReturn(Set.of(50L));
+        when(friendshipClient.areFriends(OWNER, 7L)).thenReturn(true);
+        assertThat(videoService.getViewable(7L, List.of("private", "friends", "follower", "stranger")))
+                .extracting(com.tiktok.videoservice.dto.response.ViewableVideoResponse::id).containsExactly("friends", "follower");
+    }
+
+    @Test
+    void viewableHidesBannedAndDeactivatedOwnersIncludingTheViewerOwnVideos() {
+        when(videoCache.getAll(List.of("A"))).thenReturn(Map.of("A", publicVideo("A")));
+        when(bans.findHiddenAmong(org.mockito.ArgumentMatchers.anyCollection(), any()))
+                .thenReturn(List.of(new com.tiktok.videoservice.entity.OwnerBan(OWNER, Instant.now().plusSeconds(60), Instant.now())));
+        assertThat(videoService.getViewable(OWNER, List.of("A"))).isEmpty();
+    }
+
+    @Test
+    void viewableDropsDeletedMissingAndUnpublishedVideosEvenForOwner() {
+        VideoResponse processing = new VideoResponse("processing", OWNER, "title", "description", "thumb", null, null,
+                10, 1080, 1920, VideoStatus.PROCESSING, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(),
+                null, null, null, null, null, null, null, null, false, false, null);
+        when(videoCache.getAll(List.of("deleted", "processing"))).thenReturn(Map.of("processing", processing));
+        when(videoRepository.findByIdInAndDeletedAtIsNull(List.of("deleted"))).thenReturn(List.of());
+        assertThat(videoService.getViewable(OWNER, List.of("deleted", "processing"))).isEmpty();
+    }
+
+    @Test
+    void viewableRejectsMoreThan50IdsBeforeAnyLookupAndTrimsTitle() {
+        assertThatThrownBy(() -> videoService.getViewable(7L,
+                java.util.stream.IntStream.range(0, 51).mapToObj(String::valueOf).toList()))
+                .isInstanceOf(com.tiktok.common.exception.BadRequestException.class);
+        verifyNoInteractions(videoCache, videoRepository, blockClient);
+        VideoResponse longTitle = new VideoResponse("A", OWNER, "  " + "x".repeat(100) + "  ", null, "thumb", null, null,
+                10, 1080, 1920, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, 0, 0, 0L, false, List.of(), Instant.now(),
+                null, null, null, null, null, null, null, null, false, false, null);
+        assertThat(com.tiktok.videoservice.dto.response.ViewableVideoResponse.from(longTitle).title()).isEqualTo("x".repeat(80));
     }
 }

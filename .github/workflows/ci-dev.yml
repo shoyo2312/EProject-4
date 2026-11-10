@@ -42,6 +42,44 @@ jobs:
           reporter: java-junit
           fail-on-error: false
 
+  # rank-service and moderation-service are not Maven modules, so ./mvnw never ran their tests.
+  python-tests:
+    name: Python tests (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [moderation-service, rank-service]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The version both Dockerfiles build on.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/requirements*.txt
+
+      # From the CPU index, at the version the Dockerfile pins — read out of it, so the two cannot
+      # drift. test_harm imports the CLIP scorer, which imports torch; no weights are fetched.
+      - name: Install torch
+        if: matrix.service == 'moderation-service'
+        run: pip install --index-url https://download.pytorch.org/whl/cpu "$(grep -o 'torch==[0-9.]*' Dockerfile)"
+
+      # LightGBM needs libgomp at runtime, as its Dockerfile says.
+      - name: Install libgomp
+        if: matrix.service == 'rank-service'
+        run: sudo apt-get install -y --no-install-recommends libgomp1
+
+      - name: Install
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Test
+        run: python -m pytest -q
+
   code-quality:
     name: Code Quality (quick)
     runs-on: ubuntu-latest

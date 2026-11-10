@@ -33,11 +33,13 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -73,7 +75,7 @@ class ModerationTermControllerTest {
     @Test
     void anAdminAddsATerm_sanitizedBeforeItIsStored() throws Exception {
         when(moderationTermService.add(eq(7L), any())).thenReturn(new ModerationTermResponse(1L, "cút đi",
-                Category.INSULT, AdminTerm.Action.HOLD, null, 7L, Instant.now()));
+                Category.INSULT, AdminTerm.Action.HOLD, null, 7L, Instant.now(), null, null));
 
         mockMvc.perform(post("/api/v1/admin/moderation/terms")
                         .header("Authorization", bearer(7L, "ADMIN"))
@@ -114,10 +116,21 @@ class ModerationTermControllerTest {
     void aUserWhoIsNotAnAdmin_cannotTouchTheList() throws Exception {
         mockMvc.perform(get("/api/v1/admin/moderation/terms").header("Authorization", bearer(8L, "USER")))
                 .andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/admin/moderation/terms/removed").header("Authorization", bearer(8L, "USER")))
+                .andExpect(status().isForbidden());
         mockMvc.perform(delete("/api/v1/admin/moderation/terms/1").header("Authorization", bearer(8L, "USER")))
                 .andExpect(status().isForbidden());
 
         verifyNoInteractions(moderationTermService);
+    }
+
+    @Test
+    void anAdminReadsTheRemovedTerms() throws Exception {
+        mockMvc.perform(get("/api/v1/admin/moderation/terms/removed").param("q", "dạy").param("action", "REJECT")
+                        .header("Authorization", bearer(7L, "ADMIN")))
+                .andExpect(status().isOk());
+
+        verify(moderationTermService).listRemoved(eq("dạy"), eq(AdminTerm.Action.REJECT), any());
     }
 
     @Test
@@ -168,5 +181,17 @@ class ModerationTermControllerTest {
                 .andExpect(status().isForbidden());
 
         verifyNoInteractions(moderationTermService);
+    }
+
+    /**
+     * Spring MVC answers a HEAD with the GET handler, so an internal rule for GET alone lets a HEAD
+     * fall through to the ROLE_ADMIN rule, which an admin's JWT satisfies.
+     */
+    @Test
+    void theInternalList_refusesAnAdminsHeadToo() throws Exception {
+        mockMvc.perform(head("/api/v1/admin/internal/blocklist").header("Authorization", bearer(7L, "ADMIN")))
+                .andExpect(status().isForbidden());
+
+        verify(moderationTermService, never()).snapshot();
     }
 }

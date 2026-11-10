@@ -85,6 +85,25 @@ class OutboxPublisherTest {
                         tuple("auth.social-avatar-events", "7"));
     }
 
+    /**
+     * auth.user-events reads every message as a registration: an alert sent there would welcome the
+     * account all over again, once per sign-in from a new device.
+     */
+    @Test
+    void aNewDeviceAlert_goesToItsOwnTopic_keyedByAccount() {
+        when(outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc())
+                .thenReturn(List.of(row(1L, "NEW_DEVICE", "7")));
+        when(kafkaOperations.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(null));
+
+        publisher().publishPending();
+
+        ArgumentCaptor<ProducerRecord<String, String>> sent = ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafkaOperations).send(sent.capture());
+        assertThat(sent.getValue())
+                .extracting(ProducerRecord::topic, ProducerRecord::key)
+                .containsExactly("auth.new-device-events", "7");
+    }
+
     @Test
     void aRowWithAnUnknownAggregateType_staysPending() {
         when(outboxEventRepository.findTop100ByPublishedAtIsNullOrderByCreatedAtAsc())

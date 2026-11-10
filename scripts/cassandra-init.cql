@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS comments_by_video (
     status      text,
     mod_reason  text,
     mod_version text,
+    -- A sticker from chat-service's pack (content is '' for a sticker on its own), and when the
+    -- author last edited the text. Both null on most rows.
+    sticker_id  text,
+    edited_at   timestamp,
     PRIMARY KEY ((video_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
 
@@ -77,6 +81,9 @@ ALTER TABLE comments_by_video ADD IF NOT EXISTS likes int;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS status text;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS mod_reason text;
 ALTER TABLE comments_by_video ADD IF NOT EXISTS mod_version text;
+-- Same, for clusters that predate comment stickers and edits.
+ALTER TABLE comments_by_video ADD IF NOT EXISTS sticker_id text;
+ALTER TABLE comments_by_video ADD IF NOT EXISTS edited_at timestamp;
 
 -- A video owner's queue of held comments, newest first: ids only, one partition per video, the
 -- way comment_index serves the public threads. comments_by_video decides whether a row here still
@@ -86,6 +93,18 @@ CREATE TABLE IF NOT EXISTS held_comments_by_video (
     video_id   bigint,
     comment_id bigint,
     PRIMARY KEY ((video_id), comment_id)
+) WITH CLUSTERING ORDER BY (comment_id DESC);
+
+-- A video owner's Studio inbox: every comment somebody else left on any video they own, newest
+-- first — ids only, one partition per owner, the way held_comments_by_video serves one video's
+-- queue. video_id names the comments_by_video partition the comment is in. comments_by_video
+-- decides whether a row here still means anything: a deleted comment's row is dropped when the
+-- owner was known at the time, and skipped by the reader if it was not.
+CREATE TABLE IF NOT EXISTS comments_by_owner (
+    owner_id   bigint,
+    comment_id bigint,
+    video_id   bigint,
+    PRIMARY KEY ((owner_id), comment_id)
 ) WITH CLUSTERING ORDER BY (comment_id DESC);
 
 -- Who is banned, as admin-service decided — UserBannedEvent / UserUnbannedEvent on
@@ -192,3 +211,11 @@ ALTER TABLE video_counters ADD IF NOT EXISTS view_count counter;
 ALTER TABLE video_counters ADD IF NOT EXISTS save_count counter;
 -- Same reason, for clusters created before reposts were counted.
 ALTER TABLE video_counters ADD IF NOT EXISTS repost_count counter;
+
+-- One share per delivered chat message; claims expire after 30 days.
+CREATE TABLE IF NOT EXISTS chat_share_dedupe (
+    video_id bigint,
+    dedupe_key text,
+    share_id bigint,
+    PRIMARY KEY ((video_id, dedupe_key))
+) WITH default_time_to_live = 2592000;

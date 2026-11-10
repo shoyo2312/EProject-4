@@ -37,9 +37,11 @@ public class UserSettingsController {
 
     @Operation(summary = "Change the caller's settings",
             description = "True partial update: an absent key is left alone, and an explicit null "
-                    + "clears one of the three nullable fields. Unlike PATCH /me there is no "
+                    + "clears a nullable field (a daily limit, sleep hours). Unlike PATCH /me there is no "
                     + "empty-string-clears rule. Switching privateAccount off approves every "
-                    + "pending follow request. 400 VALIDATION_ERROR, 404 USER_PROFILE_NOT_FOUND "
+                    + "pending follow request. Turning the daily limit on needs screenTimePasscode "
+                    + "unless one is stored; sleepHoursEnd is derived (start + 8h). "
+                    + "400 VALIDATION_ERROR, 404 USER_PROFILE_NOT_FOUND "
                     + "when privateAccount is sent before the profile exists, "
                     + "409 CONCURRENT_MODIFICATION.")
     @PatchMapping("/me/settings")

@@ -39,11 +39,20 @@ class ChatWebSocketControllerTest {
                 .isTrue();
     }
 
+    /**
+     * What stays an annotation is the length cap. "Not blank" is no longer one — it depends on the
+     * type (a sticker has no content at all), so {@code MessagePayload} checks it, before the
+     * conversation is touched; {@code MessagePayloadTest} covers it, over this same payload.
+     */
     @Test
-    void blankAndOversizedContent_breakTheConstraintsTheAnnotationRuns() {
-        assertThat(validator.validate(new SendMessageRequest("  "))).isNotEmpty();
+    void oversizedContent_breaksTheConstraintTheAnnotationRuns() {
         assertThat(validator.validate(new SendMessageRequest("x".repeat(2001)))).isNotEmpty();
         assertThat(validator.validate(new SendMessageRequest("hello"))).isEmpty();
+    }
+
+    @Test
+    void aStickerHasNoContentAndStillPassesTheAnnotationConstraints() {
+        assertThat(validator.validate(SendMessageRequest.sticker("fire"))).isEmpty();
     }
 
     /**
@@ -57,7 +66,7 @@ class ChatWebSocketControllerTest {
         assertThat(handler.getAnnotation(MessageExceptionHandler.class)).isNotNull();
         assertThat(handler.getAnnotation(SendToUser.class).value()).containsExactly("/queue/errors");
 
-        ApiResponse<Void> body = new ChatWebSocketController(null).handleRefusal(new MessagingBlockedException());
+        ApiResponse<Void> body = new ChatWebSocketController(null, null).handleRefusal(new MessagingBlockedException());
         assertThat(body.code()).isEqualTo("MESSAGING_BLOCKED");
     }
 }

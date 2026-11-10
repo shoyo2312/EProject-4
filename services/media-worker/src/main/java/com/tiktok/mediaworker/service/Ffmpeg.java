@@ -1,5 +1,7 @@
 package com.tiktok.mediaworker.service;
 
+import com.tiktok.event.video.VideoPublishedEvent;
+
 import java.nio.file.Path;
 import java.util.List;
 
@@ -35,6 +37,37 @@ public interface Ffmpeg {
     boolean normalize(Path source, Path target);
 
     /**
+     * Applies the app editor's segments to {@code source}: each is trimmed out and retimed to its
+     * speed, the pieces are joined in order, and the result is encoded into {@code target} the
+     * same way {@link #normalize} encodes — H.264/AAC, 720p or below, rotation baked in, moov in
+     * front — so it needs no second encode. Re-encoding is unavoidable: a cut lands between key
+     * frames and a speed change rewrites every timestamp.
+     *
+     * @param segments  from {@link EditFilterGraph#usable}, never empty
+     * @param colour    from {@link EditFilterGraph#colour}, or null to leave the colour alone
+     * @param overlays  the text and sticker layers, lowest first, each a PNG already passed through
+     *                  {@link OverlayImage#requireUsable}; empty for none
+     * @param music     the track mixed under the video, or null
+     * @param withAudio whether {@code source} has an audio stream
+     * @return false if the source could not be decoded or encoded
+     */
+    boolean edit(Path source, Path target, List<VideoPublishedEvent.Edit.Segment> segments, double[] colour,
+                 List<Overlay> overlays, Music music, boolean withAudio);
+
+    /**
+     * A downloaded catalogue track, already checked to start like an MP3, and how it is mixed.
+     * See {@link EditFilterGraph.Mix}.
+     */
+    record Music(Path file, double start, double volume, double originalVolume, double editedSeconds) {
+    }
+
+    /**
+     * A downloaded overlay layer and when it shows, in seconds on the edited video's clock.
+     */
+    record Overlay(Path file, Double start, Double end) {
+    }
+
+    /**
      * Writes one decoded frame from {@code atSecond} into {@code target} as a JPEG, scaled to a
      * height of 720 with the aspect ratio kept and the container's rotation applied.
      *
@@ -67,4 +100,22 @@ public interface Ffmpeg {
      * @return the frames actually written, in order, or an empty list if none could be decoded
      */
     List<Path> sampleFrames(Path source, Path targetDir, int count, int durationSeconds);
+
+    /**
+     * Turns a still picture into a silent clip {@code seconds} long, so a story photo can go
+     * through {@link #edit} like any video: its colour, text and song are then applied the one way.
+     * H.264 at the picture's own size, capped at 1080 wide and rounded to even sides.
+     *
+     * @param image a JPEG, PNG or WebP, read by the image demuxer and nothing else
+     * @return false if the picture could not be decoded
+     */
+    boolean stillVideo(Path image, Path target, double seconds);
+
+    /**
+     * Writes the first frame of {@code source} as a full-size JPEG — the still a story photo is
+     * served as once its colour, text and stickers are drawn in.
+     *
+     * @return false if no frame could be decoded
+     */
+    boolean firstFrame(Path source, Path target);
 }

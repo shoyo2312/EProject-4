@@ -26,6 +26,13 @@ public interface RecommendationService {
      */
     void recordVisibilityChanged(String videoId, String visibility);
 
+    /**
+     * The owner edited the caption, and these are the video's tags now. The stash takes them
+     * whatever state the video is in, so a later {@link #recordVideoReady} or reindex reads them;
+     * the tag indexes only if the video is in them, which is ready and not hidden.
+     */
+    void recordTagsChanged(String videoId, List<String> tags);
+
     /** Takes a video out of candidate generation while keeping what a restore needs to undo it. */
     void recordTakenDown(String videoId);
 

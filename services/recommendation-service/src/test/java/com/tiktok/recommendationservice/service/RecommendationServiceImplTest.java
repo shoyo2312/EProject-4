@@ -127,6 +127,25 @@ class RecommendationServiceImplTest {
         verify(zSetOperations).add(eq("reco:tag:dance"), eq("vid1"), org.mockito.ArgumentMatchers.anyDouble());
     }
 
+    /** An open Inspiration page refetches on the approval itself, so the ranking cannot wait a minute. */
+    @Test
+    void recordVideoReady_rebuildsTheRankingAtOnce() {
+        recommendationService.recordVideoReady("vid1");
+
+        verify(zSetOperations).unionAndStore(
+                startsWith("reco:trend:"), anyList(), eq("reco:trending"), eq(Aggregate.SUM), any(Weights.class));
+    }
+
+    @Test
+    void recordVideoReady_forAHiddenVideo_leavesTheRankingAlone() {
+        when(setOperations.isMember("reco:video:private", "vid1")).thenReturn(true);
+
+        recommendationService.recordVideoReady("vid1");
+
+        verify(zSetOperations, never()).unionAndStore(
+                anyString(), anyList(), anyString(), any(Aggregate.class), any(Weights.class));
+    }
+
     /**
      * Publish time is a ranking feature in its own right, so it has to be recorded for videos
      * with no tags too. Writing it alongside the tag indexes would have skipped exactly those
@@ -401,6 +420,51 @@ class RecommendationServiceImplTest {
 
         verify(setOperations).remove("reco:video:private", "vid1");
         verify(zSetOperations).add("reco:tag:dance", "vid1", 1700.0);
+    }
+
+    /**
+     * An edited caption used to leave the video under its old tags for as long as the indexes
+     * kept it, and out of the new ones. A live video moves, at its original publish time.
+     */
+    @Test
+    void recordTagsChanged_ofALiveVideo_movesItFromTheOldTagsToTheNew() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance", "food"));
+        when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
+
+        recommendationService.recordTagsChanged("vid1", List.of("food", "cooking"));
+
+        verify(setOperations).add("reco:video:tags:vid1", "food", "cooking");
+        verify(setOperations).remove("reco:video:tags:vid1", "dance");
+        verify(zSetOperations).remove("reco:tag:dance", (Object) "vid1");
+        verify(zSetOperations, never()).remove("reco:tag:food", (Object) "vid1");
+        verify(zSetOperations).add("reco:tag:food", "vid1", 1700.0);
+        verify(zSetOperations).add("reco:tag:cooking", "vid1", 1700.0);
+    }
+
+    /** Still transcoding: only the stash changes, and recordVideoReady indexes from it later. */
+    @Test
+    void recordTagsChanged_beforeTheVideoIsReady_onlyUpdatesTheStash() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+        when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(null);
+
+        recommendationService.recordTagsChanged("vid1", List.of("cooking"));
+
+        verify(setOperations).add("reco:video:tags:vid1", "cooking");
+        verify(setOperations).remove("reco:video:tags:vid1", "dance");
+        verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
+    }
+
+    /** A private video is in no tag index, and an edit must not put it in one. */
+    @Test
+    void recordTagsChanged_ofAHiddenVideo_doesNotIndexIt() {
+        when(setOperations.members("reco:video:tags:vid1")).thenReturn(Set.of("dance"));
+        when(zSetOperations.score("reco:video:published", "vid1")).thenReturn(1700.0);
+        when(setOperations.isMember("reco:video:private", "vid1")).thenReturn(true);
+
+        recommendationService.recordTagsChanged("vid1", List.of("cooking"));
+
+        verify(setOperations).add("reco:video:tags:vid1", "cooking");
+        verify(zSetOperations, never()).add(startsWith("reco:tag:"), anyString(), org.mockito.ArgumentMatchers.anyDouble());
     }
 
     /** A video uploaded PRIVATE was recommended the moment moderation approved it. */

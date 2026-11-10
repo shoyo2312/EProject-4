@@ -44,8 +44,25 @@ public class DataExportSources {
     public record Conversation(String id, List<Long> participantIds, Instant createdAt) {
     }
 
+    /**
+     * {@code type} is null for a message from before chat had types, and TEXT otherwise; a STICKER has
+     * no {@code content}, only the catalog entry chat-service attached. VIDEO carries its id and caption,
+     * with no card or media URLs.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record Message(String id, Long senderId, String content, Instant sentAt) {
+    public record Message(String id, Long senderId, String content, Instant sentAt, String type, Sticker sticker, String videoId) {
+
+        public Message(String id, Long senderId, String content, Instant sentAt, String type, Sticker sticker) {
+            this(id, senderId, content, sentAt, type, sticker, null);
+        }
+
+        public Message(String id, Long senderId, String content, Instant sentAt) {
+            this(id, senderId, content, sentAt, null, null);
+        }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Sticker(String name) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -101,10 +118,11 @@ public class DataExportSources {
     }
 
     /** Newest first, as chat-service pages them. */
-    public List<Message> messagesOf(String conversationId) {
+    public List<Message> messagesOf(String conversationId, Long viewerId) {
         return readAll(cursor -> {
             MessagePage page = data(chatServiceRestClient.get()
                     .uri(uri -> uri.path("/api/v1/conversations/internal/{conversationId}/messages")
+                            .queryParam("viewerId", viewerId)
                             .queryParamIfPresent("cursor", Optional.ofNullable(cursor))
                             .queryParam("size", 100)
                             .build(conversationId))

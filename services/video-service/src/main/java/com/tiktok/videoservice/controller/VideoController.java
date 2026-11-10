@@ -2,7 +2,11 @@ package com.tiktok.videoservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.FeedKind;
+import com.tiktok.videoservice.dto.request.StudioPostFilter;
+import com.tiktok.videoservice.dto.request.UpdateCaptionRequest;
 import com.tiktok.videoservice.dto.request.UpdateCommentSettingRequest;
+import com.tiktok.videoservice.dto.request.UpdatePinRequest;
 import com.tiktok.videoservice.dto.request.UpdateVideoVisibilityRequest;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
 import com.tiktok.videoservice.dto.response.CursorPage;
@@ -10,13 +14,17 @@ import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.service.VideoService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -24,6 +32,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/v1/videos")
 @RequiredArgsConstructor
+@Validated
 public class VideoController {
 
     private final VideoService videoService;
@@ -54,9 +63,12 @@ public class VideoController {
      */
     @GetMapping("/feed")
     public ApiResponse<CursorPage<VideoResponse>> getFeed(
+            @AuthenticationPrincipal Long currentUserId,
             @RequestParam(required = false) String cursor,
-            @RequestParam(required = false) Integer size) {
-        return ApiResponse.success(videoService.getFeed(cursor, size));
+            @RequestParam(required = false) Integer size,
+            // FOR_YOU when this is For You's chronological fallback: the viewer's keywords apply.
+            @RequestParam(required = false) FeedKind feed) {
+        return ApiResponse.success(videoService.getFeed(currentUserId, cursor, size, feed));
     }
 
     /**
@@ -74,9 +86,11 @@ public class VideoController {
             @AuthenticationPrincipal Long currentUserId,
             @RequestParam(required = false) List<Long> followedUserIds,
             @RequestParam(required = false) String cursor,
-            @RequestParam(required = false) Integer size) {
+            @RequestParam(required = false) Integer size,
+            // The Friends tab reads this endpoint too, and says so for its own keyword list.
+            @RequestParam(defaultValue = "FOLLOWING") FeedKind feed) {
         return ApiResponse.success(
-                videoService.getFollowingFeed(currentUserId, followedUserIds, cursor, size));
+                videoService.getFollowingFeed(currentUserId, followedUserIds, cursor, size, feed));
     }
 
     @GetMapping("/{videoId}")
@@ -97,8 +111,10 @@ public class VideoController {
     @GetMapping("/batch")
     public ApiResponse<List<VideoResponse>> getByIds(
             @AuthenticationPrincipal Long currentUserId,
-            @RequestParam List<String> ids) {
-        return ApiResponse.success(videoService.getByIds(currentUserId, ids));
+            @RequestParam List<String> ids,
+            // FOR_YOU when this hydrates the For You ranking: the viewer's keywords apply.
+            @RequestParam(required = false) FeedKind feed) {
+        return ApiResponse.success(videoService.getByIds(currentUserId, ids, feed));
     }
 
     /**
@@ -122,6 +138,27 @@ public class VideoController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
         return ApiResponse.success(videoService.listForExport(userId, Math.max(page, 0), Math.clamp(size, 1, 100)));
+    }
+
+    /**
+     * TikTok Studio's Posts table. Token required (see SecurityConfig): it only ever answers for the
+     * caller. {@code page}/{@code size} as on every Page listing; the order comes from {@code sort}
+     * and {@code order}. List filters take comma-separated values ({@code views=UNDER_1K,OVER_100K}).
+     */
+    @GetMapping("/me")
+    public ApiResponse<Page<VideoResponse>> listStudioPosts(
+            @AuthenticationPrincipal Long currentUserId,
+            @RequestParam(required = false) List<VideoStatus> status,
+            @RequestParam(required = false) List<VideoVisibility> visibility,
+            @RequestParam(required = false) @Size(max = 100) String q,
+            @RequestParam(required = false) List<StudioPostFilter.CountRange> views,
+            @RequestParam(required = false) List<StudioPostFilter.CountRange> likes,
+            @RequestParam(required = false) List<StudioPostFilter.CountRange> comments,
+            @RequestParam(required = false) StudioPostFilter.Sort sort,
+            @RequestParam(required = false) StudioPostFilter.Order order,
+            Pageable pageable) {
+        return ApiResponse.success(videoService.listStudioPosts(currentUserId,
+                new StudioPostFilter(status, visibility, q, views, likes, comments, sort, order), pageable));
     }
 
     @GetMapping("/users/{userId}")
@@ -181,5 +218,27 @@ public class VideoController {
             @Valid @RequestBody UpdateCommentSettingRequest request) {
         return ApiResponse.success(
                 videoService.updateCommentsDisabled(currentUserId, videoId, request.disabled()));
+    }
+
+    /**
+     * Owner-only, like {@link #updateVisibility}. Title and description from Studio's edit page;
+     * {@code VIDEO_*_REJECTED} or {@code VIDEO_CAPTION_HELD} (422) when the text screen refuses it.
+     */
+    @PatchMapping("/{videoId}/caption")
+    public ApiResponse<VideoResponse> updateCaption(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable String videoId,
+            @Valid @RequestBody UpdateCaptionRequest request) {
+        return ApiResponse.success(
+                videoService.updateCaption(currentUserId, videoId, request.title(), request.description()));
+    }
+
+    /** Owner-only. Pins to the top of the profile, or unpins; {@code PIN_LIMIT_REACHED} (409) past three. */
+    @PatchMapping("/{videoId}/pin")
+    public ApiResponse<VideoResponse> updatePin(
+            @AuthenticationPrincipal Long currentUserId,
+            @PathVariable String videoId,
+            @Valid @RequestBody UpdatePinRequest request) {
+        return ApiResponse.success(videoService.updatePinned(currentUserId, videoId, request.pinned()));
     }
 }

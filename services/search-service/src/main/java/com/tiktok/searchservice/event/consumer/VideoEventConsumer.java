@@ -1,6 +1,7 @@
 package com.tiktok.searchservice.event.consumer;
 
 import tools.jackson.databind.ObjectMapper;
+import com.tiktok.event.video.VideoCaptionChangedEvent;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
@@ -26,6 +27,7 @@ public class VideoEventConsumer {
     private static final String VIDEO_PUBLISHED = "VideoPublishedEvent";
     private static final String VIDEO_DELETED = "VideoDeletedEvent";
     private static final String VIDEO_VISIBILITY_CHANGED = "VideoVisibilityChangedEvent";
+    private static final String VIDEO_CAPTION_CHANGED = "VideoCaptionChangedEvent";
 
     private final SearchIndexWriter searchIndexWriter;
     private final IdempotentEventProcessor idempotentEventProcessor;
@@ -62,6 +64,14 @@ public class VideoEventConsumer {
             // move when they do.
             idempotentEventProcessor.runOnce(event.eventId(), VIDEO_VISIBILITY_CHANGED, () ->
                     searchIndexWriter.applyVisibility(event.videoId(), event.visibility()));
+        } else if (VIDEO_CAPTION_CHANGED.equals(eventType)) {
+            VideoCaptionChangedEvent event =
+                    objectMapper.readValue(payload, VideoCaptionChangedEvent.class);
+            // The caption rides on the publication, sent once; without this an edited video stays
+            // findable by its old words.
+            idempotentEventProcessor.runOnce(event.eventId(), VIDEO_CAPTION_CHANGED, () ->
+                    searchIndexWriter.applyCaption(event.videoId(), event.title(),
+                            event.description(), event.tags()));
         } else {
             log.debug("Ignoring video eventType={}", eventType);
         }

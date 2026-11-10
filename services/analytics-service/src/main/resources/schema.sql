@@ -50,3 +50,32 @@ CREATE TABLE IF NOT EXISTS video_tags (
     published_at DateTime64(3)
 ) ENGINE = ReplacingMergeTree
 ORDER BY (video_id, tag);
+
+-- Follow edges, for a creator's follower growth in Studio. Ordered by the account followed first,
+-- because the one query that reads this table asks for one creator's gains and losses.
+CREATE TABLE IF NOT EXISTS follow_events (
+    event_id     String,
+    follower_id  Int64,
+    following_id Int64,
+    followed     UInt8,
+    occurred_at  DateTime64(3)
+) ENGINE = ReplacingMergeTree
+ORDER BY (following_id, event_id);
+
+-- Where a view came from, for Studio's traffic sources and search queries. Rows written before
+-- the columns existed, and reports from clients that send no source, read as OTHER / ''.
+ALTER TABLE watch_events ADD COLUMN IF NOT EXISTS source LowCardinality(String) DEFAULT 'OTHER';
+ALTER TABLE watch_events ADD COLUMN IF NOT EXISTS search_query String DEFAULT '';
+
+-- The video a follow came from, for Studio's "New followers" per video. '' for unfollows,
+-- profile-page follows and rows written before the column existed.
+ALTER TABLE follow_events ADD COLUMN IF NOT EXISTS source_video_id String DEFAULT '';
+
+-- One row per viewer who told us their birth date, for Studio's age groups. Fed by sign-up
+-- events and by the one-time "set birth date" event; the latest updated_at wins, read with FINAL.
+CREATE TABLE IF NOT EXISTS viewer_profiles (
+    user_id    Int64,
+    birth_date Nullable(Date),
+    updated_at DateTime64(3)
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY user_id;

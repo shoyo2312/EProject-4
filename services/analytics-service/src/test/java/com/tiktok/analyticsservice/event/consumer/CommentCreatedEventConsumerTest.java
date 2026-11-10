@@ -77,6 +77,20 @@ class CommentCreatedEventConsumerTest {
                 new EngagementEventRepository.Row(deleted.eventId(), "UNCOMMENTED", "42", 7L, deleted.occurredAt())));
     }
 
+    /** String.valueOf(null) is the text "null": such an event used to be filed under a video called that. */
+    @Test
+    void anEventNamingNoVideo_isSkipped_andTheRestOfThePollStillWritten() throws Exception {
+        CommentCreatedEvent noVideo = CommentCreatedEvent.of(4L, null, 7L, "hi", null, null);
+        CommentCreatedEvent fine = CommentCreatedEvent.of(5L, 42L, 7L, "hi", null, null);
+
+        consumer().onMessages(List.of(
+                record(objectMapper.writeValueAsString(noVideo), "CommentCreatedEvent"),
+                record(objectMapper.writeValueAsString(fine), "CommentCreatedEvent")));
+
+        verify(engagementEventRepository).insertAll(List.of(
+                new EngagementEventRepository.Row(fine.eventId(), "COMMENTED", "42", 7L, fine.occurredAt())));
+    }
+
     private static ConsumerRecord<String, String> record(String payload, String eventType) {
         ConsumerRecord<String, String> record = new ConsumerRecord<>("interaction.comment-events", 0, 0L, "42", payload);
         if (eventType != null) {

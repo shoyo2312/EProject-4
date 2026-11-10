@@ -27,11 +27,27 @@ public record VideoWatchEvent(
         Long userId,
         long watchedMs,
         long durationMs,
-        boolean completed
+        boolean completed,
+        /*
+         * Where the viewer was when the video played (FOR_YOU, SEARCH, PROFILE, ...). Nullable:
+         * absent on every event written before it existed and on reports from clients that do not
+         * send it; analytics stores those as OTHER.
+         */
+        String source,
+        /*
+         * The search phrase that led here, trimmed and lower-cased by the producer. Only meaningful
+         * with source SEARCH; nullable, absent on older events.
+         */
+        String searchQuery
 ) implements DomainEvent {
 
     public static VideoWatchEvent of(Long videoId, Long userId, long watchedMs, long durationMs, boolean completed) {
-        return new VideoWatchEvent(
-                UUID.randomUUID().toString(), Instant.now(), videoId, userId, watchedMs, durationMs, completed);
+        return of(videoId, userId, watchedMs, durationMs, completed, null, null);
+    }
+
+    public static VideoWatchEvent of(Long videoId, Long userId, long watchedMs, long durationMs, boolean completed,
+                                     String source, String searchQuery) {
+        return new VideoWatchEvent(UUID.randomUUID().toString(), Instant.now(), videoId, userId, watchedMs,
+                durationMs, completed, source, searchQuery);
     }
 }

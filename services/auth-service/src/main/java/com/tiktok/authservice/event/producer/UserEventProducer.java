@@ -5,6 +5,7 @@ import com.tiktok.authservice.entity.OutboxEvent;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.event.DomainEvent;
 import com.tiktok.event.user.AccountStateChangedEvent;
+import com.tiktok.event.user.NewDeviceSignInEvent;
 import com.tiktok.event.user.SocialAvatarDiscoveredEvent;
 import com.tiktok.event.user.UserRegisteredEvent;
 import com.tiktok.event.user.UsernameChangedEvent;
@@ -21,6 +22,7 @@ public class UserEventProducer {
     static final String USERNAME_AGGREGATE = "USERNAME";
     static final String SOCIAL_AVATAR_AGGREGATE = "SOCIAL_AVATAR";
     static final String ACCOUNT_AGGREGATE = "ACCOUNT";
+    static final String NEW_DEVICE_AGGREGATE = "NEW_DEVICE";
 
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
@@ -44,6 +46,14 @@ public class UserEventProducer {
     /** Keyed by the account, so a close and the reopening after it arrive in order. */
     public void publishAccountStateChanged(AccountStateChangedEvent event) {
         save(ACCOUNT_AGGREGATE, event.userId(), event);
+    }
+
+    /**
+     * Written in the transaction that remembers the device, so an alert cannot be lost after its
+     * device was recorded as known — that device would never alert again.
+     */
+    public void publishNewDeviceSignIn(NewDeviceSignInEvent event) {
+        save(NEW_DEVICE_AGGREGATE, event.userId(), event);
     }
 
     @SneakyThrows

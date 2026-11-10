@@ -1,0 +1,21 @@
+package com.tiktok.analyticsservice.dto.response;
+
+import java.time.LocalDate;
+
+/**
+ * One day of a creator's chart, in Vietnam's calendar. Every day of the window is present, zeros
+ * included, so a client can draw it without filling gaps. On the account's chart follower moves are
+ * the account's; on a single video's chart {@code followersGained} is the follows that came from that
+ * video and {@code followersLost} is 0.
+ */
+public record CreatorDailyStatsResponse(
+        LocalDate day,
+        long views,
+        long likes,
+        long comments,
+        long shares,
+        long saves,
+        long followersGained,
+        long followersLost
+) {
+}

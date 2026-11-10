@@ -1,6 +1,7 @@
 package com.tiktok.recommendationservice.event.consumer;
 
 import tools.jackson.databind.ObjectMapper;
+import com.tiktok.event.video.VideoCaptionChangedEvent;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
@@ -116,5 +117,17 @@ class VideoEventConsumerTest {
         consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoVisibilityChangedEvent"));
 
         verify(recommendationService).recordVisibilityChanged("vid5", "PRIVATE");
+    }
+
+    @Test
+    void onMessage_captionChange_recordsTheNewTags() throws Exception {
+        VideoCaptionChangedEvent event = VideoCaptionChangedEvent.of("vid6", 1L, "New title", null,
+                List.of("cooking"), Instant.now());
+        givenFirstDelivery(event.eventId());
+
+        consumer().onMessage(objectMapper.writeValueAsString(event), header("VideoCaptionChangedEvent"));
+
+        verify(recommendationService).recordTagsChanged("vid6", List.of("cooking"));
+        verify(recommendationService, never()).recordVideoUploaded(eq("vid6"), any(), any(), any());
     }
 }

@@ -67,6 +67,8 @@ import java.util.List;
         // The visibility-change poll. Only ever a handful of rows carry a non-null value at any
         // moment, but the collection it scans without this index is the largest one here.
         @CompoundIndex(name = "visibility_outbox_idx", def = "{'visibilityEventPendingAt': 1}"),
+        // The caption-edit poll, same reasoning as the visibility one.
+        @CompoundIndex(name = "caption_outbox_idx", def = "{'captionEventPendingAt': 1}"),
         // The early-purge poll, same reasoning: a handful of rows ever carry a value.
         // See VideoEventPublisher.publishRequestedPurges.
         @CompoundIndex(name = "purge_request_idx", def = "{'purgeRequestedAt': 1}"),
@@ -102,6 +104,9 @@ public class Video {
     private String hlsUrl;
 
     private Integer durationSeconds;
+
+    /** Trim and speed from the app's editor, applied by media-worker. Null when not edited. */
+    private VideoEdit edit;
 
     /**
      * Display size of the playback file, rotation already applied — the shape a client lays the
@@ -237,6 +242,20 @@ public class Video {
      */
     private Instant visibilityEventPendingAt;
 
+    /**
+     * The outbox slot for VideoCaptionChangedEvent, run exactly like {@link #visibilityEventPendingAt}:
+     * set on every edit from Studio, cleared once the broker has the caption, and the timestamp
+     * of the edit that makes each event id distinct.
+     */
+    private Instant captionEventPendingAt;
+
+    /**
+     * When the owner pinned this video to the top of their profile; null when it is not pinned.
+     * The profile grid sorts on it descending, so the latest pin comes first and an unpinned video
+     * (null sorts lowest in Mongo) falls back to upload order.
+     */
+    private Instant pinnedAt;
+
     @CreatedDate
     private Instant createdAt;
 
@@ -287,6 +306,33 @@ public class Video {
     /** Owner turning new comments on or off for their own video. */
     public void changeCommentsDisabled(boolean commentsDisabled) {
         this.commentsDisabled = commentsDisabled;
+    }
+
+    /**
+     * Owner editing the caption from Studio. The new screening replaces the publish-time one, and
+     * the announcement is queued in the same object, as {@link #changeVisibility} does — the read
+     * paths that copied the old caption are the reason the edit has to travel at all. Queued
+     * whatever the status: the publisher only sends it once the publication has gone out, so a
+     * video that never went live is announced with its caption as it is by then, while one taken
+     * down still has copies out there, flagged rather than dropped, that a restore shows again.
+     */
+    public void changeCaption(String title, String description, List<String> tags,
+                              VideoTextModeration textModeration) {
+        this.title = title;
+        this.description = description;
+        this.tags = tags;
+        this.textModeration = textModeration;
+        this.captionEventPendingAt = Instant.now();
+    }
+
+    /** The queued caption edit has been acknowledged by the broker; nothing left to send. */
+    public void markCaptionEventPublished() {
+        this.captionEventPendingAt = null;
+    }
+
+    /** Pin to the top of the owner's profile, or take the pin off. */
+    public void changePinned(boolean pinned) {
+        this.pinnedAt = pinned ? Instant.now() : null;
     }
 
     /**

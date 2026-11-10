@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.InvalidDataAccessResourceUsageException;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.data.elasticsearch.NoSuchIndexException;
+import org.springframework.data.elasticsearch.ResourceNotFoundException;
 import org.springframework.data.elasticsearch.UncategorizedElasticsearchException;
 
 import java.net.ConnectException;
@@ -59,6 +61,16 @@ class ElasticsearchStatusTest {
 
         assertThat(classified).isInstanceOf(InvalidDataAccessResourceUsageException.class);
         assertThat(classified).hasRootCauseInstanceOf(ResponseException.class);
+    }
+
+    /**
+     * An update of a document that is not there arrives with no status on it, and the writer's
+     * skip for an unknown video never matched: the event went to the DLT instead.
+     */
+    @Test
+    void aMissingDocument_isA404_andAMissingIndexIsNot() {
+        assertThat(ElasticsearchStatus.is(new ResourceNotFoundException("[v1]: document missing"), 404)).isTrue();
+        assertThat(ElasticsearchStatus.is(new NoSuchIndexException("videos"), 404)).isFalse();
     }
 
     private static Response response(int status) {

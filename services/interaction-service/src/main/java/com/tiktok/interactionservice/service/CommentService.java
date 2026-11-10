@@ -1,5 +1,6 @@
 package com.tiktok.interactionservice.service;
 
+import com.tiktok.interactionservice.dto.request.CommentInboxFilter;
 import com.tiktok.interactionservice.dto.response.CommentLikeResponse;
 import com.tiktok.interactionservice.dto.response.CommentPermissionResponse;
 import com.tiktok.interactionservice.dto.response.CommentPageResponse;
@@ -16,7 +17,12 @@ public interface CommentService {
      * @throws com.tiktok.interactionservice.exception.CommentingRestrictedException while the caller's
      *         strikes restrict them, checked before anything else
      */
-    CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId);
+    CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId,
+                               String stickerId);
+
+    default CommentResponse addComment(Long videoId, Long currentUserId, String content, Long parentId) {
+        return addComment(videoId, currentUserId, content, parentId, null);
+    }
 
     default CommentResponse addComment(Long videoId, Long currentUserId, String content) {
         return addComment(videoId, currentUserId, content, null);
@@ -30,6 +36,17 @@ public interface CommentService {
 
     default CommentPageResponse listComments(Long videoId, String cursor, int size) {
         return listComments(videoId, cursor, size, null);
+    }
+
+    /**
+     * The same top-level comments ranked by interaction: likes plus replies, highest first, ties
+     * newest first. Only the newest few hundred are ranked; past them the listing carries on
+     * newest first with an ordinary cursor.
+     */
+    CommentPageResponse listTopComments(Long videoId, String cursor, int size, Long currentUserId);
+
+    default CommentPageResponse listTopComments(Long videoId, String cursor, int size) {
+        return listTopComments(videoId, cursor, size, null);
     }
 
     /**
@@ -49,6 +66,18 @@ public interface CommentService {
      */
     CommentPermissionResponse commentPermission(Long videoId, Long currentUserId);
 
+    /**
+     * The author replaces the text of their own comment. The new text goes through the same screening
+     * as a new comment: refused (a strike) when a new comment would be refused, and not saved when a
+     * new comment would be held — see {@link com.tiktok.interactionservice.exception.CommentEditNeedsReviewException}.
+     * The sticker, if any, is left as posted. An unchanged text is answered without a write.
+     *
+     * @throws com.tiktok.interactionservice.exception.NotCommentOwnerException for anyone but the author
+     * @throws com.tiktok.interactionservice.exception.CommentNotFoundException when it is unknown,
+     *         deleted or held
+     */
+    CommentResponse editComment(Long videoId, Long commentId, Long currentUserId, String content);
+
     void deleteComment(Long videoId, Long commentId, Long currentUserId);
 
     /**
@@ -67,6 +96,17 @@ public interface CommentService {
      *         owner — and for the owner while video-service cannot confirm it (fails closed)
      */
     CommentPageResponse listHeld(Long videoId, String cursor, int size, Long currentUserId);
+
+    /**
+     * TikTok Studio's comment inbox: comments others left on any of the owner's videos, newest
+     * first, held ones included and marked HELD, narrowed by {@code filter}. Comments posted before
+     * the inbox existed are not in it — except narrowed to one video, which reads that video's own
+     * comments and refuses a video the owner does not own (fails closed, like {@link #listHeld}).
+     * A cursor belongs to the filter it was issued under. With a video, the filter may also rank
+     * (most liked, most replied), keep only answered or unanswered threads, or keep only authors in
+     * a follower-count range — then the video is read whole, up to a cap, and paged by offset.
+     */
+    CommentPageResponse listForOwner(Long ownerId, CommentInboxFilter filter, String cursor, int size);
 
     /**
      * Publishes a held comment: indexed, counted and announced exactly as if it had just been

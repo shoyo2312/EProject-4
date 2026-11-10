@@ -30,8 +30,9 @@ public class RateLimiterConfig {
      * admin it serves arrives from that one address, and a few of them on the videos page empty a
      * shared 20 req/s bucket between them. The account is a key nobody can forge — the
      * authentication filter has verified the token before any route filter runs, and a token that
-     * fails is a 401 there, not a guest. Only admins: anyone can create an ordinary account, and
-     * keying those by account would hand out a fresh bucket per sign-up.
+     * fails never names one: it is a 401, or on the sign-in routes a guest keyed by address. Only
+     * admins: anyone can create an ordinary account, and keying those by account would hand out a
+     * fresh bucket per sign-up.
      *
      * <p>The web client reaches us through Next.js, which proxies {@code /api/*} here from its own
      * server, so {@code getRemoteAddress()} is that one server for every viewer on the site — the

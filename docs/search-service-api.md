@@ -2,7 +2,7 @@
 
 Tài liệu này mô tả **những gì client (Flutter/Dart) cần biết** để tích hợp đúng với `search-service`: tìm video (theo từ khoá hoặc hashtag). Không phải tài liệu thiết kế backend — chỉ phần hợp đồng API (contract). Đọc kèm `docs/video-service-api.md` vì kết quả tìm video **không đủ để phát** — xem mục 4.
 
-Quy tắc token: **mọi endpoint đều public, không cần token.** Gửi token cũng không đổi kết quả (khác `video-service`/`interaction-service`). Gateway route `GET /api/v1/search/**` là public.
+Quy tắc token: **mọi endpoint đều public, không cần token.** Gửi token hợp lệ cũng không đổi kết quả (khác `video-service`/`interaction-service`); nhưng token hết hạn / bị thu hồi / giả thì gateway trả `401` kể cả trên path public — đừng gửi kèm token hỏng. Gateway route `GET /api/v1/search/**` là public.
 
 ## 1. Tech stack liên quan đến client
 
@@ -44,7 +44,7 @@ Phân trang bằng query param chuẩn Spring: `?page=0&size=20&sort=field,dir`.
 - `page` bắt đầu từ **0**. Không truyền → `page=0`, `size=20`.
 - `size` bị kẹp ở **100** (`spring.data.web.pageable.max-page-size`); xin lớn hơn thì nhận về 100. Xin 20–50 là hợp lý.
 - Điều kiện dừng infinite scroll: `last == true` (hoặc `number + 1 >= totalPages`). `content` ngắn hơn `size` ở trang cuối là bình thường.
-- `sort` mặc định theo **điểm liên quan (relevance)** của Elasticsearch khi có `q`; không truyền `q` thì thứ tự không xác định — nên truyền `sort=createdAt,desc` nếu muốn thứ tự ổn định cho danh mục.
+- Không truyền `sort` → server sắp `_score desc, createdAt desc`: khớp nhất trước, cùng điểm thì video mới hơn trước. Không có `q`/`hashtag` thì mọi kết quả cùng điểm, nên thứ tự là mới nhất trước.
 - `sort` chỉ nhận `_score`, `createdAt`, `viewCount`, `likeCount`, `commentCount`, `shareCount`. Field khác (vd. `title` — field text, Elasticsearch không sort được) → `400 INVALID_SORT`.
 - `totalElements` / `totalPages` chỉ đếm tới **10 000** (`track_total_hits` = cửa sổ phân trang bên dưới): quá số đó thì vẫn trả 10 000. Đếm chính xác bắt Elasticsearch duyệt mọi kết quả khớp, cho một con số không ai lật tới được. Dùng để dừng cuộn thì vẫn đúng; đừng hiển thị như "tổng số kết quả".
 - Chỉ phân trang được trong **10 000 kết quả đầu** (`(page + 1) * size <= 10000`, giới hạn `max_result_window` của Elasticsearch). Vượt quá → `400 PAGE_TOO_DEEP`; thu hẹp `q`/`hashtag` thay vì lật tiếp.
@@ -65,12 +65,13 @@ Query param (tất cả optional, nhưng nên có **ít nhất một** trong `q`
 | `hashtag` | string | Tìm theo hashtag, **gần đúng** như `q`. `#Dance`, `dance`, ` Dance ` đều được — server tự chuẩn hoá (lowercase, bỏ `#`, trim). Khớp trên `tags` và `description` |
 | `page`, `size`, `sort` | | Xem mục 2 |
 
+- `q` và `hashtag` mỗi cái tối đa **200 ký tự**; dài hơn → `400 QUERY_TOO_LONG`.
 - `q` và `hashtag` **cộng dồn (AND)**: `?q=biển&hashtag=dance` = video vừa khớp "biển" ở text vừa khớp hashtag `dance`.
 - Không truyền cả hai → trả về mọi video `PUBLISHED` (phân trang). Không phải lỗi, nhưng thường không phải ý client muốn.
 - `hashtag` xếp hạng theo độ khớp: `#cat` → tag `cat` trước, rồi tag bắt đầu bằng `cat` (`catdance`), rồi tag lệch một ký tự hoặc chung tiền tố (`capcut`, `car`), cuối cùng video chỉ nhắc nó trong `description`.
-- Tên tác giả do `user-service` trả về lúc tìm (50 tài khoản nhiều follower nhất khớp tên). `user-service` lỗi/chậm quá 500ms thì vẫn trả kết quả, chỉ thiếu phần khớp tác giả.
+- Tên tác giả do `user-service` trả về lúc tìm (50 tài khoản nhiều follower nhất khớp tên). `user-service` lỗi/chậm quá 500ms thì vẫn trả kết quả, chỉ thiếu phần khớp tác giả. Chỉ hỏi tác giả khi `q` (đã trim) dài **3–100 ký tự**: `q=ab` không bao giờ khớp theo tên tác giả.
 
-Chỉ trả về video ở trạng thái **`PUBLISHED`**. Video đang `PROCESSING`, `FAILED`, `TAKEN_DOWN`, `PRIVATE` hoặc đã xoá **không** xuất hiện, kể cả với chủ video (service này không biết ai đang gọi). Video của tài khoản **đang bị ban** cũng bị loại (index `owner_bans`, lọc lúc đọc theo `bannedUntil > now`), nên ban tạm hết hạn là video tự hiện lại, không cần event nào. Tài khoản **do chủ tự đóng** cũng vậy (`deactivatedAt` trên cùng document, ghi từ `auth.account-events`, guard `accountStateChangedAt` riêng): ẩn = `bannedUntil > now` **hoặc** có `deactivatedAt`, và unban không mở lại tài khoản đã đóng, mở lại cũng không gỡ ban.
+Chỉ trả về video ở trạng thái **`PUBLISHED`** **và** `visibility` **`PUBLIC`**. Video đang `PROCESSING`, `FAILED`, `TAKEN_DOWN`, video `FRIENDS`/`PRIVATE` (visibility, không phải status) hoặc đã xoá **không** xuất hiện, kể cả với chủ video hay bạn bè (service này không biết ai đang gọi — video `FRIENDS` thì xem ở trang profile). Video của tài khoản **đang bị ban** cũng bị loại (index `owner_bans`, lọc lúc đọc theo `bannedUntil > now`), nên ban tạm hết hạn là video tự hiện lại, không cần event nào. Tài khoản **do chủ tự đóng** cũng vậy (`deactivatedAt` trên cùng document, ghi từ `auth.account-events`, guard `accountStateChangedAt` riêng): ẩn = `bannedUntil > now` **hoặc** có `deactivatedAt`, và unban không mở lại tài khoản đã đóng, mở lại cũng không gỡ ban.
 
 Response `data.content[]` → `VideoSearchResponse`:
 ```json
@@ -124,13 +125,14 @@ Client nên tự ẩn video vừa xoá ở phía mình thay vì đợi search lo
 
 | `code` | HTTP | Khi nào |
 |---|---|---|
-| `VALIDATION_ERROR` | 400 | Param sai kiểu (vd. `minPrice=abc`) |
+| `VALIDATION_ERROR` | 400 | Request sai định dạng |
 | `INVALID_SORT` | 400 | `sort` theo field không nằm trong danh sách ở mục 2 |
 | `PAGE_TOO_DEEP` | 400 | Trang vượt quá 10 000 kết quả đầu |
+| `QUERY_TOO_LONG` | 400 | `q` hoặc `hashtag` dài quá 200 ký tự |
 | `INTERNAL_ERROR` | 500 | Elasticsearch không phản hồi / lỗi không xác định |
 | — | 429 | Vượt hạn mức gateway (20 req/s, burst 40, theo IP) |
 
-Ngoài hai mã phân trang ở trên, không có mã lỗi nghiệp vụ riêng — mọi endpoint đều là đọc và luôn trả `Page`, kể cả rỗng. `q`/`hashtag` không khớp gì → `content: []`, `totalElements: 0`, **không** phải 404.
+Ngoài ba mã `INVALID_SORT` / `PAGE_TOO_DEEP` / `QUERY_TOO_LONG` ở trên, không có mã lỗi nghiệp vụ riêng — mọi endpoint đều là đọc và luôn trả `Page`, kể cả rỗng. `q`/`hashtag` không khớp gì → `content: []`, `totalElements: 0`, **không** phải 404.
 
 ## 7. Sự kiện Kafka (Events)
 
@@ -140,6 +142,8 @@ search-service **chỉ tiêu thụ**, không phát event nào. Toàn bộ index 
 |---|---|---|---|
 | `video.video-events` | `VideoPublishedEvent` (vắng ⇒ coi là Published) | `VideoPublishedEvent` | Tạo `VideoDocument`, `status = PROCESSING`, copy `title`/`description`/`tags` |
 | `video.video-events` | `VideoDeletedEvent` | `VideoDeletedEvent` | Xoá hẳn document (không đánh dấu cờ) |
+| `video.video-events` | `VideoVisibilityChangedEvent` | `VideoVisibilityChangedEvent` | Ghi `visibility` (scripted partial update, không upsert — video lạ thì bỏ qua, publication đến sau đã mang visibility hiện tại). Chủ video chuyển sang `FRIENDS`/`PRIVATE` → biến khỏi kết quả tìm kiếm; status không đổi |
+| `video.video-events` | `VideoCaptionChangedEvent` | `VideoCaptionChangedEvent` | Ghi đè `title`/`description`/`tags` bằng caption hiện tại (scripted partial update, không upsert — video lạ thì bỏ qua); `description` null thì xoá field khỏi `_source`. Status, counter, media không đổi |
 | `media.video-transcoded-events` | — | `VideoTranscodedEvent` | Chỉ áp dụng khi video còn chờ transcode (`pendingStatus` rỗng/`PROCESSING`/`FAILED`): `success` → `PENDING_MODERATION`, hoặc verdict đã đến trước (`verdict`) nếu có; ngược lại `FAILED`. `thumbnailUrl` + `durationSeconds` luôn được ghi. Đến trước publication thì kết quả được giữ ở `pendingStatus` và publication nhận lại — document chưa có `status` nên chưa vào kết quả tìm kiếm |
 | `media.video-moderation-events` | — | `VideoModerationCompletedEvent` | Chỉ verdict đầu tiên có tác dụng (ghi vào `verdict`). `APPROVED` → `PUBLISHED`, `REVIEW` → `PENDING_REVIEW`, `REJECTED` → `REJECTED`, nhưng chỉ đổi status khi video đang `PENDING_MODERATION`; đến trước transcode thì được giữ lại cho transcode áp dụng (khớp `Video.applyModeration` bên video-service) |
 | `interaction.like-events` | — | `VideoLikeEvent` | `likeCount += liked ? 1 : -1` (kẹp ≥ 0) |
@@ -148,6 +152,7 @@ search-service **chỉ tiêu thụ**, không phát event nào. Toàn bộ index 
 | `interaction.share-events` | — | `VideoSharedEvent` | `shareCount++` |
 | `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` | 2 event trên | `status = TAKEN_DOWN` (chưa có `pendingStatus` thì ghi status bị thay vào đó, để restore không nhảy thẳng lên `PUBLISHED` khi video còn đang transcode) / restore: video đang TAKEN_DOWN thì trả về `pendingStatus`; video không bị gỡ mà đang `PENDING_REVIEW`/`REJECTED` thì đó là admin duyệt → `PUBLISHED` (khớp `Video.markRestored` bên video-service) |
 | `admin.moderation-events` | `UserBannedEvent` / `UserUnbannedEvent` | 2 event trên | Ghi / gỡ bản ghi trong index `owner_bans` (`bannedUntil`, vĩnh viễn nếu null); không đụng document video. Event cũ hơn bản ghi đang giữ (`changedAt`) bị bỏ qua. Không claim `eventId` — ghi ban là một phép gán, redelivery ra cùng kết quả. Event khác trên topic bị bỏ qua |
+| `auth.account-events` | — | `AccountStateChangedEvent` | Ghi / gỡ `deactivatedAt` trên cùng bản ghi `owner_bans` (guard `accountStateChangedAt` riêng, không đụng field của ban, event cũ hơn bị bỏ qua); không đụng document video. Không claim `eventId` — như ban, là một phép gán. Xem mục 3.1 |
 
 Mọi consumer **claim `eventId` trước khi xử lý** (`op_type=create` trên index `processed_events`, 409 ⇒ đã xử lý) chứ không đọc-rồi-ghi: trên Elasticsearch một document vừa ghi chưa đọc lại được cho tới lần refresh kế tiếp (mặc định 1s), nên check-then-act để lọt mọi redelivery trong cửa sổ đó. Mọi cập nhật counter là scripted partial update kèm `retry_on_conflict`, không phải đọc-sửa-ghi cả document.
 

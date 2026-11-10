@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.repository;
 
+import com.tiktok.videoservice.dto.request.StudioPostFilter;
 import com.tiktok.videoservice.dto.response.DailyVideoStatsResponse;
 import com.tiktok.videoservice.entity.PipelineState;
 import com.tiktok.videoservice.entity.Video;
@@ -9,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.bson.Document;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -96,6 +98,56 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         Query query = Query.query(criteria).with(pageable);
         List<Video> videos = mongoTemplate.find(query, Video.class);
         // The count repeats the match without the paging, which is what Page needs for its total.
+        long total = mongoTemplate.count(Query.query(criteria), Video.class);
+        return new PageImpl<>(videos, pageable, total);
+    }
+
+    @Override
+    public Page<Video> findStudioPosts(Long ownerId, StudioPostFilter filter, Pageable pageable) {
+        // userId + deletedAt lead user_videos_idx, so the match stays inside one owner's videos;
+        // sorting by a counter is in memory over those, which one owner's uploads never outgrow.
+        // Each filter is its own clause under one $and: the caption search and every count filter
+        // are an $or, and a single Criteria holds only one of those.
+        List<Criteria> clauses = new ArrayList<>();
+        clauses.add(where("userId").is(ownerId).and("deletedAt").is(null));
+        if (filter.status() != null && !filter.status().isEmpty()) {
+            clauses.add(where("status").in(filter.status()));
+        }
+        if (filter.visibility() != null && !filter.visibility().isEmpty()) {
+            clauses.add(where("visibility").in(filter.visibility()));
+        }
+        if (filter.q() != null && !filter.q().isBlank()) {
+            // Quoted for the reason given in adminCriteria.
+            String quoted = Pattern.quote(filter.q().strip());
+            clauses.add(new Criteria().orOperator(
+                    where("title").regex(quoted, "i"), where("description").regex(quoted, "i")));
+        }
+        addCountRanges(clauses, "viewCount", filter.views());
+        addCountRanges(clauses, "likeCount", filter.likes());
+        addCountRanges(clauses, "commentCount", filter.comments());
+        Criteria criteria = new Criteria().andOperator(clauses);
+
+        String field = switch (filter.sort() == null ? StudioPostFilter.Sort.NEWEST : filter.sort()) {
+            case NEWEST -> "createdAt";
+            case VIEWS -> "viewCount";
+            case LIKES -> "likeCount";
+            case COMMENTS -> "commentCount";
+        };
+        Sort.Direction direction = filter.order() == StudioPostFilter.Order.ASC ? Sort.Direction.ASC : Sort.Direction.DESC;
+        // createdAt then _id break ties, so a page boundary between equal counts cannot repeat a row.
+        Sort sort = field.equals("createdAt")
+                ? Sort.by(direction, "createdAt", "_id")
+                : Sort.by(direction, field, "createdAt", "_id");
+        // The default view leads with pinned videos, latest pin first, as the profile does: pinning
+        // from the ⋯ menu moves the row to the top. A missing pinnedAt sorts lowest, so DESC leaves
+        // unpinned videos after them. NEWEST is that view whether named or not; oldest first and
+        // a column the owner picks are that order alone.
+        if (field.equals("createdAt") && direction == Sort.Direction.DESC) {
+            sort = Sort.by(Sort.Direction.DESC, "pinnedAt").and(sort);
+        }
+        Query query = Query.query(criteria)
+                .with(PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort));
+        List<Video> videos = mongoTemplate.find(query, Video.class);
         long total = mongoTemplate.count(Query.query(criteria), Video.class);
         return new PageImpl<>(videos, pageable, total);
     }
@@ -226,6 +278,16 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         return value instanceof Number number ? number.longValue() : 0L;
     }
 
+    /** A count inside any one of the ticked ranges; nothing ticked adds nothing. */
+    private static void addCountRanges(List<Criteria> clauses, String field, List<StudioPostFilter.CountRange> ranges) {
+        if (ranges == null || ranges.isEmpty()) {
+            return;
+        }
+        clauses.add(new Criteria().orOperator(ranges.stream()
+                .map(range -> where(field).gte(range.min).lt(range.max))
+                .toList()));
+    }
+
     // statusBeforeTakedown is part of both transcode writes because that is where the outcome
     // goes while the video is down — see Video.applyOutcome. Leaving it out would drop
     // the only record of the result on exactly the videos that need it at restore time.
@@ -348,6 +410,28 @@ public class VideoRepositoryImpl implements VideoRepositoryCustom {
         Query query = Query.query(
                 where("_id").is(videoId).and("visibilityEventPendingAt").is(announced));
         return write(query, new Update().set("visibilityEventPendingAt", null)) > 0;
+    }
+
+    @Override
+    public void updateCaption(Video video) {
+        update(video.getId(), new Update()
+                .set("title", video.getTitle())
+                .set("description", video.getDescription())
+                .set("tags", video.getTags())
+                .set("textModeration", video.getTextModeration())
+                .set("captionEventPendingAt", video.getCaptionEventPendingAt()));
+    }
+
+    @Override
+    public boolean clearCaptionEventPending(String videoId, Instant announced) {
+        Query query = Query.query(
+                where("_id").is(videoId).and("captionEventPendingAt").is(announced));
+        return write(query, new Update().set("captionEventPendingAt", null)) > 0;
+    }
+
+    @Override
+    public void updatePinned(Video video) {
+        update(video.getId(), new Update().set("pinnedAt", video.getPinnedAt()));
     }
 
     @Override

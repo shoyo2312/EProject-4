@@ -13,11 +13,17 @@ Stack: Spring Cloud Gateway (**WebFlux/reactive** — KHÔNG có servlet API, KH
 | video-service | `/api/v1/videos/**` | `VIDEO_SERVICE_URI` → `:8083` |
 | interaction-service | `/api/v1/interactions/**` | `INTERACTION_SERVICE_URI` → `:8085` |
 | recommendation-service | `/api/v1/recommendations/**` | `RECOMMENDATION_SERVICE_URI` → `:8087` |
+| story-service | `/api/v1/stories/**` | `STORY_SERVICE_URI` → `:8086` |
+| chat-service | `/api/v1/conversations/**` | `CHAT_SERVICE_URI` → `:8088` |
+| chat-websocket | `/ws/**` | `CHAT_SERVICE_URI` → `:8088` |
+| notification-service | `/api/v1/notifications/**` | `NOTIFICATION_SERVICE_URI` → `:8089` |
 | search-service | `/api/v1/search/**` | `SEARCH_SERVICE_URI` → `:8095` |
 | admin-service | `/api/v1/admin/**` | `ADMIN_SERVICE_URI` → `:8096` |
 | analytics-service | `/api/v1/analytics/**` | `ANALYTICS_SERVICE_URI` → `:8097` |
 
-**Không route qua gateway** (chỉ đến được từ mạng nội bộ): `media-worker` (`:8084`, không có REST API), `rank-service` (`:8098`, xem `docs/ranking-model.md` §5), `story/chat/notification` (chưa expose).
+**Không route qua gateway** (chỉ đến được từ mạng nội bộ): `media-worker` (`:8084`, không có REST API), `rank-service` (`:8098`, xem `docs/ranking-model.md` §5), `moderation-service` (`:8099`).
+
+Actuator của gateway nằm ở `MANAGEMENT_PORT` (mặc định `8180`), không ở port public `8080`.
 
 Route không khớp path nào → `404` với envelope `ApiResponse` (xem mục 4).
 
@@ -31,18 +37,27 @@ Converter đọc header `Authorization: Bearer <token>`. Thiếu prefix `Bearer 
 
 | Pattern | Ghi chú |
 |---|---|
-| `/api/v1/auth/**` | Toàn bộ auth |
+| `/api/v1/auth/**` | Toàn bộ auth, **trừ** `/api/v1/auth/admin/**` (cần token; auth-service tự check `ROLE_ADMIN`) — auth-service tự quyết route nào cần phiên |
 | `/swagger-ui.html`, `/swagger-ui/**`, `/v3/api-docs/**` | Docs |
-| `GET /api/v1/videos/**` | Mọi GET của video (POST/DELETE vẫn cần token) |
+| `GET /api/v1/videos/**` | Mọi GET của video (POST/DELETE vẫn cần token), **trừ** `/api/v1/videos/admin[/**]` (cần token; video-service tự check `ROLE_ADMIN`) |
 | `GET /api/v1/recommendations/trending` | Chỉ trending; `GET /feed` cần token |
 | `GET /api/v1/search/**` | Toàn bộ search |
-| `GET /api/v1/interactions/videos/{id}/comments`, `/videos/{id}/counts`, `/videos/counts/batch`, `/videos/{id}/like-status` | Các `GET` mà chính interaction-service để public; khách nhận `liked: false` ở `like-status` |
+| `GET /api/v1/users`, `/users/{userId}` (chỉ id số), `/users/by-username/*` | Profile công khai; `/users/me` và các GET khác vẫn cần token |
+| `GET /api/v1/interactions/videos/{id}/comments`, `/videos/{id}/comments/{commentId}/replies`, `/videos/{id}/counts`, `/videos/counts/batch`, `/videos/{id}/like-status` | Các `GET` mà chính interaction-service để public; khách nhận `liked: false` ở `like-status` |
 | `GET /api/v1/interactions/users/{id}/reposts` | Tab Reposts của profile |
+| `GET /api/v1/stories/rings`, `/stories/users/*`, `/stories/*` | Khách chỉ thấy story PUBLIC của tài khoản công khai; `GET /stories/feed` vẫn cần token |
 | `/ws/**` | Handshake chat: token nằm ở query param, chat-service tự validate |
+| `/actuator/**` | Chỉ phục vụ trên management port (xem mục 1) |
+
+### Path bị chặn hẳn (`denyAll`)
+
+`/api/v1/users/internal/**`, `/api/v1/interactions/internal/**`, `/api/v1/admin/internal/**`, `/api/v1/videos/internal/**`, `/api/v1/conversations/internal/**`, `/api/v1/stories/internal/**` và `/api/v1/videos/*/policy` → gateway luôn từ chối (`401` khi không có token, `403` khi có token hợp lệ), không bao giờ proxy. Đây là endpoint service-to-service (header `X-Internal-Token`), chỉ đến được từ mạng nội bộ. Thêm endpoint nội bộ mới ở service thì thêm `denyAll` ở đây.
 
 Mọi request khác → **bắt buộc** token hợp lệ; thiếu/sai/hết hạn → `401` (envelope `ApiResponse`, `RestAuthenticationEntryPoint`). Không đủ quyền ở tầng gateway → `403` (`RestAccessDeniedHandler`) — hiếm, vì gateway không check role.
 
 > Lưu ý cho các path public: **không gửi token** thì là khách. **Gửi token hỏng** (hết hạn, bị thu hồi, sai chữ ký) thì vẫn `401`, kể cả trên path public — gateway không lặng lẽ hạ xuống khách. Client xử lý như mọi `401`: `/refresh` **một lần** rồi gửi lại; refresh thất bại thì xoá token và gọi lại như khách. Hạ xuống khách thì người đã đăng nhập nhận dữ liệu sai mà không có gì báo (tim rỗng, video private của chính mình biến mất).
+>
+> Ngoại lệ: các route đăng nhập mà auth-service tự `permitAll` (`POST /api/v1/auth/register|login|login/otp|refresh|logout|verify-email|resend-verification|forgot-password|reset-password/**|register/**|oauth/**|qr|qr/*/status`, xem `SecurityConfig.SIGN_IN_ROUTES`). Ở đó token hỏng bị bỏ qua và request đi tiếp như khách, vì credential nằm trong body; app mobile gửi kèm token đã hết hạn cả khi gọi `/refresh`. Các route cần phiên của auth-service (`/auth/me`, `/auth/email`, `/auth/account/**`) vẫn `401`: auth-service trả khách `403`, mà client không refresh khi gặp `403`. Thêm route đăng nhập mới ở auth-service thì thêm vào `SIGN_IN_ROUTES`.
 
 ## 3. `GET /api/v1/me` — view "tài khoản của tôi" gộp sẵn
 
@@ -67,12 +82,17 @@ Response `data` → `MeResponse`:
   "profileReady": true,
   "usernameChangeableAt": null,
   "displayNameChangeableAt": "2026-08-08T10:00:00Z",
-  "hasPassword": true
+  "hasPassword": true,
+  "emailVerified": true,
+  "providers": ["GOOGLE"],
+  "birthDate": "2001-05-09"
 }
 ```
 
 - **`usernameChangeableAt`** (từ auth-service) / **`displayNameChangeableAt`** (từ user-service): khi nào được đổi username (1 lần / 30 ngày, `PUT /api/v1/auth/me/username`) và tên hiển thị (1 lần / 7 ngày, `PATCH /api/v1/users/me`) lần tới. `null` = đổi được ngay. `displayNameChangeableAt` cũng `null` khi `profileReady: false`.
 - **`hasPassword`** (từ auth-service): `false` với tài khoản tạo bằng Google/Facebook chưa từng đặt mật khẩu. Client dùng để hiện "Set password" — đặt qua luồng `forgot-password` → `reset-password/verify` → `reset-password/complete`.
+- **`emailVerified`**, **`providers`** (từ auth-service, `providers` rỗng `[]` thay vì `null`): để client chọn cách xác minh lại khi đóng tài khoản (`auth-service-api.md` mục 3.19).
+- **`birthDate`** (từ user-service): `null` với tài khoản Google/Facebook chưa khai ngày sinh — client hỏi một lần. Cũng `null` khi `profileReady: false`.
 
 - **`profileReady: false`** → user-service chưa tạo profile xong (Kafka `UserRegisteredEvent` chưa xử lý — thường vài trăm ms sau register). Khi đó `displayName`/`bio`/`avatarUrl`/`followerCount`/`followingCount` đều `null`. Gateway đã **retry ngầm** call user-service 2 lần (backoff 150ms) trên riêng `404` trước khi degrade — client vẫn nên xử lý được trạng thái này (hiện `id`/`username`/`email` trước, poll lại `/me` để lấy profile).
 - Call auth-service **không** được degrade: identity là bắt buộc, lỗi của nó (401, 5xx, timeout) truyền thẳng ra client.
@@ -82,7 +102,7 @@ Lỗi: `401` (thiếu/sai token), hoặc lỗi propagate từ auth-service.
 
 ## 4. Envelope lỗi của chính gateway
 
-Lỗi sinh ở tầng gateway (route không khớp, downstream chết/không kết nối được, 401/403) được `GlobalErrorAttributes` bọc về đúng dạng `ApiResponse` như mọi service:
+Lỗi sinh ở tầng gateway (route không khớp, downstream chết/không kết nối được) được `GlobalErrorAttributes` bọc về đúng dạng `ApiResponse` như mọi service; `401`/`403` do `RestAuthenticationEntryPoint`/`RestAccessDeniedHandler` ghi cùng dạng đó với `code` `UNAUTHORIZED`/`FORBIDDEN`:
 
 ```json
 {
@@ -117,6 +137,13 @@ Xác định IP: bắt đầu từ `getRemoteAddress()`; **chỉ khi** địa ch
 - ⚠️ **Next.js rewrites không append**: nó chỉ set `X-Forwarded-For` khi request chưa có (`??=`), nên nếu Next.js được expose thẳng ra internet thì header client tự bịa đi qua nguyên vẹn và gateway không thể biết IP thật. Cần một proxy đứng trước Next.js ghi đè/append header này (Vercel edge đã làm; chạy Docker thì đặt nginx/Caddy phía trước). Khi đã biết địa chỉ proxy, thu hẹp `trusted-proxies` về đúng các địa chỉ đó.
 
 Hệ quả cho mobile: nhiều thiết bị sau cùng một NAT chia nhau hạn mức 20 req/s. Đây là lý do các doc khác yêu cầu poll giãn dần, không gọi `/like-status` cho cả trang feed cùng lúc, dùng `GET /videos/batch` thay vì `GET /{id}` nhiều lần.
+
+### Header gửi xuống service (`ClientAddressFilter`)
+
+Global filter chạy trước mọi thứ khác, trên mọi route:
+
+- **`X-Client-Ip`** = IP client, xác định đúng như key resolver ở trên (cùng `trusted-proxies`). Header bị **ghi đè** (`set`), nên giá trị client tự gửi bị bỏ.
+- **`X-Internal-Token`**: chỉ gắn vào request đi **route `auth-service`**, để auth-service tin `X-Client-Ip` (nhật ký bảo mật, vị trí đăng nhập). Mọi route khác bị gỡ header này, kể cả khi client tự gửi — gắn lên mọi route thì mọi request của user đều thành internal caller.
 
 ## 6. Sự kiện Kafka
 

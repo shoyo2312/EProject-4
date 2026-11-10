@@ -16,6 +16,7 @@ import com.tiktok.userservice.exception.DataExportUnavailableException;
 import com.tiktok.userservice.repository.DataExportRequestRepository;
 import io.minio.GetPresignedObjectUrlArgs;
 import io.minio.MinioClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import io.minio.http.Method;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
@@ -44,6 +45,8 @@ public class DataExportServiceImpl implements DataExportService {
 
     private final DataExportRequestRepository repository;
     private final DataExportProperties properties;
+    /** Signs the download link, so it must name the public host (see MinioConfig). */
+    @Qualifier("publicMinioClient")
     private final MinioClient minioClient;
     private final MinioProperties minioProperties;
 

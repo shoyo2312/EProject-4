@@ -1,0 +1,33 @@
+# Few on purpose: each one is something that loses data or users if nobody looks, and that nothing
+# else in the system notices on its own.
+groups:
+  - name: tiktok
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 2m
+        annotations:
+          summary: "{{ $labels.instance }} has not answered a scrape for 2 minutes"
+
+      # The dispatcher only sees the batches it is handed, so a dead poller looks exactly like an
+      # idle outbox from inside the service. The gauge is read from the table on every scrape.
+      - alert: OutboxStuck
+        expr: max by (application, outbox) (outbox_oldest_pending_age_seconds) > 300
+        for: 5m
+        annotations:
+          summary: "{{ $labels.application }} outbox {{ $labels.outbox }}: the oldest event has waited {{ $value | humanizeDuration }} for the broker"
+
+      # Nothing replays a DLT on its own: a record there is an event every consumer of that topic
+      # missed. kafka-lib only dead-letters what is not an outage (bad JSON, a bug).
+      - alert: DeadLetters
+        expr: sum by (application, topic) (increase(kafka_consumer_dead_letters_total[15m])) > 0
+        annotations:
+          summary: "{{ $labels.application }} dead-lettered records from {{ $labels.topic }}: fix the cause and deploy before replaying (docs/operations.md)"
+
+      - alert: ServerErrors
+        expr: |
+          sum by (application) (rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+            / sum by (application) (rate(http_server_requests_seconds_count[5m])) > 0.05
+        for: 10m
+        annotations:
+          summary: "{{ $labels.application }}: {{ $value | humanizePercentage }} of requests have answered 5xx for 10 minutes"

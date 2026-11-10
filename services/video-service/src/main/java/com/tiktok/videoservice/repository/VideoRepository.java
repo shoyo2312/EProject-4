@@ -24,8 +24,20 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      */
     List<Video> findByIdInAndDeletedAtIsNull(Collection<String> ids);
 
-    /** Owner's own listing: everything they uploaded, whatever state it is in. */
-    Page<Video> findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(Long userId, Pageable pageable);
+    /**
+     * Owner's own listing: everything they uploaded, whatever state it is in. Pinned videos first
+     * (this and the two stranger listings below), as on a TikTok profile.
+     *
+     * <p>ponytail: pinnedAt is not in user_videos_idx, so the sort runs in memory over one owner's
+     * videos — fine at profile sizes; add pinnedAt to the index if an account ever outgrows it.
+     */
+    Page<Video> findByUserIdAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(Long userId, Pageable pageable);
+
+    /** How many of an owner's videos are pinned, for the limit of three. */
+    long countByUserIdAndPinnedAtIsNotNullAndDeletedAtIsNull(Long userId);
+
+    /** Pins placed before this instant — the ones a pin made at it has to fit behind. */
+    long countByUserIdAndPinnedAtBeforeAndDeletedAtIsNull(Long userId, Instant pinnedAt);
 
     /**
      * Someone else's listing. Carries the same status+visibility filter the feed applies in
@@ -34,7 +46,7 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      * /api/v1/videos/users/{userId} gets the owner's PRIVATE uploads, their videos still
      * PROCESSING, and the ones moderation took down.
      */
-    Page<Video> findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
+    Page<Video> findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(
             Long userId, VideoStatus status, VideoVisibility visibility, Pageable pageable);
 
     /**
@@ -42,7 +54,7 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      * Same index ({@code user_videos_idx}) as the single-visibility query above — an {@code $in}
      * over two enum values still takes its bounds and its sort from the index.
      */
-    Page<Video> findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByCreatedAtDesc(
+    Page<Video> findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(
             Long userId, VideoStatus status, Collection<VideoVisibility> visibilities, Pageable pageable);
 
     /**
@@ -82,6 +94,9 @@ public interface VideoRepository extends MongoRepository<Video, String>, VideoRe
      * carries the current audience.
      */
     List<Video> findTop100ByVisibilityEventPendingAtIsNotNullAndEventPublishedAtIsNotNullOrderByVisibilityEventPendingAtAsc();
+
+    /** Caption-edit outbox poll, same rules as the visibility one above. */
+    List<Video> findTop100ByCaptionEventPendingAtIsNotNullAndEventPublishedAtIsNotNullOrderByCaptionEventPendingAtAsc();
 
     /**
      * Early-purge outbox poll: trashed videos an admin asked to erase now — see

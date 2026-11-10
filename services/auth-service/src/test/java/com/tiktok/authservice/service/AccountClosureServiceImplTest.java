@@ -114,8 +114,14 @@ class AccountClosureServiceImplTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private KnownDevices knownDevices;
+
     @BeforeEach
     void cleanUp() {
+        // Before the users they reference.
+        jdbcTemplate.update("delete from known_devices");
+        jdbcTemplate.update("delete from known_device_accounts");
         securityEventRepository.deleteAll();
         outboxEventRepository.deleteAll();
         refreshTokenRepository.deleteAll();
@@ -256,6 +262,22 @@ class AccountClosureServiceImplTest {
         UserResponse again = authService.register(
                 new RegisterRequest("johndoe", "john@example.com", PASSWORD, "test-turnstile-token"));
         assertThat(again.id()).isNotEqualTo(id);
+    }
+
+    /** Account deletion removes personal data, the data-deletion page says — the devices included. */
+    @Test
+    void theSweep_forgetsTheAccountsDevices() {
+        Long id = signedUpWithPassword();
+        knownDevices.signedIn(id, "device-aaaaaaaaaaaa");
+        accountClosureService.requestDeletion(id, byPassword(PASSWORD));
+        jdbcTemplate.update("update users set deletion_scheduled_at = now() - interval '1 minute' where id = ?", id);
+
+        accountDeletionSweep.deleteDueAccounts();
+
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from known_devices where user_id = ?", Integer.class, id)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "select count(*) from known_device_accounts where user_id = ?", Integer.class, id)).isZero();
     }
 
     @Test

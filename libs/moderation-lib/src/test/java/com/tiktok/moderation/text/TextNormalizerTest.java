@@ -63,6 +63,22 @@ class TextNormalizerTest {
     }
 
     @Test
+    void lookAlikesCarryingVietnameseMarks_composeIntoTheLetterTheyPassFor() {
+        // Cyrillic о + circumflex + grave has no precomposed form, so the marks were dropped as
+        // loose and the word read "lon". Cyrillic а + dot below + breve composes to Cyrillic ӑ,
+        // which no map entry covers.
+        assertThat(TextNormalizer.normalize("lо̂̀n cӑ̣c").accented().getFirst())
+                .containsExactly("lồn", "cặc");
+    }
+
+    @Test
+    void invisibleFormatCharacters_doNotSplitAWord() {
+        // Zero-width space, zero-width non-joiner, word joiner, soft hyphen.
+        assertThat(TextNormalizer.normalize("l​ồn đ‌ị⁠t­").accented().getFirst())
+                .containsExactly("lồn", "địt");
+    }
+
+    @Test
     void longRepeats_squeeze_butDoublesStay() {
         assertThat(TextNormalizer.normalize("nguuuu đmmmm xoong good").accented().getFirst())
                 .containsExactly("ngu", "đm", "xoong", "good");

@@ -6,12 +6,14 @@ import com.tiktok.analyticsservice.repository.EngagementEventRepository;
 import com.tiktok.event.interaction.CommentCreatedEvent;
 import com.tiktok.event.interaction.CommentDeletedEvent;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 
 /**
@@ -20,6 +22,7 @@ import java.util.List;
  * is on the eventType header interaction-service sets; a missing header is a creation, which is
  * all the older producer ever sent.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class CommentCreatedEventConsumer {
@@ -40,11 +43,22 @@ public class CommentCreatedEventConsumer {
         Header eventTypeHeader = record.headers().lastHeader("eventType");
         if (eventTypeHeader != null && COMMENT_DELETED.equals(new String(eventTypeHeader.value(), StandardCharsets.UTF_8))) {
             CommentDeletedEvent event = objectMapper.readValue(record.value(), CommentDeletedEvent.class);
-            return new EngagementEventRepository.Row(event.eventId(), "UNCOMMENTED", String.valueOf(event.videoId()),
-                    event.userId(), event.occurredAt());
+            return row(event.eventId(), "UNCOMMENTED", event.videoId(), event.userId(), event.occurredAt());
         }
         CommentCreatedEvent event = objectMapper.readValue(record.value(), CommentCreatedEvent.class);
-        return new EngagementEventRepository.Row(event.eventId(), "COMMENTED", String.valueOf(event.videoId()),
-                event.userId(), event.occurredAt());
+        return row(event.eventId(), "COMMENTED", event.videoId(), event.userId(), event.occurredAt());
+    }
+
+    /**
+     * Null — nothing to write, see {@link BatchWriter} — for an event naming no video:
+     * {@code String.valueOf} would file it under a video called "null".
+     */
+    private static EngagementEventRepository.Row row(String eventId, String eventType, Long videoId, Long userId,
+                                                     Instant occurredAt) {
+        if (videoId == null) {
+            log.warn("Skipping {} {}: no videoId", eventType, eventId);
+            return null;
+        }
+        return new EngagementEventRepository.Row(eventId, eventType, String.valueOf(videoId), userId, occurredAt);
     }
 }

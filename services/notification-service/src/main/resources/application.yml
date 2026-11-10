@@ -34,6 +34,7 @@ downstream:
   video-service-uri: ${VIDEO_SERVICE_URI:http://localhost:8083}
   user-service-uri: ${USER_SERVICE_URI:http://localhost:8082}
   interaction-service-uri: ${INTERACTION_SERVICE_URI:http://localhost:8085}
+  story-service-uri: ${STORY_SERVICE_URI:http://localhost:8086}
   timeout-millis: ${DOWNSTREAM_TIMEOUT_MILLIS:1000}
 
 jwt:

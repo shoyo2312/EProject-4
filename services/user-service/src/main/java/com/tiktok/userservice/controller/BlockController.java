@@ -2,6 +2,8 @@ package com.tiktok.userservice.controller;
 
 import com.tiktok.common.response.ApiResponse;
 import com.tiktok.userservice.dto.response.BlockResponse;
+import com.tiktok.userservice.dto.response.BlockStateResponse;
+import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.dto.response.BlockStatusResponse;
 import com.tiktok.userservice.dto.response.UserProfileResponse;
 import com.tiktok.userservice.service.BlockService;
@@ -13,6 +15,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequiredArgsConstructor
@@ -51,6 +55,15 @@ public class BlockController {
     @GetMapping("/api/v1/users/internal/blocks")
     public ApiResponse<BlockStatusResponse> blockBetween(@RequestParam Long userA, @RequestParam Long userB) {
         return ApiResponse.success(new BlockStatusResponse(blockService.isBlockedBetween(userA, userB)));
+    }
+
+    @GetMapping("/api/v1/users/internal/blocks/states")
+    public ApiResponse<List<BlockStateResponse>> blockStates(@RequestParam Long viewerId,
+                                                            @RequestParam List<Long> otherIds) {
+        if (otherIds.size() > 100) {
+            throw new TooManyProfileIdsException(100);
+        }
+        return ApiResponse.success(blockService.states(viewerId, otherIds));
     }
 
     @Operation(summary = "Accounts the caller has blocked")

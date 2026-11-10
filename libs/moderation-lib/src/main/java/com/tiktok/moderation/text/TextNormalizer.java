@@ -14,10 +14,11 @@ import java.util.Map;
  * comparison does not:
  *
  * <ol>
- *   <li>NFKC — full-width letters, mathematical alphanumerics (𝐝𝐦) and ligatures become plain
- *       letters — then lower case, any combining mark NFKC left loose dropped, then look-alikes
- *       read as the letter they pass for: Cyrillic and Greek twins of Latin letters, and
- *       {@code ð} for {@code đ}.
+ *   <li>NFKD — full-width letters, mathematical alphanumerics (𝐝𝐦) and ligatures become plain
+ *       letters, marks come off their letters — then lower case, invisible format characters
+ *       dropped, look-alikes read as the letter they pass for (Cyrillic and Greek twins of Latin
+ *       letters, {@code ð} for {@code đ}), and only then composed again, so the marks land on the
+ *       Latin letter. Any mark still loose after that is dropped.
  *   <li>Split into syllables on anything that is not a letter or a digit.
  *   <li>Inside a syllable that has letters, digits and a few symbols read as the letters they stand
  *       in for ({@code d1t}, {@code c@c}). A syllable of digits only is a number and stays one.
@@ -39,7 +40,7 @@ public final class TextNormalizer {
      * matched no form of any term.
      */
     private static final Map<Integer, Integer> LOOK_ALIKES = lookAlikes(
-            "аa еe ёe оo рp сc уy хx кk мm іi јj ѕs ԁd ӏl һh ԛq ԝw "
+            "аa еe оo рp сc уy хx кk мm іi јj ѕs ԁd ӏl һh ԛq ԝw "
                     + "αa οo εe ιi κk νv ρp τt υu χx γy "
                     + "ðđ ɖđ");
 
@@ -94,20 +95,37 @@ public final class TextNormalizer {
     }
 
     /**
-     * NFKC composes every Vietnamese letter, so a combining mark still loose after it is one no word
-     * needs: a variation selector nobody sees ({@code lồn} + U+FE0E), an underline drawn under each
-     * letter ({@code l̲ồ̲n̲}). Kept, it would make a listed word a different string; dropped, the word
-     * is itself again.
+     * Look-alikes are read on the decomposed text, before anything is composed or dropped. Done the
+     * other way round, a Cyrillic {@code о} carrying a circumflex and a grave has no composed form,
+     * so its marks looked loose and were dropped — {@code lồn} written that way read {@code lon} —
+     * and a Cyrillic {@code а} with a breve composed into Cyrillic {@code ӑ}, which no entry maps.
+     * Mapped first, the base is Latin and the marks compose onto it as Vietnamese.
+     *
+     * <p>Format characters (zero-width space and joiners, word joiner, soft hyphen) go in the same
+     * pass: they draw nothing, and left in they split a syllable in two. Removing them before
+     * composing also lets a letter and a mark they separated come back together.
+     *
+     * <p>Composed, every Vietnamese letter is one code point, so a combining mark still loose is
+     * one no word needs: a variation selector nobody sees ({@code lồn} + U+FE0E), an underline
+     * drawn under each letter ({@code l̲ồ̲n̲}). Kept, it would make a listed word a different
+     * string; dropped, the word is itself again.
      */
     private static String prepare(String text) {
-        String lower = Normalizer.normalize(text, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
-        StringBuilder out = new StringBuilder(lower.length());
-        lower.codePoints().forEach(cp -> {
-            int type = Character.getType(cp);
-            if (type == Character.NON_SPACING_MARK || type == Character.ENCLOSING_MARK) {
-                return;
+        String decomposed = Normalizer.normalize(text, Normalizer.Form.NFKD).toLowerCase(Locale.ROOT);
+        StringBuilder mapped = new StringBuilder(decomposed.length());
+        decomposed.codePoints().forEach(cp -> {
+            if (Character.getType(cp) != Character.FORMAT) {
+                mapped.appendCodePoint(LOOK_ALIKES.getOrDefault(cp, cp));
             }
-            out.appendCodePoint(LOOK_ALIKES.getOrDefault(cp, cp));
+        });
+
+        String composed = Normalizer.normalize(mapped, Normalizer.Form.NFC);
+        StringBuilder out = new StringBuilder(composed.length());
+        composed.codePoints().forEach(cp -> {
+            int type = Character.getType(cp);
+            if (type != Character.NON_SPACING_MARK && type != Character.ENCLOSING_MARK) {
+                out.appendCodePoint(cp);
+            }
         });
         return out.toString();
     }

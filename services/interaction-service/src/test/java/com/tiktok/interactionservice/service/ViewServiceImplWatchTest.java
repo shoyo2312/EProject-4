@@ -2,6 +2,7 @@ package com.tiktok.interactionservice.service;
 
 import com.tiktok.interactionservice.client.VideoOwnershipClient;
 import com.tiktok.interactionservice.dto.request.WatchRequest;
+import com.tiktok.interactionservice.dto.request.WatchSource;
 import com.tiktok.interactionservice.dto.response.WatchResponse;
 import com.tiktok.interactionservice.event.producer.InteractionEventPublisher;
 import com.tiktok.interactionservice.repository.VideoCountersRepository;
@@ -74,7 +75,7 @@ class ViewServiceImplWatchTest {
 
         assertThat(response.completed()).isTrue();
         assertThat(response.watchedMs()).isEqualTo(9_000L);
-        verify(eventPublisher).publishWatch(7L, 1L, 9_000L, 10_000L, true);
+        verify(eventPublisher).publishWatch(7L, 1L, 9_000L, 10_000L, true, "OTHER", "");
         verifyNoInteractions(videoCountersRepository, counterCacheService);
     }
 
@@ -83,7 +84,7 @@ class ViewServiceImplWatchTest {
         WatchResponse response = viewService().recordWatch(7L, 1L, new WatchRequest(5_000L, 10_000L));
 
         assertThat(response.completed()).isFalse();
-        verify(eventPublisher).publishWatch(7L, 1L, 5_000L, 10_000L, false);
+        verify(eventPublisher).publishWatch(7L, 1L, 5_000L, 10_000L, false, "OTHER", "");
     }
 
     /**
@@ -96,7 +97,7 @@ class ViewServiceImplWatchTest {
         WatchResponse response = viewService().recordWatch(7L, 1L, new WatchRequest(3_600_000L, 10_000L));
 
         assertThat(response.watchedMs()).isEqualTo(10_000L);
-        verify(eventPublisher).publishWatch(7L, 1L, 10_000L, 10_000L, true);
+        verify(eventPublisher).publishWatch(7L, 1L, 10_000L, 10_000L, true, "OTHER", "");
     }
 
     /**
@@ -112,7 +113,7 @@ class ViewServiceImplWatchTest {
         viewService.recordWatch(7L, 1L, new WatchRequest(9_500L, 10_000L));
 
         verify(eventPublisher, times(2))
-                .publishWatch(eq(7L), eq(1L), anyLong(), anyLong(), anyBoolean());
+                .publishWatch(eq(7L), eq(1L), anyLong(), anyLong(), anyBoolean(), any(), any());
     }
 
     /**
@@ -127,7 +128,7 @@ class ViewServiceImplWatchTest {
         WatchResponse response = viewService().recordWatch(7L, 1L, new WatchRequest(3_600_000L, 3_600_000L));
 
         assertThat(response.watchedMs()).isEqualTo(tenMinutes);
-        verify(eventPublisher).publishWatch(7L, 1L, tenMinutes, tenMinutes, true);
+        verify(eventPublisher).publishWatch(7L, 1L, tenMinutes, tenMinutes, true, "OTHER", "");
     }
 
     /**
@@ -141,7 +142,7 @@ class ViewServiceImplWatchTest {
         WatchResponse response = viewService().recordWatch(7L, 1L, new WatchRequest(1L, 1L));
 
         assertThat(response.completed()).isFalse();
-        verify(eventPublisher).publishWatch(7L, 1L, 1L, 3_000L, false);
+        verify(eventPublisher).publishWatch(7L, 1L, 1L, 3_000L, false, "OTHER", "");
     }
 
     /**
@@ -155,7 +156,7 @@ class ViewServiceImplWatchTest {
         WatchResponse response = viewService.recordWatch(7L, 1L, new WatchRequest(10_000L, 10_000L));
 
         assertThat(response.completed()).isFalse();
-        verify(eventPublisher).publishWatch(7L, 1L, 10_000L, 60_000L, false);
+        verify(eventPublisher).publishWatch(7L, 1L, 10_000L, 60_000L, false, "OTHER", "");
     }
 
     /**
@@ -169,7 +170,7 @@ class ViewServiceImplWatchTest {
         WatchResponse response = viewService.recordWatch(7L, 1L, new WatchRequest(2_000L, 2_000L));
 
         assertThat(response.completed()).isTrue();
-        verify(eventPublisher).publishWatch(7L, 1L, 2_000L, 2_000L, true);
+        verify(eventPublisher).publishWatch(7L, 1L, 2_000L, 2_000L, true, "OTHER", "");
     }
 
     /**
@@ -184,6 +185,41 @@ class ViewServiceImplWatchTest {
         assertThatThrownBy(() -> viewService.recordWatch(7L, 1L, new WatchRequest(9_000L, 10_000L)))
                 .isInstanceOf(WatchRateLimitedException.class);
 
-        verify(eventPublisher, never()).publishWatch(anyLong(), anyLong(), anyLong(), anyLong(), anyBoolean());
+        verify(eventPublisher, never()).publishWatch(anyLong(), anyLong(), anyLong(), anyLong(), anyBoolean(), any(), any());
+    }
+
+    @Test
+    void aMissingSourceIsStoredAsOther() {
+        viewService().recordWatch(7L, 1L, new WatchRequest(5_000L, 10_000L, null, null));
+
+        verify(eventPublisher).publishWatch(7L, 1L, 5_000L, 10_000L, false, "OTHER", "");
+    }
+
+    @Test
+    void aSearchWatchKeepsItsQueryTrimmedAndLowerCased() {
+        viewService().recordWatch(7L, 1L, new WatchRequest(5_000L, 10_000L, WatchSource.SEARCH, "  Tiny HOUSE "));
+
+        verify(eventPublisher).publishWatch(7L, 1L, 5_000L, 10_000L, false, "SEARCH", "tiny house");
+    }
+
+    @Test
+    void aQueryOnANonSearchSourceIsDropped() {
+        viewService().recordWatch(7L, 1L, new WatchRequest(5_000L, 10_000L, WatchSource.FOR_YOU, "tiny house"));
+
+        verify(eventPublisher).publishWatch(7L, 1L, 5_000L, 10_000L, false, "FOR_YOU", "");
+    }
+
+    @Test
+    void anOverlongQueryIsDroppedNotRefused() {
+        viewService().recordWatch(7L, 1L, new WatchRequest(5_000L, 10_000L, WatchSource.SEARCH, "x".repeat(101)));
+
+        verify(eventPublisher).publishWatch(7L, 1L, 5_000L, 10_000L, false, "SEARCH", "");
+    }
+
+    @Test
+    void aBlankQueryIsDropped() {
+        viewService().recordWatch(7L, 1L, new WatchRequest(5_000L, 10_000L, WatchSource.SEARCH, "   "));
+
+        verify(eventPublisher).publishWatch(7L, 1L, 5_000L, 10_000L, false, "SEARCH", "");
     }
 }

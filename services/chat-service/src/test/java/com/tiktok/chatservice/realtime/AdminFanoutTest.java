@@ -63,6 +63,21 @@ class AdminFanoutTest {
         verify(messaging, times(1)).convertAndSend(AdminFanout.DESTINATION, new AdminFrame("ReportSubmittedEvent"));
     }
 
+    /** The console filters engagement by the "interaction." prefix, so the header is dropped. */
+    @Test
+    void engagementGoesOutAsItsTopic() {
+        AdminFanout fanout = new AdminFanout(messaging);
+        fanout.onEvent(record("interaction.comment-events", "CommentCreatedEvent", "{}"));
+        fanout.onEvent(record("interaction.comment-events", "CommentDeletedEvent", "{}"));
+        fanout.onEvent(record("interaction.like-events", null, "{}"));
+
+        fanout.flush();
+
+        verify(messaging, times(1)).convertAndSend(AdminFanout.DESTINATION, new AdminFrame("interaction.comment-events"));
+        verify(messaging, times(1)).convertAndSend(AdminFanout.DESTINATION, new AdminFrame("interaction.like-events"));
+        verify(messaging, times(2)).convertAndSend(anyString(), any(Object.class));
+    }
+
     @Test
     void aQuietWindowSendsNothing() {
         AdminFanout fanout = new AdminFanout(messaging);
@@ -97,7 +112,8 @@ class AdminFanoutTest {
         assertThat(listener.groupId()).startsWith("admin-realtime-");
         assertThat(listener.topics()).containsExactlyInAnyOrder(
                 "admin.report-events", "admin.moderation-events",
-                "media.video-moderation-events", "video.video-events", "auth.user-events");
+                "media.video-moderation-events", "video.video-events", "auth.user-events",
+                "interaction.like-events", "interaction.comment-events", "interaction.share-events");
     }
 
     private static ConsumerRecord<String, String> record(String topic, String eventType, String payload) {

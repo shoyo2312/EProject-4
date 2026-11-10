@@ -16,6 +16,8 @@ import org.springframework.util.backoff.BackOffExecution;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.UnknownHostException;
+import java.net.http.HttpConnectTimeoutException;
+import java.net.http.HttpTimeoutException;
 import java.sql.SQLTransientConnectionException;
 import java.util.stream.Stream;
 
@@ -43,6 +45,12 @@ class KafkaConsumerAutoConfigurationTest {
                 Arguments.of("a command that timed out", new QueryTimeoutException("Redis command timed out")),
                 Arguments.of("a driver that only reports the socket", new IllegalStateException(
                         "query failed", new ConnectException("Connection refused"))),
+                // RestClient over the JDK HttpClient: a timeout is an HttpTimeoutException, neither a SocketException
+                // nor a SocketTimeoutException. The wrapper stands in for the ResourceAccessException that carries it.
+                Arguments.of("an HTTP call that timed out reading", new IllegalStateException(
+                        "I/O error on GET request", new HttpTimeoutException("request timed out"))),
+                Arguments.of("an HTTP call that timed out connecting", new IllegalStateException(
+                        "I/O error on GET request", new HttpConnectTimeoutException("HTTP connect timed out"))),
                 Arguments.of("a container mid-restart", new UnknownHostException("elasticsearch")),
                 Arguments.of("a broker that did not answer", new KafkaException("send failed",
                         new org.apache.kafka.common.errors.TimeoutException("Expiring 1 record(s)"))));

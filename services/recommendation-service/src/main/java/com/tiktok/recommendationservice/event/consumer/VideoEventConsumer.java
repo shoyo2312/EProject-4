@@ -1,6 +1,7 @@
 package com.tiktok.recommendationservice.event.consumer;
 
 import tools.jackson.databind.ObjectMapper;
+import com.tiktok.event.video.VideoCaptionChangedEvent;
 import com.tiktok.event.video.VideoDeletedEvent;
 import com.tiktok.event.video.VideoPublishedEvent;
 import com.tiktok.event.video.VideoVisibilityChangedEvent;
@@ -32,6 +33,7 @@ public class VideoEventConsumer {
     private static final String VIDEO_PUBLISHED = "VideoPublishedEvent";
     private static final String VIDEO_DELETED = "VideoDeletedEvent";
     private static final String VIDEO_VISIBILITY_CHANGED = "VideoVisibilityChangedEvent";
+    private static final String VIDEO_CAPTION_CHANGED = "VideoCaptionChangedEvent";
 
     private final RecommendationService recommendationService;
     private final InboxService inboxService;
@@ -59,6 +61,11 @@ public class VideoEventConsumer {
             VideoVisibilityChangedEvent event = objectMapper.readValue(payload, VideoVisibilityChangedEvent.class);
             inboxService.runOnce(event.eventId(), () ->
                     recommendationService.recordVisibilityChanged(event.videoId(), event.visibility()));
+        } else if (VIDEO_CAPTION_CHANGED.equals(eventType)) {
+            // Tags are the only part of a caption this service keeps.
+            VideoCaptionChangedEvent event = objectMapper.readValue(payload, VideoCaptionChangedEvent.class);
+            inboxService.runOnce(event.eventId(), () ->
+                    recommendationService.recordTagsChanged(event.videoId(), event.tags()));
         } else {
             log.debug("Ignoring video eventType={}", eventType);
         }

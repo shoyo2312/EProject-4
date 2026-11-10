@@ -58,8 +58,8 @@ class UserSettingsCacheTest {
 
     @Test
     void whatIsPut_isReadBack_oneAtATimeOrAPageAtOnce() {
-        OwnerCommentSettings seven = new OwnerCommentSettings("FRIENDS", false, true, List.of("spoiler", "tạch"));
-        OwnerCommentSettings eight = new OwnerCommentSettings("EVERYONE", null, null, null);
+        OwnerCommentSettings seven = new OwnerCommentSettings("FRIENDS", false, true, List.of("spoiler", "tạch"), null);
+        OwnerCommentSettings eight = new OwnerCommentSettings("EVERYONE", null, null, null, null);
 
         cache.putAll(Map.of(7L, seven, 8L, eight));
 
@@ -82,7 +82,7 @@ class UserSettingsCacheTest {
         UserSettingsCache off = new UserSettingsCache(redisTemplate,
                 new UserSettingsCacheProperties(false, Duration.ofSeconds(30)), JsonMapper.builder().build());
 
-        off.putAll(Map.of(7L, new OwnerCommentSettings("FRIENDS", true, false, List.of())));
+        off.putAll(Map.of(7L, new OwnerCommentSettings("FRIENDS", true, false, List.of(), null)));
 
         assertThat(redisTemplate.keys("user-settings:*")).isEmpty();
         assertThat(off.get(7L)).isEmpty();

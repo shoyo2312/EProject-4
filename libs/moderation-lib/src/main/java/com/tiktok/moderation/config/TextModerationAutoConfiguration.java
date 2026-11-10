@@ -8,6 +8,7 @@ import com.tiktok.moderation.rules.AdminTermsSync;
 import com.tiktok.moderation.rules.Blocklist;
 import com.tiktok.moderation.rules.SpamSignals;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.actuate.info.InfoContributor;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
@@ -40,6 +41,19 @@ public class TextModerationAutoConfiguration {
         Blocklist blocklist = Blocklist.load(resourceLoader.getResource(properties.blocklist()));
         SpamSignals spamSignals = new SpamSignals(properties.captionLinkAllowlist(), properties.mentionFlood());
         return new TextModerator(blocklist, spamSignals, properties.enforce());
+    }
+
+    /** With actuator on the classpath, which every service that has this library has. */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(InfoContributor.class)
+    static class InfoConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean
+        public TextModerationInfoContributor textModerationInfoContributor(
+                TextModerator textModerator, ObjectProvider<TextClassifier> textClassifier) {
+            return new TextModerationInfoContributor(textModerator, textClassifier);
+        }
     }
 
     @Configuration(proxyBeanMethods = false)

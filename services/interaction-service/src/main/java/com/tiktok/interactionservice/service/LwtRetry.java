@@ -1,12 +1,16 @@
 package com.tiktok.interactionservice.service;
 
-import com.datastax.oss.driver.api.core.servererrors.WriteTimeoutException;
 import com.tiktok.interactionservice.exception.InteractionConflictException;
+import org.springframework.data.cassandra.CassandraWriteTimeoutException;
 
 import java.util.function.BooleanSupplier;
 
 /**
- * Runs a lightweight transaction, retrying it on {@link WriteTimeoutException}.
+ * Runs a lightweight transaction, retrying it on {@link CassandraWriteTimeoutException}.
+ *
+ * <p>Spring's type, not the driver's {@code WriteTimeoutException}: repository calls go through
+ * Spring Data, which translates the driver's exception before it gets here. Catching the driver
+ * type caught nothing, so a timed-out like answered 500 and, if it had applied, never counted.
  *
  * <p>A timeout leaves the outcome unknown: the write may have applied before the coordinator gave
  * up waiting. Retrying IF NOT EXISTS / IF EXISTS is safe, but after an attempt that did apply the
@@ -28,11 +32,11 @@ final class LwtRetry {
      * @param what          names the operation in the conflict raised when every attempt timed out
      */
     static boolean run(BooleanSupplier lwt, BooleanSupplier landedEarlier, String what) {
-        WriteTimeoutException lastError = null;
+        CassandraWriteTimeoutException lastError = null;
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
                 return lwt.getAsBoolean() || (lastError != null && landedEarlier.getAsBoolean());
-            } catch (WriteTimeoutException e) {
+            } catch (CassandraWriteTimeoutException e) {
                 lastError = e;
             }
         }

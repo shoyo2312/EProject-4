@@ -54,6 +54,8 @@ Bảng xếp hạng tính trên **24 giờ gần nhất**, giờ mới nặng h�
 
 **Bắt buộc token.** Trả về gợi ý riêng cho người đang đăng nhập.
 
+`limit`: mặc định `20`, bị kẹp về khoảng `1..50` (khác `/trending`: trần 100). Gửi `limit=100` thì nhận tối đa `50`, không phải lỗi — trần này bằng `max-page-size` của `/videos/batch` ở video-service, nên xin nhiều hơn chỉ ra những id không bao giờ hydrate được.
+
 ```json
 {
   "success": true,
@@ -64,10 +66,10 @@ Bảng xếp hạng tính trên **24 giờ gần nhất**, giờ mới nặng h�
 }
 ```
 
-- `reasons` là **công cụ debug**, không phải nội dung để hiển thị. Nó cho biết vì sao video lọt vào danh sách: `trending` (đang thịnh hành), `tag:<tag>` (khớp sở thích), và `model` (thứ tự do mô hình ML quyết định, xem `docs/ranking-model.md`). Format có thể đổi.
+- `reasons` là **công cụ debug**, không phải nội dung để hiển thị. Nó cho biết vì sao video lọt vào danh sách: `trending` (đang thịnh hành), `tag:<tag>` (khớp sở thích), `explore` (rút ngẫu nhiên từ toàn bộ catalogue để feed không cạn), và `model` (thứ tự do mô hình ML quyết định, xem `docs/ranking-model.md`). Format có thể đổi.
 - `score` cũng chỉ có nghĩa trong một response, như mục 3.1. **Thang đo không cố định**: khi có `model` trong `reasons`, score là xác suất xem hết (0..1); khi không có, score là điểm heuristic (thường 0..4). Đừng hiển thị nó, đừng so sánh giữa hai response, đừng lọc theo ngưỡng cứng.
-- Người dùng mới chưa xem gì sẽ nhận **đúng danh sách trending** — đó là hành vi đúng, không phải lỗi.
-- Danh sách **đã loại các video người này đã xem** (dựa trên `POST /interactions/videos/{id}/watch`, xem mục 5) **và những gì `/feed` vừa trả cho chính người này trong 30 phút qua**. Gọi `/feed` hai lần liên tiếp ra hai danh sách khác nhau — đó là cách phân trang, xem mục 7.
+- Người dùng mới chưa xem gì nhận **trending + một mẫu ngẫu nhiên từ catalogue** (`explore`), không có `tag:` — đó là hành vi đúng, không phải lỗi. Thứ tự được xáo nhẹ mỗi lần gọi (nhiễu chỉ dùng để sắp, `score` trả về vẫn là điểm thật), nên hai người mới không nhận cùng một trang.
+- Danh sách **đã loại các video người này đã xem** (dựa trên `POST /interactions/videos/{id}/watch`, xem mục 5), **những gì `/feed` vừa trả cho chính người này trong 30 phút qua**, **video của chính người này** và **video của tài khoản họ đã mute** (hỏi user-service; user-service không trả lời thì feed không lọc mute, không lỗi). Gọi `/feed` hai lần liên tiếp ra hai danh sách khác nhau — đó là cách phân trang, xem mục 7.
 - Có thể trả về **mảng rỗng** khi hệ thống chưa có dữ liệu (mới deploy, Redis vừa bị xoá). Client phải xử lý được trạng thái này thay vì hiện màn hình trắng.
 - Nếu `rank-service` chết hoặc chưa được huấn luyện, endpoint **vẫn trả về đủ video**, chỉ là thứ tự do heuristic quyết định và `reasons` không có `model`. Client không cần biết và không được xử lý khác đi.
 
@@ -93,7 +95,7 @@ Hệ quả cần xử lý: một id có thể đã bị **xoá hoặc gỡ (take
 `recommendation-service` biết người dùng đã xem gì **chỉ qua** `POST /api/v1/interactions/videos/{videoId}/watch` (mục 3.9 của `docs/interaction-service-api.md`). Nếu client không gửi:
 
 - feed sẽ **trả lại đúng những video vừa xem**, vì không có gì đánh dấu chúng đã xem rồi;
-- hồ sơ sở thích theo tag không bao giờ hình thành, nên `/feed` mãi mãi bằng `/trending`.
+- hồ sơ sở thích theo tag không bao giờ hình thành, nên `/feed` mãi mãi chỉ là trending + mẫu ngẫu nhiên, không bao giờ cá nhân hoá.
 
 Bắn `/watch` khi **kết thúc một phiên xem** (người dùng vuốt sang video khác, thoát màn hình, hoặc app vào background) — mỗi phiên một lần, không bắn theo tick.
 
@@ -110,8 +112,8 @@ Không có mã lỗi nghiệp vụ riêng: hai endpoint đều là đọc và đ
 
 ## 7. Ghi chú tích hợp
 
-- **Phân trang: gọi lại `/feed`, không có con trỏ trang.** `limit` tối đa `100`. Server nhớ những gì vừa trả cho bạn trong **30 phút** và không trả lại chúng, nên cứ gọi `/feed` khi gần hết danh sách là ra nội dung mới. Không cần gửi kèm id đã có, không cần `offset` — và cũng đừng cố tự chế: thứ hạng được tính lại mỗi request nên `offset` sẽ vừa trùng vừa sót.
-  - Hệ quả cần biết: **video đã trả về coi như đã dùng, kể cả khi người dùng chưa kịp nhìn thấy.** Prefetch 100 rồi chỉ hiển thị 10 thì 90 cái kia mất 30 phút mới quay lại. Xin đúng số lượng sắp hiển thị, đừng xin thừa cho chắc.
+- **Phân trang: gọi lại `/feed`, không có con trỏ trang.** `limit` tối đa `50`. Server nhớ những gì vừa trả cho bạn trong **30 phút** và không trả lại chúng, nên cứ gọi `/feed` khi gần hết danh sách là ra nội dung mới. Không cần gửi kèm id đã có, không cần `offset` — và cũng đừng cố tự chế: thứ hạng được tính lại mỗi request nên `offset` sẽ vừa trùng vừa sót.
+  - Hệ quả cần biết: **video đã trả về coi như đã dùng, kể cả khi người dùng chưa kịp nhìn thấy.** Prefetch 50 rồi chỉ hiển thị 10 thì 40 cái kia mất 30 phút mới quay lại. Xin đúng số lượng sắp hiển thị, đừng xin thừa cho chắc.
   - Cái này **độc lập với `/watch`**: `/watch` loại video vĩnh viễn (đã xem thật), cửa sổ 30 phút chỉ chống lặp trong một phiên cuộn. Vẫn phải gọi `/watch` — xem mục 5.
 - **Cache**: đừng cache response quá vài phút. Bảng xếp hạng được dựng lại mỗi phút. Và đừng retry `/feed` một cách mù quáng — mỗi lần gọi là một lần đốt video khỏi cửa sổ 30 phút.
 - **Đừng gọi `/feed` cho từng video**. Một lần gọi cho cả trang.
@@ -125,18 +127,22 @@ Mọi consumer idempotent qua `InboxService.runOnce(eventId, ...)`.
 
 | Topic | Event | eventType header | Tác dụng |
 |---|---|---|---|
-| `video.video-events` | `VideoPublishedEvent` | `VideoPublishedEvent` (vắng ⇒ coi là Published) | **Chỉ lưu tag của video**, chưa đưa vào candidate pool — lúc event này phát video vẫn đang `PROCESSING` (media-worker cần chính event đó để transcode) |
+| `video.video-events` | `VideoPublishedEvent` | `VideoPublishedEvent` (vắng ⇒ coi là Published) | **Chỉ lưu tag, owner, cờ private của video**, chưa đưa vào candidate pool — lúc event này phát video vẫn đang `PROCESSING` (media-worker cần chính event đó để transcode) |
+| `media.video-moderation-events` | `VideoModerationCompletedEvent` | — | **Cửa vào feed.** `APPROVED`: ghi publish time (`reco:video:published`), cộng điểm publish vào trending, index theo tag — trừ khi video đang private/taken-down. `REVIEW`/`REJECTED`: thêm vào `reco:video:held` và rút khỏi pool, giữ tag/owner để admin duyệt lại thì index được; verdict sinh trước mốc admin restore (`reco:video:approved-at:{id}`) coi như đã duyệt |
 | `media.video-transcoded-events` | `VideoTranscodedEvent` | — | `success=true`: không làm gì — xem được chưa phải đã kiểm duyệt; video chỉ vào feed khi có verdict (`media.video-moderation-events`). `success=false`: rút video khỏi candidate pool, tag index và trending, nhưng **không** coi là đã xoá (không tombstone, giữ tags/owner/cờ private): video-service để FAILED mở cho lần publish được redeliver transcode thành công cứu lại |
+| `video.video-events` | `VideoCaptionChangedEvent` | `VideoCaptionChangedEvent` | Thay tag đã lưu (`reco:video:tags:{videoId}`) bằng tag mới; gỡ video khỏi tag index của tag bị bỏ, và chỉ thêm vào tag index của tag mới (theo publish time gốc) khi video đã ready và không bị ẩn — chưa ready/đang ẩn thì lần index sau đọc tag mới từ stash. Stash hết TTL 30 ngày thì không biết tag cũ, video có thể còn nằm ở tag index cũ tới khi bị trim/hết hạn |
+| `video.video-events` | `VideoVisibilityChangedEvent` | `VideoVisibilityChangedEvent` | Không phải `PUBLIC` → thêm vào `reco:video:private` và rút khỏi trending + tag index; về `PUBLIC` → gỡ cờ và index lại nếu video đã duyệt, không bị gỡ/giữ |
 | `video.video-events` | `VideoDeletedEvent` | `VideoDeletedEvent` | Gỡ video khỏi trending + mọi tag index (ZREM), và để lại `reco:video:deleted:{videoId}` (TTL 8 ngày, dài hơn retention của broker): like/comment/watch tới muộn trên topic khác và verdict của video bị xoá giữa pipeline đều bỏ qua video này, thay vì đưa nó trở lại trending |
 | `interaction.like-events` | `VideoLikeEvent` | — | Cộng/trừ điểm engagement trending |
 | `interaction.comment-events` | `CommentCreatedEvent` / `CommentDeletedEvent` | route theo header (vắng ⇒ Created) | Cộng khi tạo, **trừ** khi xoá — nếu đọc payload không xét header thì `CommentDeletedEvent` parse nhầm thành Created và xoá comment lại đẩy video lên trending |
 | `interaction.share-events` | `VideoSharedEvent` | — | Cộng điểm engagement trending — **chỉ lượt share đầu tiên** của mỗi user cho mỗi video trong cửa sổ trending 24h (key `reco:shared:{videoId}:{userId}`); share lặp lại vẫn tăng `shareCount` nhưng không cộng điểm |
 | `interaction.watch-events` | `VideoWatchEvent` | — | Cập nhật tag affinity của người xem (xem < 20% = skip → kéo affinity xuống `-0.5`), watches/completions cho feature chất lượng |
+| `admin.moderation-events` | `VideoTakenDownEvent` / `VideoRestoredEvent` (loại khác bỏ qua) | route theo header, **bắt buộc** (vắng ⇒ bỏ record, log WARN) | Takedown: thêm vào `reco:video:taken-down` và rút khỏi pool. Restore: gỡ takedown rồi index lại; không có takedown mà video đang `held` thì đó là admin duyệt → index như `APPROVED`; không thấy cờ nào thì ghi `reco:video:approved-at:{id}` cho verdict tới muộn |
 
-Vì sao việc index chờ event transcode: nếu index ngay lúc publish, feed trả về id của video chưa playable, `/videos/batch` lọc sạch chúng (người khác chỉ thấy `PUBLISHED`) nên trang feed ngắn hơn `limit` mà không có log nào, đồng thời `markServed` đã đánh dấu các id đó là "đã phục vụ" 30 phút — đúng khoảng thời gian video sắp phát được. Hai topic nên không có thứ tự đảm bảo giữa chúng: nếu event publish tới **sau** event transcode, tag vẫn được index ngay lúc đó.
+Vì sao việc index chờ verdict kiểm duyệt (`media.video-moderation-events`), không phải lúc publish hay lúc transcode xong: video chỉ thành `PUBLISHED` ở video-service khi được `APPROVED`. Index sớm hơn thì feed trả về id của video chưa xem được, `/videos/batch` lọc sạch chúng (người khác chỉ thấy `PUBLISHED`) nên trang feed ngắn hơn `limit` mà không có log nào, đồng thời `markServed` đã đánh dấu các id đó là "đã phục vụ" 30 phút — đúng khoảng thời gian video sắp phát được. Verdict và event publish đi hai topic nên không có thứ tự đảm bảo giữa chúng: nếu event publish tới **sau** verdict, tag vẫn được index ngay lúc đó.
 
 Không nghe `interaction.view-events` (đó là counter, không phải tín hiệu xếp hạng — xem `docs/ranking-model.md` §3).
 
-`kafka-lib` error handler: `recommendation-service` **có** dùng → consumer lỗi retry 3 lần → `<topic>.DLT`. Chưa có outbox (không cần — không phát event).
+`kafka-lib` error handler: `recommendation-service` **có** dùng → Redis/dependency chết thì retry không giới hạn (partition đứng chờ, không mất event); lỗi do chính record (JSON hỏng, bug) thì retry 3 lần → `<topic>.DLT`. Xem `docs/ARCHITECTURE.md` §5b. Chưa có outbox (không cần — không phát event).
 
 Về cách các feature này được `rank-service` dùng để xếp hạng: `docs/ranking-model.md`.

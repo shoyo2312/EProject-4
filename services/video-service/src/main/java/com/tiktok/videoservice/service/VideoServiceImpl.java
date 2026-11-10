@@ -1,5 +1,6 @@
 package com.tiktok.videoservice.service;
 
+import com.tiktok.common.exception.BadRequestException;
 import com.tiktok.common.storage.ObjectKeys;
 import com.tiktok.videoservice.client.BlockClient;
 import com.tiktok.videoservice.client.FollowClient;
@@ -9,26 +10,37 @@ import com.tiktok.videoservice.client.UserSettingsClient;
 import com.tiktok.videoservice.config.MinioProperties;
 import com.tiktok.videoservice.config.UploadLimitProperties;
 import com.tiktok.videoservice.dto.request.CreateVideoRequest;
+import com.tiktok.videoservice.dto.request.FeedKind;
+import com.tiktok.videoservice.dto.request.StudioPostFilter;
 import com.tiktok.videoservice.dto.request.UploadUrlRequest;
+import com.tiktok.videoservice.dto.request.VideoEditRequest;
+import com.tiktok.videoservice.client.MusicTrack;
 import com.tiktok.videoservice.dto.response.CursorPage;
 import com.tiktok.videoservice.dto.response.UploadUrlResponse;
 import com.tiktok.videoservice.dto.response.UserVideoStatsResponse;
 import com.tiktok.videoservice.dto.response.VideoPolicyResponse;
 import com.tiktok.videoservice.dto.response.VideoResponse;
+import com.tiktok.videoservice.dto.response.ViewableVideoResponse;
 import com.tiktok.videoservice.entity.OwnerBan;
 import com.tiktok.videoservice.entity.OwnerPrivacy;
 import com.tiktok.videoservice.entity.Video;
+import com.tiktok.videoservice.entity.VideoEdit;
 import com.tiktok.videoservice.entity.VideoStatus;
+import com.tiktok.event.video.ModerationVerdict;
 import com.tiktok.videoservice.entity.VideoTextModeration;
 import com.tiktok.videoservice.entity.VideoVisibility;
 import com.tiktok.videoservice.exception.AlreadyPublishedException;
+import com.tiktok.videoservice.exception.CaptionHeldException;
 import com.tiktok.videoservice.exception.ForeignUploadException;
 import com.tiktok.videoservice.exception.NotVideoOwnerException;
+import com.tiktok.videoservice.exception.PinLimitReachedException;
 import com.tiktok.videoservice.exception.PrivateAccountException;
 import com.tiktok.videoservice.exception.TooManyFollowedUsersException;
 import com.tiktok.videoservice.exception.UnsupportedUploadTypeException;
+import com.tiktok.videoservice.exception.UploadNotFoundException;
 import com.tiktok.videoservice.exception.UploadUrlUnavailableException;
 import com.tiktok.videoservice.exception.VideoNotFoundException;
+import com.tiktok.videoservice.exception.VideoNotPinnableException;
 import com.tiktok.videoservice.mapper.VideoMapper;
 import com.tiktok.videoservice.repository.OwnerBanRepository;
 import com.tiktok.videoservice.repository.OwnerPrivacyRepository;
@@ -36,21 +48,23 @@ import com.tiktok.videoservice.repository.UserVideoStats;
 import com.tiktok.videoservice.repository.VideoRepository;
 import io.minio.MinioClient;
 import io.minio.PostPolicy;
+import io.minio.StatObjectArgs;
+import io.minio.errors.ErrorResponseException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.data.autoconfigure.web.DataWebProperties;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.util.Collection;
-import java.util.LinkedHashSet;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -97,15 +111,32 @@ public class VideoServiceImpl implements VideoService {
      */
     private static final int MAX_TAGS = 10;
 
+    /** Pinned videos a profile shows at once, as on TikTok. */
+    private static final int PIN_LIMIT = 3;
+
     /**
      * Upload types accepted, and the extension each is stored under. Deliberately short: every
      * entry is a format the transcode pipeline has to be able to read, so widening it is a
      * media-worker decision, not a client one.
      */
+    private static final String OVERLAY_TYPE = "image/png";
+    private static final String OVERLAY_EXTENSION = "png";
+
     private static final Map<String, String> UPLOAD_EXTENSIONS = Map.of(
             "video/mp4", "mp4",
             "video/quicktime", "mov",
-            "video/webm", "webm");
+            "video/webm", "webm",
+            // The editor's text and stickers (edit.overlays), never a video of its own.
+            OVERLAY_TYPE, OVERLAY_EXTENSION);
+
+    /** The extensions a rawFileUrl may have: every upload type but the overlay. */
+    private static final Set<String> VIDEO_EXTENSIONS = Set.of("mp4", "mov", "webm");
+
+    /**
+     * An overlay is one frame-sized PNG, mostly transparent: a few hundred KB at most. The video
+     * cap would let a client park gigabytes under an image type.
+     */
+    static final long MAX_OVERLAY_BYTES = 5L * 1024 * 1024;
 
     private final VideoRepository videoRepository;
     private final VideoMapper videoMapper;
@@ -122,7 +153,8 @@ public class VideoServiceImpl implements VideoService {
     private final OwnerPrivacyRepository ownerPrivacyRepository;
     private final OwnerBanRepository ownerBanRepository;
     private final CaptionModeration captionModeration;
-    private final UploadRateLimiter uploadRateLimiter;
+    private final FeedKeywordFilter feedKeywordFilter;
+    private final MusicService musicService;
 
     /**
      * The key is namespaced by uploader and carries a fresh Snowflake, so two clients uploading at
@@ -139,7 +171,6 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public UploadUrlResponse createUploadUrl(Long userId, UploadUrlRequest request) {
-        uploadRateLimiter.requireUploadUrl(userId);
         String contentType = mediaType(request.contentType());
         String extension = UPLOAD_EXTENSIONS.get(contentType);
         if (extension == null) {
@@ -153,7 +184,8 @@ public class VideoServiceImpl implements VideoService {
                 ZonedDateTime.now().plusSeconds(expirySeconds));
         policy.addEqualsCondition("key", objectKey);
         policy.addEqualsCondition("Content-Type", contentType);
-        policy.addContentLengthRangeCondition(1L, uploadLimits.maxBytes());
+        policy.addContentLengthRangeCondition(1L,
+                OVERLAY_TYPE.equals(contentType) ? MAX_OVERLAY_BYTES : uploadLimits.maxBytes());
 
         Map<String, String> formFields;
         try {
@@ -174,14 +206,22 @@ public class VideoServiceImpl implements VideoService {
 
     @Override
     public VideoResponse publish(Long userId, CreateVideoRequest request) {
-        // First: a publish refused for anything after this — a foreign upload, its caption — still
-        // spends budget, so neither can be probed at speed.
-        uploadRateLimiter.requirePublish(userId);
-        String rawFileUrl = storedUrl(requireOwnUpload(userId, request.rawFileUrl()));
+        String key = requireOwnUpload(userId, request.rawFileUrl());
+        if (!VIDEO_EXTENSIONS.contains(extension(key))) {
+            throw new UnsupportedUploadTypeException(extension(key), VIDEO_EXTENSIONS);
+        }
+        requireUploaded(key);
+        String rawFileUrl = storedUrl(key);
+        List<String> overlayUrls = checkedOverlays(userId, request.edit());
+        // Looked up again rather than trusted from the picker: the track's download URL, title
+        // and licence come from the catalogue, never from the client.
+        MusicTrack track = request.edit() == null || request.edit().music() == null ? null
+                : musicService.requireTrack(request.edit().music().trackId());
         List<String> tags = normalizeTags(request.tags(), request.description());
         // Before the insert: a caption refused here leaves nothing behind, so the same upload can
         // be published again once the text is fixed.
-        VideoTextModeration textModeration = captionModeration.screen(request.title(), request.description(), tags);
+        VideoTextModeration textModeration = captionModeration.screen(request.title(), request.description(), tags,
+                request.edit() == null ? List.of() : request.edit().overlayTexts());
 
         Video video = Video.builder()
                 .id(Video.newId())
@@ -192,6 +232,8 @@ public class VideoServiceImpl implements VideoService {
                 .visibility(request.visibility())
                 .ownerPrivate(isPrivateOwner(userId))
                 .tags(tags)
+                .commentsDisabled(request.startsWithCommentsDisabled())
+                .edit(VideoEdit.from(request.edit(), overlayUrls, track))
                 .textModeration(textModeration)
                 .status(VideoStatus.PROCESSING)
                 .viewCount(0)
@@ -222,6 +264,38 @@ public class VideoServiceImpl implements VideoService {
             ownerPrivate = isPrivateOwner(userId);
         }
         return withAccountComments(videoMapper.toResponse(video));
+    }
+
+    /**
+     * The overlay is read by media-worker exactly as the raw upload is, so it gets the same
+     * checks: the caller's own upload, of the type issued for overlays, and actually there.
+     *
+     * @return each overlay in canonical form, in order; empty for none
+     */
+    private List<String> checkedOverlays(Long userId, VideoEditRequest edit) {
+        if (edit == null || edit.overlays() == null) {
+            return List.of();
+        }
+        List<String> urls = new java.util.ArrayList<>();
+        for (VideoEditRequest.Overlay overlay : edit.overlays()) {
+            String key;
+            try {
+                key = requireOwnUpload(userId, overlay.imageUrl());
+            } catch (ForeignUploadException e) {
+                throw new ForeignUploadException("edit.overlays[].imageUrl");
+            }
+            if (!OVERLAY_EXTENSION.equals(extension(key))) {
+                throw new UnsupportedUploadTypeException(extension(key), Set.of(OVERLAY_EXTENSION));
+            }
+            requireUploaded(key);
+            urls.add(storedUrl(key));
+        }
+        return urls;
+    }
+
+    /** Of a key requireOwnUpload accepted, so there is always exactly one dot. */
+    private static String extension(String key) {
+        return key.substring(key.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -293,6 +367,25 @@ public class VideoServiceImpl implements VideoService {
             throw new ForeignUploadException();
         }
         return key;
+    }
+
+    /**
+     * The key's shape says whose upload it would be, not that one happened. Unchecked, a made-up
+     * key reached media-worker, which retried the missing file for seconds on its one listener
+     * thread, so a loop of them stalled every transcode.
+     */
+    private void requireUploaded(String key) {
+        try {
+            minioClient.statObject(StatObjectArgs.builder().bucket(minioProperties.bucket()).object(key).build());
+        } catch (ErrorResponseException e) {
+            if ("NoSuchKey".equals(e.errorResponse().code())) {
+                throw new UploadNotFoundException();
+            }
+            throw new UploadUrlUnavailableException(e);
+        } catch (Exception e) {
+            log.error("Could not check upload {} in bucket {}", key, minioProperties.bucket(), e);
+            throw new UploadUrlUnavailableException(e);
+        }
     }
 
     /**
@@ -392,7 +485,7 @@ public class VideoServiceImpl implements VideoService {
      * string, and nothing else stops a caller asking for ten thousand documents in one hop.
      */
     @Override
-    public List<VideoResponse> getByIds(Long requesterId, List<String> videoIds) {
+    public List<VideoResponse> getByIds(Long requesterId, List<String> videoIds, FeedKind feed) {
         if (videoIds == null || videoIds.isEmpty()) {
             return List.of();
         }
@@ -433,9 +526,31 @@ public class VideoServiceImpl implements VideoService {
                 .toList();
         Set<Long> followed = followedPrivateOwners(requesterId, ordered);
         Set<Long> banned = hiddenAmong(ordered.stream().map(VideoResponse::userId).collect(Collectors.toSet()));
-        return withAccountComments(ordered.stream()
+        // After the cache, never into it — see getById.
+        return withAccountComments(feedKeywordFilter.apply(requesterId, feed, ordered.stream()
                 .filter(video -> isVisibleTo(requesterId, video, followed, banned))
-                .toList());
+                .map(video -> isSelf(requesterId, video.userId()) ? quarantinedMediaUrls.forOwner(video) : video)
+                .toList()));
+    }
+
+    /** Internal chat cards use the batch audience policy plus one block check per distinct owner. */
+    @Override
+    public List<ViewableVideoResponse> getViewable(Long viewerId, List<String> ids) {
+        if (ids == null || ids.isEmpty() || ids.size() > 50 || ids.stream().anyMatch(id -> id == null || id.isBlank())) {
+            throw new BadRequestException("VALIDATION_ERROR", "ids: 1 to 50 non-blank ids required");
+        }
+        List<VideoResponse> videos = getByIds(viewerId, ids, null);
+        Set<Long> hidden = hiddenAmong(videos.stream().map(VideoResponse::userId).collect(Collectors.toSet()));
+        Map<Long, Boolean> blocked = new HashMap<>();
+        Map<String, ViewableVideoResponse> available = new HashMap<>();
+        for (VideoResponse video : videos) {
+            // Even an owner cannot share unfinished, removed, or banned-owner content.
+            if (video.status() == VideoStatus.PUBLISHED && video.deletedAt() == null && !hidden.contains(video.userId())
+                    && !blocked.computeIfAbsent(video.userId(), owner -> blockClient.isBlockedBetween(owner, viewerId))) {
+                available.put(video.id(), ViewableVideoResponse.from(video));
+            }
+        }
+        return ids.stream().map(available::get).filter(Objects::nonNull).toList();
     }
 
     private int maxBatchSize() {
@@ -448,13 +563,21 @@ public class VideoServiceImpl implements VideoService {
      * grid is finite, gets jumped around in, and its owner has a use for a total.
      */
     @Override
-    public CursorPage<VideoResponse> getFeed(String cursor, Integer size) {
-        return feedPage(null, cursor, size);
+    public CursorPage<VideoResponse> getFeed(Long requesterId, String cursor, Integer size, FeedKind feed) {
+        return withoutFilteredKeywords(feedPage(null, cursor, size), requesterId, feed);
+    }
+
+    /**
+     * After the page is cut, so the cursor stays the one of the page as read: a shortened page is
+     * fine, the web already treats a short page as having successors.
+     */
+    private CursorPage<VideoResponse> withoutFilteredKeywords(CursorPage<VideoResponse> page, Long viewerId, FeedKind feed) {
+        return new CursorPage<>(feedKeywordFilter.apply(viewerId, feed, page.items()), page.nextCursor());
     }
 
     @Override
     public CursorPage<VideoResponse> getFollowingFeed(
-            Long requesterId, List<Long> followedUserIds, String cursor, Integer size) {
+            Long requesterId, List<Long> followedUserIds, String cursor, Integer size, FeedKind feed) {
         // Following nobody is an empty tab, not the public feed. Returning early also keeps an
         // empty $in — which matches nothing but still costs a query — off the wire.
         if (followedUserIds == null || followedUserIds.isEmpty()) {
@@ -476,7 +599,7 @@ public class VideoServiceImpl implements VideoService {
         if (authors.isEmpty()) {
             return new CursorPage<>(List.of(), null);
         }
-        return feedPage(authors, cursor, size);
+        return withoutFilteredKeywords(feedPage(authors, cursor, size), requesterId, feed);
     }
 
     /**
@@ -535,7 +658,7 @@ public class VideoServiceImpl implements VideoService {
      */
     @Override
     public CursorPage<VideoResponse> listForExport(Long userId, int page, int size) {
-        Page<Video> videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+        Page<Video> videos = videoRepository.findByUserIdAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(
                 userId, PageRequest.of(page, size));
         List<VideoResponse> items = videos.getContent().stream()
                 .map(videoMapper::toResponse)
@@ -545,10 +668,17 @@ public class VideoServiceImpl implements VideoService {
     }
 
     @Override
+    public Page<VideoResponse> listStudioPosts(Long ownerId, StudioPostFilter filter, Pageable pageable) {
+        return withAccountComments(videoRepository.findStudioPosts(ownerId, filter, pageable)
+                .map(videoMapper::toResponse)
+                .map(quarantinedMediaUrls::forOwner));
+    }
+
+    @Override
     public Page<VideoResponse> listByUser(Long requesterId, Long userId, Pageable pageable) {
         if (isSelf(requesterId, userId)) {
             return withAccountComments(
-                    videoRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(userId, pageable)
+                    videoRepository.findByUserIdAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(userId, pageable)
                             .map(videoMapper::toResponse)
                             .map(quarantinedMediaUrls::forOwner));
         }
@@ -567,11 +697,11 @@ public class VideoServiceImpl implements VideoService {
         if (friendshipClient.areFriends(userId, requesterId)) {
             // One friendship check per page load, not per video: the answer is the same for every
             // video on this owner's grid.
-            videos = videoRepository.findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByCreatedAtDesc(
+            videos = videoRepository.findByUserIdAndStatusAndVisibilityInAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(
                     userId, VideoStatus.PUBLISHED,
                     List.of(VideoVisibility.PUBLIC, VideoVisibility.FRIENDS), pageable);
         } else {
-            videos = videoRepository.findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByCreatedAtDesc(
+            videos = videoRepository.findByUserIdAndStatusAndVisibilityAndDeletedAtIsNullOrderByPinnedAtDescCreatedAtDesc(
                     userId, VideoStatus.PUBLISHED, VideoVisibility.PUBLIC, pageable);
         }
 
@@ -650,7 +780,8 @@ public class VideoServiceImpl implements VideoService {
         videoRepository.updateVisibility(video);
         videoCache.evict(videoId);
 
-        return withAccountComments(videoMapper.toResponse(video));
+        // The studio swaps its row for this response, so it carries the owner's signed URLs too.
+        return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));
     }
 
     /**
@@ -671,7 +802,79 @@ public class VideoServiceImpl implements VideoService {
         videoRepository.updateCommentsDisabled(video);
         videoCache.evict(videoId);
 
-        return withAccountComments(videoMapper.toResponse(video));
+        return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));
+    }
+
+    /**
+     * Same owner gate and cache handling as {@link #updateVisibility}, screened as {@link #publish}
+     * screens. A caption the screen would hold is refused rather than stored — see
+     * {@link CaptionHeldException} for why an edit cannot be held the way a publish is.
+     */
+    @Override
+    public VideoResponse updateCaption(Long requesterId, String videoId, String title, String description) {
+        Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+
+        if (!isOwner(requesterId, video)) {
+            throw new NotVideoOwnerException(videoId);
+        }
+
+        // Typed tags survive the edit; a hashtag lives only as long as the description carrying it.
+        List<String> oldHashtags = normalizeTags(null, video.getDescription());
+        List<String> typed = video.getTags() == null ? List.of()
+                : video.getTags().stream().filter(tag -> !oldHashtags.contains(tag)).toList();
+        List<String> tags = normalizeTags(typed, description);
+        VideoTextModeration screening = captionModeration.screen(title, description, tags);
+        if (screening.isEnforced() && screening.getVerdict() != ModerationVerdict.APPROVED) {
+            throw new CaptionHeldException();
+        }
+
+        video.changeCaption(title, description, tags, screening);
+        videoRepository.updateCaption(video);
+        videoCache.evict(videoId);
+
+        return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));
+    }
+
+    /**
+     * Same owner gate and cache handling as {@link #updateVisibility}. Pinning one already pinned
+     * keeps its place rather than moving it to the front.
+     */
+    @Override
+    public VideoResponse updatePinned(Long requesterId, String videoId, boolean pinned) {
+        Video video = videoRepository.findByIdAndDeletedAtIsNull(videoId)
+                .orElseThrow(() -> new VideoNotFoundException(videoId));
+
+        if (!isOwner(requesterId, video)) {
+            throw new NotVideoOwnerException(videoId);
+        }
+
+        if (pinned != (video.getPinnedAt() != null)) {
+            if (pinned && (video.getStatus() != VideoStatus.PUBLISHED
+                    || video.getVisibility() == VideoVisibility.PRIVATE)) {
+                throw new VideoNotPinnableException(videoId);
+            }
+            if (pinned && videoRepository.countByUserIdAndPinnedAtIsNotNullAndDeletedAtIsNull(video.getUserId())
+                    >= PIN_LIMIT) {
+                throw new PinLimitReachedException(PIN_LIMIT);
+            }
+            video.changePinned(pinned);
+            videoRepository.updatePinned(video);
+            videoCache.evict(videoId);
+            // Two pins at once both pass the count above. Once both are written, the later one
+            // sees the limit already filled ahead of it and takes itself back off.
+            // ponytail: two pins in the same millisecond both stay; a per-owner slot document
+            // closes that if it ever matters.
+            if (pinned && videoRepository.countByUserIdAndPinnedAtBeforeAndDeletedAtIsNull(
+                    video.getUserId(), video.getPinnedAt()) >= PIN_LIMIT) {
+                video.changePinned(false);
+                videoRepository.updatePinned(video);
+                videoCache.evict(videoId);
+                throw new PinLimitReachedException(PIN_LIMIT);
+            }
+        }
+
+        return withAccountComments(quarantinedMediaUrls.forOwner(videoMapper.toResponse(video)));
     }
 
     /**

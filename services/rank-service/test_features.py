@@ -160,3 +160,25 @@ def test_candidate_tags_rebuilds_the_window_that_stood_back_then():
     kept = set(candidate_tags(tags, as_of=PER_TAG)["video_id"])
 
     assert kept == {f"v{i}" for i in range(PER_TAG)}
+
+
+def test_training_frame_stacks_one_label_window_per_day_before_eval():
+    """One day of labels is what a two-user instance has; stacking the days before it is what
+    turns four months of history into a training set instead of history alone."""
+    from datetime import datetime, timedelta
+
+    from train import LABEL_HORIZON, training_frame
+
+    eval_cutoff = datetime(2026, 10, 28, 9)
+    asked = []
+
+    def build(cutoff):
+        asked.append(cutoff)
+        if cutoff == eval_cutoff - 2 * LABEL_HORIZON:
+            return pd.DataFrame(columns=["user_id", "video_id", "label"])  # a quiet day
+        return pd.DataFrame({"user_id": [1], "video_id": [cutoff.day], "label": [1]})
+
+    frame = training_frame(build, eval_cutoff, windows=3)
+
+    assert asked == [eval_cutoff - k * LABEL_HORIZON for k in (1, 2, 3)]
+    assert sorted(frame["video_id"]) == [25, 27]

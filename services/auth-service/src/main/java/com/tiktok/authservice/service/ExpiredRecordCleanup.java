@@ -2,9 +2,11 @@ package com.tiktok.authservice.service;
 
 import com.tiktok.authservice.config.RetentionProperties;
 import com.tiktok.authservice.repository.AuthSecurityEventRepository;
+import com.tiktok.authservice.repository.KnownDeviceRepository;
 import com.tiktok.authservice.repository.OutboxEventRepository;
 import com.tiktok.authservice.repository.RefreshTokenRepository;
 import com.tiktok.authservice.repository.RememberedDeviceRepository;
+import com.tiktok.authservice.repository.UserSessionRepository;
 import com.tiktok.authservice.repository.VerificationTokenRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,6 +45,8 @@ public class ExpiredRecordCleanup {
     private final RememberedDeviceRepository rememberedDeviceRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final AuthSecurityEventRepository authSecurityEventRepository;
+    private final KnownDeviceRepository knownDeviceRepository;
+    private final UserSessionRepository userSessionRepository;
     private final RetentionProperties retention;
     private final TransactionTemplate transactionTemplate;
 
@@ -52,6 +56,9 @@ public class ExpiredRecordCleanup {
         int batchSize = retention.batchSize();
 
         sweep("refresh tokens", () -> refreshTokenRepository.deleteExpiredBefore(
+                now.minus(retention.refreshTokenGrace()), batchSize));
+        // Same grace as the tokens: a session is over once its last token expired or it was revoked.
+        sweep("ended sessions", () -> userSessionRepository.deleteEndedBefore(
                 now.minus(retention.refreshTokenGrace()), batchSize));
         sweep("verification tokens", () -> verificationTokenRepository.deleteExpiredBefore(
                 now.minus(retention.verificationTokenGrace()), batchSize));
@@ -63,6 +70,12 @@ public class ExpiredRecordCleanup {
         // Age alone, because an entry never expires the way a token does — see
         // AuthSecurityEventRepository.deleteRecordedBefore.
         sweep("security events", () -> authSecurityEventRepository.deleteRecordedBefore(
+                now.minus(retention.securityEventGrace()), batchSize));
+
+        // On the security log's clock, from the last use: the privacy and data-deletion pages
+        // promise that sign-in records go after that long. The account's mark in
+        // known_device_accounts stays (V19), so the next new device still alerts.
+        sweep("unused devices", () -> knownDeviceRepository.deleteUnusedBefore(
                 now.minus(retention.securityEventGrace()), batchSize));
     }
 

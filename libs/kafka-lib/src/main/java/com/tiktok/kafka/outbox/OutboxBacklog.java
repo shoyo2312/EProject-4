@@ -43,7 +43,8 @@ public record OutboxBacklog(String outbox, LongSupplier pending, Supplier<Instan
                 .register(registry);
     }
 
-    private double oldestPendingAgeSeconds() {
+    /** What the age gauge reports; admin-service reads its own outbox through this rather than a scrape. */
+    public double oldestPendingAgeSeconds() {
         Instant since = oldestPendingSince.get();
         return since == null ? 0 : Math.max(0, Duration.between(since, Instant.now()).toMillis() / 1000.0);
     }

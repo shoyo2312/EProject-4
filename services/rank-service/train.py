@@ -51,6 +51,12 @@ MODEL_PATH = Path(os.getenv("MODEL_PATH", "model/model.txt"))
 # at all on a small instance.
 LABEL_HORIZON = timedelta(days=1)
 
+# How many label windows, one per LABEL_HORIZON walking back from the evaluation cutoff, are
+# stacked into the training set. One window is a day of first watches — on an instance with two
+# active viewers that was 126 rows and a model worse than a coin flip, while months of history
+# before it went into the features and never into a label.
+TRAIN_WINDOWS = int(os.getenv("TRAIN_WINDOWS", "14"))
+
 
 def connect():
     return clickhouse_connect.get_client(
@@ -231,6 +237,21 @@ def build_dataset(client, cutoff: datetime) -> pd.DataFrame:
     return data[["user_id", "video_id", "label"] + FEATURE_NAMES]
 
 
+def training_frame(build, eval_cutoff: datetime, windows: int) -> pd.DataFrame:
+    """The frames of the `windows` label windows before `eval_cutoff`, stacked.
+
+    Each window is built as of its own cutoff, so a row only ever sees history older than its
+    label, and every window ends before the evaluation window starts. A pair is labelled in the
+    window its first watch fell in and in no other: build_dataset drops pairs already watched by
+    the cutoff. A quiet day contributes nothing rather than failing the run.
+    """
+    frames = [build(eval_cutoff - k * LABEL_HORIZON) for k in range(1, windows + 1)]
+    frames = [frame for frame in frames if not frame.empty]
+    if not frames:
+        return pd.DataFrame(columns=["user_id", "video_id", "label"] + FEATURE_NAMES)
+    return pd.concat(frames, ignore_index=True)
+
+
 def ndcg_at_k(data: pd.DataFrame, scores: np.ndarray, k: int = 10) -> float:
     """Averaged over users who have at least one positive — the rest have no ranking to get right."""
     frame = data[["user_id", "label"]].copy()
@@ -260,14 +281,14 @@ def main() -> None:
     if latest is None:
         raise SystemExit("watch_events is empty — nothing to train on. Is analytics-service consuming?")
 
-    # Two cutoffs, the earlier one for training: evaluating on a later window is the only split
-    # that answers the question actually being asked, which is whether the model works tomorrow.
+    # Training windows all end before the evaluation window starts: evaluating on a later window
+    # is the only split that answers the question actually being asked, which is whether the
+    # model works tomorrow.
     eval_cutoff = latest - LABEL_HORIZON
-    train_cutoff = eval_cutoff - LABEL_HORIZON
 
-    train = build_dataset(client, train_cutoff)
+    train = training_frame(lambda cutoff: build_dataset(client, cutoff), eval_cutoff, TRAIN_WINDOWS)
     evaluation = build_dataset(client, eval_cutoff)
-    logger.info("train rows: %d (cutoff %s)", len(train), train_cutoff)
+    logger.info("train rows: %d (%d windows before %s)", len(train), TRAIN_WINDOWS, eval_cutoff)
     logger.info("eval rows:  %d (cutoff %s)", len(evaluation), eval_cutoff)
 
     if train.empty or evaluation.empty:

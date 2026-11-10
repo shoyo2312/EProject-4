@@ -29,7 +29,7 @@
 #
 # Bump the version on every change: it is stored with every held comment and every screened video.
 
-version: 2026.10.15
+version: 2026.10.22
 
 # --- Profanity -------------------------------------------------------------------------------
 địt mẹ mày     | PROFANITY | 3

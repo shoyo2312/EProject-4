@@ -531,4 +531,60 @@ class CommentServiceImplTest extends AbstractInteractionServiceIT {
 
         assertThat(videoCountersRepository.findById(32L)).isEmpty();
     }
+
+    @Test
+    void listTopComments_ranksByLikesPlusReplies_tiesNewestFirst() {
+        CommentResponse quiet = commentService.addComment(900L, 1L, "quiet");
+        CommentResponse liked = commentService.addComment(900L, 2L, "two likes");
+        CommentResponse discussed = commentService.addComment(900L, 3L, "three replies");
+        CommentResponse newest = commentService.addComment(900L, 4L, "newest, nothing yet");
+        commentService.likeComment(900L, liked.commentId(), 5L);
+        commentService.likeComment(900L, liked.commentId(), 6L);
+        for (long replier = 7L; replier < 10L; replier++) {
+            commentService.addComment(900L, replier, "reply", discussed.commentId());
+        }
+
+        CommentPageResponse page = commentService.listTopComments(900L, null, 20, 5L);
+
+        assertThat(page.items()).extracting(CommentResponse::commentId).containsExactly(
+                discussed.commentId(), liked.commentId(), newest.commentId(), quiet.commentId());
+        assertThat(page.items().get(0).replyCount()).isEqualTo(3);
+        assertThat(page.items().get(1).likedByMe()).isTrue();
+        assertThat(page.hasMore()).isFalse();
+        // The newest-first listing is untouched.
+        assertThat(commentService.listComments(900L, null, 20).items().get(0).commentId())
+                .isEqualTo(newest.commentId());
+    }
+
+    @Test
+    void listTopComments_pagesThroughTheRankingWithItsOwnCursor() {
+        CommentResponse first = commentService.addComment(901L, 1L, "a");
+        CommentResponse second = commentService.addComment(901L, 2L, "b");
+        CommentResponse third = commentService.addComment(901L, 3L, "c");
+        commentService.likeComment(901L, first.commentId(), 9L);
+
+        CommentPageResponse one = commentService.listTopComments(901L, null, 2);
+        CommentPageResponse two = commentService.listTopComments(901L, one.nextCursor(), 2);
+
+        assertThat(one.items()).extracting(CommentResponse::commentId)
+                .containsExactly(first.commentId(), third.commentId());
+        assertThat(one.hasMore()).isTrue();
+        assertThat(two.items()).extracting(CommentResponse::commentId)
+                .containsExactly(second.commentId());
+        assertThat(two.hasMore()).isFalse();
+    }
+
+    @Test
+    void listTopComments_rejectsAMangledRankCursor() {
+        assertThatThrownBy(() -> commentService.listTopComments(902L, "top.oops", 20))
+                .isInstanceOf(InvalidCommentCursorException.class);
+    }
+
+    @Test
+    void listTopComments_isEmptyWhenCommentsAreOff() {
+        commentService.addComment(903L, 1L, "before it was turned off");
+        when(videoOwnershipClient.areCommentsDisabled(903L)).thenReturn(true);
+
+        assertThat(commentService.listTopComments(903L, null, 20).items()).isEmpty();
+    }
 }

@@ -1,9 +1,11 @@
 package com.tiktok.userservice.service;
 
+import com.tiktok.crypto.hash.HashUtils;
 import com.tiktok.moderation.rules.Blocklist;
 import com.tiktok.userservice.dto.request.UpdateUserSettingsRequest;
 import com.tiktok.userservice.dto.response.UserSettingsPolicyResponse;
 import com.tiktok.userservice.dto.response.UserSettingsResponse;
+import com.tiktok.userservice.entity.FeedKeywordFilter;
 import com.tiktok.userservice.entity.SettingsAudience;
 import com.tiktok.userservice.entity.UserSettings;
 import com.tiktok.userservice.event.producer.UserEventPublisher;
@@ -11,6 +13,7 @@ import com.tiktok.userservice.exception.InvalidUserSettingsException;
 import com.tiktok.userservice.exception.TooManyProfileIdsException;
 import com.tiktok.userservice.exception.UserProfileNotFoundException;
 import com.tiktok.userservice.mapper.UserSettingsMapper;
+import com.tiktok.userservice.repository.FeedKeywordFilterRepository;
 import com.tiktok.userservice.repository.UserProfileRepository;
 import com.tiktok.userservice.repository.UserSettingsRepository;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +30,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 @Service
@@ -34,6 +38,7 @@ import java.util.stream.Collectors;
 public class UserSettingsServiceImpl implements UserSettingsService {
 
     private final UserSettingsRepository userSettingsRepository;
+    private final FeedKeywordFilterRepository feedKeywordFilterRepository;
     private final UserSettingsMapper userSettingsMapper;
     private final UserProfileRepository userProfileRepository;
     private final UserEventPublisher userEventPublisher;
@@ -68,14 +73,38 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         Integer screenTimeLimitMinutes = request.isScreenTimeLimitMinutesSet()
                 ? request.getScreenTimeLimitMinutes()
                 : settings.getScreenTimeLimitMinutes();
+        List<Integer> screenTimeLimitsByDay = request.isScreenTimeLimitsByDaySet()
+                ? request.getScreenTimeLimitsByDay()
+                : settings.getScreenTimeLimitsByDay();
+        String passcodeHash = screenTimePasscodeHash(settings, screenTimeLimitMinutes, screenTimeLimitsByDay, request);
         LocalTime sleepHoursStart = request.isSleepHoursStartSet()
                 ? request.getSleepHoursStart()
                 : settings.getSleepHoursStart();
-        LocalTime sleepHoursEnd = request.isSleepHoursEndSet()
-                ? request.getSleepHoursEnd()
-                : settings.getSleepHoursEnd();
+        // As on TikTok, sleep hours always last 8 hours. Derived here so no client can store
+        // anything else; clearing the start clears both.
+        LocalTime sleepHoursEnd = sleepHoursStart == null ? null : sleepHoursStart.plusHours(8);
 
-        requireValidSleepWindow(sleepHoursStart, sleepHoursEnd);
+        boolean pushLikes = request.isPushLikesSet()
+                ? required("pushLikes", request.getPushLikes())
+                : settings.isPushLikes();
+        boolean pushComments = request.isPushCommentsSet()
+                ? required("pushComments", request.getPushComments())
+                : settings.isPushComments();
+        boolean pushNewFollowers = request.isPushNewFollowersSet()
+                ? required("pushNewFollowers", request.getPushNewFollowers())
+                : settings.isPushNewFollowers();
+        boolean inAppLikes = request.isInAppLikesSet()
+                ? required("inAppLikes", request.getInAppLikes())
+                : settings.isInAppLikes();
+        boolean inAppComments = request.isInAppCommentsSet()
+                ? required("inAppComments", request.getInAppComments())
+                : settings.isInAppComments();
+        boolean inAppNewFollowers = request.isInAppNewFollowersSet()
+                ? required("inAppNewFollowers", request.getInAppNewFollowers())
+                : settings.isInAppNewFollowers();
+        boolean inAppReposts = request.isInAppRepostsSet()
+                ? required("inAppReposts", request.getInAppReposts())
+                : settings.isInAppReposts();
 
         boolean filterSpamOffensive = request.isFilterSpamOffensiveSet()
                 ? required("filterSpamOffensive", request.getFilterSpamOffensive())
@@ -87,9 +116,15 @@ public class UserSettingsServiceImpl implements UserSettingsService {
                 ? commentKeywords(request.getCommentKeywords())
                 : settings.getCommentKeywords();
 
-        settings.replaceWith(commentAudience, dmAudience, screenTimeLimitMinutes,
-                sleepHoursStart, sleepHoursEnd, weeklyDigest);
+        settings.replaceWith(commentAudience, dmAudience, sleepHoursStart, sleepHoursEnd, weeklyDigest);
+        if (!Objects.equals(passcodeHash, settings.getScreenTimePasscodeHash())) {
+            // A new passcode, or none: wrong guesses at the old one no longer count.
+            settings.replacePasscodeAttempts(0, null);
+        }
+        settings.replaceScreenTimeLimit(screenTimeLimitMinutes, screenTimeLimitsByDay, passcodeHash);
         settings.replaceCommentFilters(filterSpamOffensive, filterAllComments, commentKeywords);
+        settings.replaceNotificationSwitches(pushLikes, pushComments, pushNewFollowers,
+                inAppLikes, inAppComments, inAppNewFollowers, inAppReposts);
 
         // Insert on the first write, update on the rest: currentOrDefaults hands back either a
         // managed row or a transient one, and save covers both.
@@ -140,12 +175,27 @@ public class UserSettingsServiceImpl implements UserSettingsService {
                 .stream()
                 .collect(Collectors.toMap(UserSettings::getUserId, Function.identity()));
 
+        // The whole batch's keyword filters in one query too, never one per id.
+        Map<Long, List<FeedKeywordFilter>> filters = feedKeywordFilterRepository
+                .findByUserIdInAndDeletedAtIsNull(distinctIds)
+                .stream()
+                .collect(Collectors.groupingBy(FeedKeywordFilter::getUserId));
+
         // Every id asked for is answered, with the defaults where there is no row — see the
         // interface for why absence is not an option here.
         return distinctIds.stream()
-                .map(id -> stored.getOrDefault(id, UserSettings.defaultsFor(id)))
-                .map(userSettingsMapper::toPolicy)
+                .map(id -> {
+                    List<FeedKeywordFilter> own = filters.getOrDefault(id, List.of());
+                    return userSettingsMapper.toPolicy(stored.getOrDefault(id, UserSettings.defaultsFor(id)),
+                            keywordsFor(own, FeedKeywordFilter::isForYou),
+                            keywordsFor(own, FeedKeywordFilter::isFollowing),
+                            keywordsFor(own, FeedKeywordFilter::isFriends));
+                })
                 .toList();
+    }
+
+    private static List<String> keywordsFor(List<FeedKeywordFilter> filters, Predicate<FeedKeywordFilter> feed) {
+        return filters.stream().filter(feed).map(FeedKeywordFilter::getKeyword).toList();
     }
 
     /**
@@ -208,24 +258,37 @@ public class UserSettingsServiceImpl implements UserSettingsService {
         return List.copyOf(byKey.values());
     }
 
+    /**
+     * The passcode only guards continuing past the daily limit, so it lives exactly as long as the
+     * limit: turning the limit on needs one, changing the limit keeps it, turning the limit off
+     * forgets it — which is also how a forgotten one is replaced. Changing or turning off the limit
+     * never asks for it.
+     *
+     * @return the hash to store, null when the limit is off
+     */
+    private static String screenTimePasscodeHash(UserSettings settings, Integer minutes, List<Integer> byDay,
+                                                 UpdateUserSettingsRequest request) {
+        if (minutes != null && byDay != null) {
+            throw new InvalidUserSettingsException(
+                    "screenTimeLimitMinutes and screenTimeLimitsByDay: set one daily limit, not both");
+        }
+        if (minutes == null && byDay == null) {
+            return null;
+        }
+        String passcode = request.isScreenTimePasscodeSet() ? request.getScreenTimePasscode() : null;
+        if (passcode != null) {
+            return HashUtils.bcryptHash(passcode);
+        }
+        if (settings.getScreenTimePasscodeHash() == null) {
+            throw new InvalidUserSettingsException("screenTimePasscode: required to turn on the daily limit");
+        }
+        return settings.getScreenTimePasscodeHash();
+    }
+
     private static <T> T required(String field, T value) {
         if (value == null) {
             throw new InvalidUserSettingsException(field + ": cannot be null");
         }
         return value;
-    }
-
-    /**
-     * Both ends or neither, and not the same minute twice. A start later than the end is left
-     * alone on purpose: a window that crosses midnight is the normal case for sleep hours.
-     */
-    private static void requireValidSleepWindow(LocalTime start, LocalTime end) {
-        if ((start == null) != (end == null)) {
-            throw new InvalidUserSettingsException(
-                    "sleepHoursStart and sleepHoursEnd must be set together or cleared together");
-        }
-        if (start != null && start.equals(end)) {
-            throw new InvalidUserSettingsException("sleepHoursStart and sleepHoursEnd must differ");
-        }
     }
 }

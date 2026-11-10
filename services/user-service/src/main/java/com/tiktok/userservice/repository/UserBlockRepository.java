@@ -15,6 +15,42 @@ import java.util.Optional;
 
 public interface UserBlockRepository extends JpaRepository<UserBlock, Long> {
 
+    interface BlockState {
+        Long getUserId();
+        boolean getBlockedByViewer();
+        boolean getBlockedViewer();
+        long getVersion();
+    }
+
+    // Deliberately includes deleted rows: an unblock must have a newer version than its block.
+    // The CASE is computed once in a subquery: PostgreSQL does not see a SELECT expression and a
+    // GROUP BY expression as the same when each carries its own bind parameter.
+    @Query(value = """
+            select other_id as "userId",
+                   bool_or(mine and deleted_at is null) as "blockedByViewer",
+                   bool_or(not mine and deleted_at is null) as "blockedViewer",
+                   floor(extract(epoch from max(greatest(created_at, deleted_at))) * 1000)::bigint as version
+            from (select case when blocker_id = :viewerId then blocked_id else blocker_id end as other_id,
+                         blocker_id = :viewerId as mine, created_at, deleted_at
+                  from user_blocks
+                  where (blocker_id = :viewerId and blocked_id in (:otherIds))
+                     or (blocked_id = :viewerId and blocker_id in (:otherIds))) pair
+            group by other_id
+            """, nativeQuery = true)
+    List<BlockState> findStates(@Param("viewerId") Long viewerId, @Param("otherIds") Collection<Long> otherIds);
+
+    // BaseEntity timestamps use the wall clock. Clamp to previous pair version + 1 ms under the
+    // pair lock so rapid block/unblock/reblock (or clock rollback) cannot reuse a client version.
+    @Modifying(flushAutomatically = true)
+    @Query(value = "update user_blocks set created_at = greatest(created_at, :at), "
+            + "updated_at = greatest(updated_at, :at) where id = :id", nativeQuery = true)
+    void advanceCreatedAt(@Param("id") Long id, @Param("at") Instant at);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query(value = "update user_blocks set deleted_at = :at, updated_at = :at, version = version + 1 "
+            + "where id = :id and deleted_at is null", nativeQuery = true)
+    void endBlock(@Param("id") Long id, @Param("at") Instant at);
+
     Optional<UserBlock> findByBlockerIdAndBlockedIdAndDeletedAtIsNull(Long blockerId, Long blockedId);
 
     Page<UserBlock> findByBlockerIdAndDeletedAtIsNull(Long blockerId, Pageable pageable);

@@ -6,6 +6,7 @@ import com.tiktok.moderation.text.TextSanitizer;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
@@ -25,8 +26,8 @@ import java.util.List;
  * Jackson fills a missing creator parameter with the deserializer's absent value, which for
  * {@code Optional} is the same {@code Optional.empty()} an explicit null produces.
  *
- * <p>Clearing only applies to the three nullable fields. An explicit null on an audience, on
- * {@code weeklyScreenTimeDigest}, on {@code privateAccount} or on a comment filter is a
+ * <p>Clearing only applies to the nullable fields. An explicit null on an audience, on
+ * {@code weeklyScreenTimeDigest}, on {@code privateAccount}, on a notification switch or on a comment filter is a
  * {@code VALIDATION_ERROR} rather than a no-op: those columns are NOT NULL, and silently treating the
  * key as absent is how "I set it and it didn't save" happens. {@code commentKeywords} is cleared
  * with {@code []}.
@@ -53,18 +54,54 @@ public class UpdateUserSettingsRequest {
     private String dmAudience;
     private boolean dmAudienceSet;
 
+    /** The same daily limit every day. Null turns it off; at most one of this and the per-day list is set. */
     @Min(value = 10, message = "must be at least 10 minutes")
-    @Max(value = 1440, message = "must be at most 1440 minutes")
+    @Max(value = 480, message = "must be at most 480 minutes")
     private Integer screenTimeLimitMinutes;
     private boolean screenTimeLimitMinutesSet;
 
+    /** A daily limit per weekday, Monday first. */
+    @Size(min = 7, max = 7, message = "must have one limit per weekday, Monday first")
+    private List<@NotNull @Min(value = 10, message = "must be at least 10 minutes")
+            @Max(value = 480, message = "must be at most 480 minutes") Integer> screenTimeLimitsByDay;
+    private boolean screenTimeLimitsByDaySet;
+
+    /**
+     * Write-only: stored as a bcrypt hash, never returned. Needed to turn the daily limit on when
+     * none is stored; sent while one is, it replaces it.
+     */
+    @Pattern(regexp = "\\d{4}", message = "must be 4 digits")
+    private String screenTimePasscode;
+    private boolean screenTimePasscodeSet;
+
+    /**
+     * The end is always this plus 8 hours, derived by the service. There is no {@code sleepHoursEnd}
+     * key any more; one sent by an older client is an unknown property and ignored.
+     */
     @JsonFormat(pattern = TIME_FORMAT)
     private LocalTime sleepHoursStart;
     private boolean sleepHoursStartSet;
 
-    @JsonFormat(pattern = TIME_FORMAT)
-    private LocalTime sleepHoursEnd;
-    private boolean sleepHoursEndSet;
+    private Boolean pushLikes;
+    private boolean pushLikesSet;
+
+    private Boolean pushComments;
+    private boolean pushCommentsSet;
+
+    private Boolean pushNewFollowers;
+    private boolean pushNewFollowersSet;
+
+    private Boolean inAppLikes;
+    private boolean inAppLikesSet;
+
+    private Boolean inAppComments;
+    private boolean inAppCommentsSet;
+
+    private Boolean inAppNewFollowers;
+    private boolean inAppNewFollowersSet;
+
+    private Boolean inAppReposts;
+    private boolean inAppRepostsSet;
 
     private Boolean weeklyScreenTimeDigest;
     private boolean weeklyScreenTimeDigestSet;
@@ -102,14 +139,54 @@ public class UpdateUserSettingsRequest {
         this.screenTimeLimitMinutesSet = true;
     }
 
+    public void setScreenTimeLimitsByDay(List<Integer> screenTimeLimitsByDay) {
+        this.screenTimeLimitsByDay = screenTimeLimitsByDay;
+        this.screenTimeLimitsByDaySet = true;
+    }
+
+    public void setScreenTimePasscode(String screenTimePasscode) {
+        this.screenTimePasscode = screenTimePasscode;
+        this.screenTimePasscodeSet = true;
+    }
+
     public void setSleepHoursStart(LocalTime sleepHoursStart) {
         this.sleepHoursStart = sleepHoursStart;
         this.sleepHoursStartSet = true;
     }
 
-    public void setSleepHoursEnd(LocalTime sleepHoursEnd) {
-        this.sleepHoursEnd = sleepHoursEnd;
-        this.sleepHoursEndSet = true;
+    public void setPushLikes(Boolean pushLikes) {
+        this.pushLikes = pushLikes;
+        this.pushLikesSet = true;
+    }
+
+    public void setPushComments(Boolean pushComments) {
+        this.pushComments = pushComments;
+        this.pushCommentsSet = true;
+    }
+
+    public void setPushNewFollowers(Boolean pushNewFollowers) {
+        this.pushNewFollowers = pushNewFollowers;
+        this.pushNewFollowersSet = true;
+    }
+
+    public void setInAppLikes(Boolean inAppLikes) {
+        this.inAppLikes = inAppLikes;
+        this.inAppLikesSet = true;
+    }
+
+    public void setInAppComments(Boolean inAppComments) {
+        this.inAppComments = inAppComments;
+        this.inAppCommentsSet = true;
+    }
+
+    public void setInAppNewFollowers(Boolean inAppNewFollowers) {
+        this.inAppNewFollowers = inAppNewFollowers;
+        this.inAppNewFollowersSet = true;
+    }
+
+    public void setInAppReposts(Boolean inAppReposts) {
+        this.inAppReposts = inAppReposts;
+        this.inAppRepostsSet = true;
     }
 
     public void setWeeklyScreenTimeDigest(Boolean weeklyScreenTimeDigest) {
